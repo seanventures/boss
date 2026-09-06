@@ -102,6 +102,37 @@ class Settings(BaseSettings):
     llm_engine: str = Field(default="auto", alias="BOSS_LLM_ENGINE")
     claude_cli_path: str = Field(default="claude", alias="BOSS_CLAUDE_CLI_PATH")
     claude_cli_model: Optional[str] = Field(default=None, alias="BOSS_CLAUDE_CLI_MODEL")
+    # THE BRAIN BEHIND THE CHAT AGENT, CHOSEN SEPARATELY FROM EVERYTHING ELSE.
+    #
+    # `llm_engine` is global, and flipping it to claude_cli would take the WORKER with it —
+    # the worker image has no `claude` binary, so every worker-side completion would start
+    # raising "claude CLI not found". The chat agent runs in the API container, which does
+    # have it. So the choice is scoped to the one consumer that can honour it.
+    #
+    # Empty = inherit `llm_engine`, which is what local development and CI want: no Claude
+    # CLI installed there, and a default that requires one would break every developer's
+    # console. Production sets it explicitly.
+    chat_llm_engine: str = Field(default="", alias="BOSS_CHAT_LLM_ENGINE")
+    #: Model for that agent — "opus" tracks the latest Opus rather than pinning a dated id.
+    chat_model: str = Field(default="", alias="BOSS_CHAT_MODEL")
+    #: Model round-trips the chat agent may spend before it must answer. A step that calls
+    #: tools produces no text, so this is the investigation budget: four was once the value and
+    #: every diagnostic question came back "(reached the step limit while working)".
+    chat_max_steps: int = Field(default=14, alias="BOSS_CHAT_MAX_STEPS")
+    #: The bounded continuation after a faulted answer. Smaller on purpose — it is a second
+    #: chance, not a second investigation.
+    chat_continuation_steps: int = Field(default=10, alias="BOSS_CHAT_CONTINUATION_STEPS")
+    #: The investigation runner — a real Claude Code session with a shell, the repo, the
+    #: database and the fleet. Its own model, because this is the deep-thinking seat and the
+    #: chat seat is optimised for latency.
+    investigation_model: str = Field(default="opus", alias="BOSS_INVESTIGATION_MODEL")
+    #: Turns it may take. Generous on purpose: the failure being fixed is an agent that stopped
+    #: after one hypothesis, and forty tool calls over several theories is what debugging is.
+    investigation_max_turns: int = Field(default=60, alias="BOSS_INVESTIGATION_MAX_TURNS")
+    #: A SELECT-only Postgres role for investigations. Empty falls back to the ordinary
+    #: connection with a statement guard in front of it — which stops the accidental
+    #: route and not a determined one. Setting this is the real containment.
+    investigation_db_url: str = Field(default="", alias="BOSS_INVESTIGATION_DB_URL")
     claude_cli_timeout: int = Field(default=240, alias="BOSS_CLAUDE_CLI_TIMEOUT")
 
     @model_validator(mode="after")

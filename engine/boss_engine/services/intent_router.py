@@ -834,6 +834,29 @@ _DEPLOY_SUBJECT = re.compile(
     r"deployment target|host|port|url|live)\b", re.I)
 
 
+def acted_without_checking(actions: list, tool_calls: list) -> bool:
+    """Did it change something and then not look at what happened?
+
+    The difference between an agent and a script. When I fix something I re-run the thing that
+    was broken; BOSS performed the write, reported "done", and moved on — so "I redeployed it"
+    and "it works now" were the same sentence, and the second one was never true by evidence.
+
+    A write is only finished when a read has confirmed it. The check is positional: the last
+    thing this turn did must not be the write itself.
+    """
+    if not actions:
+        return False
+    names = [str(c.get("tool") or "") for c in (tool_calls or []) if isinstance(c, dict)]
+    acted = {str(a.get("kind") or "") for a in actions if isinstance(a, dict)}
+    last_write = max((i for i, n in enumerate(names) if n in acted), default=-1)
+    if last_write < 0:
+        return False
+    # Anything at all afterwards counts, as long as it is not another write: re-reading the
+    # target, probing the URL, reading the run. Naming specific tools here would go stale the
+    # first time a better check was added.
+    return not any(n and n not in acted for n in names[last_write + 1:])
+
+
 def _say_what_did_not_work(reply: str, tool_calls: list) -> str:
     """Append the attempts that failed, when the reply left them out.
 
@@ -1110,9 +1133,18 @@ class IntentRouter:
             from ..db import get_engine
             from ..tools import build_discuss_read_registry
 
+            from .claude_cli_adapter import make_agent_chat_adapter
+
             ctx = EngineContext(settings=self.settings, engine=get_engine(self.settings))
+            # THE BRAIN IS CHOSEN HERE, NOT INHERITED.
+            #
+            # This agent ran on `gpt-5.2-codex` and nobody had decided that: `llm_engine`
+            # defaults to "auto", the adapter factory selects Claude only on the exact string
+            # "claude_cli", and so the one interface customers actually talk to ran on the
+            # fallback backend while the Claude subscription went to the coding pipeline.
             self._answer_agent_obj = EngineAgent(
-                ctx, registry=build_discuss_read_registry()
+                ctx, registry=build_discuss_read_registry(),
+                adapter=make_agent_chat_adapter(self.settings),
             )
         return self._answer_agent_obj
 
@@ -1625,6 +1657,9 @@ class IntentRouter:
                     # hand them a provider's load-shedding as a dead end.
                     _looking_only = asked_only_to_look(latest)
                     _report = _progress_reporter(project_id, thread_id)
+                    # An investigation posts its findings back into THIS conversation, so the
+                    # thread has to travel with the call. The model has no way to know it.
+                    self._answer_agent().ambient = {"_thread_id": thread_id}
                     turn = _with_transient_retry(lambda: self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
                         message=latest, history=history, system=system,
@@ -1661,7 +1696,8 @@ class IntentRouter:
                         # back as `confirmation_required`, which the console renders as a
                         # button — so the operator gets the diagnosis and the fix, one click
                         # away, instead of a fait accompli.
-                        allow_writes=not _looking_only, max_steps=12, on_step=_report,
+                        allow_writes=not _looking_only, on_step=_report,
+                        max_steps=int(getattr(self.settings, "chat_max_steps", 14) or 14),
                     ))
                     reply = str(turn.reply or "").strip()
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
@@ -1804,9 +1840,19 @@ class IntentRouter:
                     _prescribed = described_a_fix_without_doing_it(reply, actions, proposed)
                     _repeating = going_in_circles(reply, history)
                     _hid_failure = hid_a_failed_action(reply, tool_calls)
+                    _unverified = acted_without_checking(actions, tool_calls)
                     if reply and (_thin or _handed_back or _prescribed or _repeating
-                                  or _hid_failure):
+                                  or _hid_failure or _unverified):
                         gaps = []
+                        if _unverified:
+                            gaps.append(
+                                "You changed something and did not check the result. Doing the "
+                                "write is half of it: run the read that proves it worked — "
+                                "describe_deployment_target or http_probe after a redeploy, "
+                                "get_code_task after a retry, query_db after a row change — and "
+                                "report what it returned. If the check shows it did NOT work, "
+                                "say so and keep going. 'I redeployed it' and 'it works now' are "
+                                "different claims and only one of them is evidence.")
                         if _hid_failure:
                             _names = ", ".join(sorted({
                                 str(c.get("tool")) for c in tool_calls
@@ -1902,7 +1948,9 @@ class IntentRouter:
                                 system=system,
                                 # Same permission the first pass had. A continuation must not be
                                 # a way to acquire writes the turn was not entitled to.
-                                allow_writes=not _looking_only, max_steps=8, on_step=_report,
+                                allow_writes=not _looking_only, on_step=_report,
+                                max_steps=int(getattr(
+                                    self.settings, "chat_continuation_steps", 10) or 10),
                             ))
                         except Exception:  # noqa: BLE001 — the first answer still stands
                             better = None

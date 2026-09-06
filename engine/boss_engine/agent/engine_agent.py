@@ -211,15 +211,21 @@ _WHY_NOT_SELF_EXECUTED = {
 
 
 class EngineAgent:
-    def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None):
+    def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None,
+                 adapter: Any = None):
         self.ctx = ctx
         self.registry = registry or build_default_registry()
-        self._adapter = None
+        #: An explicit backend, when the caller has chosen one. The chat agent runs on Claude
+        #: Opus while everything else keeps the engine-wide default — a distinction that has to
+        #: be made per consumer, because the worker image has no Claude CLI to run.
+        self._adapter = adapter
         #: The operator's own words for the turn in flight. Read by the escalation guard: only
         #: the operator can license `force`, so the guard has to see what they actually wrote.
         self._operator_text = ""
         #: Things the loop did to the model's own calls, to be reported rather than hidden.
         self._notes: list[str] = []
+        #: Values every tool call gets whether the model asked for them or not — see invoke.
+        self.ambient: dict[str, Any] = {}
 
     def _adapter_obj(self):
         if self._adapter is None:
@@ -488,5 +494,12 @@ class EngineAgent:
                 "proposed": proposal,
             }
         return self.registry.invoke(
-            name, self.ctx, project_id=project_id, actor=actor, args=args
+            # AMBIENT CONTEXT THE MODEL CANNOT KNOW AND MUST NOT HAVE TO GUESS.
+            #
+            # An investigation posts its result back into the conversation that asked for it,
+            # which means it needs the thread id — a value that exists in the router and never
+            # in the model's head. Asking the model to pass one would produce an invented
+            # `athr_...`, which is the exact failure mode `_placeholder_argument` exists for.
+            name, self.ctx, project_id=project_id, actor=actor,
+            args={**(self.ambient or {}), **args},
         )

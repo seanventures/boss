@@ -2323,6 +2323,82 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_debug_session_tools(reg: ToolRegistry) -> None:
+    """Hand the problem to something that can actually debug it.
+
+    Every tool in this registry answers a question somebody anticipated. That is why BOSS kept
+    producing correct diagnoses and no fixes: it could describe a broken deployment precisely
+    and could not open a shell, read the app's code, test a theory, or try a second one.
+
+    `investigate` opens a real Claude Code session — a shell, the repo checked out, read-only
+    SQL and a way onto the fleet — with a large turn budget and a requirement to end with
+    evidence. It is the one tool here that does not have a fixed answer shape.
+    """
+
+    @reg.tool(
+        "investigate",
+        "Hand a problem to a full debugging session when the tools here cannot settle it: a "
+        "shell, the app's repo checked out, read-only SQL over BOSS's database, SSH onto the "
+        "fleet, and dozens of turns to form and TEST hypotheses. Use it when you have "
+        "diagnosed something twice without fixing it, when the cause is probably in the app's "
+        "code or on the machine rather than in a row, or when the operator asks you to work "
+        "something out properly. It runs for a few minutes and posts the result into this "
+        "conversation — say that you have started it and answer with what you know so far; do "
+        "NOT sit and wait, and do not open a second one while the first is running. "
+        "Read-only by default; pass fix=true only when the operator has asked for the problem "
+        "to be fixed on the machine, which they will be asked to confirm.",
+        _obj({"question": {"type": "string",
+                           "description": "what to find out — be specific, include the ids you "
+                                          "already have and what you have already ruled out"},
+              "run_id": {"type": "string",
+                         "description": "crun_ this is about, so the repo can be checked out"},
+              "fix": {"type": "boolean",
+                      "description": "allow it to CHANGE the host, not just look"}},
+             required=["question"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def investigate(ctx, *, project_id, actor, args):
+        from ..services.debug_session import open_investigation
+
+        wants_fix = bool(args.get("fix"))
+        if wants_fix and not args.get("_operator_confirmed"):
+            # THE ONE PLACE A MODEL MAY NOT DECIDE FOR ITSELF. A read-only investigation is a
+            # very capable pair of eyes; the same session with a writable shell on a production
+            # host is a different thing entirely, and on 2026-09-02 an agent with production
+            # credentials deleted 204 tables. The operator opens that one.
+            return {"ok": False, "requires_confirmation": True,
+                    "error": "a fixing investigation gets a writable shell on the host; that "
+                             "needs the operator's confirmation.",
+                    "do_this": ("call propose_action with tool='investigate', these exact args "
+                                "and a label saying what it will try to fix. Or run it "
+                                "read-only by leaving fix unset — that answers most questions."),
+                    "proposed_args": {**{k: v for k, v in args.items()
+                                         if k in ("question", "run_id")}, "fix": True}}
+        with ctx.begin() as c:
+            return open_investigation(
+                c, project_id=project_id, question=str(args.get("question") or ""),
+                actor=actor, thread_id=args.get("_thread_id"),
+                run_id=(str(args["run_id"]) if args.get("run_id") else None),
+                allow_fix=wants_fix)
+
+    @reg.tool(
+        "get_investigation",
+        "The result of an investigation: what it found, what it ran to prove it, the fix, and "
+        "whether it applied one. Call this when an investigation was started earlier in the "
+        "conversation — while it is still running, say so and answer with what you have.",
+        _obj({"investigation_id": {"type": "string",
+                                   "description": "optional — defaults to the latest"}}),
+        kind="read",
+    )
+    def get_investigation(ctx, *, project_id, actor, args):
+        from ..services.debug_session import get_investigation as _get
+
+        with ctx.begin() as c:
+            return _get(c, project_id=project_id,
+                        investigation_id=str(args.get("investigation_id") or ""))
+
+
 def _register_diagnosis_tools(reg: ToolRegistry) -> None:
     """The investigation, performed in code rather than chosen by the model each time.
 
@@ -4068,6 +4144,7 @@ def build_default_registry() -> ToolRegistry:
     _register_port_tools(reg)
     _register_run_turn_tools(reg)
     _register_diagnosis_tools(reg)
+    _register_debug_session_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
@@ -4117,6 +4194,8 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # The escape hatch from a registry of fixed questions: a real debugging session.
+    "investigate",
     # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
     # with hand-composed SQL — which BOSS took, against a schema it had to guess at.
     "create_deployment_target",

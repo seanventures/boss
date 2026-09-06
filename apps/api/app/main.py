@@ -7182,6 +7182,33 @@ def run_code_task_step_endpoint(payload: dict):
                          fencing_token=payload.get("fencing_token"))
 
 
+@app.post("/v1/investigations/{investigation_id}/run")
+def run_investigation_endpoint(investigation_id: str):
+    """Worker-invoked: perform one investigation.
+
+    It runs HERE, not in the worker, for the same reason code tasks do: the Claude Code CLI is
+    installed in this image and not in the worker's. The worker owns the queue; the container
+    with the binary owns the work.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.debug_session import run_investigation
+
+    return run_investigation(engine, settings, investigation_id=investigation_id)
+
+
+@app.get("/v1/investigations")
+def list_investigations_endpoint(project_id: str, limit: int = 10):
+    """What BOSS has investigated, newest first — the console's window onto the deep work."""
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text("SELECT id, question, status, verdict, turns, duration_ms, allow_fix, "
+                 "created_at, finished_at FROM investigations WHERE project_id = :p "
+                 "ORDER BY created_at DESC LIMIT :n"),
+            {"p": project_id, "n": max(1, min(int(limit or 10), 50))}).mappings().all()
+    return {"investigations": [dict(r) for r in rows]}
+
+
 @app.post("/v1/code-tasks/{run_id}/steer")
 def code_task_steer_endpoint(run_id: str, payload: dict):
     """Redirect a RUNNING task. The guidance is applied at the next stage boundary.

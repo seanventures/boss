@@ -51,7 +51,10 @@ def test_the_answer_path_may_actually_act():
     test_a_question_is_not_an_instruction. The flag is the same flag; what changed is that a
     question no longer sets it."""
     src = inspect.getsource(IntentRouter)
-    assert "allow_writes=not _looking_only, max_steps=12" in src
+    # The PROPERTY — writes follow the question/instruction gate — not the step count that
+    # happened to sit beside it. Making the budget configurable broke this test, which has
+    # nothing to say about budgets.
+    assert "allow_writes=not _looking_only" in src
 
 
 def test_and_an_instruction_still_reaches_that_path():

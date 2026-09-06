@@ -17,6 +17,7 @@ inference path.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -24,6 +25,8 @@ from typing import Optional, Tuple
 
 from ..config import Settings
 from .scheduling import low_priority
+
+_log = logging.getLogger(__name__)
 
 
 def _strip_fences(text: str) -> str:
@@ -74,8 +77,12 @@ def _first_json_object(text: str) -> Optional[dict]:
 
 
 class ClaudeCliAdapter:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, model: Optional[str] = None):
         self.settings = settings
+        #: Per-consumer model override. The chat agent runs on Opus while the coding pipeline
+        #: keeps its own choice — one setting for both would make raising the chat's brain a
+        #: decision about every build's cost.
+        self.model_override = model or None
 
     # ---------------------------------------------------------------- cli
     def _claude_bin(self) -> str:
@@ -120,7 +127,7 @@ class ClaudeCliAdapter:
             "--max-turns", "6",
             "--disallowedTools", self._BLOCKED_TOOLS,  # pure completion, no tool use
         ]
-        model = getattr(self.settings, "claude_cli_model", None)
+        model = self.model_override or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
         try:
@@ -168,7 +175,8 @@ class ClaudeCliAdapter:
             if "haiku" not in name:
                 primary = name
                 break
-        primary = primary or (next(iter(model_usage), None)) or getattr(self.settings, "claude_cli_model", None) or "claude-cli"
+        primary = (primary or (next(iter(model_usage), None)) or self.model_override
+                   or getattr(self.settings, "claude_cli_model", None) or "claude-cli")
         cost = data.get("total_cost_usd")
         usage = {
             "model": primary,
@@ -352,6 +360,57 @@ class ClaudeCliAdapter:
         return data.get("session_id", "claude-cli"), (data.get("result") or ""), self._usage(data)
 
 
+class FallingBackAdapter:
+    """Claude first; the previous backend if Claude cannot be reached at all.
+
+    Raising the chat agent's brain must not be a way to take chat down. The Claude path shells
+    out to a binary that has to exist, be authenticated, and answer inside a timeout — three
+    things that are true in the API container and need not be true everywhere, forever.
+
+    The distinction that matters: an INFRASTRUCTURE failure (binary missing, not logged in,
+    process timed out) is not an answer, and falling back gets the operator a reply. A MODEL
+    failure — bad JSON, a refusal, an empty completion — is an answer of sorts and belongs to
+    the caller's own retry logic, which already knows how to press it. Falling back on those
+    would silently downgrade the brain the moment the good one had a bad turn, and nobody
+    would ever see it happen.
+    """
+
+    #: Substrings that mean "this backend is not available here", not "the model did badly".
+    _UNAVAILABLE = ("cli not found", "not found. install", "timed out after",
+                    "exited 1", "exited 127", "not logged in", "authentication",
+                    "credit balance", "usage limit", "rate limit")
+
+    def __init__(self, primary, fallback, *, on_fallback=None):
+        self.primary = primary
+        self.fallback = fallback
+        self._on_fallback = on_fallback
+        #: Which one actually answered last, so it can be reported rather than guessed at.
+        self.last_backend = ""
+
+    def _unavailable(self, exc: BaseException) -> bool:
+        blob = f"{type(exc).__name__}: {exc}".lower()
+        return any(marker in blob for marker in self._UNAVAILABLE)
+
+    def create_chat_completion(self, messages, tools=None, **kwargs):
+        try:
+            out = self.primary.create_chat_completion(messages, tools=tools, **kwargs)
+            self.last_backend = type(self.primary).__name__
+            return out
+        except Exception as exc:  # noqa: BLE001
+            if not self._unavailable(exc):
+                raise
+            _log.warning("chat brain unavailable (%s); falling back to %s",
+                         exc, type(self.fallback).__name__)
+            if self._on_fallback:
+                try:
+                    self._on_fallback(exc)
+                except Exception:  # noqa: BLE001 — reporting must not break answering
+                    pass
+        out = self.fallback.create_chat_completion(messages, tools=tools, **kwargs)
+        self.last_backend = type(self.fallback).__name__
+        return out
+
+
 def make_chat_adapter(settings: Settings):
     """Pick the completion backend. claude_cli → Claude Code CLI on the Max plan;
     otherwise the OpenAI/Azure adapter."""
@@ -360,3 +419,25 @@ def make_chat_adapter(settings: Settings):
     if (getattr(settings, "llm_engine", "auto") or "auto").lower() == "claude_cli":
         return ClaudeCliAdapter(settings)
     return OpenAIAdapter(settings)
+
+
+def make_agent_chat_adapter(settings: Settings):
+    """The backend for the CHAT agent specifically — the one an operator talks to.
+
+    It was on `gpt-5.2-codex` and nobody had decided that: `llm_engine` defaults to "auto",
+    `make_chat_adapter` selects Claude only on the exact string "claude_cli", and so the one
+    interface customers use ran on the fallback while the Claude subscription went to the
+    coding pipeline. This makes the choice explicit and separately settable.
+    """
+    from .openai_adapter import OpenAIAdapter
+
+    engine = (getattr(settings, "chat_llm_engine", "") or "").strip().lower()
+    if not engine:
+        return make_chat_adapter(settings)          # inherit — local dev, CI
+    if engine != "claude_cli":
+        return OpenAIAdapter(settings)
+    return FallingBackAdapter(
+        ClaudeCliAdapter(settings, model=(getattr(settings, "chat_model", "") or "").strip()
+                         or None),
+        OpenAIAdapter(settings),
+    )

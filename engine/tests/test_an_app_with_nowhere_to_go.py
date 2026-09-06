@@ -307,7 +307,7 @@ class TestAFailedAttemptIsReported:
 
         body = inspect.getsource(intent_router)
         assert "_hid_failure = hid_a_failed_action(reply, tool_calls)" in body
-        assert "or _hid_failure)" in body
+        assert "or _hid_failure" in body
         assert "and it FAILED, and your answer" in body
 
 

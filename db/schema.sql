@@ -5860,3 +5860,32 @@ CREATE TABLE IF NOT EXISTS agent_progress (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_progress_thread
   ON agent_progress(thread_id, id DESC);
+
+-- BOSS debugging the way an engineer debugs: a real Claude Code session with a shell, the
+-- app's repo, read-only SQL and a way onto the fleet. See services/investigation.py for why
+-- the chat agent's 73 fixed-shape tools could not do this and never would.
+CREATE TABLE IF NOT EXISTS investigations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  thread_id TEXT,
+  run_id TEXT,
+  question TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  -- Read-only unless an operator pressed the button. A model cannot license this for itself:
+  -- `investigate` with fix set is declared destroys_work, so it comes back as a confirmation.
+  allow_fix BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'queued',
+  summary TEXT,
+  verdict JSONB NOT NULL DEFAULT '{}'::jsonb,
+  turns INTEGER,
+  duration_ms INTEGER,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_investigations_project_created
+  ON investigations(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_investigations_status
+  ON investigations(status) WHERE status IN ('queued', 'running');

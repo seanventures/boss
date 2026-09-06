@@ -134,6 +134,13 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_investigation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API container to run one investigation — that is where the CLI lives."""
+        response = self._client.post(
+            f"/v1/investigations/{payload['investigation_id']}/run", json={})
+        response.raise_for_status()
+        return response.json()
+
     def run_code_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/code-tasks/step", json=payload)
         # Operator/host 422 (claims frozen, missing sandbox task) is fail-closed:

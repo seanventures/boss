@@ -358,6 +358,9 @@ def capabilities() -> list[str]:
         "openai.plan",
         "meeting.step",
         "code.task",
+        # A real debugging session: shell, repo, read-only SQL, the fleet. Declared here or the
+        # worker will not lease the job and the investigation sits queued forever.
+        "investigation.run",
         "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
@@ -791,6 +794,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 return result
             raise RuntimeError(result.get("error") or "Code task failed.")
         return result
+    if job.kind == "investigation.run":
+        # A long one by design: a real debugging session reads the code, the database and the
+        # host, and forms more than one hypothesis. The API endpoint owns the timeout.
+        return client.run_investigation({"investigation_id": job.payload["investigation_id"]})
     if job.kind == "docs.update":
         result = client.run_docs_update(
             {
