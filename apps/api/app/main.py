@@ -1362,6 +1362,19 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     is_bitbucket_webhook = request.url.path == "/v1/webhooks/bitbucket"
     # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
     is_reliability_alert = request.url.path == "/v1/reliability/alert"
+    # An investigation's sandbox authenticates with a token minted for that ONE investigation,
+    # checked per request, scoped to its project, carrying its read/fix mode, and cleared the
+    # moment it finishes. That is a narrower credential than the API key, not a way around it —
+    # exempting these three paths is what lets the sandbox hold the narrow one INSTEAD of a
+    # console key.
+    #
+    # This cost a real investigation: without the exemption `boss-do` came back 401, and the
+    # session spent most of its sixty turns reverse-engineering the toolbelt from /openapi.json
+    # instead of debugging the problem it was opened for.
+    is_investigation_callback = (
+        len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "investigations"
+        and _parts[4] in {"db", "host", "do"}
+    )
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
@@ -1371,6 +1384,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_plane_webhook
         or is_bitbucket_webhook
         or is_reliability_alert
+        or is_investigation_callback
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)

@@ -851,3 +851,65 @@ class TestWhoDecidedNotWhichFlagWasSet:
         assert "cancel_job" in _NOT_FOR_INVESTIGATIONS
         assert host_command_allowed("rm -rf /data", allow_write=True)[0] is False
         assert sql_is_allowed("DROP TABLE events", allow_write=True)[0] is False
+
+
+class TestTheToolbeltMustActuallyWork:
+    """Measured on the first fixing investigation. Sixty turns, and the progress trail shows
+    what they went on:
+
+        running a BOSS operation: --list 2>&1 | head -60
+        reading .boss-bin/boss-do
+        editing .boss-bin/boss-do
+        running curl -s http://127.0.0.1:8000/openapi.json
+        running python3 - <<EOF  import json; d=json.load(open('/tmp/openapi.json')) ...
+
+    `boss-do` came back 401. The three callback paths sit under /v1/, and BOSS_REQUIRE_API_AUTH
+    is on in production, so the global middleware rejected the sandbox's own token before the
+    endpoint ever saw it. The session then spent its budget reverse-engineering my toolbelt from
+    the OpenAPI schema instead of debugging the problem it was opened for — and stopped at the
+    ceiling with no verdict.
+
+    Two defects, and the second is the worse one: the run was stored `completed`."""
+
+    def test_the_sandbox_token_is_not_shadowed_by_the_api_key(self):
+        import pathlib
+
+        main = pathlib.Path("apps/api/app/main.py").read_text()
+        assert "is_investigation_callback" in main
+        assert '_parts[4] in {"db", "host", "do"}' in main
+        assert "or is_investigation_callback" in main
+
+    def test_the_exemption_is_narrow(self):
+        """Only the three callback paths. `/v1/investigations` itself — the console's list —
+        stays behind the API key, because that is a human-facing read."""
+        import pathlib
+
+        main = pathlib.Path("apps/api/app/main.py").read_text()
+        i = main.index("is_investigation_callback = (")
+        assert '_parts[2] == "investigations"' in main[i:i + 300]
+        assert "len(_parts) >= 5" in main[i:i + 300]
+
+    def test_running_out_of_turns_is_not_completed(self):
+        from boss_engine.services.debug_session import run_investigation
+
+        body = inspect.getsource(run_investigation)
+        assert 'status = "completed" if _finished else ("incomplete" if _ran_out' in body
+        assert "RAN OUT OF TURNS IS NOT FINISHED" in body
+
+    def test_and_it_says_so_in_the_error_column(self):
+        """The operator had to query the summary column to discover the run had not finished."""
+        from boss_engine.services.debug_session import run_investigation
+
+        body = inspect.getsource(run_investigation)
+        assert "stopped at the {turns}-turn ceiling without reaching a verdict" in body
+
+    def test_a_verdict_is_what_makes_it_finished(self):
+        from boss_engine.services.debug_session import run_investigation
+
+        body = inspect.getsource(run_investigation)
+        assert '_finished = bool(verdict.get("cause"))' in body
+
+    def test_the_event_names_the_real_outcome(self):
+        from boss_engine.services.debug_session import run_investigation
+
+        assert 'f"investigation.{status}"' in inspect.getsource(run_investigation)

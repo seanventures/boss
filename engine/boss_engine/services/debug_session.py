@@ -25,8 +25,9 @@ The same runner the coding pipeline already uses — `claude -p` with its own Ba
 and Glob tools in an ephemeral sandbox — pointed at a DIAGNOSIS instead of a diff. It gets:
 
   * the app's repo checked out, so it can read the code that actually shipped;
-  * `boss-db`, read-only SQL over BOSS's own database;
+  * `boss-db`, SQL over BOSS's own database;
   * `boss-host`, a shell on any registered fleet host;
+  * `boss-do`, BOSS's own operations — the same path the console's buttons take;
   * `boss-probe`, HTTP and TCP against anything it wants to test;
   * a briefing of what BOSS already knows, so it starts oriented rather than guessing;
   * and a requirement to end with a verdict it has EVIDENCE for.
@@ -38,10 +39,16 @@ anything but SELECT, `boss-host` refuses anything outside an enumerated set of r
 and the agent has no Edit or Write tool. Freedom to look is not freedom to act, and that
 distinction is the whole reason this can be turned loose at all.
 
-An investigation opened with `fix=True` gets a real shell on the host. That one is reachable
-only by an operator pressing a button — `investigate` with fix set returns
-`requires_confirmation`, so a model cannot license it for itself. After 2026-09-02, when an
-agent holding production credentials deleted 204 tables, this is the line that matters most.
+An investigation opened with `fix=True` can change things: `boss-do` runs BOSS's own
+operations exactly as the console's buttons run them, `boss-db` writes rows, and `boss-host`
+gets a real shell. It opens when the OPERATOR authorised action — either by clicking, or by
+telling BOSS to fix something, which is the same authority the write gate already recognises.
+A question still gets an offer.
+
+What no investigation may do, in either mode, whoever asked: cancel work in flight, waive a
+gate, change the database's shape, delete in bulk, or run the irreversible shell verbs. After
+2026-09-02, when an agent holding production credentials deleted 204 tables, that list is the
+line that matters most — and it did not move when write access arrived.
 """
 from __future__ import annotations
 
@@ -760,23 +767,38 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str) -> d
                 "error": f"{type(exc).__name__}: {exc}"[:500]}
 
     verdict = _verdict_from(summary)
+    # RAN OUT OF TURNS IS NOT FINISHED.
+    #
+    # Measured: a session spent most of its budget working around a broken toolbelt, stopped at
+    # the ceiling, and was stored `completed` with an empty verdict — so the console showed a
+    # finished investigation with nothing in it, and the operator had to query the summary
+    # column to discover it had not finished. That is the same lie as a deploy step going green
+    # over a failure, in the one place built to end that class of lie.
+    _finished = bool(verdict.get("cause"))
+    _ran_out = (not _finished
+                and ("ran out of turns" in summary.lower()
+                     or turns >= int(getattr(settings, "investigation_max_turns", 60) or 60)))
+    status = "completed" if _finished else ("incomplete" if _ran_out else "completed")
     with begin(engine) as c:
         c.execute(
             # THE TOKEN DIES WITH THE INVESTIGATION. The sandbox is torn down, but a token
             # recovered from one afterwards must open nothing.
-            sql("UPDATE investigations SET status = 'completed', summary = :s, "
+            sql("UPDATE investigations SET status = :st, summary = :s, "
                 "verdict = CAST(:v AS JSONB), turns = :t, duration_ms = :d, token = NULL, "
-                "finished_at = now(), updated_at = now() WHERE id = :i"),
-            {"i": investigation_id, "s": summary[:20000], "v": json.dumps(verdict),
-             "t": turns, "d": int((time.monotonic() - started) * 1000)})
-        emit_event(c, project_id, "investigation.completed", str(record["actor"]),
+                "error = :e, finished_at = now(), updated_at = now() WHERE id = :i"),
+            {"i": investigation_id, "st": status, "s": summary[:20000],
+             "v": json.dumps(verdict), "t": turns,
+             "e": (f"stopped at the {turns}-turn ceiling without reaching a verdict"
+                   if status == "incomplete" else None),
+             "d": int((time.monotonic() - started) * 1000)})
+        emit_event(c, project_id, f"investigation.{status}", str(record["actor"]),
                    "investigation", investigation_id,
                    {"cause": str(verdict.get("cause") or "")[:500],
                     "applied": bool(verdict.get("applied")), "turns": turns})
         if record.get("thread_id"):
             _post_to_thread(c, str(record["thread_id"]), investigation_id, summary, verdict)
 
-    return {"ok": True, "investigation_id": investigation_id, "status": "completed",
+    return {"ok": True, "investigation_id": investigation_id, "status": status,
             "verdict": verdict, "turns": turns, "summary": summary[:4000]}
 
 
