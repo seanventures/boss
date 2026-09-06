@@ -89,7 +89,9 @@ describe("archived, not deleted", () => {
   it("a general chat with no key stays keyless rather than being stamped", () => {
     const fn = SERVICE.slice(SERVICE.indexOf("def clear_thread"),
                              SERVICE.indexOf("def list_threads"));
-    expect(fn).toContain("CASE WHEN :ref IS NULL THEN NULL");
+    // CAST, not a bare parameter: psycopg 3 cannot infer a type from a NULL comparison and
+    // fails with AmbiguousParameter in production, while psycopg2 passes locally.
+    expect(fn).toContain("CASE WHEN CAST(:ref AS TEXT) IS NULL THEN NULL");
   });
 });
 
