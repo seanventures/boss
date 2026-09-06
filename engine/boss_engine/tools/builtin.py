@@ -2251,6 +2251,114 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_run_turn_tools(reg: ToolRegistry) -> None:
+    """The turn-by-turn record of what a build was actually doing.
+
+    A build was reported "stuck for 27m". BOSS called get_code_task, find_starved_work and
+    inspect_self, concluded the implement phase was stalled, and cancelled it. The answer was
+    sitting in `agent_turns` — 101 rows for that run — and no tool read that table. Asked again
+    afterwards it reached for `get_run_activity`, which reads `llm_calls`, which had zero rows
+    for the run, and reported that no detail existed.
+
+    So the richest record BOSS keeps was unreachable except by hand-written SQL, which is why a
+    question about progress got answered from queue statistics instead of from what the engineer
+    was doing. What it was doing: nine and a half minutes of ordinary work, then one command
+    that never returned.
+    """
+    @reg.tool(
+        "read_run_turns",
+        "THE FIRST THING TO READ when asked about a build's progress, why it is slow, or "
+        "whether it is stuck. The turn-by-turn record of what the coding agent actually did: "
+        "each prompt, completion, tool call and tool result, with timings. Also reports "
+        "SILENCE — how long since the last recorded turn — which is what distinguishes a run "
+        "that is working from one that has hung. Read this BEFORE queue or host statistics: "
+        "those describe the machine, this describes the work.",
+        _obj({"run_id": {"type": "string", "description": "the code-task run (crun_...)"},
+              "limit": {"type": "integer", "description": "most recent N turns (default 40)"},
+              "stage": {"type": "string", "description": "only this stage, e.g. implement"},
+              "project_id": {"type": "string"}},
+             ["run_id"]),
+        kind="read",
+    )
+    def read_run_turns(ctx, *, project_id, actor, args):
+        run_id = str(args.get("run_id") or "").strip()
+        if not run_id:
+            return {"ok": False, "error": "run_id is required"}
+        limit = max(1, min(int(args.get("limit") or 40), 200))
+        stage = str(args.get("stage") or "").strip()
+        with ctx.begin() as c:
+            summary = c.execute(
+                _text("SELECT count(*) AS turns, min(created_at) AS first_turn, "
+                      "max(created_at) AS last_turn, "
+                      "count(*) FILTER (WHERE direction = 'tool_call') AS tool_calls, "
+                      "count(*) FILTER (WHERE direction = 'tool_result') AS tool_results, "
+                      "count(*) FILTER (WHERE ok = false) AS failures, "
+                      "EXTRACT(EPOCH FROM (now() - max(created_at))) AS silent_seconds "
+                      "FROM agent_turns WHERE code_task_run_id = :r"),
+                {"r": run_id}).mappings().first()
+            run = c.execute(
+                _text("SELECT status, phase FROM code_task_runs WHERE id = :r"),
+                {"r": run_id}).mappings().first()
+            rows = c.execute(
+                _text("SELECT turn_index, direction, stage, role_key, tool_name, latency_ms, "
+                      "ok, error, truncated, left(coalesce(content, ''), 400) AS content, "
+                      "created_at FROM agent_turns WHERE code_task_run_id = :r "
+                      "  AND (:stage = '' OR stage = :stage) "
+                      "ORDER BY created_at DESC, turn_index DESC LIMIT :lim"),
+                {"r": run_id, "stage": stage, "lim": limit}).mappings().all()
+
+        if not summary or not summary["turns"]:
+            return {"run_id": run_id, "turns": 0,
+                    "note": "nothing captured for this run. It may not have started, or "
+                            "capture may have been off. Try read_logs for the service."}
+
+        calls = int(summary["tool_calls"] or 0)
+        results = int(summary["tool_results"] or 0)
+        silent = int(summary["silent_seconds"] or 0)
+        running = str((run or {}).get("status") or "") in ("running", "queued")
+        # THE ONE NUMBER THAT ANSWERS "IS IT STUCK?".
+        #
+        # A run that is working produces turns. Its last turn being 18 minutes old while its
+        # status is still `running` is not a slow build — it is a build that stopped saying
+        # anything, which is a different problem with a different cause. Stated as a finding
+        # rather than left for the reader to subtract two timestamps.
+        findings = []
+        if running and silent > 300:
+            findings.append(
+                f"NO TURN RECORDED FOR {silent // 60}m while the run is still '{run['status']}' "
+                f"in phase '{run.get('phase')}'. It is not working slowly; it has gone quiet. "
+                "Look at the last tool_call below — a command that never returned is the usual "
+                "cause.")
+        if calls > results:
+            findings.append(
+                f"{calls - results} tool call(s) never produced a result. The last one is where "
+                "it stopped; a command whose output pipe is held open by a process it started "
+                "will hang past its own timeout.")
+        if int(summary["failures"] or 0):
+            findings.append(f"{summary['failures']} turn(s) recorded an error.")
+
+        return {
+            "run_id": run_id,
+            "status": (run or {}).get("status"),
+            "phase": (run or {}).get("phase"),
+            "turns": int(summary["turns"]),
+            "tool_calls": calls,
+            "tool_results": results,
+            "first_turn": summary["first_turn"].isoformat() if summary["first_turn"] else None,
+            "last_turn": summary["last_turn"].isoformat() if summary["last_turn"] else None,
+            "silent_for_seconds": silent,
+            "findings": findings,
+            "recent_turns": [
+                {**{k: v for k, v in dict(row).items() if k != "created_at"},
+                 "created_at": row["created_at"].isoformat() if row["created_at"] else None}
+                for row in rows
+            ],
+            "note": "newest first. `direction` is prompt | completion | tool_call | tool_result "
+                    "— a tool_call with no matching tool_result is a command that never came "
+                    "back.",
+        }
+
+
 def _register_standard_tools(reg: ToolRegistry) -> None:
     """Let a role turn a conclusion into a rule that binds future builds.
 
@@ -3604,6 +3712,7 @@ def build_default_registry() -> ToolRegistry:
     _register_deployment_target_tools(reg)
     _register_role_experience_tools(reg)
     _register_standard_tools(reg)
+    _register_run_turn_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)

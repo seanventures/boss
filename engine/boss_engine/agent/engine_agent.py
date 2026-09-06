@@ -315,6 +315,30 @@ class EngineAgent:
         "generate_image",
     })
 
+    #: THROWS AWAY WORK, OR REMOVES A SAFEGUARD. Always offered, never executed by the model.
+    #:
+    #: PROPOSE_ONLY above was built on one idea — "starts expensive work" — and the taxonomy had
+    #: no category for the opposite. So `cancel_job` was an ordinary write, and asked why a build
+    #: was slow, BOSS cancelled it: twenty-seven minutes of work destroyed to answer a question,
+    #: with `force: true`, and the operator found out by reading the reply.
+    #:
+    #: Phrasing cannot be the control here. A gate that reads the operator's words is a
+    #: heuristic and every heuristic has holes; the cost of a hole in THIS direction is
+    #: destroyed work that nobody can get back. So these are unconditional: no sentence, however
+    #: explicit, makes the model itself press them. The operator presses them.
+    #:
+    #: That is not a refusal to act — the button is right there in the reply, it carries the
+    #: exact arguments BOSS chose, and one click runs it verbatim. It costs a click and it
+    #: cannot cost an afternoon.
+    DESTRUCTIVE = frozenset({
+        "cancel_job",
+        "cancel_code_task",
+        # Removes a check somebody put there on purpose.
+        "waive_gates",
+        # Arbitrary mutation. `query_db` reads every table; this one can empty them.
+        "write_db",
+    })
+
     def _run_tool(
         self, name: str, args: dict, *, project_id: str, actor: str,
         allow_writes: bool, pending: list[dict],
@@ -327,6 +351,19 @@ class EngineAgent:
             name = spec.name
         except ToolError as exc:
             return {"ok": False, "error": str(exc)}
+        if name in self.DESTRUCTIVE:
+            pending.append({"tool": name, "args": args})
+            return {
+                "ok": True, "proposed": True, "tool": name, "args": args,
+                "label": _propose_label(name, args),
+                "why": "destroys work or removes a safeguard — the operator decides",
+                "note": (f"NOT run. {name} throws away work or removes a check, so it is ALWAYS "
+                         "offered as a button and never performed by you, whatever was asked. "
+                         "Say plainly what you are offering and why you think it is right — and "
+                         "do not describe it as something you have done. If the operator only "
+                         "asked a question, ANSWER the question first; the offer is a footnote "
+                         "to the answer, not the answer."),
+            }
         if name in self.PROPOSE_ONLY:
             pending.append({"tool": name, "args": args})
             return {

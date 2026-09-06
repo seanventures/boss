@@ -16,6 +16,11 @@ _EXPECTED_TOOLS: set[str] = {
     # here for the same reason: a role that mandates a check it cannot itself run has filed a
     # request, not applied a control.
     "mandate_standard", "list_standards", "check_port_exposure",
+    # The turn-by-turn record of what a build DID. 101 rows existed for a run reported as
+    # "stuck" and nothing could read them: get_run_activity reads llm_calls, which was empty.
+    # So a question about progress got answered from queue statistics, and the build was
+    # cancelled on the strength of it.
+    "read_run_turns",
     # The spec an app was built from — PRD, criteria, review notes. BOSS could read
     # its own source, its logs and its hosts, and could not read the one document
     # that says what an app was FOR.
@@ -108,10 +113,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 69, (
+    assert len(reg.names()) == 70, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 44
+    assert len(read) == 45
     assert len(write) == 25
     # the capabilities the user explicitly asked the agent to cover
     for name in (
