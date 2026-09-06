@@ -236,6 +236,19 @@ class TestAPrintedOfferBecomesAButton:
         assert "```json" not in turn.reply
         assert "The run stopped because" in turn.reply
 
+    def test_a_proposal_of_a_proposal_is_unwrapped(self, monkeypatch):
+        """Observed live. `propose_action` is itself a tool, so a model writing out its own
+        call describes {"tool": "propose_action", "args": {"tool": "retry_code_task", …}}.
+        Recovered literally that is a button whose tool is propose_action — on click it would
+        propose something rather than doing it. The offer read "Retry Interview Scorecard App"
+        and would have run nothing."""
+        printed = ('```json\n{"tool": "propose_action", "args": '
+                   '{"tool": "retry_code_task", "args": {"run_id": "crun_33a0"}}, '
+                   '"label": "Retry Interview Scorecard App"}\n```')
+        turn, _ = run(monkeypatch, "why is crun_33a0 stuck?", [(printed, SIX_READS)])
+        assert [p["tool"] for p in turn.proposed_actions] == ["retry_code_task"]
+        assert turn.proposed_actions[0]["args"] == {"run_id": "crun_33a0"}
+
     def test_a_json_sample_the_operator_asked_for_survives(self, monkeypatch):
         """Not every fenced block is a proposal. One that does not name a real tool with an
         args object is left exactly as written."""

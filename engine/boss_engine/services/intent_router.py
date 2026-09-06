@@ -323,6 +323,24 @@ def _recover_tagged_actions(reply: str, known_tools, existing) -> tuple[list, st
     return found, _PROPOSE_TAG.sub(_take, reply)
 
 
+def _unwrap_proposal(tool: str, args: dict) -> tuple[str, dict]:
+    """A proposal OF a proposal is the inner one.
+
+    `propose_action` is itself a tool, so a model writing out its own call — as a JSON block, a
+    tag or a table row — describes `{"tool": "propose_action", "args": {"tool": "retry_code_task",
+    …}}`. Recovered literally that produces a button whose tool is `propose_action`, which on
+    click proposes something instead of doing it. Observed live: the offer read "Retry Interview
+    Scorecard App" and would have run nothing.
+    """
+    seen = 0
+    while tool == "propose_action" and isinstance(args, dict) and seen < 3:
+        inner = args.get("args") if isinstance(args.get("args"), dict) else {}
+        tool = str(args.get("tool") or "").strip()
+        args = inner
+        seen += 1
+    return tool, (args if isinstance(args, dict) else {})
+
+
 #: A fenced JSON block that describes a proposal instead of being one.
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -366,7 +384,9 @@ def _recover_json_actions(reply: str, known_tools, existing) -> tuple[list, str]
         # must survive intact, so this needs the tool name to be real and an args object.
         if tool not in known_tools or not isinstance(payload.get("args"), dict):
             return match.group(0)
-        args = payload["args"]
+        tool, args = _unwrap_proposal(tool, payload["args"])
+        if tool not in known_tools or tool == "propose_action":
+            return ""
         if _placeholder_argument(args):
             return ""
         key = (tool, json.dumps(args, sort_keys=True))
