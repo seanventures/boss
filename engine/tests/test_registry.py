@@ -21,6 +21,10 @@ _EXPECTED_TOOLS: set[str] = {
     # So a question about progress got answered from queue statistics, and the build was
     # cancelled on the strength of it.
     "read_run_turns",
+    # The whole investigation as one call, in the right order, with the comparison that
+    # makes a duration mean something. A prompt can be skipped under pressure; a routine
+    # cannot.
+    "diagnose_run",
     # The spec an app was built from — PRD, criteria, review notes. BOSS could read
     # its own source, its logs and its hosts, and could not read the one document
     # that says what an app was FOR.
@@ -113,10 +117,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 70, (
+    assert len(reg.names()) == 71, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 45
+    assert len(read) == 46
     assert len(write) == 25
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -282,3 +286,54 @@ def test_discuss_read_registry_drops_project_id_override_from_args():
     assert seen["project_id"] == "project-a"
     assert "project_id" not in seen["args"]
     assert seen["args"]["limit"] == 3
+
+
+def test_every_write_declares_what_pressing_it_costs():
+    """A new destructive tool must not be able to arrive as an ordinary write.
+
+    `cancel_job` was exactly that — a write like any other until it threw away twenty-seven
+    minutes of a build to answer a question. The membership lived in a hand-maintained name set
+    inside the agent, so anything added later was silently in neither set.
+
+    The declaration is now on the tool. This test is what stops the default from quietly
+    covering the next one: every write names its reversibility, and adding a write means
+    choosing.
+    """
+    from boss_engine.tools.registry import Reversibility  # noqa: F401 — documents the values
+
+    allowed = {"safe", "costs_money", "destroys_work", "irreversible"}
+    reg = build_default_registry()
+    undeclared = []
+    for spec in reg.specs(kind="write"):
+        assert spec.reversibility in allowed, f"{spec.name}: {spec.reversibility!r}"
+        if spec.reversibility == "safe":
+            undeclared.append(spec.name)
+    # `safe` is a real answer AND the default, so it is the one that can be reached by
+    # accident. Pinning the set means a new write landing on the default has to be added here
+    # deliberately, in front of a reviewer.
+    assert sorted(undeclared) == sorted(_SAFE_WRITES), (
+        "a write is relying on the `safe` default. Declare its reversibility explicitly, then "
+        f"add it here: {sorted(set(undeclared) - set(_SAFE_WRITES))}")
+
+
+#: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
+#: means, and they stay one-shot when the operator asks for them.
+_SAFE_WRITES = [
+    "close_orphaned_runs", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
+    "redeploy", "register_repository", "retarget_app", "send_feedback", "set_job_priority",
+    "start_preview", "steer_code_task", "stop_preview",
+]
+
+
+def test_the_tools_that_are_never_pressed_by_the_model():
+    """The other half: what the operator must click for themselves."""
+    reg = build_default_registry()
+    never = sorted(s.name for s in reg.specs(kind="write") if not s.self_executable)
+    assert never == [
+        "cancel_code_task",   # throws away a build in flight
+        "cancel_job",         # the one that caused this
+        "decide",             # approves a gate; an agent that approves its own gates is ungated
+        "run_on_host",        # arbitrary command on a live machine
+        "waive_gates",        # removes a check somebody put there
+        "write_db",           # arbitrary mutation of any table
+    ]

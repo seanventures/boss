@@ -6,6 +6,7 @@ import { Markdown } from "./markdown";
 
 import {
   askBossAction,
+  loadAgentProgressAction,
   loadAgentWorkspaceAction,
   loadRoleStartersAction,
   loadTaskContextAction,
@@ -217,6 +218,31 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // elapsed time is always visible, and a turn that outlives NORMAL/STALL says so in the log
   // rather than leaving the operator watching a dot forever.
   const [elapsed, setElapsed] = useState(0);
+  // WHAT IT IS DOING, WHILE IT IS DOING IT.
+  //
+  // A turn is one request, so the tool calls are known only when it returns — and the
+  // reliability work deliberately makes turns investigate MORE, which makes the wait longer.
+  // The server records each step as it starts; this polls for them. "Working — reading the
+  // system" for two minutes is indistinguishable from a turn that has died.
+  const [steps, setSteps] = useState<string[]>([]);
+  useEffect(() => {
+    if (!busy || !threadId) { setSteps([]); return; }
+    let alive = true;
+    let cursor = 0;
+    const tick = () => {
+      loadAgentProgressAction(threadId, cursor).then((r) => {
+        if (!alive || !r.ok || !r.data) return;
+        const d = r.data as { steps?: { id: number; label: string }[]; cursor?: number };
+        if (Array.isArray(d.steps) && d.steps.length) {
+          cursor = Number(d.cursor ?? cursor);
+          setSteps((prev) => [...prev, ...d.steps!.map((s) => s.label)].slice(-6));
+        }
+      });
+    };
+    const id = window.setInterval(tick, 1500);
+    tick();
+    return () => { alive = false; window.clearInterval(id); };
+  }, [busy, threadId]);
   useEffect(() => {
     if (!busy) { setElapsed(0); return; }
     const t0 = Date.now();
@@ -652,14 +678,25 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                  data-testid="agent-working-line" aria-live="polite">
                 <span className="agent-working-dot" aria-hidden />
                 <span>
-                  {elapsed >= AGENT_NORMAL_SECONDS
-                    ? "Still working — this turn is running long. It has not been dropped; BOSS is chaining tools."
-                    : "Working — reading the system and choosing tools."}
+                  {/* The most recent real step beats any generic sentence: it is evidence the
+                      turn is alive, and it tells the operator what is being looked at. */}
+                  {steps.length
+                    ? steps[steps.length - 1]
+                    : elapsed >= AGENT_NORMAL_SECONDS
+                      ? "Still working — this turn is running long. It has not been dropped; BOSS is chaining tools."
+                      : "Working — reading the system and choosing tools."}
                 </span>
                 <span className="agent-working-elapsed" data-testid="agent-elapsed">
                   {elapsed}s{elapsed >= AGENT_NORMAL_SECONDS ? ` / ~${AGENT_STALL_SECONDS}s` : ""}
                 </span>
               </p>
+              {/* The trail, oldest first. Six is enough to show it is chaining without the
+                  panel scrolling away from the answer when it arrives. */}
+              {steps.length > 1 ? (
+                <ol className="agent-steps" data-testid="agent-steps">
+                  {steps.slice(0, -1).map((s, i) => <li key={`${s}-${i}`}>{s}</li>)}
+                </ol>
+              ) : null}
             </article>
           ) : null}
         </div>

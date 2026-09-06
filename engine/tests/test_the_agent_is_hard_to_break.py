@@ -52,12 +52,12 @@ class TestNothingDestroysWorkWithoutAClick:
         """A heuristic over natural language will always have a hole. This one cannot: the
         check happens where the tool is invoked, after every prompt, phrasing and retry."""
         body = inspect.getsource(EngineAgent._run_tool)
-        assert "if name in self.DESTRUCTIVE:" in body
+        assert "if not spec.self_executable or name in self.DESTRUCTIVE:" in body
         # And BEFORE the allow_writes gate, so even an explicit instruction — which sets
         # allow_writes True — cannot route past it. Compared against the GATE, not the
         # parameter of the same name in the signature.
         gate = body.index('if spec.kind == "write" and not allow_writes:')
-        assert body.index("if name in self.DESTRUCTIVE:") < gate
+        assert body.index("if not spec.self_executable") < gate
 
     @pytest.mark.parametrize("phrasing", [
         "cancel the job",
@@ -79,14 +79,14 @@ class TestNothingDestroysWorkWithoutAClick:
 
     def test_and_the_note_forbids_claiming_it_was_done(self):
         body = inspect.getsource(EngineAgent._run_tool)
-        section = body[body.index("if name in self.DESTRUCTIVE:"):]
+        section = body[body.index("if not spec.self_executable"):]
         assert "do not describe it as something you have done" in section[:1200]
 
     def test_the_offer_is_a_footnote_when_only_a_question_was_asked(self):
         """The failure was not only that it cancelled — it answered with what it had done
         instead of with why the build was slow."""
         body = inspect.getsource(EngineAgent._run_tool)
-        section = body[body.index("if name in self.DESTRUCTIVE:"):]
+        section = body[body.index("if not spec.self_executable"):]
         assert "ANSWER the question first" in section[:1200]
 
 

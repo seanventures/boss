@@ -5837,3 +5837,26 @@ CREATE INDEX IF NOT EXISTS idx_engineering_standards_active
 -- appear in every prompt in duplicate. This index is what actually enforces one row per key.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_engineering_standards_global_key
   ON engineering_standards(standard_key) WHERE project_id IS NULL;
+
+-- WHAT BOSS IS DOING RIGHT NOW, WHILE IT IS DOING IT.
+--
+-- A chat turn is ONE HTTP request: the tool calls are known only when it returns, so a turn
+-- that chains eight lookups shows the operator a pulsing dot for two minutes and nothing else.
+-- That was survivable when the average answer used 2.86 tools. The reliability work deliberately
+-- raises that floor, which makes the silence longer — so the silence has to go first.
+--
+-- Written on its OWN connection and committed per row: the turn's transaction has not committed
+-- yet, so anything written on it is invisible to the poller until the answer is already there,
+-- which is precisely too late.
+--
+-- Deliberately tiny and disposable. It is a progress indicator, not a record — `agent_turns` and
+-- the message trail are where the durable account lives.
+CREATE TABLE IF NOT EXISTS agent_progress (
+  id BIGSERIAL PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  project_id TEXT,
+  label TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_progress_thread
+  ON agent_progress(thread_id, id DESC);

@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import re
 import uuid
 import json
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .._compat import services_module
 from ..tools import ToolError, ToolRegistry, build_default_registry
@@ -153,11 +154,72 @@ def _report_from_trace(trace: list[dict]) -> str:
     return "\n".join(lines)
 
 
+#: Arguments that turn an action into its strongest form: skip the checks, take everything,
+#: do not stop at the first refusal.
+_ESCALATION_ARGS = frozenset({"force", "hard", "all", "recursive", "skip_checks", "no_verify"})
+
+#: The operator asking for it in their own words. Narrow on purpose — this is what LICENSES the
+#: escalation, so a loose match here hands back exactly what was taken away.
+_FORCE_WORDS = re.compile(r"\b(force|forcibly|hard|regardless|anyway|no matter what|"
+                          r"skip the checks?|override)\b", re.IGNORECASE)
+
+
+def _escalation_flags(args: dict) -> set[str]:
+    """Escalating arguments the model set to a truthy value."""
+    return {k for k in _ESCALATION_ARGS if args.get(k) not in (None, False, "", 0)}
+
+
+def _asked_for_force(text: str) -> bool:
+    return bool(_FORCE_WORDS.search(text or ""))
+
+
+def _step_label(name: str, args: dict) -> str:
+    """What BOSS is doing, in the operator's language rather than the schema's.
+
+    "read_run_turns crun_33a0…" is not what somebody watching wants; "reading what the build
+    actually did" is. The subject matters more than the verb — a label with no object reads as
+    a spinner with extra words.
+    """
+    subject = ""
+    for key in ("run_id", "job_id", "target_id", "host", "service", "repo", "role", "sql"):
+        value = str(args.get(key) or "").strip()
+        if value:
+            subject = value[:40]
+            break
+    friendly = {
+        "diagnose_run": "diagnosing the run",
+        "read_run_turns": "reading what the build actually did",
+        "read_logs": "reading the service logs",
+        "explain_run": "breaking down where the time went",
+        "query_db": "querying the database",
+        "search_code": "searching the code",
+        "read_code": "reading the code",
+        "list_code_tasks": "listing the work",
+        "get_code_task": "reading the run",
+        "inspect_host": "inspecting the host",
+        "recall_role_experience": "recalling what this role has argued here",
+        "describe_role": "reading the role's remit",
+    }.get(name, name.replace("_", " "))
+    return f"{friendly} — {subject}" if subject else friendly
+
+
+#: Why a tool came back as an offer, in the words the operator should read.
+_WHY_NOT_SELF_EXECUTED = {
+    "destroys_work": "throws away work in flight, or removes a control — the operator decides",
+    "irreversible": "cannot be undone once done — the operator decides",
+}
+
+
 class EngineAgent:
     def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None):
         self.ctx = ctx
         self.registry = registry or build_default_registry()
         self._adapter = None
+        #: The operator's own words for the turn in flight. Read by the escalation guard: only
+        #: the operator can license `force`, so the guard has to see what they actually wrote.
+        self._operator_text = ""
+        #: Things the loop did to the model's own calls, to be reported rather than hidden.
+        self._notes: list[str] = []
 
     def _adapter_obj(self):
         if self._adapter is None:
@@ -175,11 +237,17 @@ class EngineAgent:
         max_steps: int = 6,
         history: Optional[list[dict]] = None,
         system: Optional[str] = None,
+        #: Called with a short human label as each tool starts. The turn is one HTTP request,
+        #: so without this the operator watches a dot for as long as the investigation takes —
+        #: and the reliability work deliberately makes investigations longer.
+        on_step: Optional[Callable[[str], None]] = None,
     ) -> AgentTurn:
         """Run one agent turn. Returns the reply plus the tool trace and any
         write actions that were held for confirmation. `system` overrides the
         default system prompt (the router's answer path passes its own
         discuss-don't-claim-you-started framing)."""
+        self._operator_text = message or ""
+        self._notes = []
         schemas = self.registry.openai_schema()
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
         if history:
@@ -261,6 +329,11 @@ class EngineAgent:
                     args = json.loads(tc.get("arguments") or "{}")
                 except Exception:
                     args = {}
+                if on_step is not None:
+                    try:
+                        on_step(_step_label(name, args))
+                    except Exception:  # noqa: BLE001 — never fail a turn to report progress
+                        pass
                 result = self._run_tool(
                     name, args, project_id=project_id, actor=actor,
                     allow_writes=allow_writes, pending=pending,
@@ -351,13 +424,40 @@ class EngineAgent:
             name = spec.name
         except ToolError as exc:
             return {"ok": False, "error": str(exc)}
-        if name in self.DESTRUCTIVE:
+        # AN ESCALATION NOBODY ASKED FOR.
+        #
+        # Cancelling the build, the model passed `force: true` — a flag that overrides the very
+        # checks that would have stopped it — and nothing in the operator's message asked for
+        # force. A model reaching for the strongest form of an action it was not asked to take
+        # at all is the failure twice over.
+        #
+        # These flags are dropped unless the operator's own words asked for them. Dropped, not
+        # refused: the tool still runs in its ordinary form, and if the gentle form is genuinely
+        # blocked the tool says so and the operator can ask for force in as many words.
+        escalated = _escalation_flags(args)
+        if escalated and not _asked_for_force(self._operator_text):
+            args = {k: v for k, v in args.items() if k not in escalated}
+            self._notes.append(
+                f"dropped {', '.join(sorted(escalated))} from {name}: nothing in the request "
+                "asked to force it")
+
+        # DECLARED ON THE TOOL, NOT LISTED HERE.
+        #
+        # `DESTRUCTIVE` and `PROPOSE_ONLY` are hand-maintained name sets, which means a tool
+        # added tomorrow is silently in neither — and `cancel_job` was exactly that: an
+        # ordinary write until it destroyed twenty-seven minutes of a build. Every write now
+        # declares what pressing it costs (`reversibility` on the ToolSpec), a registry test
+        # requires the declaration, and this reads it. The sets remain as a belt-and-braces
+        # backstop for anything that predates the declaration.
+        if not spec.self_executable or name in self.DESTRUCTIVE:
             pending.append({"tool": name, "args": args})
             return {
                 "ok": True, "proposed": True, "tool": name, "args": args,
                 "label": _propose_label(name, args),
-                "why": "destroys work or removes a safeguard — the operator decides",
-                "note": (f"NOT run. {name} throws away work or removes a check, so it is ALWAYS "
+                "why": _WHY_NOT_SELF_EXECUTED.get(
+                    spec.reversibility,
+                    "destroys work or removes a safeguard — the operator decides"),
+                "note": (f"NOT run. {name} is declared '{spec.reversibility}', so it is ALWAYS "
                          "offered as a button and never performed by you, whatever was asked. "
                          "Say plainly what you are offering and why you think it is right — and "
                          "do not describe it as something you have done. If the operator only "

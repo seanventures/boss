@@ -54,7 +54,9 @@ class TestItWillNotRunOnTheModelsSayS0:
 
     def test_the_refusal_says_how_to_get_it_in_front_of_the_operator(self):
         out = _run({"host": "hetzner-ci-01", "command": "docker ps"})
-        assert "propose_command" in out["do_this"]
+        # `propose_action`, not `propose_command` — which this refusal named for months and
+        # which has never been a registered tool. The refusal was sending the model to nothing.
+        assert "propose_action" in out["do_this"]
         # The args come back so the model proposes the SAME command, not a paraphrase of it.
         assert out["proposed_args"]["command"] == "docker ps"
         assert out["proposed_args"]["host"] == "hetzner-ci-01"

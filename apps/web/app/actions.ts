@@ -290,6 +290,12 @@ export async function loadAgentWorkspaceAction(projectId: string, actor: string)
   } };
 }
 
+/** What BOSS is doing in this thread right now — polled while a turn is in flight. */
+export async function loadAgentProgressAction(threadId: string, since: number): Promise<ActionResult> {
+  return getJsonReturn(
+    `/v1/agent/threads/${encodeURIComponent(threadId)}/progress?since=${Math.max(0, since | 0)}`);
+}
+
 /** Questions worth asking THIS role, from the server, grounded in its own record here. */
 export async function loadRoleStartersAction(projectId: string, role: string): Promise<ActionResult> {
   return getJsonReturn(

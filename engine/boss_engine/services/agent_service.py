@@ -302,6 +302,10 @@ class AgentService:
             # app branch (extend the PR) instead of a fresh build on main.
             external_ref=thread.get("external_ref"),
             role=role,
+            # So the turn can report what it is doing while it does it. See agent_progress:
+            # a chat turn is one HTTP request, and an investigation that now runs six or more
+            # lookups would otherwise be two minutes of a pulsing dot.
+            thread_id=thread["id"],
         )
         assistant = self.append_message(
             connection,

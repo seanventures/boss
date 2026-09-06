@@ -92,7 +92,7 @@ def test_cancel_code_task_refuses_foreign_run():
     ctx = _Ctx(_Conn(run_project="project-b"))
     out = reg.invoke(
         "cancel_code_task", ctx, project_id="project-a", actor="mcp",
-        args={"run_id": "crun_other"},
+        args={"run_id": "crun_other", "_operator_confirmed": True},
     )
     assert out["ok"] is False
     assert "no code task run" in out["error"]
@@ -108,7 +108,7 @@ def test_cancel_code_task_allows_same_project(monkeypatch):
     ctx = _Ctx(conn)
     out = reg.invoke(
         "cancel_code_task", ctx, project_id="project-a", actor="mcp",
-        args={"run_id": "crun_mine"},
+        args={"run_id": "crun_mine", "_operator_confirmed": True},
     )
     assert out["ok"] is True
     assert out["run_id"] == "crun_mine"
@@ -167,6 +167,7 @@ def test_decide_refuses_foreign_decision(monkeypatch):
         "decide", ctx, project_id="project-a", actor="mcp",
         args={
             "decision_id": "dec_other",
+                "_operator_confirmed": True,
             "action": "approve",
             "note": "looks good",
             "actor": "admin-of-other-project",
@@ -291,7 +292,27 @@ def test_watch_code_task_refuses_foreign_run(monkeypatch):
     ctx = _Ctx(_Conn(run_project="project-b"))
     out = reg.invoke(
         "watch_code_task", ctx, project_id="project-a", actor="mcp",
-        args={"run_id": "crun_other"},
+        args={"run_id": "crun_other", "_operator_confirmed": True},
     )
     assert out["ok"] is False
     assert called["n"] == 0
+
+
+def test_a_destructive_tool_refuses_without_the_operators_click():
+    """The scoping tests above pass `_operator_confirmed` because they are testing tenant
+    isolation, not confirmation. This is the other half: without it, the tool does not run at
+    all — enforced in the registry, so it holds for every caller and not only the agent loop.
+
+    `cancel_job` was an ordinary write until it threw away twenty-seven minutes of a build in
+    response to a question.
+    """
+    reg = build_default_registry()
+    ctx = _Ctx(_Conn(run_project="project-a"))
+    out = reg.invoke("cancel_code_task", ctx, project_id="project-a", actor="mcp",
+                     args={"run_id": "crun_mine"})
+    assert out["ok"] is False
+    assert out["error"] == "operator_confirmation_required"
+    assert out["requires_confirmation"] is True
+    # And it says what to do instead, with the arguments intact for the button to carry.
+    assert "propose_action" in out["do_this"]
+    assert out["proposed_args"] == {"run_id": "crun_mine"}

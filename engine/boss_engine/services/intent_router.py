@@ -453,6 +453,139 @@ _ASKED_TO_LOOK = re.compile(
 )
 
 
+#: A question about a specific piece of running or failed work. These are the ones the operator
+#: needs RESOLVED, and the ones where answering from two lookups is how a normal build gets
+#: called a stall.
+_OPERATIONAL = re.compile(
+    r"\b(crun_[a-z0-9]+|wfr_[a-z0-9]+|job_[a-z0-9]+"
+    r"|stuck|stall(?:ed|ing)?|hang(?:ing|s)?|slow|latency|failing|failed|broken|error"
+    r"|not working|no preview|timed? ?out|why is|what happened|progress)\b",
+    re.IGNORECASE,
+)
+
+#: How many lookups an operational answer must be built on before it is allowed to be an answer.
+#:
+#: Measured over 79 assistant messages: the average was 2.86 tool calls against a budget of 12,
+#: and 5% called none at all. The budget was raised to twelve precisely so BOSS could chain a
+#: real investigation — find the run, read its timings, read the code that explains them — and
+#: it was using under a quarter of it. Six is the floor, not the target.
+_MIN_LOOKUPS_FOR_OPERATIONAL = 6
+
+#: Endings that hand the operator their own problem back.
+_GAVE_UP = re.compile(
+    r"(could not determine|couldn't determine|unable to determine|not enough information"
+    r"|no logs (?:were )?available|cannot tell|can't tell|unclear why|not clear why)",
+    re.IGNORECASE,
+)
+
+#: A question back to the operator that does their thinking for them in the wrong direction.
+_YES_NO_BACK = re.compile(
+    r"(would you like me to|do you want me to|shall i|should i (?:go ahead|proceed|investigate)"
+    r"|let me know if you(?:'d| would) like|if you want me to)",
+    re.IGNORECASE,
+)
+
+
+def _progress_reporter(project_id: str, thread_id: Optional[str]):
+    """A callback that records what BOSS is doing, visible WHILE it is doing it.
+
+    On its own connection and committed per row. The turn's transaction has not committed yet,
+    so a row written on it is invisible to the poller until the answer has already arrived —
+    which is exactly too late to be progress.
+
+    Returns None when there is nothing to report to, so callers need no branch.
+    """
+    if not thread_id:
+        return None
+
+    def report(label: str) -> None:
+        try:
+            from ..db import get_engine
+
+            with get_engine().begin() as c:
+                c.execute(
+                    text("INSERT INTO agent_progress (thread_id, project_id, label) "
+                         "VALUES (:t, :p, :l)"),
+                    {"t": thread_id, "p": project_id, "l": str(label)[:200]},
+                )
+        except Exception:  # noqa: BLE001 — an indicator must never take down the answer
+            pass
+
+    return report
+
+
+def _sentences(text: str) -> list[str]:
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n+", text or "") if x.strip()]
+
+
+def without_what_was_already_said(reply: str, history: list) -> str:
+    """Strip sentences this thread has already been told, and say so once.
+
+    "No duplicate answers, no answering the same thing again and again." A prompt instruction
+    does not hold this — the model cannot see its own repetition across turns as clearly as a
+    diff can. Sentences are the unit because a repeated PARAGRAPH is usually a repeated
+    argument, while a repeated clause is often just English.
+
+    Deliberately conservative: only long sentences (short ones repeat innocently — "Here is what
+    I found."), only exact matches after normalisation, and never the whole reply. A
+    de-duplicator that eats an answer is worse than one that misses a repetition.
+    """
+    if not reply or not history:
+        return reply
+    seen = set()
+    for message in history:
+        if str(message.get("role")) != "assistant":
+            continue
+        for sentence in _sentences(str(message.get("content") or "")):
+            seen.add(" ".join(sentence.lower().split()))
+    if not seen:
+        return reply
+
+    kept, dropped = [], 0
+    for sentence in _sentences(reply):
+        norm = " ".join(sentence.lower().split())
+        if len(norm) > 80 and norm in seen:
+            dropped += 1
+            continue
+        kept.append(sentence)
+    if not dropped or not kept:
+        return reply
+    out = " ".join(kept)
+    # Say that something was removed rather than leaving a reply that reads as oddly terse.
+    return out + (f"\n\n(BOSS left out {dropped} point{'s' if dropped > 1 else ''} already "
+                  "covered above rather than repeating them.)")
+
+
+def is_operational_question(message: str) -> bool:
+    """Is this about a specific piece of work that is running, slow or broken?"""
+    return bool(_OPERATIONAL.search(message or ""))
+
+
+def under_investigated(tool_calls: list, message: str) -> bool:
+    """Did an operational answer get built on too little looking?
+
+    A floor as well as a ceiling. The incident answer used three tools and the fourth was the
+    one that mattered; nothing in the loop asked whether that was enough.
+    """
+    if not is_operational_question(message):
+        return False
+    return len([c for c in (tool_calls or []) if c.get("tool")]) < _MIN_LOOKUPS_FOR_OPERATIONAL
+
+
+def hands_the_problem_back(reply: str, proposed: list) -> bool:
+    """Does this reply end without a direction the operator can act on?
+
+    "I could not determine it" is an acceptable FINDING when it names the next specific step.
+    It is never an acceptable ending, and neither is "would you like me to investigate
+    further?" — which asks the operator to do the thinking they came here to avoid.
+    """
+    if not reply:
+        return False
+    if proposed:
+        return False           # there is a button; that is a direction
+    return bool(_GAVE_UP.search(reply) or _YES_NO_BACK.search(reply))
+
+
 def asked_only_to_look(message: str) -> bool:
     """Is this a question rather than an instruction?
 
@@ -641,6 +774,8 @@ class IntentRouter:
         external_ref: Optional[str] = None,
         #: Answer AS this member of the workforce, rather than as BOSS-in-general.
         role: Optional[str] = None,
+        #: The conversation this turn belongs to, so progress can be reported while it runs.
+        thread_id: Optional[str] = None,
     ) -> RouterTurn:
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
@@ -665,6 +800,7 @@ class IntentRouter:
             if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
                     latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
                 return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                thread_id=thread_id,
                                 role=role)
             # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
             # thread whose plan was already handled another way — the user just steers with a message.
@@ -733,6 +869,7 @@ class IntentRouter:
         # this console today; if a model is configured at all, it is available.
         if self.settings.openai_api_key or self.settings.azure_openai_key:
             return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                thread_id=thread_id,
                                 role=role)
 
         # No model available — fall back to keywords rather than doing nothing.
@@ -742,6 +879,7 @@ class IntentRouter:
             # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
             # every greeting, question, or test string). Work starts only on an explicit intent.
             return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                thread_id=thread_id,
                                 role=role)
 
         capability_id = {
@@ -808,7 +946,8 @@ class IntentRouter:
 
     def _answer(self, connection, project_id: str, messages: list,
                 *, external_ref: Optional[str] = None,
-                role: Optional[str] = None) -> RouterTurn:
+                role: Optional[str] = None,
+                thread_id: Optional[str] = None) -> RouterTurn:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
         explicit build intent (handled in route_turn) actuates work."""
@@ -824,7 +963,36 @@ class IntentRouter:
             "You are BOSS, the operator console for an autonomous software factory. You have "
             "COMPLETE access to this system and you OPERATE it — you are expected to use it "
             "like an engineer with a terminal and root, not to answer from memory.\n\n"
+            "YOUR JOB IS TO END THE PROBLEM, NOT TO DESCRIBE IT.\n"
+            "An answer that explains a failure perfectly and leaves the operator to fix it has "
+            "done a fraction of the job. Every diagnosis that has a known fix ENDS with that "
+            "fix offered — the exact tool with real arguments, via propose_action — so the "
+            "operator is one click from done. A build that hung: offer the retry. A target "
+            "pointing at the wrong port: offer the correction.\n\n"
+            "ANSWER THE QUESTION THAT WAS ASKED.\n"
+            "The first sentence is the answer, not the preamble. Asked why something is stuck, "
+            "the first sentence names the cause. Evidence goes underneath. Do not deliver a "
+            "standard tour of the subject when a specific thing was asked — and do not repeat "
+            "anything you have already said in this conversation; build on it.\n\n"
+            "NEVER HAND THE PROBLEM BACK.\n"
+            "\"I could not determine it\" is a finding only when it names the next specific "
+            "step; it is never an ending. And never ask the operator a yes/no question — no "
+            "\"would you like me to investigate further?\". If you need a decision, present "
+            "the options you have already worked out with a recommendation. If you are stuck, "
+            "give the single most likely cause, the ONE check that would confirm it, and a "
+            "button that runs it.\n\n"
+            "LOOK ACROSS EVERYTHING BEFORE YOU ANSWER.\n"
+            "You have the run's own turns, the service logs, the customer's app code on its PR "
+            "branch, BOSS's own source, every table in the database, the hosts, and this "
+            "project's history. An operational question is worth SIX or more lookups, not two; "
+            "you have twelve steps and stopping early is how a normal build gets called a "
+            "stall. Name in your answer what you actually consulted, and say plainly what you "
+            "could not check and why.\n\n"
             "PROGRESS, LATENCY AND \"IS IT STUCK\" QUESTIONS — READ THE WORK FIRST.\n"
+            "  diagnose_run(run_id) does the whole sequence in one call — turns, silence, the "
+            "last command that never returned, the phase breakdown, AND how this run compares "
+            "to other builds on this project. Prefer it over assembling the same picture by "
+            "hand.\n"
             "When an operator asks how a build is going, why it is slow, why it is taking so "
             "long, or whether it is stuck, your FIRST call is read_run_turns(run_id) — the "
             "turn-by-turn record of what the coding agent actually did, and how long it has "
@@ -1091,6 +1259,7 @@ class IntentRouter:
                     # they had to notice and ask again. The customer's only interface should not
                     # hand them a provider's load-shedding as a dead end.
                     _looking_only = asked_only_to_look(latest)
+                    _report = _progress_reporter(project_id, thread_id)
                     turn = _with_transient_retry(lambda: self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
                         message=latest, history=history, system=system,
@@ -1127,7 +1296,7 @@ class IntentRouter:
                         # back as `confirmation_required`, which the console renders as a
                         # button — so the operator gets the diagnosis and the fix, one click
                         # away, instead of a fait accompli.
-                        allow_writes=not _looking_only, max_steps=12,
+                        allow_writes=not _looking_only, max_steps=12, on_step=_report,
                     ))
                     reply = str(turn.reply or "").strip()
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
@@ -1234,6 +1403,71 @@ class IntentRouter:
                                 f"{role}'s record on this project — treat any specific figure "
                                 "in it as unverified.)")
 
+                    # LOOKED TOO LITTLE, OR HANDED THE PROBLEM BACK.
+                    #
+                    # The turn currently ends when the model produces text. For an operational
+                    # question that is the wrong stopping condition: the incident answer was
+                    # built on three lookups and the fourth was the one that mattered, and the
+                    # measured average across 79 answers was 2.86 against a budget of 12.
+                    #
+                    # So one bounded continuation — not an open loop — when either is true:
+                    # the answer rests on too little looking, or it ends by handing the problem
+                    # back ("could not determine", "would you like me to investigate further").
+                    # It is told exactly which fault it committed and what to do about it,
+                    # because "try harder" is not an instruction a model can act on.
+                    _thin = under_investigated(tool_calls, latest)
+                    _handed_back = hands_the_problem_back(reply, proposed)
+                    if reply and (_thin or _handed_back):
+                        gaps = []
+                        if _thin:
+                            gaps.append(
+                                f"You answered an operational question after "
+                                f"{len([c for c in tool_calls if c.get('tool')])} lookups. "
+                                "That is not enough to be sure. Call diagnose_run on the run in "
+                                "question if you have not, then read_logs, then the code — you "
+                                "have a budget of twelve steps and answering early is how a "
+                                "normal build gets called a stall.")
+                        if _handed_back:
+                            gaps.append(
+                                "Your answer ends by handing the problem back. Never end on "
+                                "'could not determine' or 'would you like me to'. State the "
+                                "single most likely cause, the ONE check that would confirm it, "
+                                "and — if a tool can perform that check or the fix — offer it "
+                                "with propose_action. A direction, never a yes/no question.")
+                        try:
+                            better = _with_transient_retry(lambda: self._answer_agent().chat(
+                                project_id=project_id, actor="orchestrator",
+                                message="\n\n".join(gaps) + (
+                                    "\n\nAnswer the operator's original question again, better. "
+                                    "Do not restate what you already said — replace it."),
+                                history=history + [{"role": "assistant", "content": reply}],
+                                system=system,
+                                # Same permission the first pass had. A continuation must not be
+                                # a way to acquire writes the turn was not entitled to.
+                                allow_writes=not _looking_only, max_steps=8, on_step=_report,
+                            ))
+                        except Exception:  # noqa: BLE001 — the first answer still stands
+                            better = None
+                        for step in (getattr(better, "trace", None) or []):
+                            result = step.get("result") or {}
+                            tool_calls.append({"tool": step.get("tool"),
+                                               "args": step.get("args"),
+                                               "ok": bool(result.get("ok", True))})
+                            if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
+                                actions.append({"kind": str(step.get("tool")),
+                                                "args": step.get("args"), "result": result})
+                            if result.get("proposed"):
+                                proposed.append({
+                                    "id": make_id("act"),
+                                    "tool": result.get("tool") or step.get("tool"),
+                                    "args": result.get("args") or {},
+                                    "label": result.get("label"),
+                                    "why": result.get("why"),
+                                })
+                        improved = str(getattr(better, "reply", "") or "").strip()
+                        if improved:
+                            reply = improved
+
                     # IT SAID IT DID IT. MAKE IT DO IT.
                     #
                     # Given the tool and explicit approval, BOSS read HookWatch's target, got
@@ -1330,6 +1564,9 @@ class IntentRouter:
         # here to check it against.
         reply = _no_action_was_claimed(reply, actions)
         reply = _boss_cannot_call_you_back(reply)
+        # SAY IT ONCE. Applied last, after every reconciler has had its say, so a correction
+        # note is never mistaken for a repetition and stripped.
+        reply = without_what_was_already_said(reply, history)
         return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls,
                           proposed_actions=proposed)
 

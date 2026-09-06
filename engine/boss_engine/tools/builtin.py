@@ -437,6 +437,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["title", "instructions"],
         ),
         kind="write",
+        reversibility="costs_money",
     )
     def create_code_task(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -527,6 +528,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id", "instructions"],
         ),
         kind="write",
+        reversibility="costs_money",
     )
     def extend_code_task(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
@@ -578,6 +580,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id"],
         ),
         kind="write",
+        reversibility="costs_money",
     )
     def retry_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
@@ -609,6 +612,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["seed"],
         ),
         kind="write",
+        reversibility="costs_money",
     )
     def create_discovery(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -648,6 +652,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["directive"],
         ),
         kind="write",
+        reversibility="costs_money",
     )
     def request_meeting(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -693,6 +698,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id"],
         ),
         kind="write",
+        reversibility="safe",
     )
     def start_preview(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
@@ -821,6 +827,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "force": {"type": "boolean", "description": "stop it even if running"}},
              required=["job_id", "reason"]),
         kind="write",
+        reversibility="destroys_work",
     )
     def cancel_job(ctx, *, project_id, actor, args):
         from ..services.jobs import JobLeaseService
@@ -850,6 +857,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                               "description": "confirm an intentionally unqualified UPDATE/DELETE"}},
              required=["sql", "reason"]),
         kind="write",
+        reversibility="destroys_work",
     )
     def write_db(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
@@ -881,6 +889,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string", "description": "why — recorded on the deployment"}},
              required=["run_id"]),
         kind="write",
+        reversibility="safe",
     )
     def redeploy(ctx, *, project_id, actor, args):
         from ..services.shepherd_service import _act_on_deployment
@@ -905,6 +914,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "target_id": {"type": "string", "description": "optional exact deptgt_ to use"}},
              required=["run_id", "environment"]),
         kind="write",
+        reversibility="safe",
     )
     def deploy_app(ctx, *, project_id, actor, args):
         from ..services.delivery_pipeline import deploy_build
@@ -1010,6 +1020,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string"}},
              required=["job_id", "band", "reason"]),
         kind="write",
+        reversibility="safe",
     )
     def set_job_priority(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
@@ -1082,6 +1093,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "task_id": {"type": "string"}},
              required=["run_id", "kind"]),
         kind="write",
+        reversibility="safe",
     )
     def link_run_origin(ctx, *, project_id, actor, args):
         import json as _json
@@ -1176,6 +1188,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "dry_run is true.",
         _obj({"dry_run": {"type": "boolean", "description": "default true"}}),
         kind="write",
+        reversibility="safe",
     )
     def close_orphaned_runs(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
@@ -1247,6 +1260,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["decision_id", "action", "note"],
         ),
         kind="write",
+        reversibility="irreversible",
     )
     def decide(ctx, *, project_id, actor, args):
         action = args["action"]
@@ -1279,6 +1293,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "forever with nothing driving it.",
         _obj({"run_id": {"type": "string"}, "reason": {"type": "string"}}, ["run_id"]),
         kind="write",
+        reversibility="destroys_work",
     )
     def cancel_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
@@ -1325,6 +1340,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["run_id", "waive_gates"],
         ),
         kind="write",
+        reversibility="destroys_work",
     )
     def waive_gates(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
@@ -1357,6 +1373,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["run_id", "message"],
         ),
         kind="write",
+        reversibility="safe",
     )
     def send_feedback(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
@@ -1380,6 +1397,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "start_preview.",
         _obj({"preview_id": {"type": "string"}}, ["preview_id"]),
         kind="write",
+        reversibility="safe",
     )
     def stop_preview(ctx, *, project_id, actor, args):
         preview_id = args["preview_id"]
@@ -1404,6 +1422,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                            "description": "what to do differently, in plain terms"}},
              ["run_id", "guidance"]),
         kind="write",
+        reversibility="safe",
     )
     def steer_code_task(ctx, *, project_id, actor, args):
         import json as _json
@@ -1857,6 +1876,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["connection_id", "repository"],
         ),
         kind="write",
+        reversibility="safe",
     )
     def register_repository(ctx, *, project_id, actor, args):
         gc = services_module("github_connections")
@@ -2251,6 +2271,179 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_diagnosis_tools(reg: ToolRegistry) -> None:
+    """The investigation, performed in code rather than chosen by the model each time.
+
+    The ordering — what the work did, then the logs, then the machine — lived in prose in the
+    system prompt, which is guidance. Asked why a build was slow, BOSS read the job queue and
+    the container, found nothing starved, concluded the phase was stalled and cancelled it,
+    while 101 recorded turns said the engineer had worked normally for nine minutes and then
+    issued one command that never returned.
+
+    A prompt can be skipped under pressure and a routine cannot. This runs the sequence, adds
+    the comparison that makes "27 minutes" mean something, and says plainly what it could NOT
+    check — so an answer built on it cannot quietly omit the step it never took.
+    """
+    @reg.tool(
+        "diagnose_run",
+        "THE ONE CALL for 'why is this stuck / slow / failing?'. Runs the whole investigation "
+        "in the right order and returns it as evidence: what the work actually did (its "
+        "turns), how long it has been silent, the last command that never returned, the phase "
+        "breakdown, and — crucially — how this run's duration COMPARES to other builds on this "
+        "project, so a normal build is not called a stall. Also reports what could not be "
+        "checked. Prefer this over assembling the same picture yourself from four tools.",
+        _obj({"run_id": {"type": "string", "description": "the code-task run (crun_...)"},
+              "project_id": {"type": "string"}},
+             ["run_id"]),
+        kind="read",
+    )
+    def diagnose_run(ctx, *, project_id, actor, args):
+        run_id = str(args.get("run_id") or "").strip()
+        pid = args.get("project_id") or project_id
+        if not run_id:
+            return {"ok": False, "error": "run_id is required"}
+
+        checked: list[str] = []
+        could_not_check: list[str] = []
+        findings: list[str] = []
+
+        with ctx.begin() as c:
+            run = c.execute(
+                _text("SELECT id, project_id, title, status, phase, error, created_at, "
+                      "updated_at, EXTRACT(EPOCH FROM (coalesce(updated_at, now()) "
+                      "  - created_at))/60 AS minutes "
+                      "FROM code_task_runs WHERE id = :r"),
+                {"r": run_id}).mappings().first()
+            if run is None:
+                return {"ok": False, "error": f"no run {run_id} on this platform"}
+            pid = run["project_id"] or pid
+            checked.append("the run row")
+
+            turns = c.execute(
+                _text("SELECT count(*) AS n, max(created_at) AS last_turn, "
+                      "min(created_at) AS first_turn, "
+                      "count(*) FILTER (WHERE direction = 'tool_call') AS calls, "
+                      "count(*) FILTER (WHERE direction = 'tool_result') AS results, "
+                      "count(*) FILTER (WHERE ok = false) AS failures, "
+                      "EXTRACT(EPOCH FROM (now() - max(created_at))) AS silent "
+                      "FROM agent_turns WHERE code_task_run_id = :r"),
+                {"r": run_id}).mappings().first()
+
+            last_call = None
+            if turns and turns["n"]:
+                checked.append(f"{turns['n']} recorded turns")
+                # THE COMMAND THAT NEVER CAME BACK. A tool_call with no tool_result after it is
+                # where the work stopped, and it is the single most useful row in the table.
+                last_call = c.execute(
+                    _text("SELECT turn_index, tool_name, left(coalesce(content,''), 300) AS args, "
+                          "created_at FROM agent_turns "
+                          "WHERE code_task_run_id = :r AND direction = 'tool_call' "
+                          "ORDER BY created_at DESC LIMIT 1"),
+                    {"r": run_id}).mappings().first()
+            else:
+                could_not_check.append(
+                    "the turn-by-turn record — nothing was captured for this run")
+
+            # WHAT NORMAL LOOKS LIKE HERE. "27 minutes" is not a fact about a build, it is a
+            # comparison, and BOSS called 28 minutes a stall on a project whose builds took
+            # 13, 14, 22, 55, 56, 66 and 82.
+            peers = c.execute(
+                _text("SELECT EXTRACT(EPOCH FROM (updated_at - created_at))/60 AS minutes "
+                      "FROM code_task_runs "
+                      "WHERE project_id = :p AND id <> :r AND status = 'completed' "
+                      "  AND updated_at IS NOT NULL "
+                      "ORDER BY created_at DESC LIMIT 30"),
+                {"p": pid, "r": run_id}).scalars().all()
+            durations = sorted(float(m) for m in peers if m is not None)
+
+        minutes = float(run["minutes"] or 0)
+        baseline = None
+        if durations:
+            checked.append(f"{len(durations)} previous completed runs on this project")
+            mid = durations[len(durations) // 2]
+            p90 = durations[max(0, int(len(durations) * 0.9) - 1)]
+            baseline = {"median_minutes": round(mid, 1), "p90_minutes": round(p90, 1),
+                        "sample": len(durations),
+                        "longest_minutes": round(durations[-1], 1)}
+            if minutes <= p90:
+                findings.append(
+                    f"{minutes:.0f} minutes is NOT unusual here — the median is {mid:.0f} and "
+                    f"the slowest completed run took {durations[-1]:.0f}. Do not call this a "
+                    "stall on duration alone.")
+            else:
+                findings.append(
+                    f"{minutes:.0f} minutes is beyond this project's p90 of {p90:.0f} "
+                    f"(median {mid:.0f}, n={len(durations)}).")
+        else:
+            could_not_check.append(
+                "how long this project's other builds take — none have completed yet, so there "
+                "is no baseline and no duration here can be called abnormal")
+
+        silent = int((turns or {}).get("silent") or 0)
+        running = str(run["status"]) in ("running", "queued")
+        if turns and turns["n"] and running and silent > 300:
+            findings.append(
+                f"NO TURN RECORDED FOR {silent // 60} MINUTES while the run is still "
+                f"'{run['status']}'. This is not slow work — it has gone quiet.")
+        calls, results = int((turns or {}).get("calls") or 0), int((turns or {}).get("results") or 0)
+        if calls > results:
+            findings.append(
+                f"{calls - results} tool call(s) never produced a result. The last one is where "
+                "it stopped.")
+        if run["error"]:
+            findings.append(f"the run records an error: {str(run['error'])[:200]}")
+
+        # THE ANSWER ENDS WITH THE FIX, NOT WITH THE DIAGNOSIS.
+        #
+        # "Your build hung on npm run verify" is a good explanation and leaves the operator
+        # exactly where they started. The resolution for this state is known here, with real
+        # arguments, so it is handed over rather than left to be worked out — the model offers
+        # it as a button and the operator is one click from done.
+        resolution = None
+        status = str(run["status"] or "")
+        if status in ("cancelled", "failed", "blocked", "error"):
+            resolution = {
+                "tool": "retry_code_task",
+                "args": {"run_id": run_id},
+                "label": f"Retry {run['title'] or run_id}",
+                "why": f"this run is '{status}'; retrying resumes the same lineage, reusing the "
+                       "branch and the code already written rather than starting again",
+            }
+        elif running and silent > 300:
+            resolution = {
+                "tool": "cancel_code_task",
+                "args": {"run_id": run_id},
+                "label": f"Stop {run['title'] or run_id}",
+                "why": "it has produced nothing for "
+                       f"{silent // 60} minutes; stopping it frees the slot — but this throws "
+                       "away the work done so far, so it is the operator's call",
+            }
+
+        return {
+            "run_id": run_id, "project_id": pid, "title": run["title"],
+            "status": run["status"], "phase": run["phase"],
+            "resolution": resolution,
+            "running_minutes": round(minutes, 1),
+            "normal_for_this_project": baseline,
+            "turns": int((turns or {}).get("n") or 0),
+            "silent_for_seconds": silent,
+            "last_tool_call": (
+                {**dict(last_call), "created_at": last_call["created_at"].isoformat()}
+                if last_call else None),
+            "findings": findings,
+            "checked": checked,
+            "could_not_check": could_not_check,
+            "next": (
+                "If findings name a silent period or an unmatched tool call, the last_tool_call "
+                "above is the cause — read it and say so. If nothing here explains it, call "
+                "read_logs(service='worker') and explain_run BEFORE concluding anything, and "
+                "say in your answer which of those you read. "
+                "If `resolution` is set, END YOUR ANSWER by offering exactly that with "
+                "propose_action, so the operator is one click from done — do not describe the "
+                "fix in prose and leave them to ask for it."),
+        }
+
+
 def _register_run_turn_tools(reg: ToolRegistry) -> None:
     """The turn-by-turn record of what a build was actually doing.
 
@@ -2430,6 +2623,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["key", "title", "body", "rationale"]),
         kind="write",
+        reversibility="safe",
     )
     def mandate_standard(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -2774,6 +2968,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["target_id"]),
         kind="write",
+        reversibility="safe",
     )
     def retarget_app(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -2863,6 +3058,7 @@ def _register_image_tools(reg: ToolRegistry) -> None:
                                        "one"}},
              ["prompt", "path"]),
         kind="write",
+        reversibility="costs_money",
     )
     def generate_image(ctx, *, project_id, actor, args):
         import base64
@@ -3019,6 +3215,7 @@ def _register_app_identity_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["keep_app_id", "merge_app_ids"]),
         kind="write",
+        reversibility="safe",
     )
     def merge_apps(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -3482,6 +3679,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
              ["host", "command"]),
         kind="write",
+        reversibility="irreversible",
     )
     def run_on_host(ctx, *, project_id, actor, args):
         """A shell on the operator's own machine, off by default and always recorded.
@@ -3513,15 +3711,19 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
         # A PERSON PRESSES THE BUTTON. Only /v1/engine/agent/action sets this, and it sets it
         # after an operator has seen the exact host and the exact command on a button and
-        # clicked it. A model calling this tool directly gets sent back to propose_command,
+        # clicked it. A model calling this tool directly gets sent back to propose_action,
         # which is what puts the command in front of the operator in the first place.
+        #
+        # Redundant since the registry enforces this for every tool declared irreversible, and
+        # kept deliberately: this one carries the command verbatim, and defence in depth on the
+        # single most dangerous tool BOSS owns is worth one duplicated check.
         if not args.get("_operator_confirmed"):
             return {
                 "ok": False,
                 "requires_confirmation": True,
                 "error": "running a command on a host needs the operator's confirmation.",
                 "do_this": (
-                    "call propose_command with name='run_on_host' and these exact args, plus a "
+                    "call propose_action with tool='run_on_host' and these exact args, plus a "
                     "label saying what it does and why. The console renders it as a button; "
                     "nothing runs until the operator clicks it."
                 ),
@@ -3713,6 +3915,7 @@ def build_default_registry() -> ToolRegistry:
     _register_role_experience_tools(reg)
     _register_standard_tools(reg)
     _register_run_turn_tools(reg)
+    _register_diagnosis_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)

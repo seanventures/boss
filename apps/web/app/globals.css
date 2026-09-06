@@ -6309,6 +6309,17 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 
+/* The steps behind a turn in flight. Dim and small: it is evidence the work is alive, not
+   content to read — the answer is what the operator is waiting for. */
+.agent-steps {
+  margin: 6px 0 0 18px; padding: 0; list-style: none;
+  font-size: 11.5px; line-height: 1.6; color: var(--faint, var(--muted));
+}
+.agent-steps li { position: relative; }
+.agent-steps li::before {
+  content: "✓"; position: absolute; left: -14px; opacity: .55; font-size: 10px;
+}
+
 /* Actions BOSS is offering. Distinct from the transcript so an offer never reads as something
    that already happened. */
 .agent-proposals {

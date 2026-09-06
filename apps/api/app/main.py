@@ -10721,6 +10721,30 @@ def project_repositories_endpoint(project_id: str):
             "suggested": suggested, "suggested_source": source}
 
 
+@app.get("/v1/agent/threads/{thread_id}/progress")
+def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
+    """What BOSS is doing in this thread right now.
+
+    A chat turn is one HTTP request, so its tool calls are known only when it returns. An
+    investigation that chains eight lookups showed the operator a pulsing dot for two minutes;
+    the reliability work deliberately raises the number of lookups, which makes the silence
+    longer, so the silence had to go first.
+
+    Cheap on purpose — polled every second or two while a turn is in flight.
+    """
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text("SELECT id, label, created_at FROM agent_progress "
+                 "WHERE thread_id = :t AND id > :since ORDER BY id LIMIT 50"),
+            {"t": thread_id, "since": int(since or 0)},
+        ).mappings().all()
+    return {"thread_id": thread_id,
+            "steps": [{"id": r["id"], "label": r["label"],
+                       "at": r["created_at"].isoformat() if r["created_at"] else None}
+                      for r in rows],
+            "cursor": rows[-1]["id"] if rows else int(since or 0)}
+
+
 @app.get("/v1/agent/role-starters")
 def agent_role_starters_endpoint(project_id: str, role: str):
     """Questions worth asking THIS role, grounded in what it has actually seen here.
