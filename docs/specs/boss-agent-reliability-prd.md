@@ -3,6 +3,7 @@
 **Status:** draft for review
 **Author:** drafted 2026-09-06 after the Interview Scorecard App incident
 **Reviewer:** Param
+**Revision:** §4.5 added at the operator's direction — resolution, specificity, non-repetition, and exhausting the evidence before answering.
 **One line:** The BOSS Agent is the only interface a customer has. It currently behaves like a
 capable engineer with no operating discipline: it investigates in the wrong order, acts when it
 was asked a question, and reports what it did rather than what was asked.
@@ -94,6 +95,32 @@ A deed and an offer must never be readable as the same thing.
 **P6 — Refusing to act is a failure too.**
 P1–P2 are not a licence to return advice. Told to fix something, BOSS fixes it. The 2026-08-23
 commit was right about the disease; this PRD is about the dose.
+
+**P7 — Resolve, do not describe.**
+The unit of success is the operator's problem being over, not an accurate account of it. An
+answer that explains a failure perfectly and leaves the operator to fix it has done a fraction
+of the job.
+
+**P8 — Answer the question that was asked.**
+Not the topic it belongs to. "Why is this stuck?" is answered by the cause, in the first
+sentence. Background is offered underneath, if at all.
+
+**P9 — Never repeat yourself.**
+Saying the same thing a second time is a defect, not thoroughness. If BOSS has already told the
+operator something in this thread, the next answer builds on it and does not restate it.
+
+**P10 — Exhaust the evidence before answering.**
+Tools, the model's own reasoning, both source trees, the database, the logs, the hosts. The
+answer comes after looking, not after one lookup.
+
+**P11 — Never give up; hand over a direction.**
+"I could not determine it" is an acceptable *finding* only when it names the next specific step
+and, where possible, takes it. It is never an acceptable ending.
+
+**P12 — No yes/no questions back to the operator.**
+If BOSS needs a decision, it presents the options it has already worked out, with a
+recommendation. "Would you like me to investigate further?" makes the operator do the thinking
+they came to avoid.
 
 ---
 
@@ -205,6 +232,113 @@ are seen in real transcripts.
 Every incident of this kind becomes a stored transcript that must produce the safe behaviour
 forever. The Interview Scorecard turn is fixture #1.
 
+### 4.5 Resolution — the agent exists to end the problem (P7–P12)
+
+Added at the operator's direction, and the principles it rests on (P7–P12) are in §2 with the
+rest. Safety (§4.1) stops BOSS doing harm; this section is about it being *worth talking to*.
+The objective is not a good explanation — it is that the operator's problem is gone.
+
+#### 4.5.1 What the transcripts actually show
+
+Measured over the 79 assistant messages on `boss-dogfood`:
+
+| Measure | Value | Reading |
+|---|---|---|
+| Answers ending in give-up or defer language | **5 / 79 (6.3%)** | "could not determine", "let me know if", "would you like me to" |
+| Answers that called **no tool at all** | **4 / 79 (5%)** | answered from the conversation, not from the system |
+| Average tools per answer | **2.86** | against a step budget of 12 — it stops looking early |
+| Average reply length | **693 chars** | 5 answers over 1,500 |
+| Verbatim repeated openings within a thread | **0** | P9 is currently a risk, not yet a measured defect |
+
+The headline is `2.86`. The step budget was raised to 12 precisely so BOSS could chain a real
+investigation — find the run, read its timings, read the code that explains them — and it is
+using under a quarter of it. The incident is the same shape: three tools, then a conclusion, on
+a question whose answer needed a fourth.
+
+**Repetition is not yet showing in the data**, so P9 is written as a guardrail against a
+behaviour the operator has seen rather than one I can currently quantify. If it is happening in
+threads I did not measure, T2's scripted suite is where it should be caught.
+
+#### 4.5.2 What to build
+
+**R1. A resolution loop, not an answer loop.**
+The turn currently ends when the model produces text. It should end when the problem is
+addressed or the operator is asked a real question. Concretely: after drafting, BOSS checks its
+own answer against the question — is the specific thing asked actually answered, is there an
+action that would end this, is anything asserted that was not read — and continues if not. One
+bounded self-check, not an open loop.
+
+**R2. Budget spent on looking, not on prose.**
+Enforce a floor as well as a ceiling: an operational question that ran fewer than N tool calls
+before answering gets sent back to look further, with the specific gap named. Today the only
+bound is the ceiling, and the average sits at 2.86.
+
+**R3. Answer-first formatting.**
+The first sentence is the answer. Evidence follows. Background is collapsed or omitted. Today's
+average of 693 characters is not the problem — a 693-character answer that opens with three
+sentences of context is. This pairs with C1.
+
+**R4. Thread memory: say it once.**
+Before sending, BOSS diffs its draft against what it has already said in this thread and strips
+what it is repeating, replacing it with a reference ("as above, the hung `npm run verify`").
+Cheap, and it is the mechanism P9 needs — a prompt instruction alone will not hold.
+
+**R5. Escalation ladder instead of surrender.**
+When the obvious lookup fails, BOSS is required to walk a defined ladder before it may say it
+does not know: turn record → service logs → container/host → both source trees → the database
+→ the model's own reasoning about what would explain the evidence. The reply then states which
+rungs it climbed. "I could not determine it" without that list is not an answer.
+
+**R6. Direction, never a yes/no.**
+When BOSS genuinely cannot resolve something, the reply must end with: the single most likely
+cause, the one check that would confirm it, and a button that runs that check where one exists.
+Never "would you like me to look further?".
+
+**R7. Give the operator the resolution, not just the diagnosis.**
+Every diagnosis that has a known fix ends with that fix as an offer — the exact tool and
+arguments, one click. The Interview Scorecard reply should have ended with **Retry this build**,
+not with a description of a hung command.
+
+**R8. Cross-source synthesis before answering.**
+For any question about a running or failed piece of work, BOSS consults, in one pass: the run's
+turns, the service logs, the app's code on its PR branch, the platform's own code, the
+deployment target, and this project's history for comparison. The reply names what it consulted.
+This is the "communicate with tools, models, codebase, infra across all information" requirement
+made concrete and checkable.
+
+**R9. Self-service resolution for the operator.**
+The operator should be able to end the common problems from the reply itself, without knowing
+BOSS's internals: retry a build, resume a cancelled run, rebind a target, restart a preview,
+re-run a failed step, roll back a release. Each as a button with the arguments already resolved.
+The measure is that an operator never has to ask BOSS *how* to do something they can see is
+needed.
+
+#### 4.5.3 New measures
+
+Rolled into the scorecard in §6; repeated here only with the reasoning behind each target.
+
+| Measure | Today | Target |
+|---|---|---|
+| Answers ending in give-up language with no named next step | 5 / 79 | 0 |
+| Answers that called no tool | 4 / 79 | 0 for operational questions |
+| Average tools per operational answer | 2.86 | ≥ 6, and no ceiling breach |
+| Diagnoses that end with an executable fix | rare | every one that has a known fix |
+| Repeated content within a thread | not measured | measured, then 0 |
+| Questions BOSS asks that are yes/no | not measured | 0 — options with a recommendation |
+
+#### 4.5.4 The tensions, stated plainly
+
+R1, R2 and R8 all make turns **slower and more expensive**: more tool calls, more tokens, more
+wall-clock on a path where the operator is watching a spinner. That is the trade this section
+asks for, and it is the right one — but it makes C3 (progress while it works) a dependency
+rather than a nicety. An eight-tool investigation behind a silent dot will read as broken even
+when it is the best answer BOSS has ever given.
+
+Second tension: P7 ("resolve at any cost") and P2 ("destroying work always costs a click") point
+in opposite directions on exactly one class of problem — the ones whose fix is destructive.
+The resolution is that P2 wins and P7 is satisfied by the button being *in the answer*, already
+filled in. Resolution means the operator is one click from done, not that BOSS presses it.
+
 ---
 
 ## 5. Explicitly out of scope
@@ -226,6 +360,14 @@ forever. The Interview Scorecard turn is fixture #1.
 | Diagnoses that state a baseline for a duration claim | ~0 | every one |
 | Replies claiming an action the trace does not show | corrected after the fact | prevented before send |
 | Operator-reported "it did something I did not ask for" | 1 this week | zero |
+| Answers ending in give-up language with no named next step | 5 / 79 (6.3%) | 0 |
+| Answers that called no tool at all | 4 / 79 (5%) | 0 for operational questions |
+| Average tools per operational answer | 2.86 of a 12 budget | ≥ 6 |
+| Diagnoses that end with an executable fix | rare | every one with a known fix |
+| Repeated content within a thread | not measured | measured, then 0 |
+| Questions BOSS asks that are yes/no | not measured | 0 — options with a recommendation |
+
+§4.5.3 carries the same numbers with their derivation; this table is the one to review against.
 
 ---
 
@@ -243,3 +385,12 @@ forever. The Interview Scorecard turn is fixture #1.
 4. **Should `diagnose_run` be the default for any message mentioning a run id and a symptom?**
    That is close to routing, and routing on keywords is how the original gate would have been
    built badly.
+5. **What is the floor for R2?** Six tool calls on an operational question is my proposal, from
+   the observed 2.86 average and a budget of 12. Too high and cheap questions get expensive;
+   too low and it changes nothing.
+6. **Does §4.5 change the cost profile more than you want?** R1/R2/R8 mean most operational
+   turns cost several times what they do today. If that is unacceptable, the honest lever is to
+   apply the floor only to questions about running or failed work, and leave everything else at
+   today's behaviour.
+7. **Is C3 (streaming progress) a blocker for §4.5 rather than a follow-on?** My view is yes —
+   see §4.5.4.
