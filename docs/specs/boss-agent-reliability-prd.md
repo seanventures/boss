@@ -1,6 +1,7 @@
 # PRD — BOSS Agent: response, communication and safety
 
-**Status:** draft for review
+**Status:** implemented — awaiting end-to-end validation
+**Implemented:** 2026-09-06, deployed to goldeneye (`62ed6a8b`)
 **Author:** drafted 2026-09-06 after the Interview Scorecard App incident
 **Reviewer:** Param
 **Revision:** §4.5 added at the operator's direction — resolution, specificity, non-repetition, and exhausting the evidence before answering.
@@ -338,6 +339,41 @@ Second tension: P7 ("resolve at any cost") and P2 ("destroying work always costs
 in opposite directions on exactly one class of problem — the ones whose fix is destructive.
 The resolution is that P2 wins and P7 is satisfied by the button being *in the answer*, already
 filled in. Resolution means the operator is one click from done, not that BOSS presses it.
+
+---
+
+### 4.6 What shipped, item by item
+
+| Item | Shipped as | Note |
+|---|---|---|
+| S1 reversibility on the tool spec | `ToolSpec.reversibility`, all 25 writes declared | registry test forces the declaration |
+| S2 confirmation cannot be self-issued | enforced in `ToolRegistry.invoke` | holds for every caller, not just chat |
+| S3 undo | `diagnose_run` returns the retry with real args | offered from the same reply |
+| S4 never invent `force` | escalation flags dropped unless asked for | `force`, `hard`, `all`, `recursive` |
+| I1 diagnosis routine | `diagnose_run` | one call, fixed order |
+| I2 baselines | median/p90 of this project's completed runs | "28 minutes against a median of 22" |
+| I3 container logs | **not done** — `read_logs` still covers api/worker/web only | sandbox output is reachable via `read_run_turns` |
+| I4 say what was not checked | `checked` / `could_not_check` in every diagnosis | |
+| C1 answer shape | prompt: answer first, evidence under | not structurally enforced |
+| C2 deeds vs offers | recovery of printed offers in any shape | four shapes seen live |
+| C3 progress while working | `agent_progress` + dock polling | "diagnosing the run — crun_33a0…" |
+| C4 ask when ambiguous | **partial** — P12 forbids yes/no, no clarify flow yet | |
+| R1 resolution loop | one bounded continuation on a thin or dead-end answer | |
+| R2 investigation floor | 6 lookups for operational questions | |
+| R3 answer-first | prompt only | |
+| R4 thread memory | `without_what_was_already_said` | |
+| R5 escalation ladder | prompt + `diagnose_run.next` | |
+| R6 direction not yes/no | `hands_the_problem_back` triggers a continuation | |
+| R7 diagnosis ends in a fix | `diagnose_run.resolution` | |
+| R8 cross-source synthesis | prompt + the floor | |
+| R9 self-service resolution | retry/cancel offered as buttons | |
+| T1 no pinned constants | two such tests rewritten as properties | |
+| T2 scripted conversations | `test_scripted_conversations.py`, 30 cases | replays the incident |
+| T3 adversarial corpus | `test_the_agent_is_hard_to_break.py`, 48 cases | |
+| T4 incident fixtures | the incident is case #1 of T2 | |
+
+**Not done, deliberately:** I3 (container/sandbox logs as a first-class source) and C4's
+clarify flow. Both are additive and neither blocks the safety or resolution properties.
 
 ---
 
