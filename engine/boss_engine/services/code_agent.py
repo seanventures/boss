@@ -667,7 +667,14 @@ class ClaudeCodeAgent:
             # "--- SECTION ---" header) must never be read as a CLI option.
             # Single choke point: every stage (build AND review) goes through _invoke, so the
             # batching rule is applied uniformly here rather than in each prompt builder.
-            return argv + ["--", _argv_safe(prompt) + _PARALLEL_TOOLS_RULE]
+            # THE SAME 128 KiB ARGV CEILING. A repo-context pack plus a long spec crosses it,
+            # and the whole command is then rejected before the process starts — measured on the
+            # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
+            # the prompt goes on stdin; under it, nothing changes.
+            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE
+            if len(body.encode("utf-8", "ignore")) > 96_000:
+                return argv, body
+            return argv + ["--", body], None
         last_error = ""
 
         def _live_sink(live_model: str):
@@ -730,7 +737,7 @@ class ClaudeCodeAgent:
             # this cannot read, the right outcome is a build that succeeds without a
             # transcript — not a build that fails with one. `capturing` is cleared below on the
             # first such failure and these flags rebuild without it.
-            cmd = base_cmd(capturing)
+            cmd, stdin_prompt = base_cmd(capturing)
             # Live tracing only makes sense while we are asking for the stream format. Without
             # `capturing` there are no per-turn events to read.
             on_line, live_parser, live_written = (
@@ -746,7 +753,7 @@ class ClaudeCodeAgent:
                 # change to what runs — with nothing else competing it is exactly as fast.
                 child = subprocess.Popen(
                     low_priority(cmd),
-                    stdin=subprocess.DEVNULL,
+                    stdin=(subprocess.PIPE if stdin_prompt else subprocess.DEVNULL),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -773,6 +780,13 @@ class ClaudeCodeAgent:
                     env=agent_environment(os.environ, _shared_tool_caches()),
                 )
                 register_seat(child.pid, seat)
+                if stdin_prompt is not None and child.stdin is not None:
+                    # Written and closed before draining: the CLI reads its prompt to EOF, and
+                    # leaving the pipe open would deadlock both sides waiting on each other.
+                    try:
+                        child.stdin.write(stdin_prompt)
+                    finally:
+                        child.stdin.close()
                 try:
                     # READ THE STREAM AS A STREAM.
                     #

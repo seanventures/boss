@@ -197,7 +197,10 @@ def test_the_command_is_rebuilt_per_attempt_so_capture_can_be_dropped():
     """
     invoke = _invoke_source()
     assert "def base_cmd(stream: bool)" in invoke, "argv is fixed before the retry loop"
-    assert "cmd = base_cmd(capturing)" in invoke, "the retry reuses the first attempt's flags"
+    # The PROPERTY — argv is rebuilt inside the loop, so dropping capture on a retry changes
+    # the flags. The call now also returns the stdin prompt (a long conversation cannot be an
+    # argv entry), which is why this matches the call rather than the whole assignment.
+    assert "base_cmd(capturing)" in invoke, "the retry reuses the first attempt's flags"
 
 
 def test_unreadable_output_drops_capture_instead_of_failing():

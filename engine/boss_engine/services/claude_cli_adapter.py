@@ -109,9 +109,16 @@ class ClaudeCliAdapter:
 
     def _invoke(self, prompt: str) -> dict:
         timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
+        # A LONG CONVERSATION IS NOT AN ARGUMENT. Linux caps a single argv entry at
+        # MAX_ARG_STRLEN (128 KiB), and this prompt is the whole conversation plus ~48 tool
+        # schemas — so a thread that had been going a while died with
+        # `OSError: [Errno 7] Argument list too long: 'nice'`, which reached the operator as "I
+        # could not answer that". The prompt goes on stdin once it is large; small ones keep the
+        # argv form so nothing changes for the common case.
+        via_stdin = len(prompt.encode("utf-8", "ignore")) > 96_000
         cmd = [
             self._claude_bin(),
-            "-p", prompt,
+            *(("-p",) if via_stdin else ("-p", prompt)),
             "--output-format", "json",
             # NOT 2. A TURN SPENT REACHING FOR A BLOCKED TOOL WAS FATAL.
             #
@@ -135,7 +142,8 @@ class ClaudeCliAdapter:
             # nothing here is latency-critical. See services/scheduling.py.
             proc = subprocess.run(
                 low_priority(cmd),
-                stdin=subprocess.DEVNULL,
+                input=(prompt if via_stdin else None),
+                stdin=(None if via_stdin else subprocess.DEVNULL),
                 capture_output=True,
                 text=True,
                 timeout=timeout,

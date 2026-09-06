@@ -913,3 +913,55 @@ class TestTheToolbeltMustActuallyWork:
         from boss_engine.services.debug_session import run_investigation
 
         assert 'f"investigation.{status}"' in inspect.getsource(run_investigation)
+
+
+class TestALongConversationIsNotAnArgument:
+    """Measured live, on the Opus chat brain, in a thread that had been going a while:
+
+        I could not answer that: OSError: [Errno 7] Argument list too long: 'nice'
+
+    Linux caps a single argv entry at MAX_ARG_STRLEN — 128 KiB — and this backend passes the
+    ENTIRE conversation plus ~48 tool schemas as one `-p <prompt>` argument. So raising the
+    chat brain to a model that investigates more thoroughly made the prompt bigger and
+    eventually fatal: the command was rejected before the process started, and the operator was
+    told BOSS could not answer. The same ceiling sits under the coding path, where a repo
+    context pack plus a long spec crosses it just as easily.
+    """
+
+    def test_a_large_prompt_goes_on_stdin(self):
+        from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
+
+        body = inspect.getsource(ClaudeCliAdapter._invoke)
+        assert 'via_stdin = len(prompt.encode("utf-8", "ignore")) > 96_000' in body
+        assert '*(("-p",) if via_stdin else ("-p", prompt))' in body
+        assert "input=(prompt if via_stdin else None)" in body
+
+    def test_a_small_one_still_goes_on_the_command_line(self):
+        """Unchanged for the common case: this is a ceiling, not a redesign."""
+        from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
+
+        body = inspect.getsource(ClaudeCliAdapter._invoke)
+        assert "stdin=(None if via_stdin else subprocess.DEVNULL)" in body
+
+    def test_the_threshold_is_under_the_kernel_limit(self):
+        """MAX_ARG_STRLEN is 128 KiB and the rest of argv shares the budget."""
+        from boss_engine.services import claude_cli_adapter
+
+        assert "96_000" in inspect.getsource(claude_cli_adapter)
+        assert 96_000 < 128 * 1024
+
+    def test_the_coding_path_has_the_same_ceiling_and_the_same_fix(self):
+        from boss_engine.services import code_agent
+
+        body = inspect.getsource(code_agent.ClaudeCodeAgent._invoke)
+        assert "return argv, body" in body
+        assert "cmd, stdin_prompt = base_cmd(capturing)" in body
+
+    def test_the_pipe_is_closed_before_the_stream_is_drained(self):
+        """The CLI reads to EOF; leaving it open deadlocks both sides."""
+        from boss_engine.services import code_agent
+
+        body = inspect.getsource(code_agent.ClaudeCodeAgent._invoke)
+        i = body.index("child.stdin.write(stdin_prompt)")
+        assert "child.stdin.close()" in body[i:i + 200]
+        assert body.index("child.stdin.close()") < body.index("_drain(child")
