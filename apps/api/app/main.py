@@ -10630,6 +10630,24 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
             raise HTTPException(status_code=404, detail=str(error)) from error
         except AgentThreadOwnershipError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
+        except HTTPException:
+            raise
+        except Exception as error:  # noqa: BLE001
+            # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT.
+            #
+            # The chat box is the only interface a customer has, and an unhandled exception
+            # reached it as five words that name nothing, suggest nothing, and cannot be acted
+            # on — the same emptiness as "the capability reported failure without a reason",
+            # arriving somewhere even more visible. Worse, the operator cannot tell a broken
+            # BOSS from a broken app, so they ask BOSS, which is also down.
+            #
+            # The class and message, not a stack trace: enough to act on, nothing leaked.
+            LOGGER.exception("agent chat failed on %s", endpoint)
+            raise HTTPException(
+                status_code=500,
+                detail=f"BOSS could not complete that turn: {type(error).__name__}: "
+                       f"{str(error)[:300]}",
+            ) from error
         return AgentChatResponse(**result)
 
 
