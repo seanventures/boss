@@ -1135,9 +1135,19 @@ def resume_awaited(
     parked = connection.execute(
         text(
             """
-            SELECT id, step_id, output FROM workflow_step_runs
+            SELECT id, step_id, output, status FROM workflow_step_runs
             WHERE workflow_run_id = :run_id AND project_id = :project_id
-              AND status = 'waiting'
+              -- FAILED STEPS TOO, and that is the case that actually happens.
+              --
+              -- The order of events is: the build dies, the step fails, and THEN the operator
+              -- retries. Sweeping only `waiting` steps meant the recovery could never fire for
+              -- the real sequence — the operator watched a new build run to completion while
+              -- the workflow above it stayed "failed — the code_task it started finished as
+              -- 'cancelled'", stuck at 3 of 8.
+              --
+              -- A failed step is only reconsidered when a LIVE later attempt at the same work
+              -- exists (see `_successor_attempt`). Nothing else about it is revisited.
+              AND status IN ('waiting', 'failed')
             """
         ),
         {"run_id": run_id, "project_id": project_id},
@@ -1153,6 +1163,27 @@ def resume_awaited(
                 continue
         handle = (output or {}).get("await") or {}
         kind, awaited_id = str(handle.get("kind") or ""), str(handle.get("id") or "")
+
+        # A FAILED STEP IS ONLY HERE TO BE RESCUED BY A RETRY.
+        #
+        # Everything below this point decides the fate of work in flight, and a failed step has
+        # already had its verdict. The one thing that legitimately reopens it is a later attempt
+        # at the same work now running — so that is the only question asked of it.
+        if str(step["status"]) == "failed":
+            successor = (_successor_attempt(connection, project_id, awaited_id, run_id)
+                         if kind == "code_task" and awaited_id else None)
+            if successor:
+                workflows.reopen_failed_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    handle={**handle, "id": successor},
+                    note=(f"the build was retried; this step now follows {successor} "
+                          f"(the earlier attempt {awaited_id} did not finish)"),
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "following_retry", "awaited": kind,
+                             "was": awaited_id, "now": successor})
+            continue
+
         table_spec = _AWAIT_TABLES.get(kind)
         if not table_spec or not awaited_id:
             # A step waiting for a timer, a gate or a subworkflow. Those have their own
@@ -1226,6 +1257,30 @@ def resume_awaited(
                          "outcome": "failed_continued", "awaited": kind,
                          "awaited_status": status, "salvaged": bool(salvaged)})
         elif status in bad_states:
+            # A RETRY IS THE SAME STEP, NOT A NEW ONE.
+            #
+            # The step parks against ONE code-task id. Retrying a build starts a fresh attempt
+            # with a new id, so the step kept waiting on the corpse: the operator watched a new
+            # build run to completion while the workflow above it read
+            # "Build, review and test — failed — the code_task it started finished as
+            # 'cancelled'", stuck at 3 of 8 forever. Reported as "the build is running but the
+            # workflow is not updated", which is exactly what it was.
+            #
+            # Following the successor is the whole fix. It is the same work by construction —
+            # `retry_code_task` starts a new attempt in the same lineage — so the step re-parks
+            # on the live attempt rather than failing on the dead one.
+            successor = _successor_attempt(connection, project_id, awaited_id, run_id)
+            if kind == "code_task" and successor:
+                workflows.repoint_waiting_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    handle={**handle, "id": successor},
+                    note=(f"the build was retried; this step now follows {successor} "
+                          f"(the earlier attempt {awaited_id} ended as '{status}')"),
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "following_retry", "awaited": kind,
+                             "was": awaited_id, "now": successor})
+                continue
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
                 error=f"the {kind} it started finished as '{status}'",
@@ -1233,6 +1288,62 @@ def resume_awaited(
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "failed", "awaited": kind, "awaited_status": status})
     return done
+
+
+def _successor_attempt(
+    connection: Connection, project_id: str, awaited_id: str,
+    workflow_run_id: Optional[str] = None,
+) -> Optional[str]:
+    """A later attempt at the work this step was waiting on, if one is under way.
+
+    TWO SIGNALS, AND THE SECOND ONE IS WHY THIS IS NOT JUST LINEAGE. The obvious rule — same
+    `root_run_id`, so the same lineage — covers `retry_code_task`, which continues an attempt.
+    It does NOT cover the retry an operator actually presses on a stuck workflow: "Try Build,
+    review and test again" re-runs the STEP, which calls `create_code_task` and starts a fresh
+    build with a root of its own.
+
+    Checked against the live rows from the incident:
+
+        crun_33a0…  cancelled  root=crun_2b7b…  workflow_run_id=wfr_666b…
+        crun_7f38…  running    root=crun_ae46…  workflow_run_id=wfr_666b…
+
+    Different roots, same workflow run. A lineage-only rule would have missed the exact case it
+    was written for. What both runs agree on is which workflow asked for the work, and that is
+    the stronger claim anyway: this run commissioned a build, and a build it commissioned is
+    live.
+
+    Never matched on title. Two builds named "Interview Scorecard App" can be different work,
+    and a workflow following a stranger because the names matched is worse than one that stays
+    stuck. Only a LIVE successor counts — a finished one should get its own verdict the ordinary
+    way rather than starting a chase through dead attempts.
+    """
+    try:
+        row = connection.execute(
+            text(
+                """
+                WITH target AS (
+                    SELECT COALESCE(NULLIF(finalize_ctx->>'root_run_id', ''), id) AS root
+                    FROM code_task_runs WHERE id = :awaited
+                )
+                SELECT r.id
+                FROM code_task_runs r, target t
+                WHERE r.project_id = :p
+                  AND r.id <> :awaited
+                  AND r.status IN ('running', 'queued')
+                  AND (
+                        COALESCE(NULLIF(r.finalize_ctx->>'root_run_id', ''), r.id) = t.root
+                     OR (:wfr <> '' AND r.finalize_ctx->>'workflow_run_id' = :wfr)
+                  )
+                ORDER BY r.created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"awaited": awaited_id, "p": project_id, "wfr": workflow_run_id or ""},
+        ).mappings().first()
+    except Exception as error:  # noqa: BLE001 — failing the step is still the safe fallback
+        log.warning("cannot look for a successor to %s: %s", awaited_id, error)
+        return None
+    return str(row["id"]) if row else None
 
 def _gate_subject(
     connection: Connection,

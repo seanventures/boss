@@ -861,9 +861,18 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ---------- Main ---------- */
 
+/* NO z-index HERE. It traps every popover in the console underneath the sidebar.
+   `position: relative` with a z-index creates a STACKING CONTEXT, and everything inside it is
+   then flattened to that one level in the root context. The sidebar is z-index 2, so a menu
+   inside main asking for z-index 40 was still painted beneath it — the card's "…" menu opened
+   and its left half disappeared under the nav, unreadable and unclickable. No z-index on the
+   menu could have fixed that; the ceiling was here.
+   `position: relative` stays — descendants position against main — and dropping the z-index
+   leaves it `auto`, which creates no context. The shell's background layers are at z-index -1,
+   so in-flow content still paints above them. On mobile the sidebar has its own z-index (50,
+   over the 45 scrim) and does not depend on this. */
 .bx-main {
   position: relative;
-  z-index: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -3435,7 +3444,12 @@ select.input:focus {
   }
   .bx-sidebar {
     position: fixed;
-    z-index: 50;
+    /* ABOVE THE DOCK (60). Until `.bx-main` stopped creating a stacking context, everything
+       inside it — topbar, dock, every menu — was flattened to one level beneath this. Now that
+       they compete directly, the slide-over nav has to out-rank the dock explicitly, or opening
+       the nav on a phone while the Ask panel is up would slide it in behind a full-width
+       panel. */
+    z-index: 70;
     left: 0;
     top: 0;
     width: 256px;
@@ -3452,7 +3466,8 @@ select.input:focus {
   .bx-scrim {
     position: fixed;
     inset: 0;
-    z-index: 45;
+    /* Between the dock and the nav it dims for. */
+    z-index: 65;
     background: rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(2px);
   }
@@ -6092,9 +6107,15 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   display: inline-flex; align-items: center; justify-content: center;
   width: 34px; padding: 0;            /* square: it holds a glyph, not a word */
 }
+/* OPENS TO THE RIGHT, because the trigger is on the LEFT of the action row.
+   Anchored `right: 0` a 264px menu grew 264px leftward from a button near the card's left
+   edge — off the card, across the gutter and under the sidebar. Right-alignment is correct for
+   a trigger at the end of a row; this one is second from the start. */
 .ct-menu {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  position: absolute; top: calc(100% + 6px); left: 0; right: auto; z-index: 40;
   min-width: 264px; padding: 6px;
+  /* Never wider than the viewport it has to fit in, whatever the min-width asks for. */
+  max-width: min(320px, calc(100vw - 32px));
   background: var(--surface-3, #16213C);
   border: 1px solid var(--border-strong, #26365C);
   border-radius: var(--r-lg, 10px);

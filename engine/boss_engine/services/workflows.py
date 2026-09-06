@@ -2463,6 +2463,105 @@ def force_fail_waiting_step(
     return _serialize_step(row)
 
 
+def repoint_waiting_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    handle: dict[str, Any],
+    note: str,
+) -> dict[str, Any]:
+    """Move a parked step onto a LATER attempt at the same work.
+
+    A step parks against one id. Retrying a build starts a fresh attempt with a new id, so the
+    step went on waiting for the corpse — the operator watched a new build run to completion
+    while the workflow above it read "failed — the code_task it started finished as
+    'cancelled'", stuck at 3 of 8 permanently.
+
+    The step stays WAITING. Nothing about it has succeeded or failed; it is waiting for
+    different work, and the note records the substitution so the operator can see why the id
+    under the step changed rather than finding a stranger there.
+    """
+    row = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET output = COALESCE(output, '{}'::jsonb)
+                         || jsonb_build_object('await', CAST(:handle AS JSONB),
+                                               'awaited_note', CAST(:note AS TEXT),
+                                               'code_task_run_id', CAST(:new_id AS TEXT)),
+                updated_at = now()
+            WHERE id=:id AND project_id=:project_id AND status='waiting'
+            RETURNING *
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id,
+         "handle": json.dumps(handle), "note": note[:500],
+         "new_id": str(handle.get("id") or "")},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Waiting workflow step not found.")
+    # The RUN goes back to waiting too. A previous attempt may have marked it failed before the
+    # retry existed, and leaving it failed above a step that is actively waiting is the same
+    # contradiction in the other direction.
+    connection.execute(
+        text("UPDATE workflow_runs SET status='waiting', error=NULL, updated_at=now() "
+             "WHERE id=:id"),
+        {"id": row["workflow_run_id"]},
+    )
+    return _serialize_step(row)
+
+
+def reopen_failed_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    handle: dict[str, Any],
+    note: str,
+) -> dict[str, Any]:
+    """Put a step that failed with its build back to waiting, on the retry.
+
+    The sequence that actually happens: the build dies, the step fails, and THEN the operator
+    presses retry. So the recovery has to reach a step that has already been given its verdict —
+    otherwise the operator watches a new build run to completion while the workflow above it
+    reads "failed", permanently, at 3 of 8.
+
+    Narrow on purpose. Only a step whose awaited work has a LIVE later attempt is reopened, only
+    the await handle and the status change, and the note records the substitution — a step that
+    silently changed which run it was watching would be worse than the stuck one.
+    """
+    row = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='waiting', last_error=NULL, completed_at=NULL,
+                lease_owner=NULL, lease_expires_at=NULL,
+                output = COALESCE(output, '{}'::jsonb)
+                         || jsonb_build_object('await', CAST(:handle AS JSONB),
+                                               'awaited_note', CAST(:note AS TEXT),
+                                               'code_task_run_id', CAST(:new_id AS TEXT)),
+                updated_at = now()
+            WHERE id=:id AND project_id=:project_id AND status='failed'
+            RETURNING *
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id,
+         "handle": json.dumps(handle), "note": note[:500],
+         "new_id": str(handle.get("id") or "")},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Failed workflow step not found.")
+    # The run was marked failed when the step was. It is waiting again now, and leaving it
+    # failed above an actively-waiting step is the same contradiction the other way round.
+    connection.execute(
+        text("UPDATE workflow_runs SET status='waiting', error=NULL, updated_at=now() "
+             "WHERE id=:id"),
+        {"id": row["workflow_run_id"]},
+    )
+    return _serialize_step(row)
+
+
 def park_step_awaiting(
     connection: Connection,
     *,
