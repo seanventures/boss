@@ -20,6 +20,27 @@ const LABELS: Array<[RegExp, string]> = [
 const BOILERPLATE =
   /^(product requirements document|prd|design|spec|specification|overview|summary|web app|version\b.*|introduction|document)\b[\s:–—-]*$/i;
 
+/**
+ * What makes two names THE SAME APP — the TypeScript half of `naming.identity_key`.
+ *
+ * Deliberately identical: letters and digits in order, single-spaced, case-folded. Punctuation
+ * and spacing are collapsed because a trailing full stop and a U+2010 hyphen once made
+ * "Incident Timeline Builder." and "Incident-Timeline Builder" two apps with two PRs and two
+ * bills. It exists here so the console can compare a step's recorded app name against the run's
+ * own — a deploy records `meeting-cost-meter` and a target records `Meeting cost meter`, and
+ * those are one app.
+ *
+ * If the Python side ever changes, this must change with it; a display filter that disagrees
+ * with the engine about identity hides rows rather than showing the wrong ones, which is worse.
+ */
+export function identityKey(name: string): string {
+  return (name ?? "")
+    .toLowerCase()
+    .replace(/[^0-9a-z]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 function norm(s: string): string {
   return (s ?? "")
     .normalize("NFKC")

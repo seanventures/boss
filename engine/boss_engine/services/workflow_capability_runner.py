@@ -308,6 +308,39 @@ _OBSERVED_GATES: dict[str, tuple[str, ...]] = {
 }
 
 
+def _this_runs_app(connection: Connection, context: dict[str, Any]) -> Optional[str]:
+    """The app THIS workflow run is about, as an identity key, or None.
+
+    A run is about one app. Read from the deploy step first — `applied.app` is the thing this
+    run actually shipped, which is the strongest claim available — then from the code task's own
+    app name. Compared through `identity_key` because the two records spell it differently:
+    the deploy says `meeting-cost-meter` and the target says `Meeting cost meter`.
+    """
+    from .naming import identity_key, project_name
+
+    for produced in (context.get("steps") or {}).values():
+        if not isinstance(produced, dict):
+            continue
+        applied = ((produced.get("detail") or {}).get("applied") or {})
+        name = applied.get("app") if isinstance(applied, dict) else None
+        if isinstance(name, str) and name.strip():
+            return identity_key(name)
+
+    run_id = _build_run_id(context)
+    if not run_id:
+        return None
+    try:
+        row = connection.execute(
+            text("SELECT title FROM code_task_runs WHERE id = :r"), {"r": run_id},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001 — an unscoped step is better than a failed one
+        return None
+    if not row:
+        return None
+    display, _blurb, _label = project_name(str(row["title"] or ""))
+    return identity_key(display) if display and display != "Untitled app" else None
+
+
 def _observed_monitoring(
     connection: Connection, project_id: str, context: dict[str, Any]
 ) -> dict[str, Any]:
@@ -333,7 +366,33 @@ def _observed_monitoring(
         ),
         {"p": project_id},
     ).mappings().all()
+
+    # THIS RUN'S APP, NOT EVERY APP IN THE PROJECT.
+    #
+    # The Meeting cost meter workflow reported "watching Incident-Timeline Builder · staging,
+    # Meeting cost meter · staging, Vendor-Status-Watcher · staging" — every active target the
+    # project has. A run is about ONE app, so two thirds of that was somebody else's work
+    # presented as this step's result, and once the step grew links it became three prominent
+    # links to the wrong apps.
+    #
+    # Unscoped only when the run does not say which app it is about: a step that silently
+    # narrowed to nothing would be worse than one that over-reports.
+    from .naming import identity_key
+
+    wanted = _this_runs_app(connection, context)
+    if wanted:
+        mine = [t for t in targets if identity_key(str(t["app_name"] or "")) == wanted]
+        # An app with no target of its own is a real answer — "nothing is watching this yet" —
+        # and far better than listing the neighbours. The caller reports the empty case.
+        targets = mine
+
     if not targets:
+        if wanted:
+            raise SettledCapabilityError(
+                "nothing is watching this app: it has no active deployment target, so no health "
+                "probe will ever run against it. Other apps in this project may be watched; "
+                "this one is not."
+            )
         raise SettledCapabilityError(
             "nothing is being watched: this project has no active deployment target, so no "
             "health probe will ever run against it."

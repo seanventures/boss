@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { identityKey } from "./app-identity";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -150,7 +151,7 @@ const LIVE = ["running", "waiting", "queued", "validating", "leased"];
 /** What a step observed from the build, rather than started itself: the review seats and the
  *  quality gates the governed pipeline actually recorded. Without this, `review` and `test` were
  *  two rows that said only "succeeded" about the checks an operator most wants to read. */
-function observedGates(step: RunStep): string | null {
+function observedGates(step: RunStep, runAppName = ""): string | null {
   const out = (step.output ?? {}) as {
     status?: string; gates_passed?: unknown; targets?: unknown; findings?: unknown;
   };
@@ -165,8 +166,7 @@ function observedGates(step: RunStep): string | null {
     if (found.length) return `findings: ${found.join(" · ")}`;
   }
   if (Array.isArray(out.targets)) {
-    const names = out.targets
-      .map((t) => (t as { app_name?: string; environment?: string }))
+    const names = targetsForThisApp(out.targets, runAppName)
       .map((t) => [t.app_name, t.environment].filter(Boolean).join(" · "))
       .filter(Boolean);
     return names.length ? `watching ${names.join(", ")}` : null;
@@ -822,7 +822,29 @@ function stepDuration(step: { started_at?: string | null; completed_at?: string 
  * it opened or the panel it convened. The ids are already in the step's output; these turn them
  * into somewhere to go.
  */
-function stepLinks(output: Record<string, unknown>): Array<{ label: string; href: string; external?: boolean }> {
+/** The targets a step reports that belong to THIS run's app.
+ *
+ * The capability now scopes itself, but a run that already completed has its output frozen —
+ * the Meeting cost meter run on screen lists all three of the project's apps and always will.
+ * So the display filters too, which also means an older run stops claiming to watch its
+ * neighbours the moment this ships rather than only after it is re-run.
+ *
+ * Unfiltered when the run does not name an app: showing everything beats showing nothing.
+ */
+export function targetsForThisApp(
+  targets: unknown[], runAppName: string,
+): Array<{ app_name?: string; environment?: string }> {
+  const rows = targets.map((t) => t as { app_name?: string; environment?: string });
+  const wanted = identityKey(runAppName || "");
+  if (!wanted) return rows;
+  const mine = rows.filter((t) => identityKey(String(t.app_name ?? "")) === wanted);
+  // A run whose app matches nothing in the list is the case where the filter would blank a
+  // step that does have something to say — an adopted run, a renamed app. Better to show what
+  // was recorded than to hide it on a guess.
+  return mine.length ? mine : rows;
+}
+
+function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ label: string; href: string; external?: boolean }> {
   const out: Array<{ label: string; href: string; external?: boolean }> = [];
   // KEEP WHO YOU ARE. These hrefs were built from scratch — `?area=code_tasks&run=…` — which
   // dropped `?org=`, and the console gates on that: no org means the organisation picker. So
@@ -854,8 +876,7 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
   // find the Monitoring area and then find that app in it, for a step whose whole subject is
   // that one app. `?watch=` names it, and the monitoring panel scrolls to it and marks it.
   if (Array.isArray(output.targets)) {
-    for (const raw of output.targets as unknown[]) {
-      const t = raw as { app_name?: string; environment?: string };
+    for (const t of targetsForThisApp(output.targets as unknown[], runAppName)) {
       const app = String(t.app_name ?? "").trim();
       if (!app) continue;
       const env = String(t.environment ?? "").trim();
@@ -2138,7 +2159,8 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   // the runtime recorded — merged here so the link builder sees one object.
   const merged = { ...(step.output || {}),
                    ...(step.live_preview ? { live_preview: step.live_preview } : {}) };
-  const links = stepLinks(merged);
+  const runAppTitle = typeof runInput.title === "string" ? runInput.title : "";
+  const links = stepLinks(merged, runAppTitle);
   const previewHref = links.find((l) => l.label === "open the preview")?.href ?? null;
   // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
   // is not — which is why the old busy flag cleared a second after the click.
@@ -2218,8 +2240,10 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           <span className="detail">{liveAppUrl} — shipped and answering.</span>
         </p>
       ) : null}
-      {observedGates(step) ? (
-        <p className="dw-step-gates" data-testid="dw-step-gates">{observedGates(step)}</p>
+      {observedGates(step, runAppTitle) ? (
+        <p className="dw-step-gates" data-testid="dw-step-gates">
+          {observedGates(step, runAppTitle)}
+        </p>
       ) : null}
 
       {/* CHOOSE WHERE IT SHIPS BEFORE IT ASKS TO SHIP.
