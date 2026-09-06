@@ -878,3 +878,191 @@ def backfill_hosts_from_targets(connection, *, project_id: str,
         linked += getattr(result, "rowcount", 0) or 0
 
     return {"hosts_created": created, "targets_linked": linked}
+
+
+def _target_id() -> str:
+    return f"deptgt_{uuid.uuid4().hex[:20]}"
+
+
+def _ports_assigned_on(connection, address: str) -> dict[int, str]:
+    """Every port BOSS has already promised on this host, whoever owns it.
+
+    Not scoped to the project: a collision with another project's app is still a collision, and
+    the machine does not care whose row reserved the socket.
+    """
+    rows = connection.execute(
+        sql("SELECT app_name, domains FROM deployment_targets WHERE status <> 'retired'")
+    ).mappings().all()
+    taken: dict[int, str] = {}
+    for row in rows:
+        for domain in (row["domains"] or []):
+            head, _, tail = str(domain).rpartition(":")
+            if tail.isdigit() and head == address:
+                taken[int(tail)] = str(row["app_name"] or "")
+    return taken
+
+
+def _first_free_port(connection, address: str, *, start: int = 3000) -> Optional[int]:
+    """A port nothing is listening on AND nothing has been promised.
+
+    Both halves are required. A port that answers nothing right now but belongs to an app
+    between deploys is not free, and taking it reproduces the collision one deploy later.
+    """
+    import socket
+
+    taken = _ports_assigned_on(connection, address)
+    port = max(1024, start)
+    checked = 0
+    while checked < 200 and port < 65535:
+        checked += 1
+        if port not in taken:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.settimeout(2.0)
+            try:
+                probe.connect((address, port))
+            except OSError:
+                return port          # nothing answered, nothing promised
+            finally:
+                probe.close()
+        port += 1
+    return None
+
+
+def create_deployment_target(
+    connection, *, project_id: str, app_name: str, environment: str = "staging",
+    repo: Optional[str] = None, host_id: Optional[str] = None, port: Optional[int] = None,
+    actor: str = "boss",
+) -> dict[str, Any]:
+    """Give an app somewhere to be deployed to.
+
+    THIS DID NOT EXIST, and its absence is what turned a routine first deployment into an
+    incident. An app that has never shipped has no `deployment_target`; the deploy capability
+    refuses without one; and the only tool that could create one was `write_db` with SQL the
+    model had to compose from a schema it was guessing at. It guessed `code_tasks` (the table is
+    `code_task_runs`), the INSERT failed, and the operator was shown a raw psycopg error.
+
+    Reaching for raw SQL was not a lapse in judgement — it was the only route left. So the route
+    exists now, and it knows the things the SQL could not: which host this project deploys to,
+    which ports are genuinely free, that a bare IP must be probed over http rather than https,
+    and that `target_ref` is derived from the host record rather than typed.
+
+    Deliberately narrow, in the same spirit as `deploy_build`:
+      * it creates a DESTINATION and never ships anything to it — those are two decisions;
+      * an app that already has a target for this environment adopts it rather than growing a
+        second one, because two targets for one app is the ambiguity that started all of this;
+      * the host must be verified, since a target on an unproven host fails at deploy time,
+        far from the decision that caused it.
+    """
+    from .naming import identity_key, project_name
+
+    display, _blurb, _label = project_name(str(app_name or ""))
+    app = display if display and display != "Untitled app" else str(app_name or "").strip()
+    if not app:
+        return {"ok": False, "error": "app_name is required, and must be the app's name rather "
+                                      "than the directive it was built from"}
+    environment = str(environment or "staging").strip() or "staging"
+    wanted = identity_key(app)
+
+    # ONE APP, ONE TARGET PER ENVIRONMENT. Compared on identity, not on the literal string:
+    # "Change Calendar" and "change-calendar" are the same app, and letting both exist recreates
+    # the ambiguous-target failure this function was written to end.
+    for row in connection.execute(
+        sql("SELECT id, app_name, status, host_id, domains FROM deployment_targets "
+            "WHERE project_id = :p AND environment = :e"),
+        {"p": project_id, "e": environment},
+    ).mappings().all():
+        if identity_key(str(row["app_name"] or "")) != wanted:
+            continue
+        if row["status"] == "retired":
+            connection.execute(
+                sql("UPDATE deployment_targets SET status = 'active', updated_at = now() "
+                    "WHERE id = :i"), {"i": row["id"]})
+        return {"ok": True, "target_id": row["id"], "app_name": row["app_name"],
+                "environment": environment, "adopted_existing": True,
+                "revived": row["status"] == "retired",
+                "domains": row["domains"] or [],
+                "note": f"{app!r} already has a {environment} target; using it rather than "
+                        "creating a second one."}
+
+    hosts = [dict(h) for h in list_hosts(connection, project_id)]
+    verified = [h for h in hosts if h.get("status") == "verified"]
+    if host_id:
+        host = get_host(connection, host_id)
+        if not host:
+            return {"ok": False, "error": f"no such deployment host: {host_id}",
+                    "hosts": [{"host_id": h["id"], "name": h["name"],
+                               "status": h["status"]} for h in hosts]}
+    elif len(verified) == 1:
+        host = verified[0]
+    else:
+        # The host every other app in this project is already on. When a project deploys to one
+        # machine, asking which machine is a question with one answer and no reason to ask it.
+        used = {r["host_id"] for r in connection.execute(
+            sql("SELECT DISTINCT host_id FROM deployment_targets "
+                "WHERE project_id = :p AND host_id IS NOT NULL AND status = 'active'"),
+            {"p": project_id}).mappings().all() if r["host_id"]}
+        host = get_host(connection, next(iter(used))) if len(used) == 1 else None
+        if not host:
+            return {"ok": False,
+                    "error": ("this project deploys to more than one host, so which one this "
+                              "app belongs on is a real decision. Pass host_id."),
+                    "hosts": [{"host_id": h["id"], "name": h["name"], "address": h["address"],
+                               "status": h["status"]} for h in hosts]}
+
+    if host.get("status") != "verified":
+        return {"ok": False,
+                "error": f"host {host['name']!r} is {host.get('status')!r}, not verified. A "
+                         "target on an unproven host fails at deploy time, a long way from the "
+                         "decision that caused it. Finish onboarding it first."}
+
+    address = str(host["address"])
+    taken = _ports_assigned_on(connection, address)
+    if port:
+        port = int(port)
+        if port in taken:
+            return {"ok": False,
+                    "error": f"port {port} on {address} is already assigned to "
+                             f"{taken[port]!r}. Leave port unset and one will be chosen.",
+                    "assigned": [{"port": k, "app": v} for k, v in sorted(taken.items())]}
+    else:
+        port = _first_free_port(connection, address)
+        if not port:
+            return {"ok": False,
+                    "error": f"no free port found on {address} in the range scanned"}
+
+    if not repo:
+        row = connection.execute(
+            sql("SELECT repo FROM deployment_targets WHERE project_id = :p AND repo <> '' "
+                "ORDER BY created_at DESC LIMIT 1"), {"p": project_id}).mappings().first()
+        repo = str(row["repo"]) if row else ""
+    repo = str(repo or "").rsplit("/", 1)[-1]
+
+    # A BARE IP HAS NO CERTIFICATE. Defaulting to https had a healthy app failing its gate with
+    # WRONG_VERSION_NUMBER; the destination is known here, so this is a fact rather than a guess.
+    looks_like_ip = address.count(".") == 3 and all(p.isdigit() for p in address.split("."))
+    scheme = "http" if (looks_like_ip or ":" in address) else "https"
+
+    target_id = _target_id()
+    connection.execute(
+        sql("INSERT INTO deployment_targets "
+            "(id, project_id, app_name, repo, environment, target_kind, target_ref, domains, "
+            " health_checks, status, created_by, created_at, updated_at) "
+            "VALUES (:i, :p, :a, :r, :e, 'ssh', :ref, CAST(:dom AS JSONB), "
+            "        CAST(:hc AS JSONB), 'active', :by, now(), now())"),
+        {"i": target_id, "p": project_id, "a": app, "r": repo, "e": environment,
+         "ref": target_ref_for(host), "dom": json.dumps([f"{address}:{port}"]),
+         "hc": json.dumps([{"kind": "http", "scheme": scheme, "path": "/",
+                            "expect_status": 200, "port": port}]),
+         "by": actor})
+    attached = attach_target(connection, target_id=target_id, host_id=host["id"])
+    emit_event(connection, project_id, "deployment.target_created", actor,
+               "deployment_target", target_id,
+               {"app_name": app, "environment": environment, "host": host["name"],
+                "domain": f"{address}:{port}"})
+
+    return {"ok": True, "target_id": target_id, "app_name": app, "environment": environment,
+            "host": host["name"], "address": address, "port": port,
+            "domain": f"{address}:{port}", "target_ref": attached.get("target_ref"),
+            "arch": attached.get("arch"), "repo": repo,
+            "health_check": f"{scheme}://{address}:{port}/ expecting 200",
+            "next": "Nothing has been deployed yet. Deploy the build to it with deploy_app."}

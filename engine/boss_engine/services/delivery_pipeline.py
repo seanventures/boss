@@ -140,7 +140,12 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
 
     with begin(engine) as c:
         run = c.execute(
-            sql("SELECT id, project_id, status, title, spec FROM code_task_runs "
+            # finalize_ctx WAS NEVER SELECTED, so the app-name lookup below silently fell
+            # through to `title` on every single run — and a title is the operator's whole
+            # directive ("Build a change calendar. Who it is for: a team that keeps deploying…"),
+            # not a name. The matching that was supposed to prevent a wrong deployment was
+            # therefore comparing target names against a paragraph.
+            sql("SELECT id, project_id, status, title, spec, finalize_ctx FROM code_task_runs "
                 "WHERE id = :i AND project_id = :p"),
             {"i": run_id, "p": project_id}).mappings().first()
         if not run:
@@ -177,23 +182,72 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "ORDER BY created_at DESC"),
                 {"p": project_id, "r": repo, "e": environment}).mappings().all()]
 
-            app_name = ""
-            try:
-                from .naming import stable_app_id  # noqa: F401  (import proves availability)
-                fctx = run.get("finalize_ctx") or {}
-                app_name = str(fctx.get("app_name") or "").strip()
-            except Exception:  # noqa: BLE001
-                app_name = ""
+            from .naming import identity_key, project_name
+
+            fctx = run.get("finalize_ctx") or {}
+            app_name = str(fctx.get("app_name") or "").strip()
             if not app_name:
-                app_name = str(run.get("title") or "").strip()
+                # `project_name` is what everything else in BOSS uses to turn a directive into
+                # the app's display name — the same function the console titles cards with.
+                display, _blurb, _label = project_name(str(run.get("title") or ""))
+                app_name = display if display and display != "Untitled app" else ""
+
+            wanted = identity_key(app_name) if app_name else ""
 
             def _matches(t: dict) -> bool:
-                name = str(t.get("app_name") or "").strip().lower()
-                return bool(name) and (name in app_name.lower() or app_name.lower().startswith(name))
+                return bool(wanted) and identity_key(str(t.get("app_name") or "")) == wanted
 
             named = [t for t in candidates if _matches(t)]
             if len(named) == 1:
                 target = named[0]
+            elif named:
+                return {
+                    "status": "failed",
+                    "reason": (
+                        f"{len(named)} active '{environment}' targets are registered for "
+                        f"'{app_name}'. Pass target_id — deploying to the wrong one of an app's "
+                        "own targets is still a wrong deployment."),
+                    "candidates": [
+                        {"target_id": t["id"], "app_name": t.get("app_name"),
+                         "domains": t.get("domains")} for t in named
+                    ],
+                }
+            elif candidates and wanted:
+                # NOT AMBIGUOUS. MISSING.
+                #
+                # This branch used to say "N targets share repo 'boss-sandbox', pass target_id"
+                # and list the other apps as CANDIDATES. Every app in this project is built into
+                # the one sandbox repo, so that fired whenever an app had no target of its own —
+                # which is the normal state of an app that has never shipped. The message named
+                # someone else's infrastructure as the answer, and BOSS spent two turns trying
+                # to work out which of Meeting cost meter or Vendor-Status-Watcher to deploy a
+                # change calendar onto. There was no right answer in that list.
+                #
+                # "Pass target_id" was also advice that could not be followed: no target for
+                # this app existed to pass, and until create_deployment_target there was no tool
+                # to make one, so the only route left was hand-written SQL. That is exactly what
+                # BOSS did.
+                return {
+                    "status": "failed",
+                    "reason": (
+                        f"'{app_name}' has no '{environment}' deployment target of its own, so "
+                        f"there is nowhere to ship it. The {len(candidates)} '{environment}' "
+                        f"targets on repo '{repo}' belong to other apps ("
+                        + ", ".join(sorted({str(t.get("app_name") or "?") for t in candidates}))
+                        + ") — deploying onto one of those would overwrite a running app. "
+                        "Create a target for this app first: create_deployment_target(app_name="
+                        f"'{app_name}', environment='{environment}'), which picks a free port on "
+                        "the host and registers it, then deploy again."),
+                    "missing": "deployment_target",
+                    "app_name": app_name,
+                    "fix": {"tool": "create_deployment_target",
+                            "args": {"app_name": app_name, "environment": environment,
+                                     "run_id": run_id}},
+                    "other_apps_targets": [
+                        {"target_id": t["id"], "app_name": t.get("app_name"),
+                         "domains": t.get("domains")} for t in candidates
+                    ],
+                }
             elif len(candidates) == 1:
                 target = candidates[0]
             elif candidates:
@@ -201,8 +255,9 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "status": "failed",
                     "reason": (
                         f"{len(candidates)} active '{environment}' targets share repo "
-                        f"'{repo}', and this run does not name one unambiguously. Pass "
-                        "target_id — deploying the wrong app is worse than not deploying."),
+                        f"'{repo}', and this run does not name an app to match them against, so "
+                        "none of them can be chosen safely. Pass target_id — deploying the wrong "
+                        "app is worse than not deploying."),
                     "candidates": [
                         {"target_id": t["id"], "app_name": t.get("app_name"),
                          "domains": t.get("domains")} for t in candidates

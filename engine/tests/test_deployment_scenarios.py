@@ -179,8 +179,22 @@ def test_deploy_refuses_when_the_target_is_ambiguous():
     src = inspect.getsource(delivery_pipeline.deploy_build)
     assert "ORDER BY created_at DESC LIMIT 1" not in code, "still silently picking the newest"
     assert "candidates" in src, "an ambiguous target does not report the options"
-    assert "does not name one unambiguously" in src
+    assert "candidates" in src, "an ambiguous target does not report the options"
     assert "app_name" in src, "the app is still not part of target resolution"
+    # AMBIGUOUS AND MISSING ARE DIFFERENT ANSWERS, and conflating them is what turned a routine
+    # first deployment into an incident. Every app in this project is built into ONE repo, so
+    # "N targets share this repo" fired whenever an app simply had no target of its own — and
+    # it named the other apps as CANDIDATES, so BOSS spent two turns working out whether to
+    # deploy a change calendar onto Meeting cost meter's port.
+    assert "has no" in src and "deployment target of its own" in src
+    assert "other_apps_targets" in src, "other apps are still offered as candidates"
+    assert "create_deployment_target" in src, (
+        "the refusal does not name the tool that fixes it — 'pass target_id' is advice that "
+        "cannot be followed when no target for this app exists")
+    # Identity, not substring. `name in app_name.lower()` matched a target called "Change" to an
+    # app called "Change Calendar", and matched nothing at all when app_name fell back to the
+    # operator's whole directive.
+    assert "identity_key" in code
 
 
 def test_an_explicit_target_id_is_always_honoured():

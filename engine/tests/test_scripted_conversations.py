@@ -142,7 +142,13 @@ class TestGivingUpIsNotAnEnding:
             ("It hung on `npm run verify`; the retry is offered below.", SIX_READS),
         ])
         assert len(model.calls) >= 2, f"sent without a direction: {ending!r}"
-        assert "handing the problem back" in model.calls[1]["message"]
+        # The PROPERTY, not the sentence. This used to pin the phrase "handing the problem
+        # back", so rewording the instruction — which had to be reworded, because the model was
+        # copying it back as section headings — broke four tests that had nothing to say about
+        # the behaviour. A test that pins the wording of a prompt tests the prompt's spelling.
+        instruction = model.calls[1]["message"]
+        assert "hands the problem back" in instruction or "handing the problem back" in instruction
+        assert "propose_action" in instruction or "RUN THE CHECK" in instruction
 
     def test_asking_for_an_identifier_is_handing_it_back(self, monkeypatch):
         """Observed live. "To pinpoint the exact cause we need the specific run identifier so

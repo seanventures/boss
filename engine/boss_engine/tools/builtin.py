@@ -847,6 +847,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "status that is stuck. Before you say a change needs someone else, check whether it is "
         "one row in one table -- if it is, do it. One statement, always WHERE-qualified unless "
         "whole_table is set. Never invent a value you write: read it first, or ask. "
+        "NOT for deployment targets: use create_deployment_target, which knows the host, the "
+        "free ports and the health check. Composing that INSERT by hand failed on a guessed "
+        "table name and would have written a row missing half its columns. "
         "PREFER a structured tool when one exists: raw SQL emits no domain events and updates "
         "no related rows, so cancel_job is better than UPDATE jobs SET status. This is the "
         "fallback for what those tools do not cover, not a shortcut around them.",
@@ -867,6 +870,19 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         ok, why = _is_single_write(statement, whole_table=bool(args.get("whole_table")))
         if not ok:
             return {"ok": False, "error": f"rejected: {why}"}
+        # THE SAME GUARD THE OFFER PATH HAS. `propose_action` refuses to put a fabricated value
+        # behind a button; write_db would execute one. So the check that stopped a bad BUTTON
+        # did not stop a bad WRITE, and the row BOSS tried to insert carried
+        # target_ref='container_ref_placeholder' — a value invented to fill a column it did not
+        # understand, headed for a table that decides where an app gets deployed.
+        invented = _placeholder_argument({"sql": statement})
+        if invented:
+            return {"ok": False,
+                    "error": ("this statement contains an invented value. Look the real one up "
+                              "first, or use the tool that knows it — create_deployment_target "
+                              "derives target_ref from the host record rather than guessing at "
+                              "it. A row written with a placeholder is worse than no row: it "
+                              "looks configured and fails later, somewhere else.")}
         with ctx.begin() as c:
             result = c.execute(_s(statement))
             changed = getattr(result, "rowcount", None)
@@ -926,6 +942,42 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             target_id=(str(args["target_id"]) if args.get("target_id") else None),
             actor=actor,
         )
+
+    @reg.tool(
+        "create_deployment_target",
+        "Give an app somewhere to deploy TO. Use this when a deploy refused with 'no target for "
+        "this app' or 'has no deployment target of its own' — that is not an ambiguity to "
+        "resolve by picking another app's target, it is a missing destination, and this creates "
+        "it. Picks a genuinely free port on the project's host (nothing listening AND nothing "
+        "else assigned it), declares a health check with the right scheme, and derives the "
+        "connection details from the host record. An app that already has a target for that "
+        "environment adopts it instead of growing a second one. It creates the DESTINATION and "
+        "ships nothing — deploy with deploy_app afterwards. Never write this row with SQL: the "
+        "table has columns this sets that a hand-written INSERT does not know about.",
+        _obj({"app_name": {"type": "string",
+                           "description": "the app's NAME, e.g. 'Change Calendar' — not the "
+                                          "directive it was built from"},
+              "environment": {"type": "string", "description": "staging | production"},
+              "host_id": {"type": "string",
+                          "description": "optional dh_ — only needed when the project deploys "
+                                         "to more than one host"},
+              "port": {"type": "integer",
+                       "description": "optional; leave unset and a free one is chosen"}},
+             required=["app_name"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def create_deployment_target(ctx, *, project_id, actor, args):
+        from ..services.deployment_fleet import create_deployment_target as _create
+
+        with ctx.begin() as c:
+            return _create(
+                c, project_id=project_id, app_name=str(args.get("app_name") or ""),
+                environment=str(args.get("environment") or "staging"),
+                host_id=(str(args["host_id"]) if args.get("host_id") else None),
+                port=(int(args["port"]) if args.get("port") else None),
+                actor=actor,
+            )
 
     @reg.tool(
         "preflight_deployment_target",
@@ -4050,6 +4102,9 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
+    # with hand-composed SQL — which BOSS took, against a schema it had to guess at.
+    "create_deployment_target",
     # Queue and run state
     "cancel_job",
     "set_job_priority",
@@ -4150,6 +4205,19 @@ def build_discuss_read_registry() -> ToolRegistry:
                 # operational writes look like reads to anything that inspects the registry —
                 # an audit, a gate, a future policy. A tool that changes state must say so.
                 kind=spec.kind,
+                # AND PRESERVE HOW HARD IT IS TO UNDO — this was dropped, which silently
+                # DISARMED the confirmation gate on the only registry the chat agent uses.
+                #
+                # `reversibility` defaults to "safe", and `self_executable` is derived from it.
+                # So every rebuilt spec came out self-executable: `write_db`, declared
+                # "destroys_work" at its definition, could run arbitrary INSERT/UPDATE/DELETE
+                # from a model's own tool call with nobody asked. It did — a hand-composed
+                # INSERT into deployment_targets, against a table name it guessed wrong.
+                #
+                # The guard I wrote after the 2026-09-02 wipe was tested against
+                # build_default_registry, which is not the registry this path uses. A safety
+                # property that holds in the registry nobody calls is not a safety property.
+                reversibility=spec.reversibility,
             )
         )
     return reg

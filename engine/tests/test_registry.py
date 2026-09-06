@@ -52,6 +52,9 @@ _EXPECTED_TOOLS: set[str] = {
     "close_orphaned_runs",
     "consistency_report",
     "create_code_task",
+    # Somewhere to deploy TO. Its absence sent BOSS to write_db with a hand-composed INSERT
+    # against a table name it guessed wrong.
+    "create_deployment_target",
     "create_discovery",
     "decide",
     "describe_schema",
@@ -120,11 +123,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 72, (
+    assert len(reg.names()) == 73, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 47
-    assert len(write) == 25
+    assert len(write) == 26
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -322,7 +325,10 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
-    "close_orphaned_runs", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
+    "close_orphaned_runs",
+    # Creating a DESTINATION, not shipping to one. It writes a row that can be retired, and an
+    # app that already has a target for the environment adopts it rather than growing a second.
+    "create_deployment_target", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
     "redeploy", "register_repository", "retarget_app", "send_feedback", "set_job_priority",
     "start_preview", "steer_code_task", "stop_preview",
 ]

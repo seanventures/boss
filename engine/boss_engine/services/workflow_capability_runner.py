@@ -351,6 +351,19 @@ def _reason_of_last_resort(output: dict[str, Any], step: dict[str, Any]) -> str:
     capability = str(output.get("capability") or step.get("step_id") or "the step")
     tool = output.get("tool")
 
+    # IF IT SAID WHY, THAT IS THE MESSAGE — DO NOT ANNOUNCE ITS ABSENCE OVER THE TOP OF IT.
+    #
+    # An operator was shown, in full: "deploy failed and gave no error message. What it did
+    # return: reason=3 active 'staging' targets share repo 'boss-sandbox'... — deploying the
+    # wrong app is worse than not d". Every clause of that is wrong together: there WAS an error
+    # message, it was announced as missing, it was relabelled "what it did return" as though it
+    # were debris, and it was cut off mid-word. The operator then had to ask BOSS what their own
+    # error meant.
+    for key in ("reason", "detail", "message", "note"):
+        spoken = str((output or {}).get(key) or "").strip()
+        if spoken:
+            return spoken
+
     # Anything the capability did say, even under a key nobody planned for. A returned dict is
     # evidence and belongs in front of the operator, not summarised into silence.
     said = {
@@ -358,8 +371,10 @@ def _reason_of_last_resort(output: dict[str, Any], step: dict[str, Any]) -> str:
         if k not in ("capability", "tool", "status", "inputs") and v not in (None, "", [], {})
     }
     if said:
-        rendered = "; ".join(f"{k}={str(v)[:160]}" for k, v in list(said.items())[:6])
-        return (f"{capability} failed and gave no error message. What it did return: {rendered}. "
+        # Whole values. The 160-character cut landed inside a word ("worse than not d") and the
+        # operator pasted the stump into chat asking what it meant, because that is all they had.
+        rendered = "; ".join(f"{k}={v}" for k, v in list(said.items())[:6])
+        return (f"{capability} failed without an error message. It returned: {rendered}. "
                 f"Read the activity log for this run, or ask BOSS about this step.")
 
     return (

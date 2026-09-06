@@ -788,6 +788,46 @@ def described_a_fix_without_doing_it(reply: str, actions: list, proposed: list) 
     return bool(_PRESCRIBES_A_FIX.search(reply))
 
 
+#: The reply owning ITS OWN failed attempt — first person, or the attempt as the subject.
+#:
+#: A bare "failed" is not enough, and testing for one is worse than testing for nothing: the
+#: reply that hid the failed INSERT opened "The Deploy step failed because BOSS could not pick a
+#: unique staging target". Every failure word in that sentence is about the thing being
+#: diagnosed. What is missing is any mention of what BOSS had just tried and what happened.
+_OWNS_A_FAILURE = re.compile(
+    r"\b(i (?:tried|attempted|ran|called|issued)|my (?:\w+ )?(?:attempt|insert|write|call|query)|"
+    r"(?:was|were) (?:rejected|refused)|i could not|i couldn'?t|i was unable|"
+    r"that (?:attempt|call|insert) failed)\b", re.I)
+
+
+def hid_a_failed_action(reply: str, tool_calls: list) -> bool:
+    """Did this turn try something, have it fail, and then not mention it?
+
+    From the transcript: BOSS called `propose_action` twice and both were refused, so the
+    operator got no button and no idea one had been attempted. Next turn it ran `write_db`,
+    the INSERT failed on a table name it had guessed wrong, and the reply again described the
+    situation as though nothing had been tried — the operator only learned about it because the
+    console renders failed tool calls beside the message.
+
+    An agent that acts must report what its actions did. Silence about a failed attempt is
+    worse than the failure: it makes the next answer look like a fresh analysis when it is the
+    same one with a hidden dead end behind it, and it is how a loop stays invisible from inside.
+    """
+    if not reply:
+        return False
+    failed = [c for c in (tool_calls or [])
+              if isinstance(c, dict) and c.get("ok") is False and c.get("tool")]
+    if not failed:
+        return False
+    low = reply.lower()
+    for call in failed:
+        name = str(call.get("tool") or "").lower()
+        # Named outright, or named the way a person writes it ("write_db" / "write db").
+        if name in low or name.replace("_", " ") in low:
+            return False
+    return not _OWNS_A_FAILURE.search(reply)
+
+
 def going_in_circles(reply: str, history: list) -> bool:
     """Is this the same answer again?
 
@@ -1727,8 +1767,24 @@ class IntentRouter:
                     # the operator holding a table of options they could not click.
                     _prescribed = described_a_fix_without_doing_it(reply, actions, proposed)
                     _repeating = going_in_circles(reply, history)
-                    if reply and (_thin or _handed_back or _prescribed or _repeating):
+                    _hid_failure = hid_a_failed_action(reply, tool_calls)
+                    if reply and (_thin or _handed_back or _prescribed or _repeating
+                                  or _hid_failure):
                         gaps = []
+                        if _hid_failure:
+                            _names = ", ".join(sorted({
+                                str(c.get("tool")) for c in tool_calls
+                                if isinstance(c, dict) and c.get("ok") is False and c.get("tool")
+                            }))
+                            gaps.append(
+                                f"You called {_names} this turn and it FAILED, and your answer "
+                                "does not mention it. Say what you tried, quote what came back, "
+                                "and say what you are doing about it. Never describe a situation "
+                                "as though you had not touched it — the operator can see the "
+                                "failed call next to your message, so omitting it does not hide "
+                                "anything, it only makes you look like you did not notice. If "
+                                "the failure was a rejected argument or a wrong table name, that "
+                                "is information: fix it and try again this turn.")
                         if _thin:
                             gaps.append(
                                 f"You answered an operational question after "
@@ -1766,12 +1822,27 @@ class IntentRouter:
                                 "the service logs), or ACT on the conclusion you have already "
                                 "reached. Do not restate it a third time.")
                         if _handed_back:
+                            # THIS TEXT WAS BEING COPIED AS A TEMPLATE, NOT FOLLOWED.
+                            #
+                            # The previous wording — "state the single most likely cause, the ONE
+                            # check that would confirm it" — came back twice as literal section
+                            # headings: "**What I FOUND** / **What I COULD NOT DETERMINE** / **One
+                            # check that would settle it** / **Single next action**", with the
+                            # action described and never taken. The operator answered "yes, please
+                            # do anything to fix it" and got the same four headings again. Naming
+                            # a check instead of RUNNING it is the same failure the instruction
+                            # was written to stop, wearing the instruction's own words.
                             gaps.append(
-                                "Your answer ends by handing the problem back. Never end on "
-                                "'could not determine' or 'would you like me to'. State the "
-                                "single most likely cause, the ONE check that would confirm it, "
-                                "and — if a tool can perform that check or the fix — offer it "
-                                "with propose_action. A direction, never a yes/no question.")
+                                "Your answer hands the problem back. Do not reply with headed "
+                                "sections, and never write a heading like 'What I could not "
+                                "determine' or 'One check that would settle it' — if a check "
+                                "would settle it, RUN THE CHECK; you have http_probe, "
+                                "inspect_host, read_logs, query_db and find_free_port, and every "
+                                "one of them answers in this turn. Only say something cannot be "
+                                "determined after a tool has actually failed to determine it, and "
+                                "then say which tool and what it returned. End with the thing you "
+                                "DID, or a propose_action button — never with a plan, and never "
+                                "with a yes/no question.")
                         try:
                             better = _with_transient_retry(lambda: self._answer_agent().chat(
                                 project_id=project_id, actor="orchestrator",
