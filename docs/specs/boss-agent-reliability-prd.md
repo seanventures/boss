@@ -428,6 +428,56 @@ so BOSS could not explain the failure to the operator either.
 
 ---
 
+### 4.8 The third incident: when the loop is the system's fault (thread `athr_50fc2730`)
+
+4.7 concluded that no capability was missing. That was true of that incident and false of this
+one, and the difference is worth stating precisely, because it changes what to look at first.
+
+The Deploy step reported: *"3 active 'staging' targets share repo 'boss-sandbox', and this run
+does not name one unambiguously. Pass target_id."* Change Calendar had **no target at all**.
+Every app in this project is built into the one sandbox repo, so the repo+environment query
+returned the other apps' targets and the code called that ambiguity — offering Meeting cost
+meter and Vendor-Status-Watcher as the candidates for deploying a change calendar. There was no
+right answer in that list, and BOSS spent two turns looking for one.
+
+"Pass target_id" could not be followed: no target for this app existed, and **no tool could
+create one**. `write_db` with hand-composed SQL was the only remaining route. BOSS took it, got
+the table name wrong (`code_tasks`; it is `code_task_runs`), and the operator was shown a raw
+psycopg error.
+
+Six defects produced one screen. Four of them are guards that were already written:
+
+| # | Defect | Why it survived |
+|---|---|---|
+| 1 | "Ambiguous" reported for a missing target | The repo is shared by every app, so the branch fired on the normal state of an app that has never shipped |
+| 2 | No `create_deployment_target` | The genuine capability gap. Raw SQL was not a lapse in judgement; it was the only route left |
+| 3 | The app name was never read | `finalize_ctx` was not in the SELECT, so matching always fell back to the operator's whole directive, compared by substring |
+| 4 | `write_db` self-executed | Declared `destroys_work` at its definition; `build_discuss_read_registry` rebuilt every spec **without `reversibility`**, which defaults to `safe` |
+| 5 | A fabricated value was written | `propose_action` refuses `container_ref_placeholder`; `write_db` executed it. The guard was on the offer path, not the write path |
+| 6 | The failed attempt went unmentioned | Nothing checked whether a reply accounts for its own actions |
+
+**#4 is the one to learn from.** The confirmation gate was correct, declared correctly, and
+tested — against `build_default_registry`, which is not the registry the chat agent uses. A
+safety property that holds only in the registry nobody calls is not a safety property. There is
+now a test that the two registries agree on `(kind, reversibility, self_executable)` for every
+admitted tool, which is the invariant rather than the instance.
+
+**On the loop.** It repeated because the situation was genuinely unresolvable by the tools it
+had — but it also repeated in a specific shape: *"**What I FOUND** / **What I COULD NOT
+DETERMINE** / **One check that would settle it** / **Single next action**"*, twice, with the
+action described and never taken. Those are the resolution instruction's own words from §4.5,
+returned as section headings. An instruction phrased as a shape gets filled in like a form.
+It now forbids the headings by name and says: if a check would settle it, run the check —
+`http_probe`, `inspect_host`, `read_logs`, `query_db` and `find_free_port` all answer within the
+turn. "I could not determine X" is legitimate only after a tool has failed to determine X, and
+must name the tool and what it returned.
+
+**The general lesson across 4.6–4.8.** Every incident so far has had the same shape: a correct
+diagnosis, a correct guard, and no connection between them. Ask of any new check — *is it wired
+into the path that actually runs, and can the agent do the thing it concludes?*
+
+---
+
 ## 5. Explicitly out of scope
 
 - Making BOSS more cautious in general. It should still act when told to; see P6.
