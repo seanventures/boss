@@ -20388,6 +20388,17 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             ),
             {"ids": ids},
         ).mappings().all()
+        # Computed HERE, while the connection is open — the loop that builds the payload runs
+        # after this block has closed it.
+        from boss_engine.services.workflow_recheck import blocker_status as _blocker_status
+
+        _blockers = {}
+        for _s in steps:
+            try:
+                _blockers[(_s["workflow_run_id"], _s["step_id"])] = _blocker_status(
+                    connection, project_id, dict(_s))
+            except Exception:  # noqa: BLE001 — a re-check must never fail the page
+                _blockers[(_s["workflow_run_id"], _s["step_id"])] = None
 
     # THE ORDER THE STEPS RUN IN, NOT THE ORDER THEY WERE INSERTED.
     #
@@ -20437,6 +20448,14 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "evidence": step["evidence"] or [],
             "error": step["last_error"],
             "decision_id": step["decision_id"],
+            # WHETHER THE FAILURE ABOVE IS STILL TRUE.
+            #
+            # A failed step's error is a record of a past attempt, and this view rendered it as
+            # a statement about the present — so after the missing deployment target was
+            # created, the Deploy step went on saying in red that the app had nowhere to ship
+            # to. Re-checked on read, because that is the moment the operator is deciding
+            # whether pressing retry is worth anything.
+            "blocker": _blockers.get((step["workflow_run_id"], step["step_id"])),
             "decision_status": step["decision_status"],
             "decision_approved_at": (step["decision_approved_at"].isoformat()
                                      if step["decision_approved_at"] else None),
@@ -20849,6 +20868,25 @@ def retry_delivery_step(run_id: str, payload: dict) -> dict:
             {"r": run_id, "p": project_id},
         )
     return {"run_id": run_id, "step_id": step_id, "status": "ready"}
+
+
+@app.post("/v1/delivery-workflows/runs/{run_id}/recheck")
+def recheck_delivery_run(run_id: str, payload: dict) -> dict:
+    """Re-test what stopped this run, and put back whatever can now proceed.
+
+    The manual refresh an operator asked for after watching BOSS fix the very thing a step was
+    still complaining about — and the operation the first fixing investigation reported as
+    missing, having had to reconcile a dead-lettered run with hand-written SQL because nothing
+    exposed this.
+    """
+    from boss_engine.services.workflow_recheck import recheck_run
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        return recheck_run(connection, project_id=project_id, run_id=run_id,
+                           requeue=bool(payload.get("requeue", True)))
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")

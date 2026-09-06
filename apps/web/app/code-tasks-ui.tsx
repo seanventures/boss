@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 
 import { consoleHref } from "./console-href";
+import { onChanged, notifyChanged } from "./changed";
 import { appIdentity, groupIdentity } from "./app-identity";
 
 /**
@@ -1162,6 +1163,9 @@ async function appDeployOp(body: Record<string, unknown>): Promise<{ ok: boolean
       cache: "no-store",
     });
     const d = await r.json().catch(() => ({}));
+    // TELL THE REST OF THE CONSOLE. Setting a target here changes the same rows the Workflows
+    // screen renders, and that screen had no way to learn it.
+    if (r.ok) notifyChanged("factory", { op: String(body.op ?? "") });
     return r.ok ? { ok: true, data: d } : { ok: false, error: d?.error ?? `HTTP ${r.status}` };
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message ?? e) };
@@ -1231,6 +1235,13 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   }, [run.id, load]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // AND WHEN THE CHANGE WAS MADE SOMEWHERE ELSE.
+  //
+  // This card shows the app's target and its deployments — exactly the rows the Workflows
+  // screen and BOSS also change. Setting a target from the workflow left this card showing the
+  // old answer until its own poll happened to run, or for ever once the card stopped polling.
+  useEffect(() => onChanged(() => { void reload(); }, "factory"), [reload]);
 
   // Poll only while something is actually moving. A card that polls forever is a card that
   // keeps a browser and an API busy describing a deployment that finished yesterday.

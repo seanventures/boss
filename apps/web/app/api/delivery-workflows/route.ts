@@ -91,6 +91,10 @@ const ACTIONS: Record<string, string> = {
 /** Actions addressed to ONE run. Kept apart because their path carries the run id. */
 const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
+  // Re-test what stopped this run and put back whatever can now proceed. Addressed to the RUN,
+  // not to a step: an operator arriving at a stalled workflow is asking "is this still true?"
+  // of the whole thing, and does not know which step to point at.
+  recheck: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/recheck`,
   set_input: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/input`,
   prepare_target: (id) =>
     `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/deploy-target`,

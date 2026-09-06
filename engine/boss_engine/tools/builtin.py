@@ -2409,6 +2409,28 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 allow_fix=wants_fix)
 
     @reg.tool(
+        "recheck_workflow_run",
+        "Re-test what stopped a workflow run and put back whatever can now proceed. Use it "
+        "when the thing a step complained about has since been dealt with — a deployment "
+        "target that did not exist and now does. A failed step's error is a record of a past "
+        "attempt, not a statement about now, so this tests the recorded blocker against the "
+        "world and re-queues only the steps whose blocker has actually cleared. It never "
+        "re-runs a step whose reason still holds, and it says which is which.",
+        _obj({"run_id": {"type": "string", "description": "the wfr_... to re-check"},
+              "requeue": {"type": "boolean",
+                          "description": "false to report without changing anything"}},
+             required=["run_id"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def recheck_workflow_run(ctx, *, project_id, actor, args):
+        from ..services.workflow_recheck import recheck_run
+
+        with ctx.begin() as c:
+            return recheck_run(c, project_id=project_id, run_id=str(args["run_id"]),
+                               requeue=bool(args.get("requeue", True)))
+
+    @reg.tool(
         "get_investigation",
         "The result of an investigation: what it found, what it ran to prove it, the fix, and "
         "whether it applied one. Call this when an investigation was started earlier in the "
@@ -4222,6 +4244,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
     # The escape hatch from a registry of fixed questions: a real debugging session.
     "investigate",
+    # Reconciling a run with a world that has moved on. Named by an investigation as the
+    # operation whose absence forced it to write SQL by hand.
+    "recheck_workflow_run",
     # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
     # with hand-composed SQL — which BOSS took, against a schema it had to guess at.
     "create_deployment_target",

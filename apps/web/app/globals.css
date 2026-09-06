@@ -988,6 +988,13 @@ h1, h2, h3, h4, h5, h6 {
 .dw-due, .dw-timeout { font-size: 0.68rem; }
 .dw-timeout { color: var(--amber, #d29922); }
 .dw-step-error { width: 100%; margin: 2px 0 0 28px; color: var(--red, #f85149); font-size: 0.72rem; }
+/* A failure whose cause has since been dealt with is HISTORY. Left readable — it still
+   explains why the run stopped — but no longer shouting in red as though it were the
+   state of things now. */
+.dw-step-error-stale { color: var(--muted); }
+.dw-step-cleared {
+  width: 100%; margin: 6px 0 0 28px; color: var(--green, #3fb950); font-size: 0.74rem;
+}
 .dw-step-out {
   width: 100%; margin: 2px 0 0 28px; color: var(--muted);
   font-family: var(--mono, monospace); font-size: 0.68rem;

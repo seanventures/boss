@@ -59,6 +59,9 @@ _EXPECTED_TOOLS: set[str] = {
     # questions a registry of fixed shapes cannot answer.
     "investigate",
     "get_investigation",
+    # Reconciling a run with a world that has moved on: re-test what stopped each step and put
+    # back only the ones whose blocker has actually cleared.
+    "recheck_workflow_run",
     "create_discovery",
     "decide",
     "describe_schema",
@@ -127,11 +130,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 75, (
+    assert len(reg.names()) == 76, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 48
-    assert len(write) == 27
+    assert len(write) == 28
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -337,6 +340,9 @@ _SAFE_WRITES = [
     # Creating a DESTINATION, not shipping to one. It writes a row that can be retired, and an
     # app that already has a target for the environment adopts it rather than growing a second.
     "create_deployment_target", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
+    # Re-queues only steps whose recorded blocker has actually cleared — each one something the
+    # operator could have retried by hand from the same screen.
+    "recheck_workflow_run",
     "redeploy", "register_repository", "retarget_app", "send_feedback", "set_job_priority",
     "start_preview", "steer_code_task", "stop_preview",
 ]

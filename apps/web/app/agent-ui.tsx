@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
+import { notifyChanged } from "./changed";
 
 import {
   askBossAction,
@@ -619,6 +620,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       const r = await runAgentActionAction(projectId, actor, action.tool, action.args, threadId ?? undefined);
       const payload = (r.data ?? {}) as Record<string, unknown>;
       const ok = r.ok && payload?.ok !== false;
+      // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here
+      // is the same write the Factory card and the Workflows screen render, and neither had a
+      // way to learn it happened — so the operator fixed the problem in the dock and went back
+      // to a screen still describing it.
+      if (ok) notifyChanged("agent", { tool: action.tool });
       // SHOW WHAT IT DID, NOT JUST THAT IT DID SOMETHING.
       //
       // A tick and a label is fine for "cancel a job". For a command on a live host it is not:

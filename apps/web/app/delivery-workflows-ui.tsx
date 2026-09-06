@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
+import { notifyChanged, onChanged } from "./changed";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -113,6 +114,8 @@ export type RunStep = {
    *  worker picks the answer up, so an approved gate looked identical to an unanswered one. */
   decision_status?: string | null;
   decision_approved_at?: string | null;
+  /** Whether this step's RECORDED blocker still holds, re-tested when the run was read. */
+  blocker?: { cleared?: boolean; checkable?: boolean; reason?: string; missing?: string } | null;
   /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
    *  The one recorded in `output` was live when the step ran, and previews expire. The whole
    *  record, because turning one into an openable link is a rule the console already owns. */
@@ -486,6 +489,43 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   }, [projectId]);
 
   useEffect(() => { void load(); }, [load]);
+  // A target set on a Factory card, or an action BOSS ran in the dock, changes what this screen
+  // is showing. Reload rather than wait for the next poll.
+  useEffect(() => onChanged(() => { void load(); }, "workflows"), [load]);
+
+  // ARRIVING AT THIS SCREEN RE-TESTS WHAT STOPPED THINGS.
+  //
+  // A failed step's error is a record of a past attempt, and this page rendered it as a
+  // statement about now — so after the missing deployment target was created, the Deploy step
+  // went on saying in red that the app had nowhere to ship to, on a run marked dead-lettered.
+  // The operator's words: "not sure why the workflow is not updated with the latest... it
+  // should automatically refresh when we get to the workflow screen again".
+  //
+  // The read path already reports, per step, whether the recorded blocker still holds. When it
+  // does not, this puts the step back without being asked. Safe to be automatic: `recheck`
+  // re-queues ONLY steps whose blocker has actually cleared, and re-queuing an already-queued
+  // step is a no-op.
+  const rechecked = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const stale = runs.filter((r) => (r.steps ?? []).some(
+      (st) => (st as RunStep & { blocker?: { cleared?: boolean } }).blocker?.cleared));
+    const todo = stale.filter((r) => !rechecked.current.has(r.id));
+    if (!todo.length) return;
+    // Once per run per mount. Without the guard the reload below re-triggers this effect and
+    // the console re-checks in a loop for as long as it is open.
+    todo.forEach((r) => rechecked.current.add(r.id));
+    void (async () => {
+      const results = await Promise.all(todo.map((r) =>
+        post("recheck", { project_id: projectId, actor, run_id: r.id })));
+      const moved = results.reduce((n, r) => n + (
+        (r.ok ? ((r.data as { requeued?: unknown[] })?.requeued ?? []).length : 0)), 0);
+      if (moved) {
+        setNotice(`${moved} step${moved === 1 ? "" : "s"} put back — what stopped ` +
+                  `${moved === 1 ? "it" : "them"} has been dealt with since.`);
+        await load();
+      }
+    })();
+  }, [runs, projectId, actor, load]);
 
   // KEEP ASKING, EVEN WHEN NOTHING IS RUNNING.
   //
@@ -565,6 +605,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
       // always requires a person" is the whole value of the validation.
       setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
+      // The Factory card and the deployment panels render the same rows this just changed.
+      if (result.ok) notifyChanged("workflows", { action });
       // RELOAD WHILE STILL BUSY. `busy` was cleared BEFORE this, so every action ended the
       // same way: the button snapped back to its normal label and the console then spent
       // seconds re-fetching with nothing on screen to say so. From the operator's side that
@@ -689,6 +731,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           }}
           previewStarting={previewStarting?.runId ?? ""}
           onBound={load}
+          onRecheck={(run) => act("Re-check", "recheck", { run_id: run.id })}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
@@ -1424,7 +1467,7 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onSetTarget, onPrepareTarget, onRunPreview,
+                   onRetryStep, onRerun, onRecheck, onSetTarget, onPrepareTarget, onRunPreview,
                    onBound, projectId,
                    previewStarting,
                    targets, hosts }: {
@@ -1437,6 +1480,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   capabilities: Capability[];
   onRetryStep: (runId: string, stepId: string) => void;
   onRerun: (run: Run) => void;
+  onRecheck: (run: Run) => void;
   onSetTarget: (runId: string, targetId: string) => void;
   onPrepareTarget: (runId: string, hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
@@ -1556,7 +1600,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
             {open ? (
               <StepPath run={run} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
-                        onRerun={() => onRerun(run)} busy={busy}
+                        onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
+                        busy={busy}
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
                         onRunPreview={onRunPreview}
@@ -1654,12 +1699,13 @@ export function decidedButNotMoved(step: RunStep): string {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onSetTarget,
+function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onRecheck,
+                   onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
                    previewStarting, busy }: {
   projectId: string;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
-  onRetryStep: (stepId: string) => void; onRerun: () => void;
+  onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
   /** Re-read the runs — used after a binding lands so the step shows it. */
@@ -1773,6 +1819,21 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           Re-running is for a run that has STOPPED; a step that needs another go has "Try …
           again", which reruns that step and keeps everything before it. */}
       <div className="dw-run-actions">
+        {/* ONE BUTTON, FOR THE WHOLE RUN.
+            The screen re-tests the recorded blockers by itself on arrival; this is the worst
+            case — the operator has just changed something outside BOSS and does not want to
+            wait for the next visit. Deliberately not per-step: somebody arriving at a stalled
+            workflow is asking "is any of this still true?" of the whole thing, and does not
+            know which step to point at. */}
+        <button type="button" className="cap-btn" onClick={onRecheck} disabled={!!busy}
+                data-testid="dw-recheck">
+          {busy === "Re-check" ? "Re-checking…" : "Re-check this workflow"}
+        </button>
+        <span className="detail">
+          Re-tests what stopped each step against how things are now, and puts back the ones
+          whose reason has been dealt with. Nothing runs again unless its blocker is genuinely
+          gone.
+        </span>
         {ACTIVE_RUN_STATES.has(run.status) ? (
           <>
             <button type="button" className="cap-btn" disabled data-testid="dw-rerun-blocked">
@@ -2192,6 +2253,7 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   const askNote = String(
     step.error || (step.output || {}).note || (step.output || {}).error || "",
   ).slice(0, 400);
+  const blocker = step.blocker ?? null;
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.
   const merged = { ...(step.output || {}),
@@ -2250,8 +2312,23 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           now … Start a fresh preview, then deploy" in red — an instruction to redo work that
           had already been done. On a succeeded step the note is history: kept, because it
           explains the delay, but not dressed as a problem you still have. */}
+      {/* WHAT STOPPED IT — AND WHETHER THAT IS STILL TRUE.
+          This rendered a past attempt's error as a statement about now, so after the missing
+          deployment target was created the step went on insisting, in red, that the app had
+          nowhere to ship to. The read path re-tests the recorded blocker; when it has cleared,
+          the failure is labelled as history and the reason is given. */}
       {step.error && step.status !== "succeeded" ? (
-        <p className="dw-step-error" data-testid="dw-step-error">{step.error}</p>
+        <>
+          {blocker?.cleared ? (
+            <p className="dw-step-cleared" data-testid="dw-step-blocker-cleared">
+              <strong>This no longer applies.</strong> {blocker.reason}
+            </p>
+          ) : null}
+          <p className={blocker?.cleared ? "dw-step-error dw-step-error-stale" : "dw-step-error"}
+             data-testid="dw-step-error">
+            {blocker?.cleared ? "Recorded on the last attempt: " : ""}{step.error}
+          </p>
+        </>
       ) : null}
       {step.output?.note ? (
         <p className="dw-step-note"
