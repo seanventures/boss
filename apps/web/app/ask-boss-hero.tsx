@@ -948,10 +948,22 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
         body: JSON.stringify({ action: "apply", project_id: projectId,
                                workflow_key: key, work_class: "project.new" }),
       });
-      // SAY WHICH WAY IT WENT. A silent select is indistinguishable from one that did nothing,
-      // and this control changes what every future project does.
-      setNote(res.ok ? "saved" : `failed (${res.status})`);
-      if (res.ok) setCurrent(key);
+      // SAY WHICH WAY IT WENT, AND WHY.
+      //
+      // `failed (500)` was the whole message for a fault the API could describe exactly — an
+      // enabled mapping already occupied the slot — so the operator got a status code for a
+      // condition that had a sentence. A bare number sends someone to the logs for something
+      // the response already said.
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setCurrent(key);
+        // "Saved, but X still wins" is a real outcome: an org-scoped mapping or a higher
+        // priority can outrank this one, and the only other place that would surface is the
+        // next project starting on the wrong workflow.
+        setNote(String(body?.note ?? "saved"));
+      } else {
+        setNote(String(body?.detail ?? body?.error ?? `failed (${res.status})`).slice(0, 140));
+      }
     } catch {
       setNote("could not save");
     } finally {

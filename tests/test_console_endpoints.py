@@ -229,6 +229,45 @@ def main() -> int:
         check("it says whether it is still running",
               200 if isinstance(run.get("running"), bool) else 0, (200,), run)
 
+    # THE WORKFLOW PICKER, PRESSED TWICE.
+    #
+    # This is the whole bug: apply called create_mapping unconditionally, and a unique index
+    # covers (project, selector_kind, selector_value, scope_type, scope_id, priority) WHERE
+    # enabled. So the first apply worked and every one after it returned
+    #
+    #     500  WorkflowConflictError: An enabled mapping already occupies this selector,
+    #          scope, and priority.
+    #
+    # which the Command Center rendered as `failed (500)`. Not specific to one workflow — every
+    # option failed, including re-picking the one already in force. One call could never have
+    # caught it; the second call is the test.
+    print("== Default workflow picker ==")
+    original = ""
+    code, body = call("GET", f"/v1/delivery-workflows?view=installed&project_id={PROJECT}")
+    keys = [w.get("workflow_key") for w in (body.get("items") or [])]
+    check("installed workflows listed", code, (200,), body)
+    if "research_led_discovery" in keys and "minor_feature" in keys:
+        code, body = call("POST", "/v1/delivery-workflows/apply",
+                          {"project_id": PROJECT, "workflow_key": "research_led_discovery",
+                           "work_class": "project.new", "actor": ACTOR})
+        check("apply over an occupied slot replaces it", code, (200,), body)
+        original = str(body.get("in_force") or "")
+        # Twice with the SAME key: idempotent, not a conflict. The picker fires on every change
+        # event, including one that lands back where it started.
+        code, body = call("POST", "/v1/delivery-workflows/apply",
+                          {"project_id": PROJECT, "workflow_key": "research_led_discovery",
+                           "work_class": "project.new", "actor": ACTOR})
+        check("applying the same one again is idempotent", code, (200,), body)
+        check("and says so", 200 if body.get("outcome") == "unchanged" else 0, (200,), body)
+        # And it reports what actually RESOLVES, which is not always what was applied.
+        check("it names what is in force",
+              200 if body.get("in_force") else 0, (200,), body)
+        # Put it back, which also exercises the replace path in the other direction.
+        code, body = call("POST", "/v1/delivery-workflows/apply",
+                          {"project_id": PROJECT, "workflow_key": "standard_product_delivery",
+                           "work_class": "project.new", "actor": ACTOR})
+        check("restore the standard default", code, (200,), body)
+
     print("== Teardown and restore ==")
     code, body = call("POST", f"/v1/deployment-targets/{tid}/teardown", {})
     check("teardown without confirm -> 428", code, (428,), body)

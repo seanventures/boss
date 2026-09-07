@@ -20338,6 +20338,24 @@ def apply_delivery_workflow(payload: dict) -> dict:
     "New projects here use Standard Product Delivery." Uses the runtime's existing mapping
     resolution — selector, scope and priority — so an org default and a project override
     behave the way they already do everywhere else.
+
+    IT SETS, IT DOES NOT APPEND. This called `create_mapping` unconditionally, and there is a
+    unique index on (project_id, selector_kind, selector_value, scope_type, scope_id, priority)
+    WHERE enabled — so the FIRST apply worked and every one after it hit the index and came
+    back as:
+
+        HTTP 500  {"detail": "WorkflowConflictError: An enabled mapping already occupies this
+                              selector, scope, and priority."}
+
+    which is what the Command Center's workflow picker rendered as `failed (500)`. Not specific
+    to Research-Led Discovery — every option failed, including re-picking the one already in
+    force, because a mapping for `project.new` was already there. A control whose whole purpose
+    is "change which workflow new projects follow" could not change it once.
+
+    The selector is single-valued by construction: that unique index says so. So an apply over
+    an occupied slot is a REPLACEMENT, not a collision — it repoints the existing mapping at
+    the new version. Anything else asks the operator to go and delete a row they have never
+    been shown.
     """
     from boss_engine.services.workflow_catalogue import WORK_CLASSES
 
@@ -20384,18 +20402,80 @@ def apply_delivery_workflow(payload: dict) -> dict:
                 status_code=409,
                 detail=f"'{workflow_key}' has no published version to apply",
             )
-        mapping = workflow_runtime.create_mapping(
-            connection,
-            project_id=project_id,
-            workflow_version_id=version_id,
-            selector_kind="work_class",
-            selector_value=work_class,
-            scope_type="project",
-            scope_id=project_id,
-            priority=int(payload.get("priority") or 100),
-            actor=actor,
-        )
-        return {"applied": mapping, "workflow_key": workflow_key, "work_class": work_class}
+        priority = int(payload.get("priority") or 100)
+        # The slot this apply owns — exactly the columns the unique index covers.
+        occupant = connection.execute(
+            text(
+                "SELECT id, workflow_version_id FROM workflow_mappings "
+                "WHERE project_id=:p AND selector_kind='work_class' AND selector_value=:sv "
+                "AND scope_type='project' AND scope_id=:p AND priority=:pr AND enabled = true"
+            ),
+            {"p": project_id, "sv": work_class, "pr": priority},
+        ).mappings().first()
+
+        if occupant is None:
+            mapping = workflow_runtime.create_mapping(
+                connection,
+                project_id=project_id,
+                workflow_version_id=version_id,
+                selector_kind="work_class",
+                selector_value=work_class,
+                scope_type="project",
+                scope_id=project_id,
+                priority=priority,
+                actor=actor,
+            )
+            outcome = "created"
+        elif occupant["workflow_version_id"] == version_id:
+            # Re-picking what is already in force. Idempotent, and NOT an error — the picker
+            # fires on every change event, including one that lands back where it started.
+            mapping = dict(occupant)
+            outcome = "unchanged"
+        else:
+            connection.execute(
+                text(
+                    "UPDATE workflow_mappings SET workflow_version_id=:v, updated_at=now() "
+                    "WHERE id=:i"
+                ),
+                {"v": version_id, "i": occupant["id"]},
+            )
+            mapping = connection.execute(
+                text("SELECT * FROM workflow_mappings WHERE id=:i"), {"i": occupant["id"]},
+            ).mappings().first()
+            mapping = dict(mapping) if mapping else {"id": occupant["id"]}
+            emit_event(
+                connection, project_id, "workflow.mapping_repointed", actor,
+                "workflow_mapping", occupant["id"],
+                {"selector_value": work_class, "workflow_key": workflow_key,
+                 "from_version_id": occupant["workflow_version_id"], "to_version_id": version_id},
+            )
+            outcome = "replaced"
+
+        # WHAT ACTUALLY RESOLVES NOW, which is not always what was just applied: an org-scoped
+        # mapping or one at a higher priority can still win. Reporting "saved" without checking
+        # would tell the operator their choice is in force when the runtime disagrees, and the
+        # only place that would surface is the next project starting on the wrong workflow.
+        try:
+            resolved = workflow_runtime.resolve_mapping(
+                connection, project_id=project_id,
+                selector_kind="work_class", selector_value=work_class,
+            )
+            in_force = str(((resolved or {}).get("selected") or {}).get("workflow_key") or "")
+        except Exception:  # noqa: BLE001
+            # Ambiguous or otherwise unresolvable. The write above succeeded and must stand;
+            # what this branch loses is the confirmation, not the change.
+            in_force = ""
+        return {
+            "applied": mapping, "workflow_key": workflow_key, "work_class": work_class,
+            "outcome": outcome,
+            "in_force": in_force or workflow_key,
+            "note": (
+                f"New {work_class} work now uses '{workflow_key}'."
+                if not in_force or in_force == workflow_key else
+                f"Saved, but '{in_force}' still wins for {work_class} — another mapping "
+                "outranks this one by scope or priority."
+            ),
+        }
 
 
 @app.get("/v1/delivery-workflows/runs")
