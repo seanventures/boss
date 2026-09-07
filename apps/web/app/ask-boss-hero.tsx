@@ -563,9 +563,15 @@ const GLYPHS = {
  * card worth looking at vanished exactly where there was room for it. Lovable's detail page
  * leads with a large preview; ours led with a tag.
  *
- * `scope` keeps the gradient and blur ids distinct, because the card and the sheet are on the
- * page at the same time and two elements sharing an id is how one of them silently borrows the
- * other's fill.
+ * `scope` keeps the gradient ids distinct, because the card and the full-page view can both be
+ * mounted and two elements sharing an id is how one of them silently borrows the other's fill.
+ *
+ * NO SVG FILTERS. The depth used to come from two circles under `feGaussianBlur stdDeviation
+ * 18`, which is a filter primitive: the browser rasterises the filtered region on its own pass,
+ * and at the size the detail page renders it — a 320-wide viewBox scaled past 900px — that pass
+ * lands a frame or more after everything else. "The image renders late" is exactly what that
+ * looks like. Radial gradients produce the same soft orb with no filter graph at all, so the
+ * artwork paints with the first frame like any other fill.
  */
 function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
   const slug = `${scope}-${slugFor(idea.title)}`;
@@ -574,7 +580,7 @@ function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
     <svg className="askboss-idea-shot" viewBox="0 0 320 128"
          preserveAspectRatio="xMidYMid slice">
       {/* THE COLOUR FIELD, the way Living Colors does it: a three-stop gradient across the
-          whole area, then two large blurred orbs for depth. That app has no image files —
+          whole area, then two large soft orbs for depth. That app has no image files —
           this IS how it looks good. */}
       <defs>
         <linearGradient id={`g-${slug}`} x1="0" y1="0" x2="1" y2="1">
@@ -582,13 +588,21 @@ function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
           <stop offset="52%" stopColor={gradientFor(idea.tag)[1]} />
           <stop offset="100%" stopColor={gradientFor(idea.tag)[2]} />
         </linearGradient>
-        <filter id={`b-${slug}`} x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="18" />
-        </filter>
+        {/* The orbs, as gradients rather than blurred shapes — same softness, no filter pass. */}
+        <radialGradient id={`o1-${slug}`}>
+          <stop offset="0%" stopColor="rgba(255,255,255,.26)" />
+          <stop offset="55%" stopColor="rgba(255,255,255,.13)" />
+          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+        </radialGradient>
+        <radialGradient id={`o2-${slug}`}>
+          <stop offset="0%" stopColor="rgba(255,255,255,.22)" />
+          <stop offset="55%" stopColor="rgba(255,255,255,.10)" />
+          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+        </radialGradient>
       </defs>
       <rect x="0" y="0" width="320" height="128" fill={`url(#g-${slug})`} />
-      <circle cx="34" cy="10" r="46" fill="rgba(255,255,255,.20)" filter={`url(#b-${slug})`} />
-      <circle cx="300" cy="124" r="52" fill="rgba(255,255,255,.16)" filter={`url(#b-${slug})`} />
+      <circle cx="34" cy="10" r="72" fill={`url(#o1-${slug})`} />
+      <circle cx="300" cy="124" r="80" fill={`url(#o2-${slug})`} />
       {/* The sidebar, darkened rather than coloured, so the window still reads as a window
           against the field. */}
       <rect x="0" y="0" width="66" height="128" fill="rgba(10,14,28,.22)" />
@@ -985,6 +999,12 @@ export function AskBossHero({
   //: READ BEFORE YOU COMMIT. Clicking a card put a wall of markdown in the composer and
   //: called that a preview. A build costs money; what it must do and how you will know it
   //: worked should be legible before you start one.
+  //:
+  //: A FULL PAGE, NOT A DIALOG. It was a centred sheet floating over the console, and with a
+  //: cover image, a pitch, five feature cards and eight standards in it, it did not fit:
+  //: everything below "Designed for" was inside an 88vh scroll box with the dashboard showing
+  //: around the edges. Lovable's is a page — its own screen, its own back link, two columns.
+  //: Ours is now the same, because that is what this much content needs.
   const [openIdea, setOpenIdea] = useState<Idea | null>(null);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
@@ -1029,6 +1049,62 @@ export function AskBossHero({
     const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
     return () => window.clearInterval(id);
   }, [busy]);
+
+  /* THE TEMPLATE PAGE IS A PLACE, so it behaves like one.
+   *
+   * A full-screen view that the Back button walks straight out of is worse than a dialog: the
+   * operator's muscle memory for "get me out of this" would leave the console entirely. It has
+   * a URL, Back closes it, and a link to it opens it. `template=` is a query param on the same
+   * route, so this is history manipulation, not navigation — nothing re-renders on the server.
+   */
+  const templateOf = useCallback(
+    (slug: string) => IDEAS.find((i) => slugFor(i.title) === slug) ?? null, []);
+
+  useEffect(() => {
+    const sync = () => {
+      try {
+        const slug = new URL(window.location.href).searchParams.get("template") ?? "";
+        setOpenIdea(slug ? templateOf(slug) : null);
+      } catch { /* non-browser */ }
+    };
+    sync();                                    // a deep link opens straight onto the template
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, [templateOf]);
+
+  const showTemplate = useCallback((idea: Idea) => {
+    setOpenIdea(idea);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("template", slugFor(idea.title));
+      window.history.pushState(null, "", url.toString());
+    } catch { /* non-browser */ }
+  }, []);
+
+  const closeTemplate = useCallback(() => {
+    setOpenIdea(null);
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("template")) return;
+      url.searchParams.delete("template");
+      // replace, not back(): `back()` would leave the site for anyone who arrived on a link.
+      window.history.replaceState(null, "", url.toString());
+    } catch { /* non-browser */ }
+  }, []);
+
+  /* Escape closes it, and the page underneath does not scroll while it is open — a full-screen
+   * view over a scrollable console otherwise scrolls the console when you reach its end. */
+  useEffect(() => {
+    if (!openIdea) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeTemplate(); };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [openIdea, closeTemplate]);
 
   const ask = useCallback((text: string) => {
     const message = text.trim();
@@ -1498,7 +1574,7 @@ export function AskBossHero({
                     type="button"
                     className="askboss-idea"
                     style={{ ["--idea-accent" as string]: accentFor(i.title) }}
-                    onClick={() => setOpenIdea(i)}
+                    onClick={() => showTemplate(i)}
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
                     {/* AN IMAGE, NOT A COLOURED RECTANGLE.
@@ -1556,54 +1632,98 @@ export function AskBossHero({
           ) : null}
         </form>
 
-        {/* THE TEMPLATE, ENLARGED.
-            Lovable's card opens a page with the template's full story; ours put a wall of
-            markdown in the composer and called that a preview. A build costs real money and
-            real minutes, so the two things worth reading first are what it must DO and how
-            you will know it WORKED — both were already written in every brief and neither was
-            ever on screen.
+        {/* THE TEMPLATE PAGE.
+            Lovable's card opens a PAGE with the template's full story — its own screen, a back
+            link, a large preview on the left and a rail on the right carrying the title, the
+            description, the button and who it is for. Ours was a centred dialog, and once it
+            held a cover image, a pitch, five feature cards and eight standards it stopped
+            fitting: everything past "Designed for" lived in an 88vh scroll box with the
+            dashboard visible around the edges. The operator's read — "it does not render well
+            inline" — is the correct one, and the answer is a page.
 
-            Where this deliberately differs from theirs: they can show a screenshot of a
-            finished thing. Ours does not exist yet — BOSS builds it, to this specification —
-            so the specification IS the preview, and the honest thing to show is the contract
-            the build will be held to. */}
+            Where this deliberately differs from theirs: they show a screenshot of a finished
+            thing. Ours does not exist yet — BOSS builds it, to this specification — so the
+            specification IS the preview, and the honest thing to show is the contract the
+            build will be held to. */}
         {openIdea ? (
-          <div className="askboss-sheet-scrim" data-testid="askboss-sheet"
-               onClick={() => setOpenIdea(null)}>
-            <article className="askboss-sheet" role="dialog" aria-modal="true"
-                     aria-label={openIdea.title}
-                     onClick={(e) => e.stopPropagation()}>
-              <button type="button" className="askboss-sheet-close" aria-label="Close"
-                      onClick={() => setOpenIdea(null)}>✕</button>
+          <div className="tpl-page" data-testid="askboss-sheet" role="dialog" aria-modal="true"
+               aria-label={openIdea.title}>
+            <header className="tpl-page-head">
+              <button type="button" className="tpl-back" aria-label="Close"
+                      onClick={closeTemplate}>
+                ← Back to templates
+              </button>
+              <span className="tpl-crumb">Templates · {openIdea.tag}</span>
+            </header>
 
-              {/* THE PREVIEW, which was missing entirely. The card showed the drawing and the
-                  enlarged view — the one place with room for it — showed a tag. It is the
-                  same artwork, rendered at the size it was drawn for. */}
-              <div className="askboss-sheet-cover" aria-hidden>
-                <IdeaCover idea={openIdea} scope="sheet" />
-                <IdeaPhoto title={openIdea.title} />
-              </div>
+            <div className="tpl-page-inner">
+              {/* TWO COLUMNS, the way a detail page is shaped: the thing on the left at the
+                  size it deserves, and everything needed to decide on the right — so the
+                  button is never below the fold on a wide screen. */}
+              <div className="tpl-top">
+                <div className="tpl-preview">
+                  <div className="tpl-shot" aria-hidden>
+                    <IdeaCover idea={openIdea} scope="page" />
+                    <IdeaPhoto title={openIdea.title} />
+                  </div>
+                  <p className="tpl-shot-note">
+                    An impression of the app, not a screenshot — this one has not been built
+                    yet. What is below is the specification BOSS will be held to.
+                  </p>
+                </div>
 
-              <div className="askboss-sheet-head">
-                <span className="askboss-idea-tag">{openIdea.tag}</span>
-                <h3>{openIdea.title}</h3>
-                {/* The pitch, in the words somebody deciding would use. Two sentences beat a
-                    bullet list for the question "is this the thing I want". */}
-                <p className="askboss-sheet-pitch">
-                  {DETAILS[openIdea.title]?.pitch ?? facetsOf(openIdea.brief).audience}
-                </p>
+                <aside className="tpl-rail">
+                  <span className="askboss-idea-tag">{openIdea.tag}</span>
+                  <h1 className="tpl-title">{openIdea.title}</h1>
+                  {/* The pitch, in the words somebody deciding would use. Two sentences beat a
+                      bullet list for the question "is this the thing I want". */}
+                  <p className="tpl-pitch">
+                    {DETAILS[openIdea.title]?.pitch ?? facetsOf(openIdea.brief).audience}
+                  </p>
+
+                  <div className="tpl-actions">
+                    {/* The composer gets the FULL brief — features, screens and quality bar —
+                        not the five-bullet version the card was built from. What you read is
+                        what is asked for. */}
+                    <button type="button" className="tpl-go" data-testid="askboss-sheet-build"
+                            onClick={() => {
+                              draftIdea({ ...openIdea,
+                                          brief: buildBrief(openIdea.title, openIdea.brief) });
+                              closeTemplate();
+                            }}>
+                      Start this build →
+                    </button>
+                    {/* Reading the brief is not the same as being sure. Asking first costs a
+                        conversation; being wrong costs a build. */}
+                    <button type="button" className="askboss-ghost"
+                            data-testid="askboss-sheet-ask"
+                            onClick={() => {
+                              setInput(`I am considering this build:\n\n${openIdea.title} — `
+                                       + `${facetsOf(openIdea.brief).audience}\n\n`
+                                       + "What would you want settled before starting it, and "
+                                       + "is there anything here we have already built?");
+                              closeTemplate();
+                            }}>
+                      Ask BOSS about it first
+                    </button>
+                  </div>
+                  <p className="tpl-nothing">
+                    Nothing is spent by opening this. Pressing Build drafts it into the
+                    composer; you still send it yourself.
+                  </p>
+
+                  {DETAILS[openIdea.title]?.designedFor?.length ? (
+                    <section className="askboss-sheet-for">
+                      <h4>Designed for</h4>
+                      <ul>
+                        {DETAILS[openIdea.title].designedFor.map((w) => <li key={w}>{w}</li>)}
+                      </ul>
+                    </section>
+                  ) : null}
+                </aside>
               </div>
 
               <div className="askboss-sheet-body">
-                {DETAILS[openIdea.title]?.designedFor?.length ? (
-                  <section className="askboss-sheet-for">
-                    <h4>Designed for</h4>
-                    <ul>
-                      {DETAILS[openIdea.title].designedFor.map((w) => <li key={w}>{w}</li>)}
-                    </ul>
-                  </section>
-                ) : null}
-
                 {/* THE ANSWER TO "THE CONTENT IS VERY LESS".
                     Five bullets specify an MVP, and an MVP is exactly what BOSS built. These
                     cards are the capability list — and they are not marketing copy: the same
@@ -1675,35 +1795,25 @@ export function AskBossHero({
                     <li>Deploy it when you approve the release</li>
                   </ol>
                 </section>
-              </div>
 
-              <div className="askboss-sheet-foot">
-                {/* The composer gets the FULL brief — features, screens and quality bar — not
-                    the five-bullet version the card was built from. What you read is what is
-                    asked for. */}
-                <button type="button" className="askboss-go" data-testid="askboss-sheet-build"
-                        onClick={() => {
-                          draftIdea({ ...openIdea,
-                                      brief: buildBrief(openIdea.title, openIdea.brief) });
-                          setOpenIdea(null);
-                        }}>
-                  Start this build →
-                </button>
-                {/* Reading the brief is not the same as being sure. Asking first costs a
-                    conversation; being wrong costs a build. */}
-                <button type="button" className="askboss-ghost"
-                        data-testid="askboss-sheet-ask"
-                        onClick={() => {
-                          setInput(`I am considering this build:\n\n${openIdea.title} — `
-                                   + `${facetsOf(openIdea.brief).audience}\n\n`
-                                   + "What would you want settled before starting it, and is "
-                                   + "there anything here we have already built?");
-                          setOpenIdea(null);
-                        }}>
-                  Ask BOSS about it first
-                </button>
+                {/* The same pair as the rail, repeated at the end. On a narrow screen the rail
+                    is above a very long page, and a decision you reach at the bottom should
+                    not need a scroll back to the top to act on. */}
+                <div className="tpl-actions tpl-actions-end">
+                  <button type="button" className="tpl-go"
+                          onClick={() => {
+                            draftIdea({ ...openIdea,
+                                        brief: buildBrief(openIdea.title, openIdea.brief) });
+                            closeTemplate();
+                          }}>
+                    Start this build →
+                  </button>
+                  <button type="button" className="askboss-ghost" onClick={closeTemplate}>
+                    Back to templates
+                  </button>
+                </div>
               </div>
-            </article>
+            </div>
           </div>
         ) : null}
 

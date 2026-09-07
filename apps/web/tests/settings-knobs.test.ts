@@ -162,7 +162,7 @@ describe("the starter shelf", () => {
     // Clicking a suggestion used to fire a governed build immediately. It now opens the brief
     // instead of pasting it, which puts TWO deliberate presses between a card and a build
     // rather than one — the property this test protects, stated as the property.
-    expect(HERO).toContain("onClick={() => setOpenIdea(i)}");
+    expect(HERO).toContain("onClick={() => showTemplate(i)}");
     expect(HERO).not.toMatch(/onClick=\{\(\) => (submit|build|startBuild)\(i\)\}/);
     // The build button in the enlarged view still only DRAFTS into the composer — it now
     // passes an enriched brief, so pinning the exact handler text broke on a change that did

@@ -88,12 +88,12 @@ describe("sixteen do not need filtering", () => {
   });
 });
 
-describe("clicking enlarges it, and reading is not the same as buying", () => {
+describe("clicking opens a page, and reading is not the same as buying", () => {
   const HERO = codeOnly("app/ask-boss-hero.tsx");
   const CSS = codeOnly("app/globals.css");
 
   it("the card opens the brief rather than pasting it", () => {
-    expect(HERO).toContain("onClick={() => setOpenIdea(i)}");
+    expect(HERO).toContain("onClick={() => showTemplate(i)}");
   });
 
   it("the enlarged view shows what it must do and how you know it worked", () => {
@@ -111,21 +111,26 @@ describe("clicking enlarges it, and reading is not the same as buying", () => {
 
   it("two deliberate presses stand between a card and a build", () => {
     expect(HERO).toContain("draftIdea({ ...openIdea,");
-    expect(HERO).toContain("setOpenIdea(null);");
+    expect(HERO).toContain("closeTemplate();");
   });
 
-  it("the artwork is on the enlarged view, not only on the card", () => {
-    // The first version showed the drawing on a 232px card and a tag on the full-width sheet —
+  it("the artwork is on the detail view, not only on the card", () => {
+    // The first version showed the drawing on a 232px card and a tag on the detail view —
     // "the image is missing in the enlarge view" — so the one place with room for it had none.
-    expect(HERO).toContain('<IdeaCover idea={openIdea} scope="sheet" />');
-    expect(HERO).toContain('className="askboss-sheet-cover"');
-    expect(CSS).toContain(".askboss-sheet-cover");
+    expect(HERO).toContain('<IdeaCover idea={openIdea} scope="page" />');
+    expect(CSS).toContain(".tpl-shot");
   });
 
-  it("and the buttons do not scroll away from a long page", () => {
-    const at = CSS.indexOf(".askboss-sheet-foot");
+  it("and it paints with the first frame rather than a filter pass later", () => {
+    // "the image renders late" — two circles under feGaussianBlur are a filter primitive, and
+    // the browser rasterises that region on its own pass. At detail-page size that pass lands
+    // after everything else. Radial gradients give the same orb with no filter graph at all.
+    expect(HERO).not.toContain("feGaussianBlur");
+    expect(HERO).toContain("radialGradient");
+    // Nor does the container scale under it, which would force a re-raster mid-animation.
+    const at = CSS.indexOf("@keyframes tpl-page-in");
     expect(at).toBeGreaterThan(-1);
-    expect(CSS.slice(at, at + 200)).toContain("sticky");
+    expect(CSS.slice(at, at + 160)).not.toContain("scale(");
   });
 
   it("asking first is offered beside building", () => {
@@ -134,9 +139,14 @@ describe("clicking enlarges it, and reading is not the same as buying", () => {
     expect(HERO).toContain('data-testid="askboss-sheet-ask"');
   });
 
-  it("it enlarges rather than appearing", () => {
-    expect(CSS).toContain("@keyframes askboss-sheet-in");
-    expect(CSS).toContain("scale(.965)");
+  it("it is a page, not a dialog floating over the dashboard", () => {
+    // A cover image, a pitch, five feature cards, a scope list and eight standards do not fit
+    // in an 88vh scroll box with the console showing around the edges.
+    expect(HERO).toContain('className="tpl-page"');
+    expect(HERO).toContain("← Back to templates");
+    expect(CSS).not.toContain(".askboss-sheet-scrim");
+    const at = CSS.indexOf(".tpl-page {");
+    expect(CSS.slice(at, at + 200)).toContain("position: fixed");
   });
 
   it("but not for anyone who asked not to be moved", () => {
@@ -145,11 +155,20 @@ describe("clicking enlarges it, and reading is not the same as buying", () => {
     expect(CSS.slice(at, at + 220)).toContain("animation: none");
   });
 
-  it("and it closes — on the scrim and on a button", () => {
-    expect(HERO).toContain("onClick={() => setOpenIdea(null)}");
-    expect(HERO).toContain('aria-label="Close"');
-    // A click inside the sheet must not close it.
-    expect(HERO).toContain("onClick={(e) => e.stopPropagation()}");
+  it("it is somewhere you can be, so Back gets you out of it", () => {
+    // A full-screen view the Back button walks out of is worse than a dialog: the muscle
+    // memory for "get me out of this" would leave the console entirely.
+    expect(HERO).toContain('url.searchParams.set("template"');
+    expect(HERO).toContain('window.addEventListener("popstate", sync)');
+    // And a link to one opens on it.
+    expect(HERO).toContain('searchParams.get("template")');
+  });
+
+  it("and Escape closes it, without the page underneath scrolling", () => {
+    expect(HERO).toContain('if (e.key === "Escape") closeTemplate();');
+    expect(HERO).toContain('document.body.style.overflow = "hidden"');
+    // Restored to what it was, not to a hardcoded value — the console sets its own.
+    expect(HERO).toContain("document.body.style.overflow = previous;");
   });
 });
 

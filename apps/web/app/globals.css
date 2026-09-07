@@ -8626,77 +8626,85 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .askboss-idea-strip[data-grid="true"] .askboss-idea { width: auto; scroll-snap-align: none; }
 
-/* ── The template, enlarged ───────────────────────────────────────────────────────────── */
-.askboss-sheet-scrim {
-  position: fixed; inset: 0; z-index: 60;
-  display: flex; align-items: center; justify-content: center; padding: 24px;
-  background: color-mix(in srgb, #05070d 72%, transparent);
-  backdrop-filter: blur(3px);
-  animation: askboss-scrim-in 160ms ease-out;
-}
-@keyframes askboss-scrim-in { from { opacity: 0; } to { opacity: 1; } }
-
-.askboss-sheet {
-  position: relative; width: min(840px, 100%); max-height: min(88vh, 880px);
-  overflow-y: auto; padding: 0 28px 0;
-  border: 1px solid var(--border); border-radius: 18px;
+/* ── The template page ────────────────────────────────────────────────────────────────────
+   It was a centred dialog. With a cover image, a pitch, five feature cards, a scope list and
+   eight standards in it, an 88vh scroll box floating over the dashboard is the wrong container
+   — "it does not render well inline", and that is right. Lovable's is a page; so is this. */
+.tpl-page {
+  position: fixed; inset: 0; z-index: 70; overflow-y: auto; overscroll-behavior: contain;
   background:
-    radial-gradient(circle at 88% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
-    var(--surface);
-  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, .6);
-  /* THE ENLARGE. It grows from slightly small and slightly low, which reads as the card
-     opening rather than a dialog appearing on top of it. 180ms: long enough to be a movement,
-     short enough that the second one you open does not feel slow. */
-  animation: askboss-sheet-in 180ms cubic-bezier(.2, .8, .3, 1);
+    radial-gradient(1100px 460px at 18% -12%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%),
+    var(--bg, #070a12);
+  animation: tpl-page-in 150ms ease-out;
 }
-@keyframes askboss-sheet-in {
-  from { opacity: 0; transform: translateY(10px) scale(.965); }
-  to   { opacity: 1; transform: none; }
-}
-/* Somebody who has asked not to be moved does not get moved. */
-@media (prefers-reduced-motion: reduce) {
-  .askboss-sheet, .askboss-sheet-scrim { animation: none; }
-}
+/* It rises rather than appears — but it does NOT scale. A transform on a container holding the
+   artwork forces the whole thing re-rasterised mid-animation, which is half of why the image
+   looked like it arrived late. */
+@keyframes tpl-page-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tpl-page { animation: none; } }
 
-.askboss-sheet-close {
-  /* Fixed to the sheet, not scrolled with it — the artwork is 200px tall and a close button
-     that leaves the top of a long page is a close button you cannot find. */
-  position: sticky; float: right; top: 14px; right: 0; z-index: 2;
-  width: 30px; height: 30px; margin: 14px -14px 0 0;
-  border-radius: 9px; border: 1px solid rgba(255, 255, 255, .22);
-  background: rgba(8, 11, 20, .55); backdrop-filter: blur(6px);
-  color: #fff; cursor: pointer; line-height: 1;
+.tpl-page-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 14px; padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg, #070a12) 88%, transparent);
+  backdrop-filter: blur(10px);
 }
-.askboss-sheet-close:hover { background: rgba(8, 11, 20, .78); border-color: #fff; }
+.tpl-back {
+  padding: 6px 12px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--ink);
+  font-size: .86rem;
+}
+.tpl-back:hover { border-color: var(--muted); }
+.tpl-crumb { color: var(--muted); font-size: .78rem; }
 
-/* THE PREVIEW, at the size the artwork was drawn for. It bleeds to the sheet's edges — hence
-   the negative margins against the 28px padding — because a cover inset by a gutter reads as
-   an illustration in an article rather than as the thing itself. */
-.askboss-sheet-cover {
-  position: relative; display: block; margin: 0 -28px 0; height: 210px; overflow: hidden;
-  border-radius: 18px 18px 0 0; background: #0b1020;
+.tpl-page-inner { max-width: 1280px; margin: 0 auto; padding: 28px 28px 72px; }
+
+/* TWO COLUMNS: the thing on the left at the size it deserves, everything needed to decide on
+   the right — so the button is never below the fold on a wide screen. */
+.tpl-top { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(300px, .95fr); gap: 34px; }
+@media (max-width: 1020px) { .tpl-top { grid-template-columns: 1fr; gap: 24px; } }
+
+.tpl-preview { min-width: 0; }
+.tpl-shot {
+  position: relative; aspect-ratio: 16 / 9; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 16px; background: #0b1020;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .7);
 }
-.askboss-sheet-cover .askboss-idea-shot,
-.askboss-sheet-cover .askboss-idea-photo {
+.tpl-shot .askboss-idea-shot, .tpl-shot .askboss-idea-photo {
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
 }
-/* The bottom fades into the sheet, so the artwork ends rather than stops. */
-.askboss-sheet-cover::after {
-  content: ""; position: absolute; inset: auto 0 0 0; height: 72px; pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--surface));
-}
+/* WHAT THIS PICTURE IS. Lovable shows a screenshot of something that exists; this is an
+   impression of something that does not yet, and saying so is the difference between a
+   preview and a promise. */
+.tpl-shot-note { margin: 10px 2px 0; color: var(--muted); font-size: .78rem; line-height: 1.55; }
 
-.askboss-sheet-head { padding-top: 16px; }
-.askboss-sheet-head h3 { margin: 8px 0 8px; font-size: 1.7rem; letter-spacing: -0.02em; }
-.askboss-sheet-who { margin: 0; color: var(--muted); font-size: .9rem; }
-/* The paragraph that answers "is this the thing I want" — set larger than the body, because
-   it is the one part somebody skimming will actually read. */
-.askboss-sheet-pitch {
-  margin: 0; font-size: 1rem; line-height: 1.6;
+.tpl-rail { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.tpl-rail .askboss-idea-tag { justify-self: start; }
+.tpl-title { margin: 0; font-size: 2.1rem; line-height: 1.1; letter-spacing: -0.025em; }
+@media (max-width: 620px) { .tpl-title { font-size: 1.6rem; } }
+/* The paragraph that answers "is this the thing I want" — larger than the body, because it is
+   the one part somebody skimming will actually read. */
+.tpl-pitch {
+  margin: 0; font-size: 1rem; line-height: 1.65;
   color: color-mix(in srgb, var(--ink) 84%, var(--muted));
 }
-.askboss-sheet-body { display: grid; gap: 22px; margin-top: 24px; }
-.askboss-sheet-body h4 {
+.tpl-actions { display: grid; gap: 9px; }
+.tpl-actions-end {
+  grid-auto-flow: column; justify-content: start; gap: 10px; margin-top: 4px;
+}
+@media (max-width: 620px) { .tpl-actions-end { grid-auto-flow: row; } }
+.tpl-go {
+  padding: 12px 18px; border-radius: 11px; cursor: pointer; border: 1px solid transparent;
+  background: var(--accent); color: #06121a; font-size: .95rem; font-weight: 600;
+}
+.tpl-go:hover { filter: brightness(1.07); }
+.tpl-nothing { margin: -4px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+
+/* Capped at a readable measure. The page is 1280px wide; prose set across all of it is not
+   prose anybody finishes. */
+.askboss-sheet-body { display: grid; gap: 28px; margin-top: 44px; max-width: 1000px; }
+.askboss-sheet-body h4, .tpl-rail h4 {
   margin: 0 0 10px; font-size: .72rem; letter-spacing: .09em; text-transform: uppercase;
   color: var(--muted);
 }
@@ -8715,7 +8723,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    wide enough, one on a narrow dock, because a five-word title over a two-line paragraph is
    unreadable at half a column. */
 .askboss-sheet-features {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 10px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(282px, 1fr)); gap: 12px;
 }
 .askboss-feature {
   display: grid; gap: 5px; padding: 13px 15px; border-radius: 12px;
@@ -8755,15 +8763,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-sheet-done p { margin: 0; font-size: .9rem; }
 .askboss-sheet-note { margin: 0; color: var(--muted); font-size: .84rem; font-style: italic; }
 .askboss-sheet-flow ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: .86rem; }
-/* THE BUTTONS DO NOT SCROLL AWAY. The sheet is now long enough that Build sat below the fold,
-   which is the one control the whole panel exists to offer. */
-.askboss-sheet-foot {
-  position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px;
-  margin: 24px -28px 0; padding: 16px 28px 20px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  backdrop-filter: blur(8px);
-}
+/* The sticky footer is gone with the dialog: on a page the buttons live in the rail, where
+   they are above the fold to begin with, and again at the end for the long scroll down. */
 .askboss-ghost {
   padding: 9px 14px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--border); background: transparent; color: var(--ink); font-size: .88rem;
