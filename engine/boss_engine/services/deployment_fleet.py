@@ -971,13 +971,29 @@ def create_deployment_target(
             "WHERE project_id = :p AND environment = :e"),
         {"p": project_id, "e": environment},
     ).mappings().all():
-        if identity_key(str(row["app_name"] or "")) != wanted:
+        # THE SAME APP, WHATEVER NAME IT WAS STORED UNDER.
+        #
+        # Identity alone could not see a target created before names were normalised, because
+        # the name in that row is the whole directive. So this created a SECOND target for
+        # Lead-Triage Inbox on the port the first one already had — two active rows, one
+        # address, and the console picking whichever it happened to match. Running the stored
+        # name through the namer first is what the setup endpoint does; it has to be the same
+        # rule in both places or one path keeps producing what the other repairs.
+        stored = str(row["app_name"] or "")
+        named, _blurb, _label = project_name(stored)
+        if identity_key(stored) != wanted and not (
+            named and named != "Untitled app" and identity_key(named) == wanted
+        ):
             continue
+        if stored != app:
+            connection.execute(
+                sql("UPDATE deployment_targets SET app_name = :a, updated_at = now() "
+                    "WHERE id = :i"), {"a": app, "i": row["id"]})
         if row["status"] == "retired":
             connection.execute(
                 sql("UPDATE deployment_targets SET status = 'active', updated_at = now() "
                     "WHERE id = :i"), {"i": row["id"]})
-        return {"ok": True, "target_id": row["id"], "app_name": row["app_name"],
+        return {"ok": True, "target_id": row["id"], "app_name": app,
                 "environment": environment, "adopted_existing": True,
                 "revived": row["status"] == "retired",
                 "domains": row["domains"] or [],

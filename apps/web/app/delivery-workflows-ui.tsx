@@ -2206,12 +2206,30 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   // `domains` holds "host:port", which is what the deployer published. Linking on anything
   // less than success would repeat the mistake this view keeps making: reporting a state the
   // system is not in.
+  //
+  // WHICH TARGET, ASKED OF THE DEPLOY THAT RAN — then of the run, then of the app's name.
+  //
+  // This asked the run's input for a `target_id` and otherwise compared `t.app_name` to the raw
+  // TITLE, which is the operator's whole directive. So the app whose title is literally its name
+  // ("Change Calendar") got its link and every other app got nothing: Lead-Triage Inbox shipped
+  // successfully to deptgt_33af7f on 2.29.2.202:3014 and the step showed no link at all.
+  //
+  // The step's own output is the authority here — it records the target this deployment
+  // actually used — and the name comparison is by app identity, which is how the rest of the
+  // console decides two names are one app. ("Lead‐Triage Inbox", as stored, carries a U+2010
+  // hyphen; string equality would not have matched it even against the right name.)
   const shippedTo = (() => {
+    const out = (step.output ?? {}) as Record<string, unknown>;
+    const fromStep = typeof out.target_id === "string" ? out.target_id : "";
+    const byStep = targets.find((t) => t.id === fromStep);
+    if (byStep) return byStep;
     const id = typeof runInput.target_id === "string" ? runInput.target_id : "";
     const byId = targets.find((t) => t.id === id);
     if (byId) return byId;
-    const name = typeof runInput.title === "string" ? runInput.title : "";
-    return targets.find((t) => t.app_name === name);
+    const wanted = identityKey(appIdentity(runInput as AppRun).name);
+    return wanted
+      ? targets.find((t) => identityKey(String(t.app_name ?? "")) === wanted)
+      : undefined;
   })();
   // WHETHER SOMETHING IS ACTUALLY SHIPPED THERE — asked of the deployments, not of the step.
   //
@@ -2224,7 +2242,10 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   useEffect(() => {
     if (!isDeployStep(step, capability) || !buildRunId) return;
     let alive = true;
-    const name = typeof runInput.title === "string" ? runInput.title : "";
+    // THE APP'S NAME, NOT THE BRIEF. This asked for deployments of an app called "Build a lead
+    // triage inbox.\nWho it is for: …", got none, and concluded nothing had shipped — which
+    // suppressed the link even when the target resolved.
+    const name = appIdentity(runInput as AppRun).name;
     (async () => {
       try {
         const r = await fetch(

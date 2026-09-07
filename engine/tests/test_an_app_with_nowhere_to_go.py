@@ -145,7 +145,9 @@ class TestSomewhereToDeployTo:
 
         body = inspect.getsource(create_deployment_target)
         assert "adopted_existing" in body
-        assert 'identity_key(str(row["app_name"] or "")) != wanted' in body
+        # The comparison now runs the stored name through the namer first, so a row written
+        # before names were normalised is recognised as the same app rather than duplicated.
+        assert 'identity_key(stored) != wanted' in body
 
     def test_a_retired_target_is_revived_rather_than_duplicated(self):
         from boss_engine.services.deployment_fleet import create_deployment_target
@@ -605,3 +607,54 @@ class TestADirectiveIsNotAnAppName:
 
         for name in ("Change Calendar", "Meeting cost meter", "Vendor-Status-Watcher"):
             assert project_name(name)[0] == name
+
+
+class TestOneAppKeepsOneTarget:
+    """Two active targets for Lead-Triage Inbox, both on 2.29.2.202:3014:
+
+        deptgt_33af7f  "Lead‐Triage Inbox"                                    22:03
+        deptgt_68bc42  "Build a lead triage inbox.Who it is for: a small…"    21:45
+
+    The setup endpoint had learned to find a row stored under a directive and repair it. The
+    TOOL had not: it compared identity only, could not see that the damaged row was the same
+    app, and created a second target on the port the first one already held. One path kept
+    producing what the other repaired."""
+
+    @staticmethod
+    def _body():
+        import inspect
+
+        from boss_engine.services.deployment_fleet import create_deployment_target
+
+        return inspect.getsource(create_deployment_target)
+
+    def test_the_stored_name_goes_through_the_namer_before_comparing(self):
+        body = self._body()
+        assert "named, _blurb, _label = project_name(stored)" in body
+        assert 'identity_key(named) == wanted' in body
+
+    def test_and_the_damaged_row_is_renamed_rather_than_duplicated(self):
+        body = self._body()
+        assert "UPDATE deployment_targets SET app_name = :a" in body
+        assert "adopted_existing" in body
+
+    def test_the_adopted_row_reports_the_repaired_name(self):
+        """Returning the old value would have the caller announce a name that no longer
+        exists."""
+        assert '"app_name": app,' in self._body()
+
+    def test_it_is_the_same_rule_as_the_endpoint(self):
+        """Two rules for one question is how they drift, and the drift IS this bug."""
+        import pathlib
+
+        main = pathlib.Path("apps/api/app/main.py").read_text()
+        i = main.index("def setup_deployment_for_code_task_endpoint")
+        endpoint = main[i:i + 8000]
+        assert "_identity_key(_named) == _wanted" in endpoint
+        assert 'identity_key(named) == wanted' in self._body()
+
+    def test_a_genuinely_different_app_still_gets_its_own_target(self):
+        from boss_engine.services.naming import identity_key, project_name
+
+        a, _b, _l = project_name("Build a lead triage inbox.\nWho it is for: a small team")
+        assert identity_key(a) != identity_key("Change Calendar")
