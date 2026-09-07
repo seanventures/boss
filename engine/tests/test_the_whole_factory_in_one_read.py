@@ -215,3 +215,115 @@ class TestASectionThatCouldNotBeReadIsNotAnEmptySection:
         ui = pathlib.Path("apps/web/app/boss-agent-home.tsx").read_text()
         assert 'data-testid="agent-briefing-partial"' in ui
         assert "is therefore" in ui and "incomplete" in ui
+
+
+class TestWhatTheLiveBoardActuallyShowed:
+    """Six stopped rows, and every one of them wrong in the same four ways:
+
+        Interview Scorecard App. — build failed        unknown · usually: ask the operator…
+        New work — preview failed                      unknown · usually: ask the operator…
+        Vendor Status Watcher. — deploy deadlettered   unknown · usually: ask the operator…
+        Services + Last-Check-Time — monitor deadlettered
+            "nothing is being watched: this project has no active deployment target"
+
+    A placeholder rendered as an app name. Trailing full stops from the directive. An identical
+    grey "unknown" badge on all six, above the ESCALATE entry — which is not a remedy, it is the
+    table saying there isn't one — presented as "usually:". No dates, though they were one to
+    four days old. And two of them asserting the project had no deployment target while it had
+    six.
+    """
+
+    STEP = {"id": "wfs_x", "step_id": "monitor", "status": "deadlettered", "workflow_run_id": "wfr_9",
+            "last_error": "nothing is being watched: this project has no active deployment "
+                          "target, so no health probe will ever run against it.",
+            "output": {}, "updated_at": "2026-09-03T22:18:18+00:00",
+            "input": {"title": "New work"}}
+
+    def test_a_placeholder_is_not_an_app_name(self):
+        """"New work" passes every "is this a real row?" check because it IS a real row. An
+        operator then goes looking for an app called New work."""
+        from boss_engine.services.factory_briefing import _app_of
+
+        assert _app_of("New work", fallback="run wfr_9") == "run wfr_9"
+        assert _app_of("", fallback="run wfr_9") == "run wfr_9"
+
+    def test_the_directive_s_full_stop_does_not_become_the_name(self):
+        from boss_engine.services.factory_briefing import _app_of
+
+        assert _app_of("Build a vendor status watcher.") == "Vendor Status Watcher"
+        assert _app_of("Build an interview scorecard app.") == "Interview Scorecard App"
+
+    def test_a_real_name_is_untouched(self):
+        from boss_engine.services.factory_briefing import _app_of
+
+        assert _app_of("Team Directory") == "Team Directory"
+
+    def test_an_unrecognised_failure_says_nothing_rather_than_unknown(self):
+        """A badge that appears on every row carries no information, and costs the rows that DO
+        have a diagnosis their distinctiveness."""
+        from boss_engine.services.factory_briefing import _diagnosis
+
+        assert _diagnosis("the code_task it started finished as 'cancelled'") == {}
+
+    def test_escalate_is_never_offered_as_a_remedy(self):
+        """"usually: ask the operator one decision-shaped question" reads as advice. It is the
+        table's way of saying there is no remedy."""
+        from boss_engine.services.factory_briefing import _diagnosis
+
+        out = _diagnosis("deployment failed: connection refused")
+        assert out["remedies"]
+        assert all(r["id"] != "escalate" for r in out["remedies"])
+
+    def test_every_row_carries_its_age(self):
+        from boss_engine.services.factory_briefing import _age_of
+
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        assert _age_of((now - timedelta(days=4)).isoformat()) == "4 days ago"
+        assert _age_of((now - timedelta(minutes=20)).isoformat()) == "20m ago"
+        assert _age_of(None) == ""
+        assert _age_of("not a date") == ""
+
+    def test_a_reason_named_in_prose_is_re_checked_too(self):
+        """The monitor step set no `missing` key — it wrote a sentence. The recorded sentence
+        was true when written and false by the time anyone read it, which is the whole failure
+        this re-check exists for; it should not depend on which field the writer used."""
+        from boss_engine.services.workflow_recheck import blocker_status
+
+        class Targets:
+            def execute(self, statement, params=None):
+                class R:
+                    def mappings(self_inner): return self_inner
+                    def first(self_inner):
+                        return {"id": "deptgt_1", "app_name": "Change Calendar",
+                                "environment": "staging", "domains": ["2.29.2.202:3013"]}
+                    def all(self_inner): return []
+                return R()
+
+        out = blocker_status(Targets(), "p", self.STEP)
+        assert out and out["cleared"] is True
+        assert "now has active deployment targets" in out["reason"]
+
+    def test_and_still_says_no_when_it_is_still_true(self):
+        from boss_engine.services.workflow_recheck import blocker_status
+
+        class NoTargets:
+            def execute(self, statement, params=None):
+                class R:
+                    def mappings(self_inner): return self_inner
+                    def first(self_inner): return None
+                    def all(self_inner): return []
+                return R()
+
+        out = blocker_status(NoTargets(), "p", self.STEP)
+        assert out and out["cleared"] is False
+
+    def test_the_console_shows_the_age_and_the_cleared_reason(self):
+        import pathlib
+
+        ui = pathlib.Path("apps/web/app/boss-agent-home.tsx").read_text()
+        assert 'data-testid="agent-item-age"' in ui
+        assert 'data-testid="agent-item-cleared"' in ui
+        assert "No longer true:" in ui
+        # Not dropped: the step really did stop, and hiding that would be its own lie.
+        assert 'Recorded then: ' in ui

@@ -8601,3 +8601,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   padding: 1px 7px; border-radius: 999px; font-size: .68rem;
   border: 1px solid var(--border); color: var(--muted);
 }
+
+/* How old a briefing row is, and whether its reason still holds. */
+.fb-age { margin-left: 8px; font-size: .7rem; font-weight: 400; color: var(--muted); }
+.fb-cleared { margin-top: 4px; font-size: .74rem; color: var(--green, #3fb950); }
+/* A failure whose cause has gone away is history: readable, no longer shouting. */
+.fb-item-error.fb-stale { color: var(--muted); }
+.fb-item[data-cleared="true"] { opacity: .78; }

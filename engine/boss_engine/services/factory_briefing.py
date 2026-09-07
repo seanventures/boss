@@ -45,9 +45,56 @@ _log = logging.getLogger(__name__)
 PER_KIND = 6
 
 
-def _app_of(title: str) -> str:
+#: Titles that are not names. A run whose brief was never written keeps the catalogue's default,
+#: and it passes every "is this a real row?" check because it IS a real row — so the briefing
+#: showed "New work — preview failed" beside four apps with actual names. A placeholder that
+#: sounds like a name is worse than an id: the operator goes looking for an app called New work.
+#:
+#: Copied in spirit from role_starters, which learned this the same way, on the same data.
+_NOT_A_NAME = frozenset({
+    "new work", "untitled app", "untitled", "new app", "new project",
+    "describe the work here", "sample", "test", "demo",
+})
+
+
+def _age_of(since: Any) -> str:
+    """"4 days ago" — how old this is, in the words an operator would use."""
+    from datetime import datetime, timezone
+
+    if not since:
+        return ""
+    try:
+        when = since if isinstance(since, datetime) else datetime.fromisoformat(
+            str(since).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        seconds = (datetime.now(timezone.utc) - when).total_seconds()
+    except Exception:  # noqa: BLE001 — an unparseable timestamp is not worth a broken briefing
+        return ""
+    if seconds < 90:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 36:
+        return f"{hours}h ago"
+    return f"{hours // 24} days ago"
+
+
+def _app_of(title: str, fallback: str = "") -> str:
+    """The app's display name, or the fallback when the title names no app.
+
+    Trailing punctuation is stripped: `project_name` keeps the full stop from "Build a vendor
+    status watcher." and the briefing rendered "Vendor Status Watcher. — deploy deadlettered",
+    which reads like a typo in the product rather than in the directive. Identity is unaffected
+    — `identity_key` collapses punctuation either way — so this is display only.
+    """
     display, _blurb, _label = project_name(str(title or ""))
-    return display if display and display != "Untitled app" else str(title or "")[:60]
+    name = str(display or "").strip().rstrip(".,;:·-— ").strip()
+    if not name or name.lower() in _NOT_A_NAME:
+        return fallback
+    return name
 
 
 def _diagnosis(error: Optional[str], *, gates_failed: Optional[list] = None) -> dict[str, Any]:
@@ -60,11 +107,22 @@ def _diagnosis(error: Optional[str], *, gates_failed: Optional[list] = None) -> 
         kind = task_shepherd.classify(error, gates_failed=gates_failed)
     except Exception:  # noqa: BLE001 — an unclassified failure is still worth showing
         return {}
+    # "UNKNOWN · USUALLY: ASK THE OPERATOR ONE DECISION-SHAPED QUESTION" ON EVERY ROW.
+    #
+    # That is what six stopped steps looked like: an identical grey badge saying the taxonomy
+    # did not recognise the error, above the ESCALATE entry — which is not a remedy at all, it
+    # is the table's way of saying there isn't one. Rendered as "usually:", it reads as advice.
+    #
+    # A diagnosis that appears on everything carries no information and costs the rows that DO
+    # have one their distinctiveness. Nothing to say means say nothing.
+    if kind == task_shepherd.UNKNOWN:
+        return {}
     name = task_shepherd.CLASS_NAMES.get(kind, "")
     remedies = [
         {"id": r.id, "describe": r.describe, "action": r.action,
          "already_automatic": bool(r.automatic)}
         for r in task_shepherd.REMEDIES.get(kind, ())
+        if r.id != "escalate"
     ]
     return {"kind": name, "remedies": remedies} if name else {}
 
@@ -113,7 +171,10 @@ def _stuck_steps(connection, project_id: str) -> list[dict[str, Any]]:
         item = {
             "kind": "workflow_step", "id": row["id"], "step": row["step_id"],
             "run_id": row["workflow_run_id"], "status": row["status"],
-            "app": _app_of(str((row["input"] or {}).get("title") or "")),
+            # No name is better than a wrong one: the step id and its run are real, and the
+            # operator can act on those.
+            "app": _app_of(str((row["input"] or {}).get("title") or ""),
+                           fallback=f"run {str(row['workflow_run_id'])[:16]}"),
             "error": error[:300], "since": str(row["updated_at"]),
             "actions": [{"tool": "recheck_workflow_run",
                          "args": {"run_id": row["workflow_run_id"]},
@@ -122,6 +183,17 @@ def _stuck_steps(connection, project_id: str) -> list[dict[str, Any]]:
         diagnosis = _diagnosis(error)
         if diagnosis:
             item["diagnosis"] = diagnosis
+        # IS IT STILL TRUE? Two of these asserted "this project has no active deployment
+        # target" while it had six — an error written days ago and read as current. A row whose
+        # reason has since cleared is not something that wants you.
+        try:
+            from .workflow_recheck import blocker_status
+
+            blocker = blocker_status(connection, project_id, dict(row))
+        except Exception:  # noqa: BLE001 — a re-check must never lose the row it checks
+            blocker = None
+        if blocker:
+            item["blocker"] = blocker
         out.append(item)
     return out
 
@@ -169,13 +241,14 @@ def _stalled_builds(connection, project_id: str) -> list[dict[str, Any]]:
             "ORDER BY updated_at LIMIT :n"),
         {"p": project_id, "n": PER_KIND}).mappings().all()
     return [{
-        "kind": "quiet_build", "id": row["id"], "app": _app_of(str(row["title"] or "")),
+        "kind": "quiet_build", "id": row["id"],
+        "app": _app_of(str(row["title"] or ""), fallback=f"run {str(row['id'])[:16]}"),
         "phase": row["phase"], "quiet_minutes": int((row["quiet_seconds"] or 0) // 60),
         # NOT "stalled". A build that has been quiet for twenty minutes is usually a build that
         # is working — the last one called stalled was cancelled and was fine.
         "note": "quiet for a while; that is often normal for this phase",
         "actions": [{"tool": "diagnose_run", "args": {"run_id": row["id"]},
-                     "label": f"Diagnose {_app_of(str(row['title'] or ''))}"}],
+                     "label": f"Diagnose {_app_of(str(row['title'] or ''), 'this run')}"}],
     } for row in rows]
 
 
@@ -206,6 +279,17 @@ def factory_briefing(connection, project_id: str) -> dict[str, Any]:
             sections[name] = []
             failures[name] = f"{type(exc).__name__}: {exc}"[:300]
     items = [item for group in sections.values() for item in group]
+    # HOW OLD IS THIS? Every "Stopped" row on the live board was between one and four days old
+    # and rendered with no date at all, under a heading that reads as "right now". The age is
+    # the difference between "something just broke" and "this has been sitting here since
+    # Thursday", and it was the one fact the operator could not see.
+    for item in items:
+        age = _age_of(item.get("since"))
+        if age:
+            item["age"] = age
+    # Cleared first is wrong — those are the ones needing LEAST attention. Anything whose
+    # recorded reason has since gone false sinks to the bottom, still visible, marked.
+    items.sort(key=lambda i: bool((i.get("blocker") or {}).get("cleared")))
     return {
         "project_id": project_id,
         "items": items,

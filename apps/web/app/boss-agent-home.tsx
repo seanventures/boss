@@ -34,6 +34,11 @@ type Item = {
   title?: string; app?: string; step?: string; environment?: string; at?: string;
   status?: string; error?: string; note?: string; since?: string;
   phase?: string | null; quiet_minutes?: number; run_id?: string;
+  /** "4 days ago" — a stopped row four days old is a different fact from one four minutes old. */
+  age?: string;
+  /** Whether the recorded reason still holds. Two rows asserted "no active deployment target"
+   *  while the project had six. */
+  blocker?: { cleared?: boolean; reason?: string } | null;
   diagnosis?: Diagnosis; actions?: Action[];
 };
 type Briefing = {
@@ -165,9 +170,30 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
                 <strong>{heading}</strong> <span className="detail">{blurb}</span>
               </div>
               {group.map((item) => (
-                <div className="fb-item" key={`${item.kind}-${item.id}`} data-testid="agent-item">
-                  <div className="fb-item-head">{itemHeadline(item)}</div>
-                  {item.error ? <div className="fb-item-error">{item.error}</div> : null}
+                <div className="fb-item" key={`${item.kind}-${item.id}`} data-testid="agent-item"
+                     data-cleared={item.blocker?.cleared ? "true" : undefined}>
+                  <div className="fb-item-head">
+                    {itemHeadline(item)}
+                    {/* WHEN. Every stopped row on the live board was one to four days old and
+                        rendered with no date, under a heading that reads as "right now". */}
+                    {item.age ? <span className="fb-age" data-testid="agent-item-age">
+                      {item.age}
+                    </span> : null}
+                  </div>
+                  {/* THE REASON HAS SINCE GONE FALSE. Not dropped — the step really did stop,
+                      and hiding that would be its own lie — but said plainly, so an operator
+                      does not go looking for a problem that has already been dealt with. */}
+                  {item.blocker?.cleared ? (
+                    <div className="fb-cleared" data-testid="agent-item-cleared">
+                      No longer true: {item.blocker.reason}
+                    </div>
+                  ) : null}
+                  {item.error ? (
+                    <div className={item.blocker?.cleared ? "fb-item-error fb-stale"
+                                                          : "fb-item-error"}>
+                      {item.blocker?.cleared ? "Recorded then: " : ""}{item.error}
+                    </div>
+                  ) : null}
                   {item.note ? <div className="detail">{item.note}</div> : null}
                   {/* WHAT IT MEANS — the Shepherd's taxonomy, which was always the good part.
                       It is offered here, never run: that is the one thing the autopilot got

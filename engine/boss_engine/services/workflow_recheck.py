@@ -41,7 +41,19 @@ def _target_now_exists(connection, project_id: str, output: dict) -> Optional[di
     """The deploy refused because the app had no target. Does it have one now?"""
     app_name = str(output.get("app_name") or "").strip()
     if not app_name:
-        return None
+        # A refusal that named no app asked a project-wide question — "nothing is being watched
+        # because this project has no active target" — so that is what gets re-tested.
+        any_target = connection.execute(
+            sql("SELECT id, app_name, environment, domains FROM deployment_targets "
+                "WHERE project_id = :p AND status = 'active' ORDER BY app_name LIMIT 1"),
+            {"p": project_id}).mappings().first()
+        if not any_target:
+            return {"cleared": False,
+                    "reason": "this project still has no active deployment target."}
+        return {"cleared": True,
+                "reason": (f"this project now has active deployment targets — "
+                           f"{any_target['app_name']} ({any_target['environment']}) among them. "
+                           "The failure above is a record of when it did not.")}
     wanted = identity_key(app_name)
     environment = str(
         (output.get("fix") or {}).get("args", {}).get("environment")
@@ -80,12 +92,35 @@ CHECKERS = {
 }
 
 
+#: Failures that named a precondition in PROSE rather than in a field.
+#:
+#: The monitor step writes "nothing is being watched: this project has no active deployment
+#: target, so no health probe will ever run against it" and sets no `missing` key — so two
+#: steps sat in the briefing asserting the project had no target while it had six. The
+#: recorded sentence was true when written and false by the time anyone read it, which is the
+#: whole failure this module exists for; it should not depend on which field the writer used.
+_BY_ERROR_TEXT: tuple[tuple[str, str], ...] = (
+    ("no active deployment target", "deployment_target"),
+    ("has no active deployment target", "deployment_target"),
+)
+
+
 def blocker_status(connection, project_id: str, step: dict) -> Optional[dict[str, Any]]:
     """Whether this step's recorded blocker still holds. None when there is nothing to say."""
     if str(step.get("status") or "") not in STALE_CAPABLE:
         return None
     output = step.get("output") if isinstance(step.get("output"), dict) else {}
     missing = str(output.get("missing") or "").strip()
+    if not missing:
+        blob = f"{step.get('last_error') or ''} {output.get('note') or ''}".lower()
+        for phrase, kind in _BY_ERROR_TEXT:
+            if phrase in blob:
+                missing = kind
+                # The prose names no app, so the check runs against the project rather than
+                # one app — "does anything here have a target now" is the question that was
+                # actually asked.
+                output = {**output, "app_name": output.get("app_name") or ""}
+                break
     if not missing:
         return None
     checker = CHECKERS.get(missing)
