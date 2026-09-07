@@ -9428,6 +9428,14 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
             "next": "Deploy it once from here; after that a merged change ships by itself."}
 
 
+def _project_of_run(run_id: str) -> str:
+    """The project a code-task run belongs to, for scoping a deployment lookup to it."""
+    with begin(engine) as connection:
+        return str(connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :r"),
+            {"r": run_id}).scalar() or "")
+
+
 @app.get("/v1/code-tasks/{run_id}/deployments")
 def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                                        app_name: Optional[str] = None):
@@ -9455,16 +9463,39 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
             text("SELECT r.id, r.app_name, r.environment, r.status, r.commit_ref, "
                  "       r.started_at, r.finished_at, r.failure_reason, r.trigger, "
                  "       r.deployment_target_id, "
-                 "       t.domains, t.health_checks, h.name AS host_name "
+                 "       t.domains, t.health_checks, h.name AS host_name, "
+                 "       r.release_packet->>'code_task_run_id' AS release_packet_run "
                  "FROM deployment_runs r "
                  "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id "
                  "LEFT JOIN deployment_hosts h ON h.id = t.host_id "
-                 "WHERE r.release_packet->>'code_task_run_id' = :run "
-                 "ORDER BY r.created_at DESC LIMIT :lim"),
-            {"run": run_id, "lim": max(1, min(int(limit), 20))}).mappings().all()
+                 # AN APP'S ATTEMPTS ARE SEVERAL RUNS, AND ONLY ONE OF THEM SHIPPED.
+                 #
+                 # This matched the release packet's run id alone. The Interview Scorecard App
+                 # was deployed and answering 200 on 3015, and its Factory card said NOT
+                 # DEPLOYED with a "Deploy now" button — because the deployment is stamped with
+                 # crun_7f38987c (the attempt that succeeded) and the card is a different
+                 # attempt of the same app. Three attempts, one deployment, and the card asked
+                 # about the wrong one.
+                 #
+                 # So the run id OR the same app, matched on identity below rather than in SQL,
+                 # because identity is one rule and it lives in Python. The docstring's warning
+                 # still holds — matching on a NAME could show another app's deployment — which
+                 # is why this is identity equality within one project and not a LIKE.
+                 "WHERE r.project_id = :p "
+                 "ORDER BY r.created_at DESC LIMIT 200"),
+            {"p": _project_of_run(run_id)}).mappings().all()
+    from boss_engine.services.naming import identity_key as _identity_key
+
+    _wanted = _identity_key(app_name) if app_name else ""
+    rows = [
+        r for r in rows
+        if r["release_packet_run"] == run_id
+        or (_wanted and _identity_key(str(r["app_name"] or "")) == _wanted)
+    ][:max(1, min(int(limit), 20))]
     out = []
     for row in rows:
         item = dict(row)
+        item.pop("release_packet_run", None)
         for key in ("started_at", "finished_at"):
             if item.get(key) is not None:
                 item[key] = str(item[key])
@@ -9495,15 +9526,27 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
     linked_host = None
     linked_target_id = None
     if app_name:
+        # IDENTITY, AND SCOPED TO THIS PROJECT.
+        #
+        # `t.app_name = :a` is exact string equality across every project. Two faults: an app
+        # stored as "Lead‐Triage Inbox" carries a U+2010 hyphen and would never equal the ASCII
+        # name the console holds, and a name shared by two projects would resolve to whichever
+        # row was newest. The name is the identity here — but identity is the collapsed form,
+        # which is the whole reason that function exists.
+        _wanted_target = _identity_key(app_name)
+        _project = _project_of_run(run_id)
         with begin(engine) as connection:
-            row = connection.execute(
-                text("SELECT t.id AS target_id, h.name FROM deployment_targets t "
+            for row in connection.execute(
+                text("SELECT t.id AS target_id, t.app_name, h.name FROM deployment_targets t "
                      "JOIN deployment_hosts h ON h.id = t.host_id "
-                     "WHERE t.app_name = :a AND t.status = 'active' "
-                     "ORDER BY t.created_at DESC LIMIT 1"),
-                {"a": app_name}).mappings().first()
-            linked_host = row["name"] if row else None
-            linked_target_id = row["target_id"] if row else None
+                     "WHERE t.project_id = :p AND t.status = 'active' "
+                     "ORDER BY t.created_at DESC"),
+                {"p": _project}).mappings().all():
+                if _identity_key(str(row["app_name"] or "")) != _wanted_target:
+                    continue
+                linked_host = row["name"]
+                linked_target_id = row["target_id"]
+                break
     return {"run_id": run_id, "deployments": out, "linked_host": linked_host,
             "linked_target_id": linked_target_id}
 
