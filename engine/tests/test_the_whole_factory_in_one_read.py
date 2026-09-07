@@ -58,7 +58,7 @@ class _Conn:
         return Result()
 
 
-DECISION = {"id": "dec_1", "title": "Merge PR #186", "status": "pending", "risk_tier": 2,
+DECISION = {"id": "dec_1", "question": "Merge PR #186", "status": "pending", "risk_tier": 2,
             "deadline_at": "2026-09-07T02:33Z", "default_action": "hold",
             "created_at": "2026-09-06T02:31Z"}
 STEP = {"id": "wfs_1", "step_id": "deploy", "status": "deadlettered",
@@ -175,3 +175,43 @@ class TestWhatTheAgentIsHanded:
         body = inspect.getsource(builtin)
         assert "Call this FIRST when asked an open " in body
         assert "instead of assembling the same picture from six separate " in body
+
+
+class TestASectionThatCouldNotBeReadIsNotAnEmptySection:
+    """It happened here, on the first live call. The decisions query named `title`; the column
+    is `question`. The section raised, the handler logged into a container nobody reads and
+    returned [], and the briefing answered "nothing needs you" while six decisions sat
+    unanswered and eleven workflow steps were stuck.
+
+    That is the exact shape of failure this page exists to end, produced by the page itself."""
+
+    class Boom:
+        def execute(self, statement, params=None):
+            raise RuntimeError('column "title" does not exist')
+
+    def test_the_reason_travels_with_the_answer(self):
+        out = factory_briefing(self.Boom(), "p")
+        assert out["errors"]
+        assert 'column "title" does not exist' in out["errors"]["decisions"]
+
+    def test_and_the_factory_is_not_called_quiet(self):
+        """Quiet means LOOKED AND FOUND NOTHING. With a section unread the honest answer is "I
+        do not know", and `quiet` is what the page renders as "nothing is blocked"."""
+        assert factory_briefing(self.Boom(), "p")["quiet"] is False
+
+    def test_a_genuinely_empty_factory_is_still_quiet(self):
+        assert factory_briefing(_Conn(), "p")["quiet"] is True
+
+    def test_the_column_it_got_wrong_is_the_one_the_table_has(self):
+        from boss_engine.services import factory_briefing as module
+
+        body = inspect.getsource(module)
+        assert "SELECT id, question, status, risk_tier" in body
+        assert 'row["question"]' in body
+
+    def test_the_console_says_which_part_it_could_not_read(self):
+        import pathlib
+
+        ui = pathlib.Path("apps/web/app/boss-agent-home.tsx").read_text()
+        assert 'data-testid="agent-briefing-partial"' in ui
+        assert "is therefore" in ui and "incomplete" in ui

@@ -38,6 +38,8 @@ type Item = {
 };
 type Briefing = {
   items: Item[]; counts: Record<string, number>; total: number; quiet: boolean;
+  /** Sections that could not be read. Never rendered as "nothing needs you". */
+  errors?: Record<string, string>;
 };
 
 const GROUPS: Array<[string, string, string]> = [
@@ -134,6 +136,17 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
           <p className="detail" data-testid="agent-briefing-failed">
             The briefing could not be read — {failed}. This is not the same as “nothing needs
             you”; ask below and BOSS will look directly.
+          </p>
+        ) : null}
+        {/* PART OF THE FACTORY WENT UNREAD. Reporting the rest as the whole picture is how a
+            console says everything is fine during an outage — and it already happened once
+            here: a query named a column the table does not have, and the page answered
+            "nothing needs you" while six decisions sat unanswered. */}
+        {Object.keys(briefing?.errors ?? {}).length ? (
+          <p className="detail" data-testid="agent-briefing-partial">
+            Could not read: {Object.entries(briefing!.errors!)
+              .map(([k, v]) => `${k} (${v})`).join("; ")}. What is listed below is therefore
+            incomplete — ask BOSS and it will look directly.
           </p>
         ) : null}
         {!failed && briefing?.quiet ? (

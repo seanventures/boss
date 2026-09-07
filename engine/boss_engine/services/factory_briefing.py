@@ -72,7 +72,10 @@ def _diagnosis(error: Optional[str], *, gates_failed: Optional[list] = None) -> 
 def _decisions(connection, project_id: str) -> list[dict[str, Any]]:
     """Approvals with nobody's answer on them. The commonest reason a factory is idle."""
     rows = connection.execute(
-        sql("SELECT id, title, status, risk_tier, deadline_at, default_action, created_at "
+        # `question`, not `title` — the column this table actually has. Getting it wrong
+        # returned an empty briefing that read as "nothing needs you" while six decisions sat
+        # unanswered, which is why the section errors below are reported rather than swallowed.
+        sql("SELECT id, question, status, risk_tier, deadline_at, default_action, created_at "
             "FROM decisions WHERE project_id = :p AND status IN ('pending', 'delegated') "
             "ORDER BY created_at LIMIT :n"),
         {"p": project_id, "n": PER_KIND}).mappings().all()
@@ -80,7 +83,7 @@ def _decisions(connection, project_id: str) -> list[dict[str, Any]]:
     for row in rows:
         overdue = bool(row["deadline_at"]) and str(row["default_action"] or "hold") == "hold"
         out.append({
-            "kind": "decision", "id": row["id"], "title": str(row["title"] or "")[:140],
+            "kind": "decision", "id": row["id"], "title": str(row["question"] or "")[:140],
             "since": str(row["created_at"]),
             # An expired hold applies NOTHING, so the work waits for ever rather than taking a
             # safe default. Saying "overdue" without that is a nag; saying it with that is a
@@ -90,7 +93,7 @@ def _decisions(connection, project_id: str) -> list[dict[str, Any]]:
                      "waiting for an answer"),
             "actions": [{"tool": "decide", "args": {"decision_id": row["id"],
                                                     "action": "approve"},
-                         "label": f"Approve — {str(row['title'] or row['id'])[:60]}"}],
+                         "label": f"Approve — {str(row['question'] or row['id'])[:60]}"}],
         })
     return out
 
@@ -183,6 +186,7 @@ def factory_briefing(connection, project_id: str) -> dict[str, Any]:
     tells the operator nothing about the four that are fine.
     """
     sections: dict[str, list] = {}
+    failures: dict[str, str] = {}
     for name, reader in (("decisions", _decisions), ("workflow_steps", _stuck_steps),
                          ("unhealthy", _unhealthy), ("quiet_builds", _stalled_builds)):
         try:
@@ -191,15 +195,26 @@ def factory_briefing(connection, project_id: str) -> dict[str, Any]:
             # is the same as none because nobody reads to the bottom of it.
             sections[name] = list(reader(connection, project_id))[:PER_KIND]
         except Exception as exc:  # noqa: BLE001
+            # A SECTION THAT COULD NOT BE READ IS NOT AN EMPTY SECTION.
+            #
+            # This logged and returned []. The decisions query named a column the table does
+            # not have (`title`; it is `question`), so the briefing answered "nothing needs
+            # you" while six decisions sat unanswered — the exact shape of failure this page
+            # exists to end, produced by the page itself. The log was in a container nobody
+            # reads. It travels with the answer now.
             _log.warning("briefing section %s failed: %s", name, exc)
             sections[name] = []
+            failures[name] = f"{type(exc).__name__}: {exc}"[:300]
     items = [item for group in sections.values() for item in group]
     return {
         "project_id": project_id,
         "items": items,
         "counts": {name: len(group) for name, group in sections.items()},
+        "errors": failures,
         "total": len(items),
-        "quiet": not items,
+        # Quiet means LOOKED AND FOUND NOTHING. A section that could not be read makes this
+        # false, because the honest answer is then "I do not know".
+        "quiet": not items and not failures,
     }
 
 
