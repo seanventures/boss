@@ -8725,13 +8725,19 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 @media (max-width: 1020px) { .tpl-top { grid-template-columns: 1fr; gap: 24px; } }
 
 .tpl-preview { min-width: 0; }
+/* THE SHAPE OF THE PICTURE, so none of it is thrown away. This was 16/9 against a 320x128
+   drawing, and `slice` fills the box by discarding whatever does not fit — about 29% off the
+   sides, which took the primary button in half and most of the sidebar with it. */
 .tpl-shot {
-  position: relative; aspect-ratio: 16 / 9; overflow: hidden;
+  position: relative; aspect-ratio: 320 / 128; overflow: hidden;
   border: 1px solid var(--border); border-radius: 16px; background: #0b1020;
   box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .7);
 }
 .tpl-shot .askboss-idea-shot, .tpl-shot .askboss-idea-photo {
-  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  /* `contain`, for the same reason as `meet` above: at this size a crop is the first thing
+     you notice, and a supplied photograph of the wrong shape should shrink rather than lose
+     its edges. */
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
 }
 /* WHAT THIS PICTURE IS. Lovable shows a screenshot of something that exists; this is an
    impression of something that does not yet, and saying so is the difference between a

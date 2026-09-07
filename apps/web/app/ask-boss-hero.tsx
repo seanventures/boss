@@ -578,8 +578,14 @@ function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
   const slug = `${scope}-${slugFor(idea.title)}`;
   const accent = accentFor(idea.title);
   return (
+    // `meet`, NOT `slice`. Slice fills the box and throws away whatever does not fit, so the
+    // moment a container's ratio differs from the drawing's 2.5:1 the art is cropped — the
+    // detail page's 16/9 frame cut about 29% off the sides, taking the primary button in half
+    // and most of the sidebar with it. `meet` fits the whole drawing in; the containers are
+    // shaped 320/128 so there is nothing to letterbox, and if one ever drifts the picture
+    // shrinks instead of losing a piece.
     <svg className="askboss-idea-shot" viewBox="0 0 320 128"
-         preserveAspectRatio="xMidYMid slice">
+         preserveAspectRatio="xMidYMid meet">
       {/* THE COLOUR FIELD, the way Living Colors does it: a three-stop gradient across the
           whole area, then two large soft orbs for depth. That app has no image files —
           this IS how it looks good. */}

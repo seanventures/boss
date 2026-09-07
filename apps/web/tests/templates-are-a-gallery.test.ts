@@ -121,6 +121,24 @@ describe("clicking opens a page, and reading is not the same as buying", () => {
     expect(CSS).toContain(".tpl-shot");
   });
 
+  it("the whole drawing is shown — never a crop of it", () => {
+    // "Just zoom out the whole image, dont cut it out when you are expanding." The frame was
+    // 16/9 against a 320x128 drawing and `slice` fills a box by discarding whatever does not
+    // fit — about 29% off the sides, taking the primary button in half and most of the sidebar.
+    expect(HERO).toContain('preserveAspectRatio="xMidYMid meet"');
+    // Narrowly: the SVG attribute. `.slice(` is all over this file as a string method.
+    expect(HERO).not.toMatch(/preserveAspectRatio="[^"]*slice/);
+    // And every frame is cut to the shape of the picture, so `meet` has nothing to letterbox.
+    for (const frame of [".tpl-shot {", ".askboss-idea-cover {"]) {
+      const at = CSS.indexOf(frame);
+      expect(at, frame).toBeGreaterThan(-1);
+      expect(CSS.slice(at, at + 260), frame).toContain("aspect-ratio: 320 / 128");
+    }
+    // A supplied photograph shrinks rather than losing its edges at this size.
+    const shot = CSS.indexOf(".tpl-shot .askboss-idea-shot");
+    expect(CSS.slice(shot, shot + 320)).toContain("object-fit: contain");
+  });
+
   it("and it paints with the first frame rather than a filter pass later", () => {
     // "the image renders late" — two circles under feGaussianBlur are a filter primitive, and
     // the browser rasterises that region on its own pass. At detail-page size that pass lands
