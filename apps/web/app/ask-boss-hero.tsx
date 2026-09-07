@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
 import { facetsOf } from "./template-brief";
+import { CRAFT, DETAILS, buildBrief } from "./template-details";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
@@ -554,6 +555,78 @@ const GLYPHS = {
   bell: "M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0",
 } as const;
 
+/**
+ * The cover art, drawn once and shown twice.
+ *
+ * It lived inline in the card, so when the enlarged view opened there was nothing to show and
+ * the operator's first observation was "the image is missing" — the one thing that made the
+ * card worth looking at vanished exactly where there was room for it. Lovable's detail page
+ * leads with a large preview; ours led with a tag.
+ *
+ * `scope` keeps the gradient and blur ids distinct, because the card and the sheet are on the
+ * page at the same time and two elements sharing an id is how one of them silently borrows the
+ * other's fill.
+ */
+function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
+  const slug = `${scope}-${slugFor(idea.title)}`;
+  const accent = accentFor(idea.title);
+  return (
+    <svg className="askboss-idea-shot" viewBox="0 0 320 128"
+         preserveAspectRatio="xMidYMid slice">
+      {/* THE COLOUR FIELD, the way Living Colors does it: a three-stop gradient across the
+          whole area, then two large blurred orbs for depth. That app has no image files —
+          this IS how it looks good. */}
+      <defs>
+        <linearGradient id={`g-${slug}`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor={gradientFor(idea.tag)[0]} />
+          <stop offset="52%" stopColor={gradientFor(idea.tag)[1]} />
+          <stop offset="100%" stopColor={gradientFor(idea.tag)[2]} />
+        </linearGradient>
+        <filter id={`b-${slug}`} x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="18" />
+        </filter>
+      </defs>
+      <rect x="0" y="0" width="320" height="128" fill={`url(#g-${slug})`} />
+      <circle cx="34" cy="10" r="46" fill="rgba(255,255,255,.20)" filter={`url(#b-${slug})`} />
+      <circle cx="300" cy="124" r="52" fill="rgba(255,255,255,.16)" filter={`url(#b-${slug})`} />
+      {/* The sidebar, darkened rather than coloured, so the window still reads as a window
+          against the field. */}
+      <rect x="0" y="0" width="66" height="128" fill="rgba(10,14,28,.22)" />
+      <circle cx="16" cy="16" r="4" fill={accent} />
+      <Line x={25} y={14} w={26} h={4} c={UI.bright} o={0.9} />
+      {[0, 1, 2, 3, 4].map((n) => (
+        <g key={n}>
+          <rect x="10" y={34 + n * 16} width="46" height="11" rx="3"
+                fill={n === 1 ? UI.row : "transparent"} />
+          <rect x="14" y={38 + n * 16} width="4" height="4" rx="1"
+                fill={n === 1 ? accent : UI.line} />
+          <Line x={22} y={38.5 + n * 16} w={28 - (n % 3) * 5} h={3}
+                c={n === 1 ? UI.bright : UI.text} o={n === 1 ? 1 : 0.7} />
+        </g>
+      ))}
+      {/* The content pane's header: a title and one primary button. The accent appears here
+          and on exactly one thing below — sparingly, the way a real interface uses colour. */}
+      <Line x={78} y={13} w={64} h={5} c={UI.bright} o={0.95} />
+      <rect x="258" y="10" width="42" height="12" rx="6" fill={accent} opacity=".92" />
+      <Line x={266} y={15} w={26} h={3} c="#0d1220" o={0.55} />
+      {(MOCKUPS[MOCKUP_FOR[idea.title] ?? "timeline"])(idea.title, accent)}
+    </svg>
+  );
+}
+
+/** The optional photograph, hidden until it decodes so a missing file is invisible. */
+function IdeaPhoto({ title }: { title: string }) {
+  return (
+    // HIDDEN UNTIL IT LOADS, rather than shown until it fails. `onError` alone leaves a
+    // broken-image icon wherever the handler has not run — in a server render, with JS still
+    // loading, or for the moment before the request 404s.
+    <img className="askboss-idea-photo" src={photoFor(title)} alt=""
+         loading="lazy" decoding="async" style={{ display: "none" }}
+         onLoad={(e) => { e.currentTarget.style.display = "block"; }}
+         onError={(e) => { e.currentTarget.style.display = "none"; }} />
+  );
+}
+
 const IDEAS: Idea[] = [
   {
     tag: "Ops", title: "Incident timeline builder", glyph: "clock",
@@ -770,10 +843,6 @@ const RESEARCH: Array<{ label: string; seed: string }> = [
     seed: "How do incident-management products differentiate on pricing for teams under 20 people?" },
 ];
 
-/** The facets, in the order an operator scans them: work first, then the rest. */
-const TEMPLATE_TAGS = ["Ops", "Team", "Money", "Quality", "Content", "Growth", "Sales",
-                       "Learning"] as const;
-
 const IDEAS_PER_PAGE = 4;
 
 /**
@@ -909,10 +978,9 @@ export function AskBossHero({
   const [steps, setSteps] = useState<string[]>([]);
   const [probe, setProbe] = useState<{ id: string } | null>(null);
   const [landing, setLanding] = useState(false);
-  //: THE GALLERY. Compared against lovable.dev/templates — 204 templates, a filterable grid,
-  //: category and persona facets — ours were sixteen cards on a conveyor with the tags they
-  //: already carry going unused. You cannot scan a conveyor and you cannot filter one.
-  const [tagFilter, setTagFilter] = useState("");
+  //: THE GALLERY. Compared against lovable.dev/templates — 204 templates in a grid — ours were
+  //: sixteen cards on a conveyor you cannot scan. "See all" fixes that; facets were tried and
+  //: removed, because sixteen items that fit on one screen do not need filtering.
   const [gridMode, setGridMode] = useState(false);
   //: READ BEFORE YOU COMMIT. Clicking a card put a wall of markdown in the composer and
   //: called that a preview. A build costs money; what it must do and how you will know it
@@ -1388,22 +1456,11 @@ export function AskBossHero({
                   for a trackpad that will not scroll sideways. */}
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>
-                {/* THE TAGS WERE ALREADY THERE AND DID NOTHING. Eight of them, one per card,
-                    rendered as a label and never as a filter — so the only way to find the
-                    money one among sixteen was to read sixteen titles. */}
-                <div className="askboss-ideas-facets" data-testid="askboss-facets">
-                  {["", ...TEMPLATE_TAGS].map((t) => (
-                    <button key={t || "all"} type="button"
-                            className="askboss-facet" aria-pressed={tagFilter === t}
-                            data-active={tagFilter === t ? "true" : undefined}
-                            onClick={() => setTagFilter(t)}>
-                      {t || "All"}
-                      <span className="askboss-facet-n">
-                        {t ? IDEAS.filter((i) => i.tag === t).length : IDEAS.length}
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                {/* NO FILTERS. Eight chips were added by analogy with Lovable, which has 204
+                    templates and genuinely needs them. We have sixteen, all visible in one
+                    press of "See all" — so the chips cost a row of screen and a decision to
+                    save nobody any scrolling. The operator's judgement, and it is right:
+                    filtering is for sets you cannot see the end of. */}
                 <div className="askboss-ideas-nav">
                   {/* Sixteen cards you can see at once, or a row you scroll. A gallery is the
                       one you can scan; the row is better when you already know what you want. */}
@@ -1435,7 +1492,7 @@ export function AskBossHero({
                 onFocusCapture={() => setStripHeld(true)}
                 onBlurCapture={() => setStripHeld(false)}
               >
-                {IDEAS.filter((i) => !tagFilter || i.tag === tagFilter).map((i) => (
+                {IDEAS.map((i) => (
                   <button
                     key={i.title}
                     type="button"
@@ -1457,67 +1514,10 @@ export function AskBossHero({
                     <span className="askboss-idea-cover" aria-hidden>
                       {/* The app, in miniature. Window chrome and a layout that matches what
                           the idea is — an inbox looks like rows, a board looks like columns —
-                          so the card previews the thing rather than tinting a rectangle. */}
-                      <svg className="askboss-idea-shot" viewBox="0 0 320 128"
-                           preserveAspectRatio="xMidYMid slice">
-                        {/* THE COLOUR FIELD, the way Living Colors does it: a three-stop
-                            gradient across the whole area, then two large blurred orbs for
-                            depth. That app has no image files — this IS how it looks good. */}
-                        <defs>
-                          <linearGradient id={`g-${slugFor(i.title)}`} x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stopColor={gradientFor(i.tag)[0]} />
-                            <stop offset="52%" stopColor={gradientFor(i.tag)[1]} />
-                            <stop offset="100%" stopColor={gradientFor(i.tag)[2]} />
-                          </linearGradient>
-                          <filter id={`b-${slugFor(i.title)}`} x="-50%" y="-50%"
-                                  width="200%" height="200%">
-                            <feGaussianBlur stdDeviation="18" />
-                          </filter>
-                        </defs>
-                        <rect x="0" y="0" width="320" height="128"
-                              fill={`url(#g-${slugFor(i.title)})`} />
-                        <circle cx="34" cy="10" r="46" fill="rgba(255,255,255,.20)"
-                                filter={`url(#b-${slugFor(i.title)})`} />
-                        <circle cx="300" cy="124" r="52" fill="rgba(255,255,255,.16)"
-                                filter={`url(#b-${slugFor(i.title)})`} />
-                        {/* The sidebar, darkened rather than coloured, so the window still
-                            reads as a window against the field. */}
-                        <rect x="0" y="0" width="66" height="128" fill="rgba(10,14,28,.22)" />
-                        <circle cx="16" cy="16" r="4" fill={accentFor(i.title)} />
-                        <Line x={25} y={14} w={26} h={4} c={UI.bright} o={0.9} />
-                        {[0, 1, 2, 3, 4].map((n) => (
-                          <g key={n}>
-                            <rect x="10" y={34 + n * 16} width="46" height="11" rx="3"
-                                  fill={n === 1 ? UI.row : "transparent"} />
-                            <rect x="14" y={38 + n * 16} width="4" height="4" rx="1"
-                                  fill={n === 1 ? accentFor(i.title) : UI.line} />
-                            <Line x={22} y={38.5 + n * 16} w={28 - (n % 3) * 5} h={3}
-                                  c={n === 1 ? UI.bright : UI.text} o={n === 1 ? 1 : 0.7} />
-                          </g>
-                        ))}
-                        {/* The content pane's header: a title and one primary button. The
-                            accent appears here and on exactly one thing below — sparingly, the
-                            way a real interface uses colour. */}
-                        <Line x={78} y={13} w={64} h={5} c={UI.bright} o={0.95} />
-                        <rect x="258" y="10" width="42" height="12" rx="6"
-                              fill={accentFor(i.title)} opacity=".92" />
-                        <Line x={266} y={15} w={26} h={3} c="#0d1220" o={0.55} />
-                        {(MOCKUPS[MOCKUP_FOR[i.title] ?? "timeline"])(i.title, accentFor(i.title))}
-                      </svg>
-                      {/* The photograph, if one has been supplied for this idea. It covers the
-                          drawing; when the file is absent it removes itself and the drawing is
-                          what you see, rather than a broken-image icon. */}
-                      {/* HIDDEN UNTIL IT LOADS, rather than shown until it fails.
-                          `onError` alone leaves a broken-image icon wherever the handler has
-                          not run — in a server render, with JS still loading, or for the
-                          moment before the request 404s. Sixteen broken icons over the
-                          artwork is worse than no photographs at all. Starting hidden means a
-                          missing file is invisible by construction and a present one appears
-                          the instant it decodes. */}
-                      <img className="askboss-idea-photo" src={photoFor(i.title)} alt=""
-                           loading="lazy" decoding="async" style={{ display: "none" }}
-                           onLoad={(e) => { e.currentTarget.style.display = "block"; }}
-                           onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                          so the card previews the thing rather than tinting a rectangle.
+                          Shared with the enlarged view, which is where it was missing. */}
+                      <IdeaCover idea={i} scope="card" />
+                      <IdeaPhoto title={i.title} />
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -1575,18 +1575,77 @@ export function AskBossHero({
                      onClick={(e) => e.stopPropagation()}>
               <button type="button" className="askboss-sheet-close" aria-label="Close"
                       onClick={() => setOpenIdea(null)}>✕</button>
+
+              {/* THE PREVIEW, which was missing entirely. The card showed the drawing and the
+                  enlarged view — the one place with room for it — showed a tag. It is the
+                  same artwork, rendered at the size it was drawn for. */}
+              <div className="askboss-sheet-cover" aria-hidden>
+                <IdeaCover idea={openIdea} scope="sheet" />
+                <IdeaPhoto title={openIdea.title} />
+              </div>
+
               <div className="askboss-sheet-head">
                 <span className="askboss-idea-tag">{openIdea.tag}</span>
                 <h3>{openIdea.title}</h3>
-                <p className="askboss-sheet-who">{facetsOf(openIdea.brief).audience}</p>
+                {/* The pitch, in the words somebody deciding would use. Two sentences beat a
+                    bullet list for the question "is this the thing I want". */}
+                <p className="askboss-sheet-pitch">
+                  {DETAILS[openIdea.title]?.pitch ?? facetsOf(openIdea.brief).audience}
+                </p>
               </div>
 
               <div className="askboss-sheet-body">
+                {DETAILS[openIdea.title]?.designedFor?.length ? (
+                  <section className="askboss-sheet-for">
+                    <h4>Designed for</h4>
+                    <ul>
+                      {DETAILS[openIdea.title].designedFor.map((w) => <li key={w}>{w}</li>)}
+                    </ul>
+                  </section>
+                ) : null}
+
+                {/* THE ANSWER TO "THE CONTENT IS VERY LESS".
+                    Five bullets specify an MVP, and an MVP is exactly what BOSS built. These
+                    cards are the capability list — and they are not marketing copy: the same
+                    text is appended to the brief by `buildBrief`, so every card here is
+                    something the build is held to. Reading it and not getting it would be the
+                    same broken promise as a green health check over a dead app. */}
+                {DETAILS[openIdea.title]?.features?.length ? (
+                  <section>
+                    <h4>Features it ships with</h4>
+                    <div className="askboss-sheet-features" data-testid="askboss-sheet-features">
+                      {DETAILS[openIdea.title].features.map((f) => (
+                        <div className="askboss-feature" key={f.title}>
+                          <strong>{f.title}</strong>
+                          <span>{f.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
                 <section>
-                  <h4>What it must do</h4>
+                  <h4>Scope</h4>
                   <ul className="askboss-sheet-list">
                     {facetsOf(openIdea.brief).mustDo.map((line) => <li key={line}>{line}</li>)}
                   </ul>
+                  {DETAILS[openIdea.title]?.surfaces?.length ? (
+                    <p className="askboss-sheet-screens">
+                      <span>Screens</span>
+                      {DETAILS[openIdea.title].surfaces.map((s) => (
+                        <em key={s}>{s}</em>
+                      ))}
+                    </p>
+                  ) : null}
+                </section>
+
+                {/* THE QUALITY BAR. Shared across all sixteen because it is not per-template:
+                    an empty state, a keyboard path and a real error message are owed by every
+                    one of them, and the first builds shipped without any of the three because
+                    nothing in the brief asked. */}
+                <section className="askboss-sheet-craft">
+                  <h4>Held to this standard</h4>
+                  <ul>{CRAFT.map((c) => <li key={c}>{c}</li>)}</ul>
                 </section>
 
                 {/* THE ACCEPTANCE TEST, given its own weight. It is the sentence the build is
@@ -1619,8 +1678,15 @@ export function AskBossHero({
               </div>
 
               <div className="askboss-sheet-foot">
+                {/* The composer gets the FULL brief — features, screens and quality bar — not
+                    the five-bullet version the card was built from. What you read is what is
+                    asked for. */}
                 <button type="button" className="askboss-go" data-testid="askboss-sheet-build"
-                        onClick={() => { draftIdea(openIdea); setOpenIdea(null); }}>
+                        onClick={() => {
+                          draftIdea({ ...openIdea,
+                                      brief: buildBrief(openIdea.title, openIdea.brief) });
+                          setOpenIdea(null);
+                        }}>
                   Start this build →
                 </button>
                 {/* Reading the brief is not the same as being sure. Asking first costs a

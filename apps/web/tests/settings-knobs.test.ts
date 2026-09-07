@@ -164,8 +164,12 @@ describe("the starter shelf", () => {
     // rather than one — the property this test protects, stated as the property.
     expect(HERO).toContain("onClick={() => setOpenIdea(i)}");
     expect(HERO).not.toMatch(/onClick=\{\(\) => (submit|build|startBuild)\(i\)\}/);
-    // The build button in the enlarged view still only drafts into the composer.
-    expect(HERO).toContain("onClick={() => { draftIdea(openIdea); setOpenIdea(null); }}");
+    // The build button in the enlarged view still only DRAFTS into the composer — it now
+    // passes an enriched brief, so pinning the exact handler text broke on a change that did
+    // not touch the property. What matters is that nothing but `draftIdea` runs on that press.
+    const foot = HERO.slice(HERO.indexOf('data-testid="askboss-sheet-build"'));
+    expect(foot.slice(0, 400)).toContain("draftIdea(");
+    expect(foot.slice(0, 400)).not.toMatch(/\b(submit|startBuild|postBounded)\(/);
   });
 });
 
@@ -219,7 +223,10 @@ describe("the starter strip is a gallery, not one image recoloured", () => {
   });
 
   it("maps by title, since mapping by glyph is what collapsed them", () => {
-    expect(HERO3).toContain("MOCKUP_FOR[i.title]");
+    // Seven of sixteen ideas shared one drawing when the lookup was keyed on the glyph. The
+    // key is the title — whatever the surrounding variable happens to be called.
+    expect(HERO3).toMatch(/MOCKUP_FOR\[\w+\.title\]/);
+    expect(HERO3).not.toMatch(/MOCKUP_FOR\[\w+\.glyph\]/);
   });
 
   it("does not force the hover peek into the layout", () => {

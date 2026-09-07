@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   audienceOf, doneWhenOf, facetsOf, mustDoOf, noteOf, summaryOf,
 } from "../app/template-brief";
+import { CRAFT, DETAILS, buildBrief } from "../app/template-details";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -71,24 +72,19 @@ describe("the brief already held what the card never showed", () => {
   });
 });
 
-describe("the tags finally do something", () => {
+describe("sixteen do not need filtering", () => {
   const HERO = codeOnly("app/ask-boss-hero.tsx");
-
-  it("every tag is a filter, with its count", () => {
-    // Eight of them, one per card, rendered as a label and never as a filter — so the only way
-    // to find the money one among sixteen was to read sixteen titles.
-    expect(HERO).toContain("const TEMPLATE_TAGS =");
-    expect(HERO).toContain('data-testid="askboss-facets"');
-    expect(HERO).toContain("IDEAS.filter((i) => i.tag === t).length");
-  });
-
-  it("and the filter actually filters", () => {
-    expect(HERO).toContain("IDEAS.filter((i) => !tagFilter || i.tag === tagFilter)");
-  });
 
   it("all sixteen can be seen at once", () => {
     expect(HERO).toContain('data-testid="askboss-grid-toggle"');
     expect(HERO).toContain('data-grid={gridMode ? "true" : undefined}');
+  });
+
+  it("and the facet chips are gone", () => {
+    // Added by analogy with Lovable, which has 204 templates and genuinely needs them. Sixteen
+    // that fit on one screen do not: the chips cost a row of the panel to save nobody a scroll.
+    expect(HERO).not.toContain("askboss-facets");
+    expect(HERO).not.toContain("tagFilter");
   });
 });
 
@@ -114,7 +110,22 @@ describe("clicking enlarges it, and reading is not the same as buying", () => {
   });
 
   it("two deliberate presses stand between a card and a build", () => {
-    expect(HERO).toContain("onClick={() => { draftIdea(openIdea); setOpenIdea(null); }}");
+    expect(HERO).toContain("draftIdea({ ...openIdea,");
+    expect(HERO).toContain("setOpenIdea(null);");
+  });
+
+  it("the artwork is on the enlarged view, not only on the card", () => {
+    // The first version showed the drawing on a 232px card and a tag on the full-width sheet —
+    // "the image is missing in the enlarge view" — so the one place with room for it had none.
+    expect(HERO).toContain('<IdeaCover idea={openIdea} scope="sheet" />');
+    expect(HERO).toContain('className="askboss-sheet-cover"');
+    expect(CSS).toContain(".askboss-sheet-cover");
+  });
+
+  it("and the buttons do not scroll away from a long page", () => {
+    const at = CSS.indexOf(".askboss-sheet-foot");
+    expect(at).toBeGreaterThan(-1);
+    expect(CSS.slice(at, at + 200)).toContain("sticky");
   });
 
   it("asking first is offered beside building", () => {
@@ -139,5 +150,72 @@ describe("clicking enlarges it, and reading is not the same as buying", () => {
     expect(HERO).toContain('aria-label="Close"');
     // A click inside the sheet must not close it.
     expect(HERO).toContain("onClick={(e) => e.stopPropagation()}");
+  });
+});
+
+/**
+ * "the content is very less, can we add more requirements for the same project so BOSS can
+ * build much more quality features than some MVP solution"
+ *
+ * Five bullets and an acceptance test specify an MVP, and an MVP is exactly what came back.
+ * The fix is not a longer page — it is a longer SPECIFICATION, because on this product the two
+ * are the same text: what the operator reads is appended to the brief BOSS is held to.
+ */
+describe("what you read is what gets built", () => {
+  const HERO = codeOnly("app/ask-boss-hero.tsx");
+  /** Every template title, read out of the gallery itself. */
+  const TITLES = [...HERO.matchAll(/title: "([^"]+)", glyph:/g)].map((m) => m[1]);
+
+  it("there are sixteen of them", () => {
+    expect(TITLES).toHaveLength(16);
+  });
+
+  it("every one has the richer detail — no template quietly falls back to five bullets", () => {
+    const missing = TITLES.filter((t) => !DETAILS[t]);
+    expect(missing).toEqual([]);
+  });
+
+  it("and no detail entry is orphaned by a renamed template", () => {
+    // A key that matches nothing is content nobody will ever see, and the failure is silent:
+    // the sheet just falls back to the thin version.
+    const orphans = Object.keys(DETAILS).filter((k) => !TITLES.includes(k));
+    expect(orphans).toEqual([]);
+  });
+
+  it("each carries enough to build from, not a tagline", () => {
+    for (const [title, d] of Object.entries(DETAILS)) {
+      expect(d.pitch.length, title).toBeGreaterThan(120);
+      expect(d.designedFor.length, title).toBeGreaterThanOrEqual(3);
+      expect(d.features.length, title).toBeGreaterThanOrEqual(5);
+      expect(d.surfaces.length, title).toBeGreaterThanOrEqual(3);
+      // A feature title with no detail is a bullet wearing a card's clothes.
+      for (const f of d.features) expect(f.detail.length, `${title}/${f.title}`)
+        .toBeGreaterThan(60);
+    }
+  });
+
+  it("the quality bar covers what the first builds actually shipped without", () => {
+    const bar = CRAFT.join(" ").toLowerCase();
+    for (const owed of ["empty state", "keyboard", "responsive", "error"]) {
+      expect(bar, owed).toContain(owed);
+    }
+  });
+
+  it("the outgoing brief contains everything the sheet showed", () => {
+    const base = "Build an incident timeline builder.\nWho it is for: someone.";
+    const brief = buildBrief("Incident timeline builder", base);
+    expect(brief).toContain(base.trim());
+    for (const f of DETAILS["Incident timeline builder"].features) {
+      expect(brief).toContain(f.title);
+      expect(brief).toContain(f.detail);
+    }
+    for (const c of CRAFT) expect(brief).toContain(c);
+    expect(brief).toContain("Timeline editor");
+  });
+
+  it("and a template with no detail entry still gets its original brief", () => {
+    // The fallback has to be the brief unchanged, not an empty one — a typo in a key must not
+    // silently ship a build with no specification at all.
+    expect(buildBrief("Not a template", "Build a thing.")).toBe("Build a thing.");
   });
 });
