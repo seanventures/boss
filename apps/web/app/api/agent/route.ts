@@ -80,6 +80,11 @@ export async function GET(req: Request) {
     return upstream(`/v1/agent/role-starters?project_id=${p}&role=${encodeURIComponent(role)}`);
   }
 
+  if (view === "briefing") {
+    // The whole factory in one read. The page renders it AND the agent can call the same tool,
+    // so the list an operator is looking at and the facts BOSS answers from cannot disagree.
+    return upstream(`/v1/agent/briefing?project_id=${p}`);
+  }
   if (view === "progress") {
     const thread = (params.get("thread_id") ?? "").trim();
     if (!thread) return NextResponse.json({ error: "missing thread_id" }, { status: 400 });

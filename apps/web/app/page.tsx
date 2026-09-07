@@ -71,7 +71,7 @@ import {
 } from "./edition-ui";
 import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
 import { OnboardingHelpCard } from "./onboarding-help-card";
-import { AgentChat } from "./agent-ui";
+import { BossAgentHome } from "./boss-agent-home";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
@@ -93,7 +93,6 @@ import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
-import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -947,16 +946,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       initialArea={requestedArea}
     >
       <div className="frame">
-        <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
-          <AgentChat projectId={activeProjectId} actor={activeActorId}
-                     initialTaskId={requestedWorkTask || undefined}
-                     roleName={requestedRole || undefined} />
-        </section>
-        <section className="panel-stack" data-area="metatron" aria-label="Metatron captain">
-          <MetatronCaptain
-            projectId={activeProjectId}
-            actor={activeActorId}
-          />
+        {/* ONE AGENT SURFACE.
+            There were three: this chat area, a Metatron Captain page, and the Task Shepherd
+            autopilot. The operator used one of them and did not like it — "I never used
+            Metatron and Agent chat is not good" — while praising the SAME agent everywhere
+            else, because those screens hand it their facts before the first word. So the chat
+            keeps its component and gains the whole factory in front of it; Metatron's page is
+            gone (its `metatron_sessions` table does not exist in this database, so it was a
+            shell); and the Shepherd's taxonomy survives as the diagnosis on each row, offered
+            as a button rather than run unattended. */}
+        <section className="panel-stack" data-area="agent" aria-label="BOSS agent">
+          <BossAgentHome projectId={activeProjectId} actor={activeActorId}
+                         initialTaskId={requestedWorkTask || undefined}
+                         roleName={requestedRole || undefined} />
         </section>
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">

@@ -16,7 +16,10 @@ import { isCommunityPrimaryNavVisible } from "../lib/edition";
 
 const HIDDEN_FROM_COMMUNITY_NAV = [
   "infra",
-  "metatron",
+  // "metatron" was here. Its page is gone — the always-on captain had no durable session in
+  // this database and nobody used it — and its idea is now what the one BOSS Agent area does.
+  // The AreaId union keeps the name so an old `?area=metatron` bookmark still resolves rather
+  // than dropping the operator on the organisation picker.
   "studio",
   "sandboxes",
   "github",

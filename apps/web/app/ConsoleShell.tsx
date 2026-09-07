@@ -202,8 +202,10 @@ const AREAS: AreaDef[] = [
   { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity, parent: "observability" },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
-  { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
-  { id: "metatron", label: "Metatron", sub: "Always-on captain: chat, goals, validated overwatch", group: "Run", icon: ICONS.metatron },
+  // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist
+  // in this database — a page over state that was never created — and the operator never used
+  // it. Its idea (a captain with the whole factory in view) is what the BOSS Agent area now IS.
+  { id: "agent", label: "BOSS Agent", sub: "What needs you, across the whole factory — and one conversation that can act on it", group: "Run", icon: ICONS.agent },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
 

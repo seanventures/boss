@@ -2409,6 +2409,23 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 allow_fix=wants_fix)
 
     @reg.tool(
+        "factory_briefing",
+        "Everything in the whole factory that wants a person right now — unanswered decisions, "
+        "failed workflow steps with what each failure MEANS, apps that are deployed and not "
+        "answering, and builds that have gone quiet. Call this FIRST when asked an open "
+        "question about the system — 'what changed', 'what is blocked', 'what should I do "
+        "next', 'how are we doing' — instead of assembling the same picture from six separate "
+        "lookups. Read-only.",
+        _obj({}),
+        kind="read",
+    )
+    def factory_briefing(ctx, *, project_id, actor, args):
+        from ..services.factory_briefing import factory_briefing as _briefing
+
+        with ctx.begin() as c:
+            return _briefing(c, project_id)
+
+    @reg.tool(
         "recheck_workflow_run",
         "Re-test what stopped a workflow run and put back whatever can now proceed. Use it "
         "when the thing a step complained about has since been dealt with — a deployment "

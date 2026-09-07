@@ -62,6 +62,8 @@ _EXPECTED_TOOLS: set[str] = {
     # Reconciling a run with a world that has moved on: re-test what stopped each step and put
     # back only the ones whose blocker has actually cleared.
     "recheck_workflow_run",
+    # The whole factory in one read, so an open question does not become six lookups.
+    "factory_briefing",
     "create_discovery",
     "decide",
     "describe_schema",
@@ -130,10 +132,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 76, (
+    assert len(reg.names()) == 77, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 48
+    assert len(read) == 49
     assert len(write) == 28
     # the capabilities the user explicitly asked the agent to cover
     for name in (

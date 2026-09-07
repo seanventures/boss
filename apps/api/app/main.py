@@ -10912,6 +10912,23 @@ def agent_chat(payload: AgentChatRequest, request: Request, response: Response) 
     return _run_agent_chat(payload, request, endpoint="/v1/agent/chat")
 
 
+@app.get("/v1/agent/briefing")
+def agent_briefing_endpoint(project_id: str):
+    """Everything in the factory that wants a person, with what each failure means.
+
+    One agent needs one picture. The screens that answer well — Workflows, Infra, Factory,
+    Monitoring — do so because each hands the agent its own facts first; this is that for the
+    whole factory, and it is what replaced the chat area, the Metatron page and the Shepherd
+    autopilot with a single surface.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.factory_briefing import factory_briefing
+
+    with begin(engine) as connection:
+        return factory_briefing(connection, project_id)
+
+
 @app.get("/v1/agent/threads")
 def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7):
     """Recent chat threads (default last 7 days) for the console's history + resume."""

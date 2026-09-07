@@ -75,11 +75,14 @@ function html(node: React.ReactElement) {
 }
 
 describe("Metatron Captain island", () => {
-  it("keeps Status Query on overview and mounts the captain island at data-area=metatron", () => {
-    expect(pageSource).toContain(
-      'import { MetatronCaptain } from "./metatron-captain-ui"',
-    );
-    expect(pageSource).toContain("<MetatronCaptain");
+  it("the captain's page is gone, and its idea lives in the one agent surface", () => {
+    // THE PAGE WAS A SHELL. `metatron_sessions` does not exist in this database, so the
+    // always-on captain had no durable session to be always-on with — and the operator never
+    // used it: "I never used Metatron and Agent chat is not good". Its actual idea, a captain
+    // with the whole factory in view, is what the BOSS Agent area now is.
+    expect(pageSource).not.toContain("metatron-captain-ui");
+    expect(pageSource).not.toContain("<MetatronCaptain");
+    expect(pageSource).toContain("<BossAgentHome");
     expect(pageSource).toContain("Status Query");
     // Renamed to Ask BOSS and moved to the top of the page: the operator asked for the
     // product's own name on its primary entry point, not an internal codename. Asserting the
@@ -92,17 +95,17 @@ describe("Metatron Captain island", () => {
     const hero = readFileSync(resolve(__dirname, "../app/ask-boss-hero.tsx"), "utf8");
     expect(hero).toContain('className="askboss-input"');
     expect(hero).toMatch(/placeholder="Ask a question, or describe something to build/);
-    expect(pageSource.split("<MetatronCaptain").length - 1).toBe(1);
+    // ONE ENTRY IN THE RAIL, NOT TWO. The captain's own nav item is gone; what it claimed to
+    // be — a captain with the whole factory in view — is what the agent area now does.
+    expect(shellSource).not.toContain('label: "Metatron"');
+    expect(shellSource).toContain('id: "agent"');
 
     const mount = pageSource.slice(
-      pageSource.lastIndexOf("<section", pageSource.indexOf("<MetatronCaptain")),
-      pageSource.indexOf("<MetatronCaptain") + 160,
+      pageSource.lastIndexOf("<section", pageSource.indexOf("<BossAgentHome")),
+      pageSource.indexOf("<BossAgentHome") + 160,
     );
-    expect(mount).toContain('data-area="metatron"');
+    expect(mount).toContain('data-area="agent"');
     expect(mount).not.toContain('data-area="overview"');
-    expect(shellSource).toContain('id: "metatron"');
-    expect(shellSource).toContain('label: "Metatron"');
-    expect(shellSource).toContain('group: "Run"');
   });
 
   it("renders chat, goal, watch, and proposal-only drive fields", () => {

@@ -108,4 +108,13 @@ def test_area_id_union_still_includes_hidden_community_areas():
     )
     for area in hidden:
         assert f'"{area}"' in union, f"AreaId union dropped {area}"
+        if area == "metatron":
+            # ITS PAGE IS GONE, ITS NAME IS NOT. The always-on captain had no durable session
+            # in this database and the operator never used it, so the nav entry was removed and
+            # what it claimed to be — a captain with the whole factory in view — is what the one
+            # BOSS Agent area now does. The AreaId union keeps the name so an existing
+            # `?area=metatron` bookmark still resolves rather than dropping somebody on the
+            # organisation picker.
+            assert 'id: "metatron"' not in shell
+            continue
         assert f'id: "{area}"' in shell, f"AREAS dropped hidden {area}"
