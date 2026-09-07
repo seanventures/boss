@@ -6608,6 +6608,17 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-opener .mr-avatar { width: 24px; height: 24px; font-size: .6rem; }
 
 /* Progress + result */
+/* The steps BOSS has taken this turn, in the hero. Same shape as `.agent-steps` in the dock —
+   one behaviour should not look like two features. */
+.askboss-steps {
+  margin: 6px 0 0 20px; padding: 0; list-style: none;
+  font-size: 11.5px; line-height: 1.6; color: var(--faint, var(--muted));
+}
+.askboss-steps li { position: relative; }
+.askboss-steps li::before {
+  content: "\2713"; position: absolute; left: -14px; opacity: .55; font-size: 10px;
+}
+
 .askboss-status {
   display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
   margin: 14px 0 0; font-size: .88rem; opacity: .9;

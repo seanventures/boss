@@ -857,6 +857,37 @@ def acted_without_checking(actions: list, tool_calls: list) -> bool:
     return not any(n and n not in acted for n in names[last_write + 1:])
 
 
+def _same_offer(a: dict, b: dict) -> bool:
+    """Two buttons that would do exactly the same thing."""
+    if str(a.get("tool") or "") != str(b.get("tool") or ""):
+        return False
+    strip = lambda d: {k: v for k, v in (d or {}).items() if not str(k).startswith("_")}  # noqa: E731
+    return strip(a.get("args")) == strip(b.get("args"))
+
+
+def remember_offer(proposed: list, entry: dict) -> None:
+    """Add a proposal unless the same one is already on the list.
+
+    THIRTEEN BUTTONS FOR SEVEN DECISIONS. Measured on the Command Center, answering "what is
+    blocked": the reply correctly said "all seven now have a button above" and rendered six
+    duplicated pairs plus one — "Approve Change Calendar (PR #184)" beside "Approve merge gate —
+    Change Calendar PR #184 (base)", the same decision, twice, under two labels.
+
+    The cause is this file's own doing: proposals are collected from the first pass AND from the
+    resolution loop's continuation, and the continuation re-offers what it re-derived. Appending
+    both left the operator to work out which of two buttons was the real one — and a list that
+    contradicts the sentence above it ("seven") is worse than a shorter list, because it makes
+    them check every row.
+
+    The FIRST label wins. A continuation's phrasing is not better for having come second, and
+    keeping the earlier one means the button an operator has already started reading does not
+    rename itself underneath them.
+    """
+    if any(_same_offer(existing, entry) for existing in proposed):
+        return
+    proposed.append(entry)
+
+
 def _offered_args(result: dict, step: dict) -> dict:
     """The arguments a proposed action should carry.
 
@@ -1798,7 +1829,7 @@ class IntentRouter:
                         # Keying on the RESULT rather than the tool name covers both, and
                         # covers the next tool added to either set.
                         if result.get("proposed"):
-                            proposed.append({
+                            remember_offer(proposed, {
                                 "id": make_id("act"),
                                 "tool": result.get("tool") or step.get("tool"),
                                 "args": _offered_args(result, step),
@@ -2042,7 +2073,7 @@ class IntentRouter:
                                 actions.append({"kind": str(step.get("tool")),
                                                 "args": step.get("args"), "result": result})
                             if result.get("proposed"):
-                                proposed.append({
+                                remember_offer(proposed, {
                                     "id": make_id("act"),
                                     "tool": result.get("tool") or step.get("tool"),
                                     "args": _offered_args(result, step),
@@ -2142,10 +2173,17 @@ class IntentRouter:
         except Exception:  # noqa: BLE001 — recovery is a bonus, never a new failure mode
             _known = set()
         tagged, reply = _recover_tagged_actions(reply, _known, proposed)
-        proposed.extend(tagged)
+        # THE RECOVERY PATHS FEED THE SAME LIST. Three of them read the reply for offers the
+        # model wrote out as prose, a tag or a call literal — and an offer already made as a
+        # real tool call is frequently ALSO described in the sentence above it. Extending
+        # blindly is the other half of how seven decisions became thirteen buttons.
+        for _found in tagged:
+            remember_offer(proposed, _found)
         printed, reply = _recover_printed_actions(reply, _known, proposed)
-        proposed.extend(printed)
-        proposed.extend(_recover_described_actions(reply, _known, proposed))
+        for _found in printed:
+            remember_offer(proposed, _found)
+        for _found in _recover_described_actions(reply, _known, proposed):
+            remember_offer(proposed, _found)
         reply = _no_button_was_promised(reply, proposed)
         # AND THAT IT DID NOT CLAIM TO HAVE ACTED. `actions` holds the writes that really ran;
         # a claim of completion with an empty list is a fabrication, and the trace is right

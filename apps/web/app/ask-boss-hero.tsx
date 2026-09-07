@@ -21,10 +21,16 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
+import { notifyChanged } from "./changed";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
-const STALL_SECONDS = 120;
+// The same bound the dock uses. A deep turn is genuinely longer since the answering agent
+// moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
+// work that was going fine. Kept in step with agent-ui.tsx deliberately: two numbers for one
+// behaviour is how the Command Center came to be reporting "running long" while the dock,
+// asking the same agent the same kind of question, was not.
+const STALL_SECONDS = 240;
 
 type ProposedAction = {
   id: string;
@@ -892,6 +898,12 @@ export function AskBossHero({
   const [reply, setReply] = useState("");
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  //: What BOSS is doing right now, and whether something outlived the turn that started it.
+  //: Both already existed in the dock; the Command Center is the FIRST place an operator asks
+  //: anything, and it was the one place still showing a spinner and a stopwatch.
+  const [steps, setSteps] = useState<string[]>([]);
+  const [probe, setProbe] = useState<{ id: string } | null>(null);
+  const [landing, setLanding] = useState(false);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [ranAction, setRanAction] = useState<string | null>(null);
@@ -957,9 +969,13 @@ export function AskBossHero({
           window.setTimeout(() => res(stalled), STALL_SECONDS * 1000)),
       ]);
       if (r === stalled) {
+        // "ASK AGAIN IN A MOMENT" IS WORK THIS PAGE CAN DO. The turn was not cancelled, its
+        // steps are still arriving above, and its answer lands in the thread by itself — so
+        // this watches for it. Asking again would start a SECOND turn and pay for it twice.
+        setLanding(true);
         setError(
-          `No answer after ${STALL_SECONDS}s. The turn may still be running — nothing was ` +
-          "cancelled. Ask again in a moment, or open the full agent panel to see if it landed.",
+          `Still working — past ${STALL_SECONDS}s. Nothing was cancelled; the answer will ` +
+          "appear here on its own when it lands.",
         );
         return;
       }
@@ -973,12 +989,73 @@ export function AskBossHero({
     });
   }, [busy, projectId, actor, threadId]);
 
+  // WHAT IT IS DOING, WHILE IT IS DOING IT — the dock's poller, here too.
+  //
+  // A stopwatch counting toward a stall bound tells the operator only that time is passing. The
+  // steps tell them the turn is alive and what it is looking at, which is the difference
+  // between waiting and wondering whether to press it again.
+  useEffect(() => {
+    if (!threadId || (!busy && !landing && !probe)) { if (!busy && !landing) setSteps([]); return; }
+    let alive = true;
+    let cursor = 0;
+    const tick = () => {
+      const q = new URLSearchParams({
+        view: "progress", project_id: projectId, actor, thread_id: threadId,
+        since: String(cursor),
+      }).toString();
+      fetch(`/api/agent?${q}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { steps?: { id: number; label: string }[]; cursor?: number;
+                    investigation?: { id: string } | null } | null) => {
+          if (!alive || !d) return;
+          if (Array.isArray(d.steps) && d.steps.length) {
+            cursor = Number(d.cursor ?? cursor);
+            setSteps((prev) => [...prev, ...d.steps!.map((x) => x.label)].slice(-4));
+          }
+          setProbe(d.investigation ? { id: d.investigation.id } : null);
+        })
+        .catch(() => {});
+    };
+    const id = window.setInterval(tick, 1500);
+    tick();
+    return () => { alive = false; window.clearInterval(id); };
+  }, [busy, landing, probe, threadId, projectId, actor]);
+
+  // WATCH FOR THE ANSWER THAT OUTRAN THE BOUND, rather than telling them to go and look.
+  useEffect(() => {
+    if (!landing || !threadId) return;
+    let alive = true;
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      if (!alive) return;
+      if (Date.now() - started > 20 * 60_000) { setLanding(false); return; }
+      const q = new URLSearchParams({
+        view: "messages", project_id: projectId, actor, thread_id: threadId,
+      }).toString();
+      fetch(`/api/agent?${q}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { messages?: Array<Record<string, unknown>> } | null) => {
+          if (!alive || !d?.messages?.length) return;
+          const last = [...d.messages].reverse().find((m) => m.role === "assistant");
+          if (!last) return;
+          setReply(String(last.content ?? ""));
+          setError("");
+          setLanding(false);
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [landing, threadId, projectId, actor]);
+
   const accept = useCallback((a: ProposedAction) => {
     setRanAction(a.id);
     startTransition(async () => {
       const r = await runAgentActionAction(projectId, actor, a.tool, a.args, threadId ?? undefined);
       const data = r.data as Record<string, unknown> | undefined;
       const ok = r.ok && data?.ok !== false;
+      // The Factory card, the Workflows screen and the monitoring panel render the rows this
+      // just changed. Same signal the dock sends.
+      if (ok) notifyChanged("command-center", { tool: a.tool });
       setReply((prev) =>
         `${prev}\n\n${ok ? "✓" : "⚠"} **${a.label}**${ok ? " — done." : ` failed: ${data?.error ?? r.error ?? "unknown error"}`}`);
       // An offer is spent once taken: leaving it on screen invites a second, duplicate run.
@@ -1440,16 +1517,39 @@ export function AskBossHero({
           ) : null}
         </form>
 
-        {busy ? (
-          <p className="askboss-status" data-slow={slow} aria-live="polite" data-testid="askboss-status">
+        {/* WHAT IT IS DOING, NOT HOW LONG IT HAS BEEN DOING IT.
+            A stopwatch counting toward a stall bound says only that time is passing, and "43s
+            / ~120s · running long" reads as a warning about work that is going exactly to
+            plan. The most recent real step is evidence the turn is alive AND tells the
+            operator what is being looked at — the dock has had this; the Command Center, which
+            is where people ask first, did not. */}
+        {busy || landing || probe ? (
+          <p className="askboss-status" data-slow={slow && !probe} aria-live="polite"
+             data-testid="askboss-status">
             <span className="askboss-status-dot" aria-hidden />
-            {slow
-              ? "Still working — this is running long. It has not been dropped."
-              : "Reading the system and choosing tools…"}
+            {steps.length
+              ? steps[steps.length - 1]
+              : probe
+                ? "Debugging — reading the code, the database and the host. A few minutes."
+                : landing
+                  ? "Still working. The answer will appear here on its own."
+                  : slow
+                    ? "Still working — it has not been dropped."
+                    : "Reading the system and choosing tools…"}
             <span className="askboss-elapsed">
-              {elapsed}s{slow ? ` / ~${STALL_SECONDS}s` : ""}
+              {/* No stall budget against a debugging session or a turn already past the bound:
+                  both are expected to take minutes, and warning about them teaches the operator
+                  to ignore the warning on the turn that really has died. */}
+              {busy && !landing ? `${elapsed}s${slow ? ` / ~${STALL_SECONDS}s` : ""}` : "working"}
             </span>
           </p>
+        ) : null}
+        {/* The trail, oldest first — four is enough to show it is chaining without pushing the
+            answer off the screen when it arrives. */}
+        {(busy || landing) && steps.length > 1 ? (
+          <ol className="askboss-steps" data-testid="askboss-steps">
+            {steps.slice(0, -1).map((x, i) => <li key={`${x}-${i}`}>{x}</li>)}
+          </ol>
         ) : null}
 
         {error ? (
