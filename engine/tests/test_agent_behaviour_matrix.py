@@ -638,7 +638,15 @@ def test_the_arrows_do_not_fight_css_scroll_snap():
     """The arrows did nothing: scrollBy with behavior:"smooth" against a strip carrying CSS
     scroll-snap, where snap pulls the position back mid-animation."""
     css = pathlib.Path("apps/web/app/globals.css").read_text(encoding="utf-8")
-    assert "scroll-snap" not in css, "snap is back and will cancel programmatic scrolling"
+    # THE PROPERTY, NOT THE SUBSTRING. The grid mode turns snap OFF explicitly —
+    # `scroll-snap-type: none` — and a bare `"scroll-snap" not in css` cannot tell a rule that
+    # enables snapping from one that disables it, so switching it off failed the test for
+    # switching it on.
+    # Filtered after matching rather than with a lookahead: `\s*` backtracks over the space, so
+    # `(?!none)` happily matches " none" and the test passes nothing.
+    values = re.findall(r"scroll-snap-(?:type|align)\s*:([^;\n]+)", css)
+    enabled = [v.strip() for v in values if v.strip() != "none"]
+    assert not enabled, f"snap is back and will cancel programmatic scrolling: {enabled}"
     src = _hero_src()
     assert "const nudge = useCallback" in src
     i = src.index("const nudge = useCallback")

@@ -292,11 +292,15 @@ CAPABILITIES: dict[str, Capability] = {
         _cap(
             key="document",
             label="Document",
-            summary="Publish the change record and the evidence behind it.",
+            summary="Write the change record from what this run produced.",
             tool=None,
             risk_tier=1,
-            required_inputs=("title",),
-            optional_inputs=("markdown",),
+            # `title` WAS REQUIRED, which made the step that writes the record the one step a
+            # run could be started without satisfying: a run with no `title` input raises
+            # before the writer is reached. The record can name itself from the directive, so
+            # a missing title should cost a nicer heading, not the whole document.
+            required_inputs=(),
+            optional_inputs=("title", "markdown"),
             produces=("document_id",),
             typical_minutes=3,
         ),

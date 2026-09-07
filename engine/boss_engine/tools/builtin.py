@@ -657,6 +657,16 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     "description": "findings the panel should argue FROM rather than "
                                    "re-derive — a research step's dossier, typically.",
                 },
+                "objective": {
+                    "type": "string",
+                    "description": "what the WORKFLOW this panel sits in has to end with — "
+                                   "a shipped app, a decision and a document, a security "
+                                   "sign-off. Shapes what the PRD is for.",
+                },
+                "workflow_name": {
+                    "type": "string",
+                    "description": "the workflow this panel is part of, by name.",
+                },
             },
             ["directive"],
         ),
@@ -673,6 +683,24 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         # to reach the argument. Appended here it reaches all of them, because they all read
         # the directive. Clearly delimited so nobody mistakes the findings for the ask.
         directive = (args.get("directive") or "").strip()
+        # WHAT THIS PANEL IS FOR, put where every seat will read it.
+        #
+        # Same mechanism as the research block below, for the same reason: the directive IS the
+        # panel's prompt, so anything not in it never reaches the agenda or the seats. It goes
+        # FIRST because it changes what the rest of the text is asking for — a panel told
+        # afterwards that none of this will be built has already written a build plan.
+        objective = (args.get("objective") or "").strip()
+        workflow_name = (args.get("workflow_name") or "").strip()
+        if objective:
+            directive = (
+                f"--- WHAT THIS PANEL IS FOR ---\n"
+                f"You are the panel inside BOSS's "
+                f"{workflow_name or 'delivery'} workflow. That workflow's objective:\n\n"
+                f"{objective}\n\n"
+                f"Write for THAT outcome. A PRD that suits a different workflow is the wrong "
+                f"document however good it is.\n"
+                f"--- WHAT YOU ARE BEING ASKED ABOUT ---\n\n{directive}"
+            )
         research = (args.get("research") or "").strip()
         if research:
             directive = (

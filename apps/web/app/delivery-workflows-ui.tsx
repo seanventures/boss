@@ -2683,6 +2683,13 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
         </div>
       ) : null}
 
+      {/* THE DOCUMENT, ON THE STEP THAT WROTE IT. `GET /v1/artifacts/{id}` has existed all
+          along and nothing called it, so even a Document step that produced something had
+          nowhere to show it — an id in the output grid is not a document. */}
+      {typeof (step.output || {}).document_id === "string" ? (
+        <ChangeRecord documentId={String((step.output as Record<string, unknown>).document_id)} />
+      ) : null}
+
       {produced.length ? (
         <dl className="dw-step-out" data-testid="dw-step-out">
           {produced.map(([k, v]) => (
@@ -2694,6 +2701,53 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
         </dl>
       ) : null}
     </section>
+  );
+}
+
+/** The change record, fetched when it is opened rather than with every run.
+ *
+ *  Collapsed by default and loaded on expand: a workflow list showing ten runs should not pull
+ *  ten documents to render a summary nobody has asked to read.
+ */
+function ChangeRecord({ documentId }: { documentId: string }) {
+  const [state, setState] = useState<
+    { kind: "shut" } | { kind: "loading" } | { kind: "text"; markdown: string }
+    | { kind: "failed"; why: string }>({ kind: "shut" });
+
+  const open = async () => {
+    if (state.kind !== "shut") return;
+    setState({ kind: "loading" });
+    try {
+      const r = await fetch(`/api/artifacts/${encodeURIComponent(documentId)}`,
+                            { cache: "no-store" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setState({ kind: "failed", why: String(body?.error ?? `HTTP ${r.status}`) });
+        return;
+      }
+      const markdown = String(body?.content?.markdown ?? "").trim();
+      setState(markdown
+        ? { kind: "text", markdown }
+        // Stored but empty is a different fact from unreadable, and saying "failed" for it
+        // would send someone looking for a fault that is not there.
+        : { kind: "failed", why: "the record was stored with no body" });
+    } catch (e) {
+      setState({ kind: "failed", why: String((e as Error)?.message ?? e) });
+    }
+  };
+
+  return (
+    <details className="dw-record" data-testid="dw-change-record"
+             onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) void open(); }}>
+      <summary>Read the change record</summary>
+      {state.kind === "loading" ? <p className="detail">Reading…</p> : null}
+      {state.kind === "failed" ? (
+        <p className="detail" data-testid="dw-change-record-failed">
+          Could not read it — {state.why}.
+        </p>
+      ) : null}
+      {state.kind === "text" ? <pre className="dw-record-body">{state.markdown}</pre> : null}
+    </details>
   );
 }
 

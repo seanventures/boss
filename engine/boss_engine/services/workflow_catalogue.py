@@ -127,6 +127,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Standard Product Delivery",
         "description": "Idea to shipped, watched software. The full path, with gates where "
                        "money and production are involved.",
+        "objective": (
+            "Ship working, watched software. The panel's PRD is the build brief: it is handed "
+            "straight to an engineering agent, so it must be specific enough to implement and to "
+            "test against."
+        ),
         "work_class": "project.new",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
@@ -166,6 +171,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Minor Feature",
         "description": "A small addition to something that already exists. Skips research; "
                        "still reviewed, still gated at the door to production.",
+        "objective": (
+            "Add one small thing to software that already exists, quickly. There is no research "
+            "step and no spec review — the PRD goes straight to the build, so keep it tight and "
+            "do not redesign the surrounding product."
+        ),
         "work_class": "feature.minor",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
@@ -181,6 +191,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Major Feature",
         "description": "A feature large enough to deserve a spec of its own and a person "
                        "signing off on it before anyone builds anything.",
+        "objective": (
+            "Specify a feature large enough to deserve its own spec, then build it and have a "
+            "person sign off the way it looks and works. The PRD is reviewed by a human before "
+            "any code and must be arguable on its merits, not just implementable."
+        ),
         "work_class": "feature.major",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
@@ -203,6 +218,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Fast Fix / Hotfix",
         "description": "Something is broken now. No research, no panel — build, prove it, "
                        "have someone say yes, ship.",
+        "objective": (
+            "Something is broken in production now. The build has already run; this panel is the "
+            "retrospective — what happened, why, and what stops it recurring. Do not re-specify "
+            "the fix."
+        ),
         "work_class": "bugfix",
         "steps": _chain([
             _step("build", "build", _build_inputs()),
@@ -216,6 +236,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Research-Led Discovery",
         "description": "Find out whether it is worth building at all. Ends in a decision and a "
                        "document, not in code.",
+        "objective": (
+            "Decide whether this is worth building AT ALL. This run ends in a decision and a "
+            "written record, not in code. The panel's job is a recommendation with the case for "
+            "and against and what would change the answer — not an implementation plan."
+        ),
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive"), "deep": True}),
@@ -228,6 +253,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "key": "backend_service_setup",
         "name": "Backend Service Setup",
         "description": "Stand up a new service: scaffold, endpoints, tests, deploy, watch.",
+        "objective": (
+            "Stand up a new service: scaffold, endpoints, tests, deployment and monitoring. The "
+            "PRD is the build brief and must name the endpoints, the data it owns and how it is "
+            "watched."
+        ),
         "work_class": "project.new",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
@@ -244,6 +274,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Frontend / UX Certification",
         "description": "For work whose whole point is how it looks and feels. A person uses "
                        "the preview and signs off before it ships.",
+        "objective": (
+            "The point of this work is how it looks and feels. A person will use the preview and "
+            "sign it off, so the PRD must state the interaction, the states (empty, loading, "
+            "error) and what 'good' means concretely enough for a reviewer to judge against."
+        ),
         "work_class": "feature.major",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
@@ -259,6 +294,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "key": "security_hardening",
         "name": "Security Hardening",
         "description": "Threat-led work with a security sign-off that cannot be automated away.",
+        "objective": (
+            "Threat-led work ending in a security sign-off that cannot be automated away. The "
+            "panel argues the threat model: what an attacker would try, what is exposed, and what "
+            "evidence the reviewer will need."
+        ),
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
@@ -275,6 +315,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Data / Migration Change",
         "description": "Changes to data are the ones you cannot take back. Reviewed by someone "
                        "who owns the data, with the rollback proven before it ships.",
+        "objective": (
+            "Change data, which is the change you cannot take back. The PRD must state the "
+            "rollback, how the migration is verified, and what happens to in-flight work — a "
+            "person reviews it before anything runs."
+        ),
         "work_class": "any",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
@@ -291,6 +336,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Compliance-Ready Release",
         "description": "Everything the standard path does, plus the evidence and the signature "
                        "an auditor will ask for.",
+        "objective": (
+            "Everything the standard path does, plus the evidence and the signature that make it "
+            "auditable. The PRD must name the controls being satisfied and the evidence each "
+            "produces."
+        ),
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
@@ -314,6 +364,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Third-Party Integration",
         "description": "Bringing someone else's system in. Research first, because the "
                        "surprises are always in their API and not in your code.",
+        "objective": (
+            "Bring someone else's system in. Research went first because their API decides the "
+            "design; the PRD must state the contract, the failure modes and what happens when "
+            "they are down."
+        ),
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
@@ -334,6 +389,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Deprecation / Sunset",
         "description": "Taking something away. The grace period is a step, so nobody removes "
                        "a thing the day after announcing it.",
+        "objective": (
+            "Take something away without stranding anyone. The panel must define the grace "
+            "period, who is told and when, and what replaces it — the notification is a step, not "
+            "an afterthought."
+        ),
         "work_class": "any",
         "steps": [
             _step("meeting", "meeting", {"directive": _in("directive")}, nxt=["announce"]),
@@ -355,7 +415,14 @@ def catalogue_summary() -> list[dict[str, Any]]:
     project, so "you have not connected a repository" is said at the point of choosing."""
     out = []
     for entry in CATALOGUE:
-        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"]}
+        # THE OBJECTIVE TRAVELS WITH THE SPEC, so a step can read what the workflow it is
+        # part of is FOR. Without it every panel in all twelve workflows convened the
+        # same generic PRD meeting: Research-Led Discovery, whose own description says it
+        # "ends in a decision and a document, not in code", asked for an implementation
+        # plan exactly like Standard Product Delivery did.
+        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
+                "objective": entry.get("objective") or "",
+                "workflow_name": entry["name"]}
         # VALIDATE FIRST, then read the gates off the result.
         #
         # Effective approval is computed during validation — a deploy step written without an
@@ -421,7 +488,14 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
             )
             definition_id = definition["id"]
 
-        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"]}
+        # THE OBJECTIVE TRAVELS WITH THE SPEC, so a step can read what the workflow it is
+        # part of is FOR. Without it every panel in all twelve workflows convened the
+        # same generic PRD meeting: Research-Led Discovery, whose own description says it
+        # "ends in a decision and a document, not in code", asked for an implementation
+        # plan exactly like Standard Product Delivery did.
+        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
+                "objective": entry.get("objective") or "",
+                "workflow_name": entry["name"]}
         try:
             version = workflows.publish_version(
                 connection, project_id=project_id, definition_id=definition_id,

@@ -8842,3 +8842,19 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 1px solid var(--border); background: transparent; color: var(--ink); font-size: .88rem;
 }
 .askboss-ghost:hover { border-color: var(--muted); }
+
+/* The change record a Document step writes, read on the step that wrote it. */
+.dw-record { margin-top: 10px; }
+.dw-record > summary {
+  cursor: pointer; font-size: .82rem; color: var(--accent);
+  padding: 4px 0; list-style: none;
+}
+.dw-record > summary::-webkit-details-marker { display: none; }
+.dw-record > summary::before { content: "▸ "; }
+.dw-record[open] > summary::before { content: "▾ "; }
+.dw-record-body {
+  margin: 8px 0 0; padding: 12px 14px; max-height: 420px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  font-size: .8rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+}

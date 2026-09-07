@@ -135,9 +135,24 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
         output = row["output"]
         if isinstance(output, dict):
             steps[row["step_id"]] = output
-    run_input = connection.execute(
-        text("SELECT input FROM workflow_runs WHERE id=:r"), {"r": run_id}
-    ).scalar()
+    # WHAT THIS RUN IS FOR, not just what it was asked to do.
+    #
+    # A step knew its own inputs and nothing about the workflow it was part of, so every panel
+    # in all twelve catalogue workflows convened the same generic PRD meeting. Research-Led
+    # Discovery — whose own description is "ends in a decision and a document, not in code" —
+    # asked its panel for an implementation plan, exactly as Standard Product Delivery did.
+    # The objective is written on the workflow and travels with its spec; it costs one join.
+    row = connection.execute(
+        text("SELECT r.input, v.spec, d.name AS workflow_name "
+             "FROM workflow_runs r "
+             "JOIN workflow_versions v ON v.id = r.workflow_version_id "
+             "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+             "WHERE r.id = :r"),
+        {"r": run_id},
+    ).mappings().first()
+    run_input = (row or {}).get("input")
+    spec = (row or {}).get("spec")
+    spec = spec if isinstance(spec, dict) else {}
     # run_id and step count travel with the context because a custom step's MCP call needs
     # them to build its effect-receipt dedupe key — the thing that stops a retried step from
     # sending the same message twice.
@@ -146,6 +161,8 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
         "input": run_input if isinstance(run_input, dict) else {},
         "run_id": run_id,
         "step_index": len(rows),
+        "objective": str(spec.get("objective") or ""),
+        "workflow_name": str(spec.get("workflow_name") or (row or {}).get("workflow_name") or ""),
     }
 
 
@@ -497,6 +514,156 @@ def _build_run_id(context: dict[str, Any]) -> Optional[str]:
                 return value.strip()
     value = (context.get("input") or {}).get("adopt_code_task_run_id")
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _from_any_step(context: dict[str, Any], field: str) -> Any:
+    """The first step that produced `field`, whatever the step happens to be called.
+
+    Same rule as `_build_run_id`: the canonical field is the contract, not the step id. A
+    customer can rename "meeting" to "Kickoff" and the document still finds the PRD.
+    """
+    for produced in (context.get("steps") or {}).values():
+        if isinstance(produced, dict):
+            value = produced.get(field)
+            if value not in (None, "", [], {}):
+                return value
+    return None
+
+
+def _write_the_record(
+    connection: Connection, project_id: str, context: dict[str, Any], inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Assemble this run's record from what its steps actually produced, and store it.
+
+    THE STEP THAT DOCUMENTED NOTHING. `document` declares `produces=("document_id",)` and had
+    `tool=None`, so it fell through to the honest-no-op branch below and reported:
+
+        succeeded · 0s · 'Document' is recorded from the work it accompanies.
+
+    There was nothing accompanying it to be recorded from. For Research-Led Discovery that is
+    not a cosmetic gap — the workflow's own description is "Ends in a decision and a document,
+    not in code", so the document IS the deliverable, and the run finished 4-of-4 green having
+    produced no document at all. The operator asked the obvious question.
+
+    Nothing here is invented. Every line comes from a step that ran: the directive the run was
+    started with, the dossier research cited, the PRD the panel wrote, the decision a person
+    made, and the pull request if one exists. A record that padded itself with plausible prose
+    would be worse than the no-op it replaces — the no-op at least did not claim to know
+    anything.
+    """
+    from ..config import get_settings
+    from .core import create_artifact
+
+    run_input = context.get("input") or {}
+    title = (str(inputs.get("title") or "").strip()
+             or str(run_input.get("title") or "").strip()
+             or str(run_input.get("directive") or "").strip()[:80]
+             or "Change record")
+    directive = str(run_input.get("directive") or "").strip()
+
+    dossier = _from_any_step(context, "dossier")
+    discovery_id = _from_any_step(context, "discovery_id")
+    prd = _from_any_step(context, "prd_markdown")
+    meeting_run_id = _from_any_step(context, "meeting_run_id")
+    decision_id = _from_any_step(context, "decision_id")
+    pr_url = _from_any_step(context, "pull_request_url")
+    code_task_run_id = _build_run_id(context)
+
+    lines: list[str] = [f"# {title}", ""]
+    if directive:
+        lines += ["## What was asked for", "", directive, ""]
+
+    if dossier:
+        body = dossier if isinstance(dossier, str) else json.dumps(dossier, indent=2)
+        lines += ["## What the research found", "", body.strip(), ""]
+        if discovery_id:
+            lines += [f"_Discovery run: `{discovery_id}`_", ""]
+    elif discovery_id:
+        lines += ["## What the research found", "",
+                  f"Research ran as `{discovery_id}`; its dossier is on the discovery run.", ""]
+
+    if prd:
+        lines += ["## The spec the panel produced", "", str(prd).strip(), ""]
+        if meeting_run_id:
+            lines += [f"_Panel: `{meeting_run_id}`_", ""]
+
+    if decision_id:
+        row = None
+        try:
+            row = connection.execute(
+                text("SELECT question, status, approved_by, resolution_note FROM decisions "
+                     "WHERE id = :d AND project_id = :p"),
+                {"d": decision_id, "p": project_id},
+            ).mappings().first()
+        except Exception as error:  # noqa: BLE001 — a missing decision must not sink the run
+            log.warning("cannot read decision %s for the record: %s", decision_id, error)
+        lines += ["## The decision", ""]
+        if row:
+            who = row["approved_by"] or "nobody yet"
+            lines += [f"**{row['question']}** — {row['status']}, by {who}."]
+            if row["resolution_note"]:
+                lines += ["", str(row["resolution_note"]).strip()]
+        else:
+            lines += [f"Recorded as `{decision_id}`."]
+        lines += [""]
+
+    if pr_url or code_task_run_id:
+        lines += ["## What was built", ""]
+        if pr_url:
+            lines += [f"Pull request: {pr_url}"]
+        if code_task_run_id:
+            lines += [f"Code task run: `{code_task_run_id}`"]
+        lines += [""]
+
+    # WHAT IS NOT IN HERE, said out loud. A record whose gaps are invisible reads as complete,
+    # and this one is assembled from whatever the run happened to contain.
+    missing = [name for name, present in (
+        ("research", bool(dossier or discovery_id)),
+        ("a panel spec", bool(prd)),
+        ("a decision", bool(decision_id)),
+        ("a build", bool(pr_url or code_task_run_id)),
+    ) if not present]
+    if missing:
+        lines += ["## Not part of this run", "",
+                  "This workflow did not include " + ", ".join(missing) + ".", ""]
+
+    markdown = "\n".join(lines).rstrip() + "\n"
+    sections = [name for name, present in (
+        ("directive", bool(directive)), ("research", bool(dossier or discovery_id)),
+        ("spec", bool(prd)), ("decision", bool(decision_id)),
+        ("build", bool(pr_url or code_task_run_id)),
+    ) if present]
+
+    document_id = create_artifact(
+        connection,
+        get_settings(),
+        project_id,
+        # The context carries steps, input, run_id and step_index — no task id. The panel
+        # produces one, and hanging the record off it is what puts it on the task's own page.
+        _from_any_step(context, "task_id") or (context.get("input") or {}).get("task_id"),
+        "change_record",
+        title,
+        {
+            "markdown": markdown,
+            "sections": sections,
+            "workflow_run_id": context.get("run_id"),
+            "discovery_id": discovery_id,
+            "meeting_run_id": meeting_run_id,
+            "decision_id": decision_id,
+            "code_task_run_id": code_task_run_id,
+            "pull_request_url": pr_url,
+        },
+    )
+    return {
+        "capability": "document",
+        "tool": None,
+        "status": "published",
+        "document_id": document_id,
+        "sections": sections,
+        "note": (f"Change record written from {', '.join(sections)}."
+                 if sections else
+                 "Change record written, but this run produced nothing to put in it."),
+    }
 
 
 def _observed_from_the_build(
@@ -883,6 +1050,11 @@ def execute_step(
     inputs = _fill_optional_from_run_input(capability, inputs, context)
 
     if capability.tool is None:
+        # `document` has no tool because it commissions nothing — it WRITES, from what the run
+        # already produced. Falling through to the no-op below made the one step whose entire
+        # job is to leave an artefact behind the only step that left nothing.
+        if key == "document":
+            return _write_the_record(connection, project_id, context, inputs)
         # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
         # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
         # "recorded from the work it accompanies" left three of the nine steps saying nothing
@@ -981,6 +1153,22 @@ def execute_step(
 
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
+
+    # WHAT THE PANEL IS BEING CONVENED FOR.
+    #
+    # The panel received the directive and, at best, the research dossier — never which
+    # workflow it sat in or what the run had to end with. So the panel in Research-Led
+    # Discovery (a workflow that produces a decision and a document, and never builds) argued
+    # exactly like the panel in Standard Product Delivery, and wrote an implementation plan for
+    # code that was never going to be written. Twelve workflows, one panel behaviour.
+    #
+    # Passed as its own field rather than pasted into the directive here: `request_meeting`
+    # owns how a brief is folded into the panel's prompt, and it already does that for research.
+    if key == "meeting":
+        objective = str(context.get("objective") or "").strip()
+        if objective:
+            inputs = {**inputs, "objective": objective,
+                      "workflow_name": str(context.get("workflow_name") or "").strip()}
 
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
