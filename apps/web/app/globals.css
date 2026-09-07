@@ -8608,3 +8608,96 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* A failure whose cause has gone away is history: readable, no longer shouting. */
 .fb-item-error.fb-stale { color: var(--muted); }
 .fb-item[data-cleared="true"] { opacity: .78; }
+
+/* ── The template gallery ────────────────────────────────────────────────────────────────
+   Compared against lovable.dev/templates: 204 templates, a filterable grid, category and
+   persona facets. Ours were sixteen cards on a conveyor carrying tags that did nothing. */
+
+.askboss-ideas-facets { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.askboss-facet {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); font-size: .74rem; line-height: 1.6;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.askboss-facet:hover { color: var(--ink); border-color: var(--muted); }
+.askboss-facet[data-active="true"] {
+  color: var(--ink); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.askboss-facet-n { opacity: .55; font-variant-numeric: tabular-nums; }
+.askboss-arrow-wide { width: auto; padding: 0 10px; font-size: .74rem; }
+
+/* SEE ALL SIXTEEN AT ONCE. A row is better when you know what you want; a grid is the only
+   one you can scan. `auto-fill` rather than a fixed count so the dock, a laptop and a wide
+   monitor each get as many columns as they can actually fit. */
+.askboss-idea-strip[data-grid="true"] {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 12px; overflow: visible; scroll-snap-type: none;
+}
+.askboss-idea-strip[data-grid="true"] .askboss-idea { width: auto; scroll-snap-align: none; }
+
+/* ── The template, enlarged ───────────────────────────────────────────────────────────── */
+.askboss-sheet-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in srgb, #05070d 72%, transparent);
+  backdrop-filter: blur(3px);
+  animation: askboss-scrim-in 160ms ease-out;
+}
+@keyframes askboss-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+
+.askboss-sheet {
+  position: relative; width: min(680px, 100%); max-height: min(84vh, 760px);
+  overflow-y: auto; padding: 26px 28px 22px;
+  border: 1px solid var(--border); border-radius: 18px;
+  background:
+    radial-gradient(circle at 88% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
+    var(--surface);
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, .6);
+  /* THE ENLARGE. It grows from slightly small and slightly low, which reads as the card
+     opening rather than a dialog appearing on top of it. 180ms: long enough to be a movement,
+     short enough that the second one you open does not feel slow. */
+  animation: askboss-sheet-in 180ms cubic-bezier(.2, .8, .3, 1);
+}
+@keyframes askboss-sheet-in {
+  from { opacity: 0; transform: translateY(10px) scale(.965); }
+  to   { opacity: 1; transform: none; }
+}
+/* Somebody who has asked not to be moved does not get moved. */
+@media (prefers-reduced-motion: reduce) {
+  .askboss-sheet, .askboss-sheet-scrim { animation: none; }
+}
+
+.askboss-sheet-close {
+  position: absolute; top: 14px; right: 14px; width: 28px; height: 28px;
+  border-radius: 8px; border: 1px solid var(--border); background: transparent;
+  color: var(--muted); cursor: pointer; line-height: 1;
+}
+.askboss-sheet-close:hover { color: var(--ink); border-color: var(--muted); }
+
+.askboss-sheet-head h3 { margin: 8px 0 4px; font-size: 1.35rem; letter-spacing: -0.01em; }
+.askboss-sheet-who { margin: 0; color: var(--muted); font-size: .9rem; }
+.askboss-sheet-body { display: grid; gap: 16px; margin-top: 18px; }
+.askboss-sheet-body h4 {
+  margin: 0 0 6px; font-size: .72rem; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--muted);
+}
+.askboss-sheet-list { margin: 0; padding-left: 18px; display: grid; gap: 5px; font-size: .9rem; }
+
+/* The sentence the build is judged against, given the weight of one. */
+.askboss-sheet-done {
+  padding: 12px 14px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.askboss-sheet-done p { margin: 0; font-size: .9rem; }
+.askboss-sheet-note { margin: 0; color: var(--muted); font-size: .84rem; font-style: italic; }
+.askboss-sheet-flow ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: .86rem; }
+.askboss-sheet-foot { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.askboss-ghost {
+  padding: 9px 14px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--ink); font-size: .88rem;
+}
+.askboss-ghost:hover { border-color: var(--muted); }

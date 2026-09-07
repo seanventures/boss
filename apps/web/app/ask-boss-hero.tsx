@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
+import { facetsOf } from "./template-brief";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
@@ -769,6 +770,10 @@ const RESEARCH: Array<{ label: string; seed: string }> = [
     seed: "How do incident-management products differentiate on pricing for teams under 20 people?" },
 ];
 
+/** The facets, in the order an operator scans them: work first, then the rest. */
+const TEMPLATE_TAGS = ["Ops", "Team", "Money", "Quality", "Content", "Growth", "Sales",
+                       "Learning"] as const;
+
 const IDEAS_PER_PAGE = 4;
 
 /**
@@ -904,6 +909,15 @@ export function AskBossHero({
   const [steps, setSteps] = useState<string[]>([]);
   const [probe, setProbe] = useState<{ id: string } | null>(null);
   const [landing, setLanding] = useState(false);
+  //: THE GALLERY. Compared against lovable.dev/templates — 204 templates, a filterable grid,
+  //: category and persona facets — ours were sixteen cards on a conveyor with the tags they
+  //: already carry going unused. You cannot scan a conveyor and you cannot filter one.
+  const [tagFilter, setTagFilter] = useState("");
+  const [gridMode, setGridMode] = useState(false);
+  //: READ BEFORE YOU COMMIT. Clicking a card put a wall of markdown in the composer and
+  //: called that a preview. A build costs money; what it must do and how you will know it
+  //: worked should be legible before you start one.
+  const [openIdea, setOpenIdea] = useState<Idea | null>(null);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [ranAction, setRanAction] = useState<string | null>(null);
@@ -1374,7 +1388,31 @@ export function AskBossHero({
                   for a trackpad that will not scroll sideways. */}
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>
+                {/* THE TAGS WERE ALREADY THERE AND DID NOTHING. Eight of them, one per card,
+                    rendered as a label and never as a filter — so the only way to find the
+                    money one among sixteen was to read sixteen titles. */}
+                <div className="askboss-ideas-facets" data-testid="askboss-facets">
+                  {["", ...TEMPLATE_TAGS].map((t) => (
+                    <button key={t || "all"} type="button"
+                            className="askboss-facet" aria-pressed={tagFilter === t}
+                            data-active={tagFilter === t ? "true" : undefined}
+                            onClick={() => setTagFilter(t)}>
+                      {t || "All"}
+                      <span className="askboss-facet-n">
+                        {t ? IDEAS.filter((i) => i.tag === t).length : IDEAS.length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
                 <div className="askboss-ideas-nav">
+                  {/* Sixteen cards you can see at once, or a row you scroll. A gallery is the
+                      one you can scan; the row is better when you already know what you want. */}
+                  <button type="button" className="askboss-arrow askboss-arrow-wide"
+                          data-testid="askboss-grid-toggle"
+                          aria-pressed={gridMode}
+                          onClick={() => setGridMode((g) => !g)}>
+                    {gridMode ? "Row" : "See all"}
+                  </button>
                   <button
                     type="button"
                     className="askboss-arrow"
@@ -1390,19 +1428,20 @@ export function AskBossHero({
               </div>
               <div
                 className="askboss-idea-strip"
+                data-grid={gridMode ? "true" : undefined}
                 ref={stripRef}
                 onMouseEnter={() => setStripHeld(true)}
                 onMouseLeave={() => setStripHeld(false)}
                 onFocusCapture={() => setStripHeld(true)}
                 onBlurCapture={() => setStripHeld(false)}
               >
-                {IDEAS.map((i) => (
+                {IDEAS.filter((i) => !tagFilter || i.tag === tagFilter).map((i) => (
                   <button
                     key={i.title}
                     type="button"
                     className="askboss-idea"
                     style={{ ["--idea-accent" as string]: accentFor(i.title) }}
-                    onClick={() => draftIdea(i)}
+                    onClick={() => setOpenIdea(i)}
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
                     {/* AN IMAGE, NOT A COLOURED RECTANGLE.
@@ -1510,12 +1549,97 @@ export function AskBossHero({
                 ))}
               </div>
               <p className="askboss-ideas-foot">
-                Clicking loads the full brief so you can edit it first — nothing builds until
-                you press Build.
+                Open one to read what it must do and how you will know it worked. Nothing
+                builds until you press Build.
               </p>
             </div>
           ) : null}
         </form>
+
+        {/* THE TEMPLATE, ENLARGED.
+            Lovable's card opens a page with the template's full story; ours put a wall of
+            markdown in the composer and called that a preview. A build costs real money and
+            real minutes, so the two things worth reading first are what it must DO and how
+            you will know it WORKED — both were already written in every brief and neither was
+            ever on screen.
+
+            Where this deliberately differs from theirs: they can show a screenshot of a
+            finished thing. Ours does not exist yet — BOSS builds it, to this specification —
+            so the specification IS the preview, and the honest thing to show is the contract
+            the build will be held to. */}
+        {openIdea ? (
+          <div className="askboss-sheet-scrim" data-testid="askboss-sheet"
+               onClick={() => setOpenIdea(null)}>
+            <article className="askboss-sheet" role="dialog" aria-modal="true"
+                     aria-label={openIdea.title}
+                     onClick={(e) => e.stopPropagation()}>
+              <button type="button" className="askboss-sheet-close" aria-label="Close"
+                      onClick={() => setOpenIdea(null)}>✕</button>
+              <div className="askboss-sheet-head">
+                <span className="askboss-idea-tag">{openIdea.tag}</span>
+                <h3>{openIdea.title}</h3>
+                <p className="askboss-sheet-who">{facetsOf(openIdea.brief).audience}</p>
+              </div>
+
+              <div className="askboss-sheet-body">
+                <section>
+                  <h4>What it must do</h4>
+                  <ul className="askboss-sheet-list">
+                    {facetsOf(openIdea.brief).mustDo.map((line) => <li key={line}>{line}</li>)}
+                  </ul>
+                </section>
+
+                {/* THE ACCEPTANCE TEST, given its own weight. It is the sentence the build is
+                    judged against, and it was buried in the middle of a paragraph. */}
+                {facetsOf(openIdea.brief).doneWhen ? (
+                  <section className="askboss-sheet-done">
+                    <h4>Done when</h4>
+                    <p>{facetsOf(openIdea.brief).doneWhen}</p>
+                  </section>
+                ) : null}
+
+                {facetsOf(openIdea.brief).note ? (
+                  <p className="askboss-sheet-note">{facetsOf(openIdea.brief).note}</p>
+                ) : null}
+
+                {/* WHAT PRESSING BUILD ACTUALLY STARTS. Every other template gallery hands you
+                    a finished artefact; this one starts a governed pipeline with your approval
+                    at each gate, and somebody about to spend money on it should be told so
+                    before they press rather than after. */}
+                <section className="askboss-sheet-flow">
+                  <h4>What BOSS will do</h4>
+                  <ol>
+                    <li>Research the idea and cite what it finds</li>
+                    <li>Convene a panel of roles to argue the shape of it</li>
+                    <li>Write a PRD — <strong>you approve it</strong> before any code</li>
+                    <li>Build, review and test it, then open a pull request</li>
+                    <li>Deploy it when you approve the release</li>
+                  </ol>
+                </section>
+              </div>
+
+              <div className="askboss-sheet-foot">
+                <button type="button" className="askboss-go" data-testid="askboss-sheet-build"
+                        onClick={() => { draftIdea(openIdea); setOpenIdea(null); }}>
+                  Start this build →
+                </button>
+                {/* Reading the brief is not the same as being sure. Asking first costs a
+                    conversation; being wrong costs a build. */}
+                <button type="button" className="askboss-ghost"
+                        data-testid="askboss-sheet-ask"
+                        onClick={() => {
+                          setInput(`I am considering this build:\n\n${openIdea.title} — `
+                                   + `${facetsOf(openIdea.brief).audience}\n\n`
+                                   + "What would you want settled before starting it, and is "
+                                   + "there anything here we have already built?");
+                          setOpenIdea(null);
+                        }}>
+                  Ask BOSS about it first
+                </button>
+              </div>
+            </article>
+          </div>
+        ) : null}
 
         {/* WHAT IT IS DOING, NOT HOW LONG IT HAS BEEN DOING IT.
             A stopwatch counting toward a stall bound says only that time is passing, and "43s

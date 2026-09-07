@@ -159,8 +159,13 @@ describe("the starter shelf", () => {
   });
 
   it("still only drafts — a click never spends money", () => {
-    // Clicking a suggestion used to fire a governed build immediately.
-    expect(HERO).toContain("onClick={() => draftIdea(i)}");
+    // Clicking a suggestion used to fire a governed build immediately. It now opens the brief
+    // instead of pasting it, which puts TWO deliberate presses between a card and a build
+    // rather than one — the property this test protects, stated as the property.
+    expect(HERO).toContain("onClick={() => setOpenIdea(i)}");
+    expect(HERO).not.toMatch(/onClick=\{\(\) => (submit|build|startBuild)\(i\)\}/);
+    // The build button in the enlarged view still only drafts into the composer.
+    expect(HERO).toContain("onClick={() => { draftIdea(openIdea); setOpenIdea(null); }}");
   });
 });
 
