@@ -844,66 +844,73 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               ) : null}
             </article>
           ) : null}
-        </div>
 
+          {/* INSIDE THE TRANSCRIPT, NOT UNDER IT.
+              These were siblings of the scroll box on a fixed-height shell, so their height came
+              OUT of the conversation: five proposals — each a button plus a paragraph of why —
+              squeezed the log to about one bubble, and a 3,525-character answer was present,
+              correct and invisible. The operator saw their own question, then buttons, and no
+              reply. They also belong here on the merits: the evidence and the offers are part of
+              the answer they came from, and they should scroll with it. */}
         {/* WHAT THE ANSWER IS BASED ON.
-            BOSS would read a dozen files to diagnose a bug and then show a paragraph with
-            nothing behind it — `actions` stays empty because a read changes nothing. The
-            operator's only options were to believe it or redo the work by hand. Collapsed by
-            default: it is evidence, not narrative, and it should be there when you doubt the
-            answer without shouting over it when you do not. */}
-        {trail.length > 0 ? (
-          <details className="agent-trail" data-testid="agent-trail">
-            <summary className="detail">
-              {`What BOSS read for this answer — ${trail.length} lookup${trail.length === 1 ? "" : "s"}`}
-            </summary>
-            <ul className="agent-trail-list">
-              {trail.map((call, i) => {
-                const args = call.args || {};
-                // The arguments worth showing: what it searched for and where it looked. The
-                // ref matters most — a search of the wrong branch is the failure this whole
-                // trail exists to make visible.
-                const detail = ["pattern", "file", "run_id", "repo", "ref", "service", "url"]
-                  .filter((k) => args[k] !== undefined && args[k] !== "")
-                  .map((k) => `${k}=${String(args[k]).slice(0, 60)}`)
-                  .join("  ");
-                return (
-                  <li key={i} className="agent-trail-item">
-                    <code>{call.tool}</code>
-                    {call.ok === false ? <span className="agent-trail-bad"> failed</span> : null}
-                    {detail ? <span className="detail"> {detail}</span> : null}
-                  </li>
-                );
-              })}
-            </ul>
-          </details>
-        ) : null}
+              BOSS would read a dozen files to diagnose a bug and then show a paragraph with
+              nothing behind it — `actions` stays empty because a read changes nothing. The
+              operator's only options were to believe it or redo the work by hand. Collapsed by
+              default: it is evidence, not narrative, and it should be there when you doubt the
+              answer without shouting over it when you do not. */}
+          {trail.length > 0 ? (
+            <details className="agent-trail" data-testid="agent-trail">
+              <summary className="detail">
+                {`What BOSS read for this answer — ${trail.length} lookup${trail.length === 1 ? "" : "s"}`}
+              </summary>
+              <ul className="agent-trail-list">
+                {trail.map((call, i) => {
+                  const args = call.args || {};
+                  // The arguments worth showing: what it searched for and where it looked. The
+                  // ref matters most — a search of the wrong branch is the failure this whole
+                  // trail exists to make visible.
+                  const detail = ["pattern", "file", "run_id", "repo", "ref", "service", "url"]
+                    .filter((k) => args[k] !== undefined && args[k] !== "")
+                    .map((k) => `${k}=${String(args[k]).slice(0, 60)}`)
+                    .join("  ");
+                  return (
+                    <li key={i} className="agent-trail-item">
+                      <code>{call.tool}</code>
+                      {call.ok === false ? <span className="agent-trail-bad"> failed</span> : null}
+                      {detail ? <span className="detail"> {detail}</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          ) : null}
 
-        {/* OFFERS, NOT DEEDS. Each is a tool + arguments BOSS chose but did not run; the click
-            is what executes it, verbatim, with no model in between. Cheapest first, because
-            "this link is wrong" does not say whether you want it cleared or the app redeployed —
-            and one of those costs minutes and money. */}
-        {proposed.length > 0 ? (
-          <div className="agent-proposals" data-testid="agent-proposals">
-            <p className="detail agent-proposals-head">
-              BOSS can do this for you — nothing runs until you choose:
-            </p>
-            {proposed.map((a) => (
-              <div className="agent-proposal" key={a.id}>
-                <button
-                  type="button"
-                  className="button agent-proposal-btn"
-                  disabled={busy}
-                  data-testid={`agent-proposal-${a.tool}`}
-                  onClick={() => acceptAction(a)}
-                >
-                  {busy && ranAction === a.id ? "…" : a.label}
-                </button>
-                {a.why ? <span className="detail agent-proposal-why">{a.why}</span> : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
+          {/* OFFERS, NOT DEEDS. Each is a tool + arguments BOSS chose but did not run; the click
+              is what executes it, verbatim, with no model in between. Cheapest first, because
+              "this link is wrong" does not say whether you want it cleared or the app redeployed —
+              and one of those costs minutes and money. */}
+          {proposed.length > 0 ? (
+            <div className="agent-proposals" data-testid="agent-proposals">
+              <p className="detail agent-proposals-head">
+                BOSS can do this for you — nothing runs until you choose:
+              </p>
+              {proposed.map((a) => (
+                <div className="agent-proposal" key={a.id}>
+                  <button
+                    type="button"
+                    className="button agent-proposal-btn"
+                    disabled={busy}
+                    data-testid={`agent-proposal-${a.tool}`}
+                    onClick={() => acceptAction(a)}
+                  >
+                    {busy && ranAction === a.id ? "…" : a.label}
+                  </button>
+                  {a.why ? <span className="detail agent-proposal-why">{a.why}</span> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
         {pendingPlan ? (
           <div className="ct-block" style={{ margin: "8px 0" }}>

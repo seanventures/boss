@@ -6282,6 +6282,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* THE SCROLL. min-height:0 is the whole fix: a flex child defaults to min-height:auto, so the
    body grew to fit the transcript instead of scrolling, and older messages went off-screen
    with no way back to them. */
+
 .bx-dock-body {
   /* HIDDEN, NOT AUTO. The transcript inside scrolls; if the body scrolls too, the composer
      scrolls away with the conversation — and the input is the one thing that must always be
