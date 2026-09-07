@@ -7841,7 +7841,14 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   text-overflow: ellipsis;
 }
 .askboss-wf-select:disabled { opacity: .6; }
-.askboss-wf-note { font-size: 0.7rem; color: var(--faint); white-space: nowrap; }
+/* `white-space: nowrap` with no bound is how a one-line confirmation grew to the width of the
+   composer. Capped, and truncated with the full sentence on the title — the long form is only
+   worth reading when something outranked the choice, and that case sets data-bad. */
+.askboss-wf-note {
+  font-size: 0.7rem; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 22ch;
+}
+.askboss-wf-note[data-bad="true"] { color: var(--amber, #d29922); max-width: 46ch; }
 @media (max-width: 1200px) { .askboss-wf { flex-basis: 100%; margin-left: 0; } }
 
 

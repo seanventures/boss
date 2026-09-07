@@ -920,7 +920,7 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
     id: string; name: string; workflow_key: string; is_catalogue?: boolean }>>([]);
   const [current, setCurrent] = useState("");
   const [saving, setSaving] = useState(false);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState<{ text: string; title: string; bad: boolean } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -938,7 +938,7 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   const apply = async (key: string) => {
     if (!key) return;
     setSaving(true);
-    setNote("");
+    setNote(null);
     try {
       const res = await fetch("/api/delivery-workflows", {
         method: "POST",
@@ -957,15 +957,22 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         setCurrent(key);
-        // "Saved, but X still wins" is a real outcome: an org-scoped mapping or a higher
-        // priority can outrank this one, and the only other place that would surface is the
-        // next project starting on the wrong workflow.
-        setNote(String(body?.note ?? "saved"));
+        // SHORT WHEN IT WENT AS ASKED, LONG ONLY WHEN IT DID NOT.
+        //
+        // The full sentence ran the width of the composer to confirm something the dropdown
+        // beside it already shows. "Saved" is the whole message when the choice took effect;
+        // the sentence stays as the tooltip, and is shown in full only for the outcome that
+        // genuinely needs reading — an org-scoped or higher-priority rule outranking this one,
+        // which otherwise surfaces when the next project starts on the wrong workflow.
+        const inForce = String(body?.in_force ?? key);
+        setNote({ text: inForce === key ? "Saved" : String(body?.note ?? "Saved"),
+                  title: String(body?.note ?? ""), bad: inForce !== key });
       } else {
-        setNote(String(body?.detail ?? body?.error ?? `failed (${res.status})`).slice(0, 140));
+        setNote({ text: String(body?.detail ?? body?.error ?? `failed (${res.status})`)
+                          .slice(0, 120), title: "", bad: true });
       }
     } catch {
-      setNote("could not save");
+      setNote({ text: "could not save", title: "", bad: true });
     } finally {
       setSaving(false);
     }
@@ -987,7 +994,12 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
           </option>
         ))}
       </select>
-      {note ? <span className="askboss-wf-note" data-testid="askboss-wf-note">{note}</span> : null}
+      {note ? (
+        <span className="askboss-wf-note" data-testid="askboss-wf-note"
+              data-bad={note.bad ? "true" : undefined} title={note.title || undefined}>
+          {note.text}
+        </span>
+      ) : null}
     </div>
   );
 }

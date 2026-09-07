@@ -24,6 +24,23 @@ from .workflow_capabilities import estimate_minutes, project_requirements
 #: new project would be a mistake worth preventing at the point of choosing.
 WORK_CLASSES = ("project.new", "feature.major", "feature.minor", "bugfix", "any")
 
+#: The same five, in words an operator uses. `project.new` is a selector value — a key in a
+#: unique index — and it leaked into a confirmation message shown beside a dropdown that says
+#: "Research-Led Discovery": "New project.new work now uses 'research_led_discovery'." Two
+#: identifiers and a dot, to describe a choice the operator had just made in plain English.
+WORK_CLASS_LABELS = {
+    "project.new": "new projects",
+    "feature.major": "major features",
+    "feature.minor": "small features",
+    "bugfix": "bug fixes",
+    "any": "any work without a more specific rule",
+}
+
+
+def work_class_label(work_class: str) -> str:
+    """What this class of work is called out loud. Falls back to the key rather than to ''."""
+    return WORK_CLASS_LABELS.get(work_class, work_class)
+
 
 def _step(
     step_id: str,

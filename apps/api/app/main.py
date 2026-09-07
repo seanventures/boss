@@ -20357,7 +20357,7 @@ def apply_delivery_workflow(payload: dict) -> dict:
     the new version. Anything else asks the operator to go and delete a row they have never
     been shown.
     """
-    from boss_engine.services.workflow_catalogue import WORK_CLASSES
+    from boss_engine.services.workflow_catalogue import WORK_CLASSES, work_class_label
 
     project_id = str(payload.get("project_id") or "").strip()
     workflow_key = str(payload.get("workflow_key") or "").strip()
@@ -20376,7 +20376,9 @@ def apply_delivery_workflow(payload: dict) -> dict:
     with begin(engine) as connection:
         row = connection.execute(
             text(
-                "SELECT id, active_version_id FROM workflow_definitions "
+                # `name` too: the confirmation this returns is read by a person standing in
+                # front of a dropdown that shows names, not keys.
+                "SELECT id, name, active_version_id FROM workflow_definitions "
                 "WHERE project_id=:p AND workflow_key=:k "
                 "AND COALESCE(namespace,'system')='product'"
             ),
@@ -20455,25 +20457,37 @@ def apply_delivery_workflow(payload: dict) -> dict:
         # mapping or one at a higher priority can still win. Reporting "saved" without checking
         # would tell the operator their choice is in force when the runtime disagrees, and the
         # only place that would surface is the next project starting on the wrong workflow.
+        in_force = ""
+        in_force_name = ""
         try:
             resolved = workflow_runtime.resolve_mapping(
                 connection, project_id=project_id,
                 selector_kind="work_class", selector_value=work_class,
             )
-            in_force = str(((resolved or {}).get("selected") or {}).get("workflow_key") or "")
+            selected = (resolved or {}).get("selected") or {}
+            in_force = str(selected.get("workflow_key") or "")
+            in_force_name = str(selected.get("workflow_name") or "")
         except Exception:  # noqa: BLE001
             # Ambiguous or otherwise unresolvable. The write above succeeded and must stand;
             # what this branch loses is the confirmation, not the change.
-            in_force = ""
+            pass
+
+        # IN THE WORDS ON THE SCREEN, not the ones in the index. This said "New project.new work
+        # now uses 'research_led_discovery'." beside a dropdown reading "Research-Led Discovery"
+        # — a selector value and a workflow key, to confirm a choice the operator had just made
+        # in plain English. Both identifiers have display names; both were one column away.
+        applied_name = str(row["name"] or workflow_key)
+        for_whom = work_class_label(work_class)
         return {
             "applied": mapping, "workflow_key": workflow_key, "work_class": work_class,
             "outcome": outcome,
             "in_force": in_force or workflow_key,
+            "in_force_name": in_force_name or applied_name,
             "note": (
-                f"New {work_class} work now uses '{workflow_key}'."
+                f"Saved — {for_whom} now use {applied_name}."
                 if not in_force or in_force == workflow_key else
-                f"Saved, but '{in_force}' still wins for {work_class} — another mapping "
-                "outranks this one by scope or priority."
+                f"Saved, but {in_force_name or in_force} still wins for {for_whom}: another "
+                "rule outranks this one by scope or priority."
             ),
         }
 
