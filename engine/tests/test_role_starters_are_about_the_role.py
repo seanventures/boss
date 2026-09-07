@@ -20,6 +20,7 @@ from __future__ import annotations
 import pytest
 
 from boss_engine.services.role_starters import (
+    NOTHING_BUILT_ASKS,
     FAMILIES,
     GENERIC_ROLE_ASKS,
     _families_for,
@@ -144,10 +145,17 @@ class TestARoleThePlatformNeverHeardOf:
         assert out and out[0] not in GENERIC_ROLE_ASKS
 
     def test_a_role_matching_nothing_still_gets_role_questions(self):
-        """Not status questions: still about this member's own judgement."""
+        """Not status questions: still about this member's own judgement.
+
+        The fallbacks are TEMPLATES now — two of them name the app, because "your biggest
+        concern about this project" named nothing and an operator asked, reasonably, what
+        "this project" was supposed to mean. With no app in this fixture the scope-stating
+        pair is used instead, and both are still about this member's judgement."""
         odd = {"title": "Chief Vibes Officer", "lens": "morale"}
         out = role_starters(Conn(role=odd), "p", "Chief Vibes Officer")
-        assert out and set(out) <= set(GENERIC_ROLE_ASKS)
+        assert out
+        allowed = set(GENERIC_ROLE_ASKS) | set(NOTHING_BUILT_ASKS)
+        assert set(out) <= allowed
         for s in out:
             assert not any(b in s.lower() for b in BANNED)
 

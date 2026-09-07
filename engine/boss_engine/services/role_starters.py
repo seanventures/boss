@@ -96,6 +96,20 @@ FAMILIES: list[dict[str, Any]] = [
         ],
     },
     {
+        # ADVERSARIAL REVIEWER AND CONSISTENCY REVIEWER MATCHED NOTHING, so two of the roles
+        # that actually run on every build fell through to the generic asks — which is how the
+        # operator came to be offered "What is your biggest concern about this project?" by a
+        # reviewer that had just read their code.
+        "family": "review",
+        "words": ("review", "critic", "adversar", "red team", "consistency", "auditor"),
+        "asks": [
+            "What did you flag on {app} that got shipped anyway?",
+            "What would you attack first in {app}, and would the tests notice?",
+            "Which of your findings on this project were closed without being fixed?",
+            "What did {run} get wrong that a review should have caught before it ran?",
+        ],
+    },
+    {
         "family": "finance",
         "words": ("finance", "finops", "cost", "budget"),
         "asks": [
@@ -145,10 +159,25 @@ FAMILIES: list[dict[str, Any]] = [
 #: Asked of any role when its family has nothing left to offer. These are still ROLE questions —
 #: they are about this role's own judgement and record — rather than status questions the
 #: console already answers on a page.
+#: "THIS PROJECT" AND "HERE" NAME NOTHING, which is the failure this module's own rule forbids
+#: two paragraphs above. Worse, "project" means something specific in BOSS — the workspace that
+#: CONTAINS the apps — so a reviewer that had just read one app's code was asked about a
+#: container holding six of them, and the operator quite reasonably asked what "this project"
+#: was supposed to mean.
+#:
+#: Grounded first: `{app}` is a real app and `_fill` drops the template when there is not one.
 GENERIC_ROLE_ASKS: list[str] = [
-    "What is your biggest concern about this project right now?",
-    "What have you argued for here that the build did not honour?",
+    "What is your biggest concern about {app} right now?",
+    "What have you argued for on {app} that the build did not honour?",
     "What would you refuse to sign off on today?",
+]
+
+#: When the project has built nothing yet there is no app to name — so say THAT, rather than
+#: gesturing at a project the operator has to interpret.
+NOTHING_BUILT_ASKS: list[str] = [
+    "Nothing has been built in this workspace yet — what will you be looking for in the first "
+    "thing that is?",
+    "What would you refuse to sign off on, whatever it turned out to be?",
 ]
 
 
@@ -330,9 +359,15 @@ def role_starters(connection: Connection, project_id: str, role: str,
             if len(out) >= limit:
                 return out[:limit]
 
-    for ask in GENERIC_ROLE_ASKS:
-        if ask not in out:
+    for template in GENERIC_ROLE_ASKS:
+        ask = _fill(template, app=app, run=run)
+        if ask and ask not in out:
             out.append(ask)
         if len(out) >= limit:
             break
+    # NOTHING TO NAME MEANS SAY SO, not gesture at a project the operator has to interpret.
+    # The role-judgement asks still fill without an app, so this is not "when out is empty" —
+    # it is "when there is no app", which is the case that needs the scope stated.
+    if not app:
+        out = [ask for ask in NOTHING_BUILT_ASKS if ask not in out] + out
     return out[:limit]
