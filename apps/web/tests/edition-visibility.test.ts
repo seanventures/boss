@@ -100,9 +100,12 @@ describe("paid vs community surface visibility", () => {
 });
 
 describe("community nav honesty helpers", () => {
-  it("relabels leftover Enterprise nav to SSO only — not an Enterprise product area", () => {
+  it("relabels leftover Enterprise nav to Identity only — not an Enterprise product area", () => {
     const copy = communityNavCopy("enterprise");
-    expect(copy.label).toBe("SSO");
+    // "SSO" names one protocol; this area configures who can sign in at all. The BADGE stays
+    // "SSO" — that is what Community is being told it includes, and the word somebody scanning
+    // for it would look for.
+    expect(copy.label).toBe("Identity");
     expect(copy.label).not.toMatch(/Enterprise/i);
     expect(copy.sub).toMatch(/OIDC|SAML|SCIM/i);
     expect(copy.sub).not.toMatch(/Enterprise/i);
@@ -340,7 +343,7 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).not.toContain("nav-paid-badge-ops");
     expect(html).not.toContain("nav-sso-badge");
     // Default label when not community-relabeled
-    expect(html).toContain("Editions &amp; SSO");
+    expect(html).toContain("Identity");
     expect(html).toContain('data-area-nav="foundations"');
     expect(html).toContain('data-area-nav="components"');
     expect(html).toContain('data-area-nav="enterprise"');

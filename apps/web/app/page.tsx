@@ -1651,9 +1651,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" data-area="budget" aria-label="Settings">
+        <section className="panel-stack" data-area="budget" aria-label="Govern">
           <div className="panel">
-            <span className="eyebrow" data-area="budget">Settings</span>
+            <span className="eyebrow" data-area="budget">Govern</span>
             <h2>How hard BOSS runs</h2>
             <p className="detail">
               These lived in environment variables, so changing one meant an ops action and a

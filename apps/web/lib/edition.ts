@@ -194,9 +194,13 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
  */
 export function communityNavCopy(areaId: string): { label?: string; sub?: string; badge?: string } {
   if (areaId === "enterprise") {
+    // "Identity", not "SSO": SSO names one protocol, and this area configures who can sign in
+    // at all — OIDC, SAML and SCIM provisioning. The badge stays "SSO" because that is the
+    // thing Community is being told it INCLUDES, and it is the word somebody scanning for it
+    // would look for.
     return {
-      label: "SSO",
-      sub: "Self-hosted identity — OIDC, SAML, SCIM, and IdP packs",
+      label: "Identity",
+      sub: "Who can sign in — OIDC, SAML, SCIM, and IdP packs",
       badge: "SSO",
     };
   }

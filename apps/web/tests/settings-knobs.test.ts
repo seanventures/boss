@@ -12,9 +12,13 @@ const SHELL = codeOnly("app/ConsoleShell.tsx");
 const STORE = codeOnly("../../engine/boss_engine/services/project_settings.py");
 const CSS = codeOnly("app/globals.css");
 
-describe("the area is called Settings", () => {
+describe("the area is called Govern", () => {
   it("is labelled for what it governs, not just spend", () => {
-    expect(SHELL).toContain('id: "budget", label: "Settings"');
+    // It was "Settings" inside a group called "Govern", which read backwards: these knobs —
+    // concurrency, turn budgets, spend — ARE the governing, and everything else in the group
+    // is a setting. The two swapped names.
+    expect(SHELL).toContain('id: "budget", label: "Govern"');
+    expect(SHELL).toContain('group: "Settings"');
   });
 
   it("keeps the area id, because ids are routes and bookmarks", () => {

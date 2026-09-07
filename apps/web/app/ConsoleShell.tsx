@@ -2,6 +2,7 @@
 
 import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
+import { onChanged } from "./changed";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 import { ProjectStrip } from "./project-strip";
@@ -103,7 +104,11 @@ type AreaDef = {
   id: AreaId;
   label: string;
   sub: string;
-  group: "Run" | "Govern" | "Platform";
+  //: THE GROUP AND THE AREA SWAPPED NAMES. "Govern" was the group heading and "Settings" was
+  //: one area inside it — which read backwards: the knobs (concurrency, turn budgets, spend)
+  //: ARE the governing, and everything else in the group is a setting. So the group is
+  //: "Settings" and the area that holds the governing knobs is "Govern".
+  group: "Run" | "Settings" | "Platform";
   icon: Icon;
   /** The section this area sits INSIDE.
    *
@@ -215,12 +220,12 @@ const AREAS: AreaDef[] = [
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
-  { id: "budget", label: "Settings", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Govern", icon: ICONS.budget },
-  { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Govern", icon: ICONS.pipeline },
-  { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },
-  { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Govern", icon: ICONS.ops },
-  { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, and security scanning", group: "Govern", icon: ICONS.assurance },
-  { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },
+  { id: "budget", label: "Govern", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Settings", icon: ICONS.budget },
+  { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
+  { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },
+  { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Settings", icon: ICONS.ops },
+  { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, and security scanning", group: "Settings", icon: ICONS.assurance },
+  { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Settings", icon: ICONS.org },
   { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
   { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, worker scaling, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
@@ -230,14 +235,17 @@ const AREAS: AreaDef[] = [
   { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   {
     id: "enterprise",
-    label: "Editions & SSO",
-    sub: "Self-hosted SSO (OIDC/SAML/SCIM) · IdP packs · Community / Cloud / Enterprise",
-    group: "Platform",
+    // WHO CAN GET IN is a setting, not a platform feature sitting above the work. It was
+    // second in the sidebar, under Command Center, ahead of everything an operator actually
+    // does — and called "SSO", which names one protocol rather than the thing it configures.
+    label: "Identity",
+    sub: "Who can sign in — OIDC, SAML, SCIM · IdP packs · Community / Cloud / Enterprise",
+    group: "Settings",
     icon: ICONS.enterprise,
   },
 ];
 
-const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Govern"];
+const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Settings"];
 
 function budgetTone(state?: string): "green" | "amber" | "red" {
   const s = (state ?? "").toLowerCase();
@@ -456,6 +464,23 @@ export default function ConsoleShell({
     schedule();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
   }, [live, paletteOpen, refreshPending, router]);
+
+  // AND IMMEDIATELY WHEN SOMETHING ACTUALLY CHANGED.
+  //
+  // The loop above is a poll: it backs off to three times what a render costs, so a change
+  // made in the dock or on another screen can sit unshown for up to three minutes. Every
+  // server-rendered panel — the governing knobs, spend, assurance, the identity providers —
+  // is a snapshot from the last tick, and an operator who has just changed one of those
+  // reasonably expects the page to know.
+  //
+  // The same guards, for the same reasons: never while a render is in flight, never in a
+  // hidden tab, never while somebody is typing.
+  useEffect(() => onChanged(() => {
+    if (refreshPending || document.hidden) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    startRefresh(() => { router.refresh(); });
+  }, "console-shell"), [refreshPending, router]);
 
   // Depend on the query STRING (stable across router.refresh(), changes on real
   // navigation) so the area syncs from the URL on deep links like "View in Work →"
