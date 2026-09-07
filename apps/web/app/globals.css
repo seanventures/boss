@@ -8522,6 +8522,61 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .dw-bind-msg { flex-basis: 100%; }
 
+/* ── Shipping is two things, in order ─────────────────────────────────────────────────────
+   The deploy step showed a host dropdown, two text boxes, "Set target" and "Review and decide"
+   as four peers on one card, and said nothing about which came first or what either did. The
+   operator's report is the predictable consequence: they might approve without setting a
+   target, or press Set target repeatedly. Numbering the two acts is the fix. */
+.dw-ship-plan {
+  list-style: none; margin: 10px 0 4px; padding: 0; display: grid; gap: 2px;
+}
+.dw-ship-step {
+  display: grid; grid-template-columns: 26px 1fr; gap: 10px;
+  padding: 10px 12px 12px; border-radius: 10px;
+  border: 1px solid transparent;
+}
+/* The one that still wants something, picked out — and only ever one of them at a time. */
+.dw-ship-step[data-done="true"] { opacity: .92; }
+.dw-ship-step[data-blocked="true"] {
+  border-color: color-mix(in srgb, var(--amber, #d29922) 34%, var(--border));
+  background: color-mix(in srgb, var(--amber, #d29922) 7%, transparent);
+}
+.dw-ship-n {
+  display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px;
+  border-radius: 50%; border: 1px solid var(--border);
+  font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.dw-ship-step[data-done="true"] .dw-ship-n {
+  border-color: color-mix(in srgb, var(--green, #3fb950) 55%, transparent);
+  color: var(--green, #3fb950);
+}
+.dw-ship-body { min-width: 0; }
+.dw-ship-title {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  font-size: .92rem; font-weight: 600;
+}
+.dw-ship-state {
+  font-size: .68rem; font-weight: 400; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--muted);
+}
+.dw-ship-step[data-done="true"] .dw-ship-state { color: var(--green, #3fb950); }
+.dw-ship-step[data-blocked="true"] .dw-ship-state { color: var(--amber, #d29922); }
+.dw-ship-hint { margin: 6px 0 0; line-height: 1.55; max-width: 78ch; }
+
+/* BOUND IS A FACT, NOT A FORM. The picker used to render whenever the console had not noticed
+   the binding, which reads as "not done yet" over a target that exists — and the reasonable
+   response to a button that appears not to have worked is to press it again. */
+.dw-bound {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 6px 0 2px; font-size: .9rem;
+}
+.dw-bound-ok {
+  display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: color-mix(in srgb, var(--green, #3fb950) 20%, transparent);
+  color: var(--green, #3fb950); font-size: .7rem;
+}
+.dw-bound-change { font-size: .76rem; padding: 3px 10px; }
+
 /* THE ACTION IS STILL RUNNING. Shown for as long as `busy` is set — which now includes the
    reload after the request, the part that used to happen with nothing on screen. */
 .dw-working { color: var(--ink); }

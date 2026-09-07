@@ -385,6 +385,27 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // of the deploy decision, and a gate that only says yes/no cannot express "yes, to staging".
   const [targets, setTargets] = useState<DeployTarget[]>([]);
   const [hosts, setHosts] = useState<DeployHost[]>([]);
+
+  /* RE-READ AFTER BINDING — the reason "Set target" looked like it had done nothing.
+   *
+   * This list was fetched once per project and never again. So the operator pressed Set target,
+   * the target really was created (deptgt_ee5dae79, 'Onboarding Path Builder.', active), and
+   * the step went on rendering the same empty form, because the only evidence that a target now
+   * exists lives in this array. Their reasonable conclusion was that the button had not worked,
+   * and the reasonable next action is to press it again — which is exactly the "he may click
+   * set target multiple times" the operator described. */
+  const reloadTargets = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/deployment-targets?project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (!res.ok) return;
+      const body = await res.json();
+      setTargets((body.items ?? []).filter(
+        (t: DeployTarget) => (t.status ?? "active") === "active"));
+    } catch { /* the gate still works; it just cannot offer a target */ }
+  }, [projectId]);
+
   useEffect(() => {
     let alive = true;
     // TWO INDEPENDENT LOADS, AND THEY MUST STAY INDEPENDENT.
@@ -730,7 +751,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             return act("Starting a preview", "start_preview", { run_id: buildRunId });
           }}
           previewStarting={previewStarting?.runId ?? ""}
-          onBound={load}
+          // Both: the run's input changes AND the target list gains a row. Reloading only the
+          // runs left the step believing there was still nowhere to ship.
+          onBound={() => { void load(); void reloadTargets(); }}
           onRecheck={(run) => act("Re-check", "recheck", { run_id: run.id })}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
@@ -1873,15 +1896,25 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
  * Choosing a HOST is the act that was missing. A target is that host plus this app's name, its
  * environment and a free port, and the button that makes one also points the run at it.
  */
-function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
+function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostName,
                       onSetTarget, onPrepareTarget, onBound }: {
   targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
   /** The code task whose build is being shipped — the app the target binds to. */
   buildRunId: string;
   busy: string | null;
+  /** The target this app is ALREADY bound to, resolved by app identity. Settled, not a form. */
+  bound?: DeployTarget;
+  /** That target's host, in the words the host list uses. */
+  hostName?: string;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onBound: () => void;
 }) {
+  // CHANGING WHERE IT SHIPS IS RARE; BEING TOLD WHERE IT SHIPS IS NOT.
+  //
+  // The form was rendered whenever the console had not noticed the binding, which read as "this
+  // is not done yet" over a target that existed. Once bound, this states the destination and
+  // keeps the form one deliberate click away.
+  const [changing, setChanging] = useState(false);
   const chosenId = typeof runInput.target_id === "string" ? runInput.target_id : "";
   const chosen = targets.find((t) => t.id === chosenId);
   // THE APP'S NAME, NOT THE BRIEF IT WAS BUILT FROM.
@@ -1899,13 +1932,32 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
   // A target for THIS app, not one of the others. Matching by name is how the API keys them.
   const mine = targets.filter((t) => t.app_name === appName);
 
-  if (chosen) {
-    // Deliberately renders nothing: the ship control directly above states the destination
-    // AND its address, and printing "Ships to Vendor-Status-Watcher · staging" underneath it
-    // said the same thing twice in two different wordings.
-    return null;
+  // ALREADY BOUND. State it as a fact and stop showing a form.
+  //
+  // `bound` is resolved by app IDENTITY against the whole target list, which is stricter than
+  // either of the two things this used to check: `chosen` needs a `target_id` on the run input
+  // (the set-target path does not always write one) and `mine` compares names by string
+  // equality (and 'Lead‐Triage Inbox' carries a U+2010 hyphen). Both said "unbound" over a live
+  // target, which is what put an empty form in front of an operator who had already filled it.
+  const settled = bound ?? chosen;
+  if (settled && !changing) {
+    const where = (settled.domains ?? []).find((d: string) => !!d);
+    return (
+      <div className="dw-bound" data-testid="dw-deploy-bound">
+        <span className="dw-bound-ok" aria-hidden>✓</span>
+        <span>
+          Ships to <strong>{settled.app_name}</strong> · {settled.environment}
+          {hostName ? <> on <strong>{hostName}</strong></> : null}
+          {where ? <span className="detail"> ({where})</span> : null}
+        </span>
+        <button type="button" className="cap-btn dw-bound-change" disabled={!!busy}
+                data-testid="dw-deploy-change" onClick={() => setChanging(true)}>
+          Change
+        </button>
+      </div>
+    );
   }
-  if (mine.length) {
+  if (mine.length && !changing) {
     return (
       <label className="mr-field-label dw-target">
         Ship to
@@ -1922,8 +1974,17 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
   }
   if (hosts.length) {
     return (
-      <BindToHost hosts={hosts} appName={appName} buildRunId={buildRunId} busy={busy}
-                  onPrepareTarget={onPrepareTarget} onBound={onBound} />
+      <>
+        <BindToHost hosts={hosts} appName={appName} buildRunId={buildRunId} busy={busy}
+                    onPrepareTarget={onPrepareTarget}
+                    onBound={() => { setChanging(false); onBound(); }} />
+        {changing ? (
+          <button type="button" className="cap-btn dw-bound-change"
+                  onClick={() => setChanging(false)}>
+            Keep the current target
+          </button>
+        ) : null}
+      </>
     );
   }
   return (
@@ -2065,6 +2126,31 @@ function askBossAbout(runRef: string, question: string): void {
     window.history.replaceState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
+}
+
+/** ANSWER THE GATE WHERE THE DECISION CAN BE READ.
+ *
+ *  Two buttons on the step answered a release without showing what was being released — no
+ *  recommendation, no cost, no risk tier, no note, and no record of who else is waiting on the
+ *  same call. Approving a deployment off a step badge is a decision made blind. The Approvals
+ *  page is where that context lives, so this goes there with the decision already selected.
+ */
+function ReviewAndDecide({ step }: { step: RunStep }) {
+  const role = (step.approval as { approver_role?: string })?.approver_role;
+  return (
+    <div className="dw-step-decide" data-testid="dw-step-decide">
+      <a className="cap-btn primary dw-decide-btn" data-testid="dw-step-review"
+         href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
+                           { area: "decisions", decision_filter: "needs_action",
+                             decision: step.decision_id })}>
+        Review and decide →
+      </a>
+      <span className="detail">
+        {role ? `${role} signs this off.`
+              : "Opens the approval with its recommendation, cost and risk."}
+      </span>
+    </div>
+  );
 }
 
 /** BIND THIS APP TO A HOST, ON THE STEP WHERE SHIPPING IS DECIDED.
@@ -2231,6 +2317,14 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
       ? targets.find((t) => identityKey(String(t.app_name ?? "")) === wanted)
       : undefined;
   })();
+  // The machine, in the words the host list uses. A target row carries a host id, and
+  // "dh_361e66c46098" is not an answer to "where does this go".
+  const boundHostName = (() => {
+    const hostId = String(shippedTo?.host_id ?? "");
+    const host = hosts.find((h) => h.id === hostId);
+    if (!host) return "";
+    return `${host.name}${host.address ? ` · ${host.address}` : ""}`;
+  })();
   // WHETHER SOMETHING IS ACTUALLY SHIPPED THERE — asked of the deployments, not of the step.
   //
   // This first used the step's own status, and the step is exactly what cannot be trusted
@@ -2396,13 +2490,65 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           Binding an app to a host is not a thing you do only while a step is pending: after a
           failed or wrongly-"succeeded" deploy you need to set the target and run it again,
           which is exactly the moment the old condition removed it. */}
+      {/* TWO THINGS, IN ORDER, AND IT NEVER SAID SO.
+          The step showed a host dropdown, two boxes and a "Set target" button beside a "Review
+          and decide" button, with nothing to say which came first, whether the first was
+          required, or what either did. So: "the user might click on Review and decide without
+          setting the target, or he may click set target multiple times". Both are the layout's
+          fault. Numbering them, marking the one that is done, and saying what the second one
+          releases is the whole fix. */}
       {isDeployStep(step, capability) ? (
-        <div className="dw-step-target" data-testid="dw-step-target">
-          <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
-                       buildRunId={buildRunId ?? ""} busy={busy}
-                       onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
-                       onBound={onBound} />
-        </div>
+        <ol className="dw-ship-plan" data-testid="dw-step-target">
+          <li className="dw-ship-step" data-done={shippedTo ? "true" : undefined}
+              data-testid="dw-ship-where">
+            <span className="dw-ship-n">1</span>
+            <div className="dw-ship-body">
+              <div className="dw-ship-title">
+                Where it ships
+                <span className="dw-ship-state">
+                  {shippedTo ? "set" : "needs you first"}
+                </span>
+              </div>
+              <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
+                           buildRunId={buildRunId ?? ""} busy={busy}
+                           bound={shippedTo} hostName={boundHostName}
+                           onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
+                           onBound={onBound} />
+              {!shippedTo ? (
+                <p className="detail dw-ship-hint">
+                  Pick the machine, confirm the name the container gets, and press Set target.
+                  Leave the port blank and BOSS picks a free one. This creates the destination;
+                  it does not ship anything.
+                </p>
+              ) : null}
+            </div>
+          </li>
+          <li className="dw-ship-step" data-testid="dw-ship-approve"
+              data-blocked={!shippedTo ? "true" : undefined}>
+            <span className="dw-ship-n">2</span>
+            <div className="dw-ship-body">
+              <div className="dw-ship-title">
+                Approve the release
+                <span className="dw-ship-state">
+                  {step.status === "waiting" ? "waiting on you" : step.status}
+                </span>
+              </div>
+              <p className="detail dw-ship-hint">
+                {shippedTo
+                  ? <>This is the press that ships it: BOSS builds a container from this app and
+                      runs it on {boundHostName || "the bound host"} at{" "}
+                      {(shippedTo.domains ?? []).find((d: string) => !!d) || "its address"}.
+                      Nothing is sent until it is approved.</>
+                  : <>Approving now would fail at the deploy — there is nowhere to put the
+                      container until step 1 is done.</>}
+              </p>
+              {/* THE BUTTON, INSIDE THE THING IT DOES. It used to sit three blocks further
+                  down, past "Ask BOSS about this step", which is how it came to look like a
+                  peer of "Set target" rather than the step after it. */}
+              {needsYou(step) ? <ReviewAndDecide step={step} /> : null}
+            </div>
+          </li>
+        </ol>
       ) : null}
 
       {/* ASK ABOUT THIS STEP, WITHOUT LEAVING IT.
@@ -2440,30 +2586,8 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
 
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
           operator leave the screen that told them it was waiting. */}
-      {needsYou(step) ? (
-        <div className="dw-step-decide" data-testid="dw-step-decide">
-          {/* The target picker is rendered once, above, for every deploy step regardless of
-              state — including this one. A second copy here would show two pickers at the
-              gate. */}
-          {/* DECIDE WHERE THE DECISION CAN BE READ.
-              Two buttons here answered a release without showing what was being released — no
-              recommendation, no cost, no risk tier, no note, and no record of who else is
-              waiting on the same call. Approving a deployment off a step badge is a decision
-              made blind. The Approvals page is where that context lives, so this goes there
-              with the decision already selected. */}
-          <a className="cap-btn primary dw-decide-btn" data-testid="dw-step-review"
-             href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
-                               { area: "decisions", decision_filter: "needs_action",
-                                 decision: step.decision_id })}>
-            Review and decide →
-          </a>
-          <span className="detail">
-            {(step.approval as { approver_role?: string })?.approver_role
-              ? `${(step.approval as { approver_role?: string }).approver_role} signs this off.`
-              : "Opens the approval with its recommendation, cost and risk."}
-          </span>
-        </div>
-      ) : null}
+      {/* On a deploy this is rendered inside step 2 above, where it belongs in the sequence. */}
+      {needsYou(step) && !isDeployStep(step, capability) ? <ReviewAndDecide step={step} /> : null}
 
       {/* THE CLICK LANDED. SAY SO.
           An operator approved a deploy, came back here, and saw the identical "waiting · gate ·

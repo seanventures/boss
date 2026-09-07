@@ -1579,6 +1579,26 @@ def _open_gate(
             "step_id": step_row["step_id"],
             "workflow_run_id": run["id"],
             "approver_role": approval.get("approver_role"),
+            # WHAT THE APPROVER IS ACTUALLY DECIDING ABOUT.
+            #
+            # The recommendation carried a capability key, a step id and a run id — three
+            # identifiers and not one fact. So the Approvals page, having no `action` it
+            # recognised, fell through to its default and told the approver "this type has no
+            # automated follow-on (no project is started)" above a Deploy gate whose approval
+            # ships a container onto a host. That sentence is the opposite of true, and it is
+            # the one an approver reads before pressing the green button.
+            #
+            # The label and the app name are what make the sentence sayable: "approving builds
+            # a container from Onboarding Path Builder and runs it on the bound host" rather
+            # than "approving records your decision".
+            "step_label": subject["label"],
+            "workflow_key": run.get("workflow_key"),
+            "app_name": str((run.get("input") or {}).get("app_name")
+                            or (run.get("input") or {}).get("title") or "").strip()[:120],
+            "environment": str((run.get("input") or {}).get("environment") or "staging"),
+            # Whether answering this finishes the step or merely lets it run. The two have
+            # different consequences and the page has never been able to tell them apart.
+            "gate_completes_step": bool(subject["completes_step"]),
         },
         {"estimated_usd": 0.0},
         subject["summary"],

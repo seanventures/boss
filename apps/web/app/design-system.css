@@ -2982,10 +2982,33 @@ select.input:focus,
   font-size: 11.5px;
   color: var(--muted);
 }
+/* WHAT APPROVING DOES — set as the most legible line on the card, not the faintest.
+   It was 11.5px in --faint, below the evidence chips, which is fine print styling for the one
+   sentence the approver most needs before pressing a green irreversible button. */
 .dq-effect {
-  font-size: 11.5px;
-  color: var(--faint);
-  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink, #e6edf3);
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+/* Where a deploy would actually land, resolved live — including the case where it would land
+   nowhere, which is the one an approver must not discover after the fact. */
+.dq-destination {
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--raised);
+  color: var(--ink, #e6edf3);
+}
+.dq-destination.bad {
+  border-color: color-mix(in srgb, var(--amber, #d29922) 45%, transparent);
+  background: color-mix(in srgb, var(--amber, #d29922) 8%, transparent);
 }
 .dq-foot {
   display: flex;

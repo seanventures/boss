@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import { createDecisionDigestAction } from "./actions";
+import { identityKey } from "./app-identity";
 import { ClientRelativeTime } from "./client-relative-time";
 import { DecisionResolveForm } from "./client-forms";
 import { SubmitButton } from "./submit-button";
@@ -84,6 +85,18 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
     return `Approve deploying${title ? ` “${title}”` : " this change"} to its target environment.`;
   }
   if (action) return action.replaceAll("_", " ");
+  // A WORKFLOW GATE, WHICH CARRIES NO `action`. It rendered as the bare words "review
+  // required" — which names the obligation and nothing about the thing being reviewed.
+  const step = str("step_label") || str("capability").replaceAll("_", " ");
+  if (str("workflow_run_id") && step) {
+    const app = str("app_name");
+    const env = str("environment");
+    return `The “${step}” step of this workflow is held for a person`
+      + (app ? `, for ${app.slice(0, 60)}${app.length > 60 ? "…" : ""}` : "")
+      + (env && ["deploy", "redeploy", "monitor"].includes(str("capability"))
+          ? ` in ${env}` : "")
+      + ". It does not run until this is answered.";
+  }
   return "review required";
 }
 
@@ -104,8 +117,142 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
   return "governance gate";
 }
 
+/**
+ * WHAT APPROVING A WORKFLOW GATE ACTUALLY DOES.
+ *
+ * A gate raised by the workflow runner carries no `action` — its recommendation is
+ * `{capability, step_id, workflow_run_id, approver_role}` — so every one of them fell through
+ * `approvalEffectLabel`'s switch to the default, and the Approvals page told the approver:
+ *
+ *     Approving records your decision — this type has no automated follow-on (no project is
+ *     started).
+ *
+ * over a Deploy gate whose approval builds a container and runs it on a host. The operator's
+ * words: "it is not relevant, we need to explain what the approver is going to do, in this case
+ * he is going to approve to be deployed in the container which is not clear". The sentence was
+ * not merely unhelpful, it was the opposite of true, and it is the last thing read before the
+ * green button.
+ *
+ * `gate_completes_step` is the distinction that matters: on a gate capability the approval IS
+ * the work, and on an ordinary step held at manual the approval only unblocks it — the step
+ * then runs and does the thing.
+ */
+export function workflowGateEffect(r: Record<string, unknown>): string {
+  const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
+  if (!str("workflow_run_id")) return "";
+  const capability = str("capability");
+  const label = str("step_label") || capability.replaceAll("_", " ") || str("step_id");
+  const app = str("app_name");
+  const named = app ? `“${app.slice(0, 60)}${app.length > 60 ? "…" : ""}”` : "this app";
+  const env = str("environment") || "staging";
+  switch (capability) {
+    case "deploy":
+    case "redeploy":
+      return `Approving ships it: BOSS builds a container image from ${named}, runs it on the `
+        + `bound host in ${env}, and the workflow moves on to monitoring. Nothing is sent to `
+        + "any host before this is approved. If no deployment target is set, this step will "
+        + "fail rather than guess a destination.";
+    case "build":
+      return `Approving starts the build of ${named} — an agent writes code, tests it and `
+        + "opens a pull request. It spends model budget.";
+    case "preview":
+      return `Approving starts a throwaway preview of ${named} on the host so it can be looked `
+        + "at before anything is shipped for real.";
+    case "spec_review":
+      return "Approving publishes the spec and releases the build that follows it. Nothing is "
+        + "written until it is approved.";
+    case "monitor":
+      return `Approving sets up health probes against ${named} in ${env}.`;
+    case "notify":
+      return "Approving sends the notification this step was configured with.";
+    case "teardown_preview":
+      return "Approving stops the preview and frees its port. The deployed app is untouched.";
+    default:
+      break;
+  }
+  // Unknown capability, but still a workflow gate: never claim there is no follow-on.
+  return r.gate_completes_step
+    ? `Approving completes the “${label}” step and the workflow continues from it.`
+    : `Approving releases the “${label}” step — it then runs, and the workflow continues.`;
+}
+
+/**
+ * WHERE IT WOULD ACTUALLY GO — read now, not recorded when the gate opened.
+ *
+ * "Approve the deployment" is not a decision anybody can make well without knowing the
+ * destination, and the destination is usually chosen AFTER the gate opens (that is the whole
+ * shape of the Deploy step: bind a target, then approve). So this is resolved at read time
+ * against the live target list rather than frozen into the recommendation.
+ *
+ * The unbound case is the one worth showing: approving with no target does not ship anywhere,
+ * it fails the step. An approver about to press a green button should be told that here, not
+ * discover it in the run log afterwards.
+ */
+function DeployDestination({ recommendation, projectId }: {
+  recommendation: Record<string, unknown>; projectId: string;
+}) {
+  const str = (k: string): string =>
+    (typeof recommendation[k] === "string" ? (recommendation[k] as string) : "");
+  const capability = str("capability");
+  const appName = str("app_name");
+  const isDeploy = !!str("workflow_run_id") && ["deploy", "redeploy"].includes(capability);
+  const [state, setState] = useState<
+    { kind: "loading" } | { kind: "bound"; where: string; env: string }
+    | { kind: "unbound" } | { kind: "unknown" }>({ kind: "loading" });
+
+  useEffect(() => {
+    if (!isDeploy || !appName) { setState({ kind: "unknown" }); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/deployment-targets?project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (!r.ok) { if (alive) setState({ kind: "unknown" }); return; }
+        const body = await r.json();
+        const wanted = identityKey(appName);
+        // Identity, not string equality: the stored names carry U+2010 hyphens and trailing
+        // punctuation from the directive they were made out of.
+        const hit = ((body.items ?? []) as Array<Record<string, unknown>>).find(
+          (t) => (t.status ?? "active") === "active"
+                 && identityKey(String(t.app_name ?? "")) === wanted);
+        if (!alive) return;
+        if (!hit) { setState({ kind: "unbound" }); return; }
+        const domains = Array.isArray(hit.domains) ? (hit.domains as string[]) : [];
+        setState({
+          kind: "bound",
+          where: domains.find(Boolean) || String(hit.id ?? ""),
+          env: String(hit.environment ?? "staging"),
+        });
+      } catch { if (alive) setState({ kind: "unknown" }); }
+    })();
+    return () => { alive = false; };
+  }, [isDeploy, appName, projectId]);
+
+  if (!isDeploy || state.kind === "unknown" || state.kind === "loading") return null;
+  if (state.kind === "unbound") {
+    return (
+      <p className="dq-destination bad" data-testid="decision-destination-unbound">
+        <strong>Nowhere to ship yet.</strong> “{appName}” has no active deployment target, so
+        approving this would fail at the deploy rather than release anything. Set the target on
+        the Deploy step in Workflow first.
+      </p>
+    );
+  }
+  return (
+    <p className="dq-destination" data-testid="decision-destination">
+      <strong>Goes to</strong> {state.where} · {state.env} — a container built from this app
+      and started there, replacing whatever is running under that name.
+    </p>
+  );
+}
+
 function approvalEffectLabel(recommendation: Record<string, unknown>): string {
   const action = typeof recommendation.action === "string" ? recommendation.action : "";
+  // A workflow gate has no `action`; before this it landed on the default below, which says
+  // the opposite of what approving a Deploy gate does.
+  const gate = workflowGateEffect(recommendation);
+  if (gate && !action) return gate;
   if (
     action === "execute_agent_tool" &&
     (recommendation.start_code_task === true || recommendation.tool === "publish_document")
@@ -593,7 +740,11 @@ function DecisionInboxRow({
             <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
           </div>
           {isPending ? (
-            <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
+            <>
+              <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
+              <DeployDestination recommendation={decision.recommendation}
+                                 projectId={projectId} />
+            </>
           ) : null}
         </div>
       </div>
