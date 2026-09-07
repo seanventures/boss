@@ -8685,8 +8685,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    It was a centred dialog. With a cover image, a pitch, five feature cards, a scope list and
    eight standards in it, an 88vh scroll box floating over the dashboard is the wrong container
    — "it does not render well inline", and that is right. Lovable's is a page; so is this. */
+/* Portalled to <body>, so this competes at the root rather than inside a `.bx-shell` that
+   isolates it. 200 clears the topbar (30), the dock (60) and the mobile nav (70); it stays
+   under the toast container (9999), because a toast about something going wrong should still
+   be readable over a template page. */
 .tpl-page {
-  position: fixed; inset: 0; z-index: 70; overflow-y: auto; overscroll-behavior: contain;
+  position: fixed; inset: 0; z-index: 200; overflow-y: auto; overscroll-behavior: contain;
   background:
     radial-gradient(1100px 460px at 18% -12%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%),
     var(--bg, #070a12);

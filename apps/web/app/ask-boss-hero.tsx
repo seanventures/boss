@@ -19,6 +19,7 @@
 
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
@@ -1645,7 +1646,18 @@ export function AskBossHero({
             thing. Ours does not exist yet — BOSS builds it, to this specification — so the
             specification IS the preview, and the honest thing to show is the contract the
             build will be held to. */}
-        {openIdea ? (
+        {/* PORTALLED TO THE BODY, and it has to be.
+            `.bx-shell` carries `isolation: isolate`, which makes each shell a self-contained
+            stacking context — and the console renders MORE THAN ONE of them (Next streams the
+            tree into a hidden <div id="S:0"> holding a second complete .bx-shell). Two isolated
+            contexts are compared as whole units in DOM order, so a `position: fixed; z-index:
+            70` element inside one of them cannot paint above ANYTHING in the other, whatever
+            number you give it. Measured live: the project strip covered the template page, its
+            own "Back to templates" header included, leaving no way out of a full-screen view
+            except navigating elsewhere and returning — which is exactly what the operator
+            described having to do.
+            Raising the z-index cannot fix that. Leaving the shell can. */}
+        {openIdea && typeof document !== "undefined" ? createPortal(
           <div className="tpl-page" data-testid="askboss-sheet" role="dialog" aria-modal="true"
                aria-label={openIdea.title}>
             <header className="tpl-page-head">
@@ -1814,7 +1826,8 @@ export function AskBossHero({
                 </div>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body,
         ) : null}
 
         {/* WHAT IT IS DOING, NOT HOW LONG IT HAS BEEN DOING IT.

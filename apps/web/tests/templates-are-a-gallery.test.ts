@@ -139,6 +139,26 @@ describe("clicking opens a page, and reading is not the same as buying", () => {
     expect(HERO).toContain('data-testid="askboss-sheet-ask"');
   });
 
+  it("it escapes the shell, because a z-index cannot get it out", () => {
+    // MEASURED IN THE LIVE CONSOLE: two `.bx-shell` elements, both `isolation: isolate` — Next
+    // streams the tree into a hidden <div id="S:0"> that holds a second complete shell. Two
+    // isolated stacking contexts are compared as whole units in DOM order, so a fixed element
+    // inside one of them cannot paint above ANYTHING in the other at any z-index. The project
+    // strip covered the template page including its own "Back to templates" header, which left
+    // no way out of a full-screen view except navigating elsewhere and coming back.
+    expect(CSS).toContain("isolation: isolate");     // the trap, still there, still correct
+    expect(HERO).toContain("createPortal(");
+    expect(HERO).toContain("document.body,");
+    // Above the topbar (30), dock (60) and mobile nav (70); below toasts (9999), because a
+    // toast about something going wrong should still be readable over a template page.
+    const at = CSS.indexOf(".tpl-page {");
+    expect(CSS.slice(at, at + 140)).toContain("z-index: 200");
+  });
+
+  it("and the portal is never built during a server render", () => {
+    expect(HERO).toContain('openIdea && typeof document !== "undefined"');
+  });
+
   it("it is a page, not a dialog floating over the dashboard", () => {
     // A cover image, a pitch, five feature cards, a scope list and eight standards do not fit
     // in an 88vh scroll box with the console showing around the edges.
