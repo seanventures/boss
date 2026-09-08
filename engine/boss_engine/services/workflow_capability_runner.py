@@ -27,7 +27,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import workflow_custom_steps as custom_steps, workflows
+from . import change_record, workflow_custom_steps as custom_steps, workflows
 from .core import create_blocking_decision, emit_event, now_utc
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
@@ -550,7 +550,6 @@ def _write_the_record(
     Nothing is invented: every line is a field some step recorded, and the gaps are listed.
     """
     from ..config import get_settings
-    from . import change_record
     from .core import create_artifact
 
     run_input = context.get("input") or {}
@@ -673,6 +672,53 @@ def _write_the_record(
         "pdf": bool(pdf_bytes),
         "note": note,
     }
+
+
+def rebuild_record(connection: Connection, project_id: str, artifact_id: str) -> dict[str, Any]:
+    """Recompose an existing change record from the run it came from.
+
+    A record is a rendering of facts that are still in the database, so a composition fix should
+    reach the documents already written rather than only the next one. Without this the operator
+    has to take "it is fixed now" on trust, on a document that still shows the old dump —
+    which, after three rounds of exactly this, is not a reasonable thing to ask.
+
+    Rewrites the artifact in place: same id, same link, new body. It cannot invent anything the
+    run did not produce, because it reads the same context the step read.
+    """
+    row = connection.execute(
+        text("SELECT title, content FROM artifacts "
+             "WHERE id = :a AND project_id = :p AND artifact_type = 'change_record'"),
+        {"a": artifact_id, "p": project_id},
+    ).mappings().first()
+    if not row:
+        return {"ok": False, "error": f"no change record {artifact_id} in this project"}
+    content = row["content"] if isinstance(row["content"], dict) else {}
+    run_id = str(content.get("workflow_run_id") or "")
+    if not run_id:
+        return {"ok": False,
+                "error": "this record does not name the run it came from, so it cannot be "
+                         "rebuilt — only a new run will produce a corrected one"}
+    context = _run_context(connection, run_id)
+    result = _write_the_record(connection, project_id, context,
+                               {"title": row["title"]})
+    new_id = result.get("document_id")
+    fresh = connection.execute(
+        text("SELECT title, content FROM artifacts WHERE id = :a"), {"a": new_id},
+    ).mappings().first()
+    if not fresh:
+        return {"ok": False, "error": "the rebuild produced no artifact"}
+    # Update IN PLACE and drop the duplicate, so links to this record keep working.
+    connection.execute(
+        text("UPDATE artifacts SET title = :t, content = CAST(:c AS JSONB) WHERE id = :a"),
+        {"t": fresh["title"], "c": json.dumps(fresh["content"]), "a": artifact_id},
+    )
+    connection.execute(text("DELETE FROM artifacts WHERE id = :a"), {"a": new_id})
+    defects = (fresh["content"] or {}).get("defects") or []
+    return {"ok": True, "artifact_id": artifact_id, "run_id": run_id,
+            "sections": (fresh["content"] or {}).get("sections") or [],
+            "defects": defects,
+            "note": f"Rebuilt from {run_id}."
+                    + (f" {len(defects)} check(s) still flag it." if defects else "")}
 
 
 def _observed_from_the_build(
@@ -1407,15 +1453,28 @@ def _dossier_brief(title: Any, state: Any) -> str:
         value = state.get(key)
         if not value:
             continue
+        if key == "research_brief" and isinstance(value, dict):
+            # `hypothesis` is the directive, restated and truncated mid-word by the research
+            # service ("- Show the spread and flag where interviewers disagree most.\n- Prod").
+            # The panel is already reading the directive; a broken copy of it is only noise.
+            value = {k: v for k, v in value.items() if k != "hypothesis"}
+            if not value:
+                continue
+        # RENDERED, NOT DUMPED — for the panel as much as for the reader.
+        #
+        # This was `json.dumps`, so the brief handed to the agent panel contained
+        # `{"questions": [...], "hypothesis": "Build an interview scorecard app.\nWho it is
+        # for: ...", "sources_consulted": [...]}` — truncated at 1200 characters, mid-URL. That
+        # is a poor prompt AND, because the change record fell back to this text when the
+        # structured dossier could not be read, it is what reached the PDF.
         if isinstance(value, str):
             body = value.strip()
         elif isinstance(value, list):
             body = "\n".join(
-                f"- {json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v}"
-                for v in value[:12]
+                f"- {change_record.render_value(v)}" for v in value[:12]
             )
         else:
-            body = json.dumps(value, indent=1, ensure_ascii=False)[:1200]
+            body = change_record.render_value(value)[:2400]
         if body:
             parts.append(f"## {heading}\n{body}")
     return "\n\n".join(parts)[:_DOSSIER_CHARS]

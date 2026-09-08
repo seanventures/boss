@@ -132,6 +132,56 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print("the record reads like a document")
+    return no_json_anywhere()
+
+
+
+
+def no_json_anywhere() -> int:
+    """No structure printed instead of rendered — in the record OR in the panel's brief.
+
+    Reported twice. The first fix rendered the change record from the discovery run's own
+    state, which is right, but left two paths still dumping:
+
+      * `_dossier_brief`, which `json.dumps`ed every dict — and which the record FALLS BACK to
+        when the structured dossier cannot be read, so the JSON reached the PDF anyway;
+      * the same brief is what the agent panel argues from, so the panel had been reading
+        `{"questions": [...], "hypothesis": "Build an interview scorecard app.\\nWho it is
+        for..."}` truncated at 1200 characters, mid-URL.
+
+    One renderer now serves both, so a fix to either cannot leave the other behind.
+    """
+    from boss_engine.services import workflow_capability_runner as runner
+
+    failures: list[str] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}{'' if ok else f'  <- {detail}'}")
+        if not ok:
+            failures.append(name)
+
+    print("== the panel's brief renders too ==")
+    brief = runner._dossier_brief("Interview Scorecard App", DOSSIER)
+    for marker in ('{"', '": [', '": {'):
+        check(f"no {marker!r} in the panel brief", marker not in brief)
+    check("a nested list is indented, not run on to its label",
+          "- **questions:**\n  - " in brief, brief[:200])
+    # The panel already HAS the directive; a copy of it truncated mid-word is only noise.
+    check("the truncated hypothesis is gone", "hypothesis" not in brief, brief[:400])
+
+    print("== and the record's fallback path is clean ==")
+    # When the structured dossier cannot be read, the record uses this text. That path is what
+    # put JSON in the PDF, so it is worth asserting end to end rather than by inspection.
+    md, sections = cr.compose(title="X", directive="Do a thing.",
+                              dossier_text=brief, discovery_id="drun_3")
+    kinds = {d["kind"] for d in cr.review(md, sections)}
+    check("the fallback record trips no raw-data check", "raw_data" not in kinds, str(kinds))
+
+    print()
+    if failures:
+        print(f"{len(failures)} FAILURE(S): {', '.join(failures)}")
+        return 1
+    print("nothing is dumped, on either path")
     return 0
 
 

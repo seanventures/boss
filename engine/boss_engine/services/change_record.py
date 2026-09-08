@@ -66,8 +66,13 @@ _ANGLE_NAMES = {
 }
 
 
-def _text(value: Any) -> str:
-    """A field as prose. Dicts and lists are rendered, never dumped."""
+def render_value(value: Any) -> str:
+    """A field as prose. Dicts and lists are rendered, never dumped.
+
+    Shared with `_dossier_brief`, which used to `json.dumps` the same structures — so the
+    JSON blob that reached the PDF also reached the PANEL, which has been arguing from
+    `{"questions": [...], "hypothesis": ...}` this whole time.
+    """
     if value is None:
         return ""
     if isinstance(value, str):
@@ -77,14 +82,26 @@ def _text(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, list):
-        return "\n".join(f"- {_text(v)}" for v in value if _text(v))
+        return "\n".join(f"- {render_value(v)}" for v in value if render_value(v))
     if isinstance(value, dict):
         # `problem` and `competition` are dicts of labelled prose. Printing the JSON was the
         # single worst thing in the old record; a labelled line per key is the same data.
-        return "\n".join(
-            f"- **{_label(str(k))}:** {_text(v)}"
-            for k, v in value.items() if _text(v)
-        )
+        #
+        # A value that is ITSELF a list gets its own indented block. Run on to the end of the
+        # label — "- **questions:** - Is the pain real..." — it reads as one broken sentence,
+        # which is the JSON problem in a new costume.
+        out: list[str] = []
+        for key, item in value.items():
+            body = render_value(item)
+            if not body:
+                continue
+            label = f"- **{_label(str(key))}:**"
+            if "\n" in body:
+                out.append(label)
+                out.extend(f"  {line}" for line in body.split("\n"))
+            else:
+                out.append(f"{label} {body}")
+        return "\n".join(out)
     return str(value)
 
 
@@ -188,26 +205,26 @@ def _research_detail(state: dict, summary: dict) -> list[str]:
     questions = brief.get("questions")
     if isinstance(questions, list) and questions:
         lines += ["### Questions it set out to answer", ""]
-        lines += [f"{i}. {_text(q)}" for i, q in enumerate(questions, 1)]
+        lines += [f"{i}. {render_value(q)}" for i, q in enumerate(questions, 1)]
         lines += [""]
 
     market = state.get("market_analysis") if isinstance(state.get("market_analysis"), dict) else {}
     for key, heading in _MARKET_FIELDS:
-        body = _text(market.get(key))
+        body = render_value(market.get(key))
         if body:
             lines += [f"### {heading}", "", body, ""]
 
     for angle, items in _findings_by_angle(state.get("signal_findings")):
         lines += [f"### {_ANGLE_NAMES.get(angle, angle.title())}", ""]
         for item in items:
-            finding = _text(item.get("finding"))
+            finding = render_value(item.get("finding"))
             if not finding:
                 continue
             lines += [f"- {finding}"]
-            evidence = _text(item.get("evidence"))
+            evidence = render_value(item.get("evidence"))
             if evidence:
                 lines += [f"  - *Evidence:* {evidence}"]
-            url = _text(item.get("citation_url"))
+            url = render_value(item.get("citation_url"))
             if url:
                 lines += [f"  - Source: {url}"]
         lines += [""]
@@ -219,9 +236,9 @@ def _research_detail(state: dict, summary: dict) -> list[str]:
         # "what would make this wrong" gets read, and it is the same content.
         lines += ["### What would make this wrong", ""]
         if critique.get("biggest_risk"):
-            lines += [_text(critique["biggest_risk"]), ""]
+            lines += [render_value(critique["biggest_risk"]), ""]
         if isinstance(disconfirming, list) and disconfirming:
-            lines += [_text(disconfirming), ""]
+            lines += [render_value(disconfirming), ""]
 
     outcomes = state.get("candidate_outcomes")
     if isinstance(outcomes, list) and outcomes:
@@ -230,7 +247,7 @@ def _research_detail(state: dict, summary: dict) -> list[str]:
             if not isinstance(outcome, dict):
                 continue
             conf = _pct(outcome.get("confidence_0_1"))
-            head = _text(outcome.get("outcome"))
+            head = render_value(outcome.get("outcome"))
             if head:
                 lines += [f"**{head}**" + (f" — confidence {conf}" if conf else ""), ""]
             for field, label in (("wedge", "The wedge"),
@@ -238,7 +255,7 @@ def _research_detail(state: dict, summary: dict) -> list[str]:
                                  ("first_prototype_slice", "First slice to build"),
                                  ("validation_plan", "How to test it"),
                                  ("target_pilot", "Who to test it with")):
-                body = _text(outcome.get(field))
+                body = render_value(outcome.get(field))
                 if body:
                     lines += [f"- *{label}:* {body}"]
             lines += [""]
@@ -249,7 +266,7 @@ def _research_detail(state: dict, summary: dict) -> list[str]:
         # old record read as five sources.
         seen, unique = set(), []
         for s in sources:
-            url = _text(s)
+            url = render_value(s)
             if url and url not in seen:
                 seen.add(url)
                 unique.append(url)
@@ -316,7 +333,7 @@ def compose(*, title: str, directive: str, dossier_state: Optional[dict] = None,
             who = decision.get("approved_by") or "nobody yet"
             lines += [f"**{decision.get('question')}** — {decision.get('status')}, by {who}."]
             if decision.get("resolution_note"):
-                lines += ["", _text(decision["resolution_note"])]
+                lines += ["", render_value(decision["resolution_note"])]
         else:
             lines += [f"Recorded as `{decision_id}`."]
         lines += [""]
@@ -445,4 +462,4 @@ def body_for_pdf(markdown: str) -> tuple[str, str, str]:
     return title, subtitle, "\n".join(lines[index:]).lstrip("\n")
 
 
-__all__ = ["compose", "research_summary", "review", "body_for_pdf"]
+__all__ = ["compose", "research_summary", "review", "body_for_pdf", "render_value"]

@@ -12550,6 +12550,26 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
         return artifact_detail_from_row(row)
 
 
+@app.post("/v1/artifacts/{artifact_id}/rebuild")
+def rebuild_change_record(artifact_id: str, payload: dict = Body(default={})) -> dict:
+    """Recompose a change record from the run it came from.
+
+    A record renders facts that are still in the database, so a composition fix should reach the
+    documents already written rather than only the next one — otherwise "it is fixed now" is
+    something the operator has to take on trust while looking at the old dump.
+    """
+    from boss_engine.services.workflow_capability_runner import rebuild_record
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        result = rebuild_record(connection, project_id, artifact_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=str(result.get("error") or "rebuild failed"))
+    return result
+
+
 @app.get("/v1/artifacts/{artifact_id}/pdf")
 def get_artifact_pdf(artifact_id: str) -> Response:
     """A document as a PDF anyone can open, mail, or put in a folder.
