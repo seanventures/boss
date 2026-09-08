@@ -127,6 +127,16 @@ export async function createStudioAgent(
   submission: AgentWizardSubmission,
   publish: boolean,
 ): Promise<StudioActionResult> {
+  // THE ROLE FIRST, when one is being made. An agent whose role does not exist is an agent the
+  // Agents page cannot list and the assignment model cannot assign — the four-models problem in
+  // its most concrete form. Idempotent on (project_id, role_key), so a retry is safe.
+  if (submission.role) {
+    const role = await post("/v1/roles", submission.role);
+    if (!role.ok) {
+      return { ...role, message: `The agent's role could not be registered: ${role.message}` };
+    }
+  }
+
   const definition = await post("/v1/agent-studio/agents", submission.definition);
   if (!definition.ok || typeof definition.item?.id !== "string") {
     return definition;

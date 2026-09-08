@@ -7,6 +7,8 @@ export type AgentWizardDraft = {
   description: string;
   owner: string;
   roleKey: string;
+  /** Only used when roleKey is NEW_ROLE: the display name the new role gets. */
+  newRoleName: string;
   executionMode: "deterministic_brief" | "live_model";
   selectionMode: "router" | "pinned" | "local";
   preferredCapabilitiesText: string;
@@ -37,7 +39,17 @@ export type AgentWizardIssue = {
 export type AgentWizardSubmission = {
   definition: Record<string, unknown>;
   version: Record<string, unknown>;
+  /** A ROLE TO REGISTER FIRST, when the operator is creating one rather than picking one.
+   *
+   *  The wizard wrote `agent_definitions`/`agent_versions` and referenced an existing
+   *  `roles.role_key`, so an agent created here never appeared on the Agents page — that roster
+   *  lists `roles`. Four disconnected agent models, and the create button was wired to the one
+   *  the operator never sees. Registering the role first converges them. */
+  role?: Record<string, unknown>;
 };
+
+/** The sentinel for "I am making a new role", not picking one that exists. */
+export const NEW_ROLE = "__new__";
 
 type AgentWizardPreset = Pick<
   AgentWizardDraft,
@@ -134,6 +146,7 @@ export function createInitialAgentWizardDraft(
     description: "",
     owner: "vp_agents",
     roleKey,
+    newRoleName: "",
     executionMode: "deterministic_brief",
     selectionMode: "router",
     preferredCapabilitiesText: "",
@@ -241,7 +254,28 @@ export function buildAgentWizardSubmission(
     modelPolicy.pinned_model = draft.pinnedModel.trim();
   }
 
+  // A NEW ROLE, REGISTERED ALONGSIDE. Without this the wizard writes agent_definitions and
+  // points at a role that already exists, so "create an agent" could never produce one the
+  // Agents page lists — that roster reads `roles`.
+  const makingRole = draft.roleKey === NEW_ROLE;
+  const newRoleKey = slugifyAgentKey(draft.newRoleName || draft.name).replace(/-/g, "_");
+
   return {
+    ...(makingRole && newRoleKey ? {
+      role: {
+        project_id: projectId,
+        role_key: newRoleKey,
+        display_name: (draft.newRoleName || draft.name).trim(),
+        // Starts at zero: an agent created by hand has done nothing yet, and an autonomy level
+        // it did not earn is the one number on this page nobody should be able to award itself.
+        autonomy_level: 0,
+        spec: {
+          mission: draft.description.trim(),
+          permissions: { allowed_skills: draft.requestedSkills },
+          boundaries: { must_not: parseWizardList(draft.rulesText) },
+        },
+      },
+    } : {}),
     definition: {
       project_id: projectId,
       agent_key: slugifyAgentKey(draft.agentKey),
@@ -252,7 +286,7 @@ export function buildAgentWizardSubmission(
     },
     version: {
       project_id: projectId,
-      role_key: draft.roleKey,
+      role_key: makingRole ? newRoleKey : draft.roleKey,
       model_policy: modelPolicy,
       prompts: {
         system: draft.systemPrompt.trim(),

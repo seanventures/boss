@@ -32,6 +32,7 @@ import {
   type AgentWizardDraft,
   type AgentWizardIssue,
   type AgentWizardPattern,
+  NEW_ROLE,
 } from "../lib/agent-wizard";
 import { createStudioAgent, type StudioActionResult } from "./agent-studio-actions";
 
@@ -351,6 +352,11 @@ export function AgentCreationWizard({
                         onChange={(event) => update("roleKey", event.target.value)}
                       >
                         <option value="">Choose an installed RoleSpec</option>
+                        {/* MAKE ONE. Every option here was a role that already existed, so this
+                            wizard could only ever produce an agent_definitions row pointing at
+                            somebody else's role — and the Agents page, which lists `roles`,
+                            would never show it. */}
+                        <option value={NEW_ROLE}>+ A new role for this agent</option>
                         {roles.map((item) => (
                           <option key={item.id} value={item.roleKey}>
                             {item.displayName} · L{item.autonomyLevel}
@@ -358,6 +364,15 @@ export function AgentCreationWizard({
                         ))}
                       </select>
                     </Field>
+                    {draft.roleKey === NEW_ROLE ? (
+                      <Field label="New role name">
+                        <input
+                          value={draft.newRoleName}
+                          placeholder={draft.name || "Release Auditor"}
+                          onChange={(event) => update("newRoleName", event.target.value)}
+                        />
+                      </Field>
+                    ) : null}
                     <Field label="Definition owner">
                       <input
                         value={draft.owner}

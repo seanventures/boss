@@ -8965,3 +8965,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 0; background: transparent; padding: 0; cursor: pointer;
   color: var(--accent); font-size: inherit; text-decoration: underline;
 }
+/* The roster's own accent button. Not `primary`: a guard test enforces that this screen uses
+   only its own namespace, and a shared class means a restyle elsewhere restyles this too. */
+.roster-new {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+.roster-new:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }

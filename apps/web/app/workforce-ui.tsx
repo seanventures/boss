@@ -2,6 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import type { RoleFeedItem } from "../lib/roles";
+import { AgentCreationWizard } from "./agent-creation-wizard";
 import { AgentDetail } from "./agent-detail-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 
@@ -126,6 +128,36 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
+  // MAKE ONE. The page listed 26 agents and offered no way to add a 27th — the only creation
+  // wizard in BOSS lives in Agent Studio and writes `agent_definitions`, which this roster does
+  // not read. Same wizard, now registering the role too, so what it makes appears here.
+  const [creating, setCreating] = useState(false);
+  const [roleOptions, setRoleOptions] = useState<RoleFeedItem[]>([]);
+  useEffect(() => {
+    if (!creating) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/agent?view=roles&project_id=${encodeURIComponent(workforce.project_id)}`,
+          { cache: "no-store" });
+        if (!r.ok) return;
+        const body = await r.json();
+        if (!alive) return;
+        // Only the four fields the wizard's picker reads. The rest of RoleFeedItem is a
+        // scoreboard this list has no use for, and inventing zeros for it would put numbers on
+        // screen that describe nothing.
+        setRoleOptions(((body.items ?? []) as Array<Record<string, unknown>>).map((x) => ({
+          id: String(x.id ?? x.role_key ?? ""),
+          roleKey: String(x.role_key ?? ""),
+          displayName: String(x.display_name ?? x.role_key ?? ""),
+          autonomyLevel: Number(x.autonomy_level ?? 0),
+        } as RoleFeedItem)));
+      } catch { /* the wizard still offers "a new role", which is the point of it here */ }
+    })();
+    return () => { alive = false; };
+  }, [creating, workforce.project_id]);
+
   const closeAgent = useCallback(() => {
     setOpenRole("");
     try {
@@ -191,8 +223,18 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
               {f === "all" ? `All ${counts.total}` : f === "working" ? `Active ${counts.WORKING}` : "Has done work"}
             </button>
           ))}
+          {/* A ROSTER YOU CANNOT ADD TO. The page listed 26 agents and had no way to make a
+              27th — the only wizard in BOSS is in Agent Studio, and it writes
+              `agent_definitions`, which this roster does not read. */}
+          <button type="button" className="cap-btn roster-new" data-testid="wf-new-agent"
+                  onClick={() => setCreating(true)}>+ New agent</button>
         </span>
       </div>
+
+      {creating ? (
+        <AgentCreationWizard projectId={workforce.project_id} roles={roleOptions} skills={[]}
+                             onClose={() => setCreating(false)} />
+      ) : null}
 
       {/* Governance gap, said once and at the top: an agent running work without a registered
           role has no trust score, no autonomy level and no violation tracking. */}
