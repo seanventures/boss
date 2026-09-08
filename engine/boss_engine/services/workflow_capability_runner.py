@@ -702,8 +702,11 @@ def rebuild_record(connection: Connection, project_id: str, artifact_id: str) ->
                 "error": "this record does not name the run it came from, so it cannot be "
                          "rebuilt — only a new run will produce a corrected one"}
     context = _run_context(connection, run_id)
-    result = _write_the_record(connection, project_id, context,
-                               {"title": row["title"]})
+    # NO TITLE PASSED IN. Handing back the stored one preserved exactly what the rebuild is for
+    # — the first rebuild kept "Build an interview scorecard app.\nWho it is for: a hiring
+    # manager tir…" as the heading and the repetition check flagged it again. The writer
+    # derives the title from the run's own input, which is where a good one comes from.
+    result = _write_the_record(connection, project_id, context, {})
     new_id = result.get("document_id")
     fresh = connection.execute(
         text("SELECT title, content FROM artifacts WHERE id = :a"), {"a": new_id},
