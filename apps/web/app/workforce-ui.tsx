@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AgentDetail } from "./agent-detail-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 
 /**
@@ -101,8 +102,40 @@ function askAgent(agentName: string): void {
   } catch { /* non-browser */ }
 }
 
+/** Open one agent. Addressable, because a view nobody can link to is one nobody can send. */
+function openAgent(roleKey: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("role", roleKey);
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
 export function WorkforceArea({ workforce }: { workforce: Workforce }) {
   const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
+  // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
+  const [openRole, setOpenRole] = useState("");
+  useEffect(() => {
+    const sync = () => {
+      try {
+        setOpenRole(new URL(window.location.href).searchParams.get("role") ?? "");
+      } catch { /* non-browser */ }
+    };
+    sync();
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+  const closeAgent = useCallback(() => {
+    setOpenRole("");
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("role")) return;
+      url.searchParams.delete("role");
+      // replace, not back(): back() would leave the site for anyone who arrived on the link.
+      window.history.replaceState(null, "", url.toString());
+    } catch { /* non-browser */ }
+  }, []);
   // Set after mount, so the first client paint matches the server HTML and the recency-driven
   // motion starts on the frame after hydration rather than fighting it.
   const [now, setNow] = useState<number | null>(null);
@@ -132,6 +165,13 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
     );
   }
 
+
+  // The detail view, over the roster. Rendered here rather than as a route because the console
+  // mounts every area at once and a route would be a second place agents can be listed.
+  if (openRole) {
+    return <AgentDetail projectId={workforce.project_id} roleKey={openRole}
+                        onClose={closeAgent} />;
+  }
   return (
     <div className="roster">
       <div className="roster-filterbar">
@@ -172,7 +212,14 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
             const share = volumeOf(a) > 0 ? volumeOf(a) / busiest : null;
             const tone = rate == null ? "none" : rate >= 0.9 ? "good" : rate >= 0.6 ? "warn" : "bad";
             return (
+              /* OPENABLE. The card was an <article> with one button on it, so an agent was a
+                 row of numbers with nowhere to go. The whole card is the way in; the Ask button
+                 stops the click so it still only opens the chat. */
               <article className="roster-card" key={a.id} data-status={a.status}
+                       onClick={() => openAgent(a.id)}
+                       role="button" tabIndex={0}
+                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") {
+                         e.preventDefault(); openAgent(a.id); } }}
                        data-recency={recency(a, now)} data-rank={i + 1}
                        style={{ ["--i" as string]: String(Math.min(i, 11)) }}
                        data-testid={`wf-agent-${a.id}`}>
@@ -185,7 +232,7 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
                       about a workforce. This opens the chat with the message already addressed,
                       so asking is a click from the card that named them. */}
                   <button type="button" className="roster-ask"
-                          onClick={() => askAgent(a.name)}
+                          onClick={(e) => { e.stopPropagation(); askAgent(a.name); }}
                           data-testid={`wf-ask-${a.id}`}
                           title={`Ask ${a.name} something`}>Ask</button>
                 </header>

@@ -8873,3 +8873,50 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: color-mix(in srgb, var(--amber, #d29922) 7%, transparent);
   font-size: .8rem; line-height: 1.5;
 }
+
+/* ── One agent, in full ───────────────────────────────────────────────────────────────────
+   The roster card was an <article> with a single button on it, so an agent was a row of
+   numbers with nowhere to go. This is what is behind it now; it reuses the template page's
+   full-screen shell, including the portal-free `.tpl-page` rules. */
+.roster-card[role="button"] { cursor: pointer; }
+.roster-card[role="button"]:hover { border-color: var(--muted); }
+.roster-card[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ad-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 20px; flex-wrap: wrap; margin-bottom: 22px;
+}
+.ad-figs { display: flex; gap: 18px; flex-wrap: wrap; }
+.ad-fig { display: grid; gap: 2px; text-align: right; }
+.ad-fig b { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.ad-fig span { font-size: .68rem; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.ad-fig[data-tone="bad"] b { color: hsl(0 70% 68%); }
+
+.ad-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.ad-table th {
+  text-align: left; font-size: .66rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); font-weight: 500; padding: 4px 10px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.ad-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ad-table td:first-child { font-weight: 500; }
+.ad-bad { color: hsl(0 70% 68%); }
+
+.ad-list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 5px; font-size: .86rem; }
+.ad-h { margin: 16px 0 4px; font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.ad-mission { margin: 0; font-size: .95rem; line-height: 1.6; max-width: 78ch; }
+.ad-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ad-chip {
+  font-size: .74rem; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--ink);
+}
+/* A forbidden skill is a fact about this agent, not a warning — but it must not read as an
+   allowed one, which is what an identical chip would do. */
+.ad-chip[data-forbidden="true"] {
+  color: var(--muted); border-style: dashed; text-decoration: line-through;
+}
+.ad-must, .ad-mustnot {
+  font-size: .64rem; letter-spacing: .07em; text-transform: uppercase; margin-right: 6px;
+}
+.ad-must { color: var(--green, #3fb950); }
+.ad-mustnot { color: hsl(0 70% 68%); }

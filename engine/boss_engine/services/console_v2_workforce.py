@@ -870,9 +870,15 @@ def agent_detail(connection, project_id: str, role_key: str, *,
                 """),
             {"p": project_id, "stages": stages, "h": int(hours)},
         ).mappings().all()
+        from .naming import project_name
         for row in rows:
+            # THE APP'S NAME, not the run's title. A title is the operator's whole directive —
+            # "Build an incident timeline builder.\nWho it is for: …" — and a list of those is
+            # unreadable. Same namer the rest of the console titles cards with.
+            display = project_name(str(row["app_name"] or ""))[0].strip().rstrip(".").strip()
             apps.append({
-                "app": row["app_name"],
+                "app": display or str(row["app_name"] or "untitled")[:60],
+                "raw_title": row["app_name"],
                 "calls": int(row["calls"] or 0),
                 "tokens": int(row["tokens"] or 0),
                 "spend_usd": round(int(row["micros"] or 0) / 1_000_000, 4),
