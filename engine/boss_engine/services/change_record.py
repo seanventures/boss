@@ -111,6 +111,18 @@ def _label(key: str) -> str:
     return key.replace("_", " ").strip()
 
 
+def _same_thing(a: str, b: str) -> bool:
+    """Two strings naming the same thing, allowing for the namer's tidying.
+
+    `project_name` turns "Build an interview scorecard app." into "Interview Scorecard App.",
+    so a literal comparison would call them different and print both.
+    """
+    def key(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+    ka, kb = key(a), key(b)
+    return bool(ka) and (ka == kb or ka.endswith(kb) or kb.endswith(ka))
+
+
 def _pct(value: Any) -> str:
     """A 0–1 confidence as a percentage. 0.45 means nothing to most readers; 45% does."""
     try:
@@ -154,13 +166,21 @@ def research_summary(state: dict) -> dict[str, Any]:
     }
 
 
-def _summary_section(*, directive: str, research: Optional[dict], decision: Optional[dict],
-                     built: dict, missing: list[str]) -> list[str]:
+def _summary_section(*, title: str, directive: str, research: Optional[dict],
+                     decision: Optional[dict], built: dict,
+                     missing: list[str]) -> list[str]:
     """What a person needs before deciding anything. Everything below this is detail."""
     lines = ["## Summary", ""]
     if directive:
+        # NOT WHEN THE TITLE ALREADY SAYS IT. A run started with no `title` names itself from
+        # the directive's first line, so "# Build an interview scorecard app." was followed two
+        # lines later by "**Asked for:** Build an interview scorecard app." — and the checklist
+        # caught it, which is the checklist working.
         first = directive.strip().split("\n")[0].strip()
-        lines += [f"**Asked for:** {first}", ""]
+        if _same_thing(first, title):
+            pass
+        else:
+            lines += [f"**Asked for:** {first}", ""]
     if research:
         verdict = research.get("verdict")
         conf = _pct(research.get("confidence"))
@@ -305,7 +325,7 @@ def compose(*, title: str, directive: str, dossier_state: Optional[dict] = None,
     lines = [f"# {title}", ""]
     if workflow_name:
         lines += [f"*{workflow_name}*", ""]
-    lines += _summary_section(directive=directive, research=summary or None,
+    lines += _summary_section(title=title, directive=directive, research=summary or None,
                               decision=decision, built=built, missing=missing)
 
     if directive:

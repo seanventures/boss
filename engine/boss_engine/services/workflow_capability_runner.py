@@ -553,9 +553,12 @@ def _write_the_record(
     from .core import create_artifact
 
     run_input = context.get("input") or {}
+    # THE APP'S NAME, via the namer the rest of the console titles things with — so the record
+    # is called "Interview Scorecard App" rather than "Build an interview scorecard app.".
+    from .naming import project_name
     title = (str(inputs.get("title") or "").strip()
              or str(run_input.get("title") or "").strip()
-             or str(run_input.get("directive") or "").strip().split("\n")[0].strip()[:80]
+             or project_name(str(run_input.get("directive") or ""))[0].strip()[:80]
              or "Change record")
     directive = str(run_input.get("directive") or "").strip()
 

@@ -125,6 +125,25 @@ def main() -> int:
           bare[-200:])
     check("sections name only what is there", bare_sections == ["directive"], str(bare_sections))
 
+    print("== the title is not restated two lines under itself ==")
+    # A run started with no `title` names itself from the directive, so the H1 and the summary
+    # said the same sentence twice. The checklist caught it on the live record — which is the
+    # checklist doing its job, and the reason it runs on every document rather than on request.
+    named, named_sections = cr.compose(
+        title="Interview Scorecard App", directive=DIRECTIVE,
+        dossier_state=DOSSIER, discovery_id="drun_4")
+    check("no 'Asked for' line repeating the title",
+          "**Asked for:**" not in named.split("## What was asked for")[0],
+          named.split("## What was asked for")[0][:300])
+    check("and the repetition check passes",
+          not any(d["kind"] == "repeated" for d in cr.review(named, named_sections)),
+          str(cr.review(named, named_sections)))
+    # A title that is genuinely different still gets the line — dropping it always would lose
+    # the one-line "what was asked" from every record with a real project name.
+    other, _ = cr.compose(title="Q3 Hiring Tools", directive=DIRECTIVE,
+                          dossier_state=DOSSIER, discovery_id="drun_5")
+    check("a different title keeps it", "**Asked for:**" in other)
+
     print()
     if _failures:
         print(f"{len(_failures)} FAILURE(S):")
