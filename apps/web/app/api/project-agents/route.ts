@@ -14,10 +14,18 @@ export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const projectId = params.get("project_id")?.trim();
   const app = params.get("app")?.trim() ?? "";
+  // WHO WOULD BE ASSIGNED, for something that does not exist yet. The new-project wizard needs
+  // that before there is an app to ask about, and a guess of its own would drift from what
+  // start_run actually seeds.
+  const defaults = params.get("defaults")?.trim() === "1";
+  const workflowKey = params.get("workflow_key")?.trim() ?? "";
   if (!projectId) return NextResponse.json({ error: "missing project_id" }, { status: 400 });
+  const query = defaults
+    ? `?defaults=1${workflowKey ? `&workflow_key=${encodeURIComponent(workflowKey)}` : ""}`
+    : (app ? `?app=${encodeURIComponent(app)}` : "");
   return relay(
-    `${API_URL}/v1/projects/${encodeURIComponent(projectId)}/agents`
-    + (app ? `?app=${encodeURIComponent(app)}` : ""), { headers: authHeaders({}) });
+    `${API_URL}/v1/projects/${encodeURIComponent(projectId)}/agents${query}`,
+    { headers: authHeaders({}) });
 }
 
 export async function POST(req: Request) {

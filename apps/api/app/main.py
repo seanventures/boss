@@ -12295,10 +12295,31 @@ def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720) ->
 
 
 @app.get("/v1/projects/{project_id}/agents")
-def list_project_agents(project_id: str, app: str = "") -> dict:
-    """Who is assigned to an app — or, with no app, every assignment in the project."""
+def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
+                        workflow_key: str = "") -> dict:
+    """Who is assigned to an app — or, with no app, every assignment in the project.
+
+    `defaults=1` answers a different question: who WOULD be assigned to something that does not
+    exist yet. The new-project wizard needs that before there is an app to ask about, and
+    showing a guess of its own would drift from what start_run actually seeds.
+    """
     from boss_engine.services import agent_assignment
     from boss_engine.services.naming import identity_key
+
+    if defaults:
+        spec = None
+        if workflow_key.strip():
+            with begin(engine) as connection:
+                row = connection.execute(
+                    text("SELECT v.spec FROM workflow_definitions d "
+                         "JOIN workflow_versions v ON v.workflow_definition_id = d.id "
+                         "WHERE d.project_id = :p AND d.workflow_key = :k "
+                         "AND v.status = 'published' ORDER BY v.version DESC LIMIT 1"),
+                    {"p": project_id, "k": workflow_key.strip()},
+                ).scalar()
+                spec = row if isinstance(row, dict) else None
+        return {"project_id": project_id, "workflow_key": workflow_key,
+                "default_roles": agent_assignment.default_roles(spec)}
 
     with begin(engine) as connection:
         if app.strip():

@@ -1024,11 +1024,13 @@ type NewProjectDraft = {
   workflowKey: string;
   repository: string;
   links: string[];
+  /** Who will be on it. Empty means "whatever BOSS seeds" — see the wizard's agents step. */
+  agents: string[];
 };
 
 const EMPTY_DRAFT: NewProjectDraft = {
   title: "", directive: "", audience: "", criteria: [""],
-  workflowKey: "", repository: "", links: [],
+  workflowKey: "", repository: "", links: [], agents: [],
 };
 
 const STEPS = ["What you are building", "How it gets built", "Where it lives", "Review"] as const;
@@ -1097,6 +1099,36 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
 }) {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
+  // WHO WILL BE ON IT. Read from the API rather than guessed here: start_run seeds from
+  // STAGE_ROLES plus the chosen workflow's approver roles, and a second copy of that rule in
+  // the console would drift from the one that actually runs.
+  const [defaultAgents, setDefaultAgents] = useState<string[]>([]);
+  const [allRoles, setAllRoles] = useState<Array<{ role_key: string;
+                                                   display_name?: string | null }>>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/project-agents?project_id=${encodeURIComponent(projectId)}&defaults=1`
+          + (draft.workflowKey ? `&workflow_key=${encodeURIComponent(draft.workflowKey)}` : ""),
+          { cache: "no-store" });
+        if (r.ok && alive) setDefaultAgents(((await r.json())?.default_roles ?? []) as string[]);
+      } catch { /* the wizard still starts the run; BOSS seeds them either way */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId, draft.workflowKey]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/agent?view=roles&project_id=${encodeURIComponent(projectId)}`,
+                              { cache: "no-store" });
+        if (r.ok && alive) setAllRoles(((await r.json())?.items ?? []) as typeof allRoles);
+      } catch { /* the picker is empty; the defaults still show */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [suggested, setSuggested] = useState<{ name: string; source: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1156,6 +1188,32 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
       });
       if (!r.ok) { setError(r.error ?? "Could not start it."); return; }
       const run = (r.data as { run?: { id?: string }; id?: string } | undefined);
+      // WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run
+      // already seeded. Writing an identical list back as `operator` would claim a decision
+      // nobody made, and the panel distinguishes the two on purpose.
+      const chosen = draft.agents;
+      const sameAsDefault = chosen.length === defaultAgents.length
+        && chosen.every((a) => defaultAgents.includes(a));
+      if (chosen.length && !sameAsDefault) {
+        try {
+          await fetch("/api/project-agents", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project_id: projectId, app: title, actor,
+                                   role_keys: chosen }),
+          });
+          // Anyone the operator took OFF the default list has to come off for real, or the
+          // wizard would show a choice the run does not honour.
+          for (const gone of defaultAgents.filter((d) => !chosen.includes(d))) {
+            await fetch("/api/project-agents", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ project_id: projectId, app: title, actor,
+                                     action: "unassign", role_key: gone }),
+            });
+          }
+        } catch { /* the run is started and seeded; the assignment can be fixed on the run */ }
+      }
       setDraft(EMPTY_DRAFT);
       setStep(0);
       onStarted(String(run?.run?.id ?? run?.id ?? "") || null);
@@ -1308,6 +1366,55 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
               );
             })}
           </div>
+
+          {/* WHO WILL BE ON IT. The wizard collected a title, a directive, criteria, a workflow
+              and a repository, and never once mentioned agents — so a project was created with
+              no say in who would build it. The defaults are shown pre-selected rather than as
+              an empty box: they are what BOSS seeds anyway, and an empty picker would imply
+              nobody is coming. */}
+          <span className="dw-field-label dw-agents-label">Who works on it</span>
+          <span className="dw-field-hint">
+            These are the agents that would run this path anyway. Take one off and it may not
+            sign off this app&rsquo;s gates; add one and it may.
+          </span>
+          <div className="aot-list" data-testid="dw-wiz-agents">
+            {(draft.agents.length ? draft.agents : defaultAgents).map((key) => (
+              <span className="aot-agent" key={key}
+                    data-source={draft.agents.length ? "operator" : "default"}>
+                <span className="aot-name">
+                  {allRoles.find((r) => r.role_key === key)?.display_name
+                    || key.replace(/_/g, " ")}
+                </span>
+                <button type="button" className="aot-x" aria-label={`Remove ${key}`}
+                        onClick={() => set("agents",
+                          (draft.agents.length ? draft.agents : defaultAgents)
+                            .filter((k) => k !== key))}>✕</button>
+              </span>
+            ))}
+            <select className="mr-select aot-pick" value="" data-testid="dw-wiz-agent-add"
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      const now = draft.agents.length ? draft.agents : defaultAgents;
+                      set("agents", [...now, e.target.value]);
+                    }}>
+              <option value="">+ Add an agent…</option>
+              {allRoles
+                .filter((r) => !(draft.agents.length ? draft.agents : defaultAgents)
+                  .includes(r.role_key))
+                .map((r) => (
+                  <option key={r.role_key} value={r.role_key}>
+                    {r.display_name || r.role_key}
+                  </option>
+                ))}
+            </select>
+          </div>
+          {draft.agents.length ? (
+            <span className="dw-field-hint">
+              Changed from the default.{" "}
+              <button type="button" className="dw-linkish"
+                      onClick={() => set("agents", [])}>Put it back</button>
+            </span>
+          ) : null}
         </div>
       ) : null}
 
