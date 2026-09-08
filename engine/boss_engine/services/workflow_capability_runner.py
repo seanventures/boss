@@ -553,12 +553,20 @@ def _write_the_record(
     from .core import create_artifact
 
     run_input = context.get("input") or {}
-    # THE APP'S NAME, via the namer the rest of the console titles things with — so the record
-    # is called "Interview Scorecard App" rather than "Build an interview scorecard app.".
+    # THE APP'S NAME, via the namer the rest of the console titles things with.
+    #
+    # Run through the namer WHATEVER the source, not only when falling back to the directive.
+    # The run's own `title` is often the directive already truncated for display — this one was
+    # "Build an interview scorecard app.\nWho it is for: a hiring manager tir…", ellipsis and
+    # all — so preferring it verbatim put a broken sentence at the top of the document and left
+    # the namer with nothing to fix. `project_name` leaves a real name alone ("Change Calendar"
+    # in, "Change Calendar" out) and turns that one into "Interview Scorecard App".
     from .naming import project_name
-    title = (str(inputs.get("title") or "").strip()
-             or str(run_input.get("title") or "").strip()
-             or project_name(str(run_input.get("directive") or ""))[0].strip()[:80]
+    candidate = (str(inputs.get("title") or "").strip()
+                 or str(run_input.get("title") or "").strip()
+                 or str(run_input.get("directive") or "").strip())
+    title = (project_name(candidate)[0].strip().rstrip(".").strip()[:80]
+             or candidate.split("\n")[0].strip()[:80]
              or "Change record")
     directive = str(run_input.get("directive") or "").strip()
 
