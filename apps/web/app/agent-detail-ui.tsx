@@ -23,6 +23,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { formatDate } from "../lib/datetime";
 
@@ -87,7 +88,15 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
   const worked = new Set((detail?.apps ?? []).map((a) => a.app));
   const spend = (detail?.apps ?? []).reduce((sum, a) => sum + (a.spend_usd || 0), 0);
 
-  return (
+  // PORTALLED, AND I MADE THIS MISTAKE TWICE.
+  //
+  // `.tpl-page` is `position: fixed; inset: 0`, and reusing the class without the portal put
+  // this view back inside `.bx-shell`, which carries `isolation: isolate`. The console renders
+  // more than one shell, so a fixed element inside one cannot escape it — the template page
+  // was covered by the project strip and this one rendered clipped to 260px with all 38 rows
+  // present and invisible. A DOM query said "rendered: true"; the screenshot said otherwise.
+  // The class is not the fix; leaving the shell is.
+  const page = (
     <div className="tpl-page" data-testid="agent-detail" role="dialog" aria-modal="true"
          aria-label={detail?.name ?? roleKey}>
       <header className="tpl-page-head">
@@ -271,4 +280,5 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
       </div>
     </div>
   );
+  return typeof document !== "undefined" ? createPortal(page, document.body) : null;
 }
