@@ -25,11 +25,15 @@ class FakeConn:
     """Routes each query to its seeded rows by the table it names."""
 
     def __init__(self, roles=(), steps=(), handoffs=(), spend=(), step_work=(),
-                 live_runs=(), live_steps=()):
+                 live_runs=(), live_steps=(), meetings=(), discoveries=(), agent_runs=()):
         self.data = {"roles": list(roles), "steps": list(steps),
                      "handoffs": list(handoffs), "spend": list(spend),
                      "step_work": list(step_work),
-                     "live_runs": list(live_runs), "live_steps": list(live_steps)}
+                     "live_runs": list(live_runs), "live_steps": list(live_steps),
+                     # Work that is NOT the coding pipeline. An agent on a panel or running a
+                     # research sweep is an agent working, and none of it was read here.
+                     "meetings": list(meetings), "discoveries": list(discoveries),
+                     "agent_runs": list(agent_runs)}
         self.statements = []
 
     def execute(self, statement, params=None):
@@ -48,8 +52,19 @@ class FakeConn:
             rows = self.data.get("live_runs", [])
         elif "status in ('running', 'in_progress', 'pending')" in low:
             rows = self.data.get("live_steps", [])
-        else:
+        elif "from meeting_runs" in low:
+            rows = self.data.get("meetings", [])
+        elif "from discovery_runs" in low:
+            rows = self.data.get("discoveries", [])
+        elif "from agent_runs" in low:
+            rows = self.data.get("agent_runs", [])
+        # An UNROUTED query used to fall through to `steps`, so any new table this module reads
+        # silently got the step rows — which is how "is anyone researching" would have answered
+        # "yes, once per finished step". Unknown means empty, loudly named in the failure.
+        elif "from agent_process_steps" in low:
             rows = self.data["steps"]
+        else:
+            raise AssertionError(f"FakeConn has no rows for this query: {raw[:120]}")
         conn_rows = rows
 
         class _R:
@@ -726,3 +741,93 @@ def test_nothing_in_flight_leaves_everyone_idle():
     """The guard must not mark agents busy on a quiet system."""
     out = workforce(FakeConn(roles=[role("qa")], spend=[lcall("check_tests")]), "proj")
     assert by_id(out)["qa"]["status"] == "IDLE"
+
+
+# --------------------------------------------------------------------------- #
+# Working is working, whatever the work is
+# --------------------------------------------------------------------------- #
+#
+# "the Agents weren't showing Working when they are doing research or meeting panel, only when
+#  they are doing the coding task ... any Agents working should show up like that"
+#
+# `_live_work` read `code_task_runs` and `agent_process_steps` — both parts of the CODING
+# pipeline. A panel debating a PRD and a discovery sweep gathering evidence are agents doing
+# work, and neither writes to either table, so the screen showed IDLE for the whole time they
+# ran. Three more sources, on the same rule: a run in flight is an agent working.
+
+def meeting_run(*, run="mrun_1", phase="round1", seats=("product_manager", "engineer"),
+                directive="Build a changelog composer."):
+    return {"id": run, "phase": phase, "directive": directive, "role_keys": list(seats)}
+
+
+def discovery_run(*, run="disc_1", phase="signal_sweep", title="On-call tooling"):
+    return {"id": run, "phase": phase, "title": title}
+
+
+def test_a_panel_in_session_is_its_seats_working():
+    out = workforce(
+        FakeConn(roles=[role("product_manager"), role("qa")],
+                 meetings=[meeting_run(seats=("product_manager",))]),
+        "p1")
+    by = {a["id"]: a for a in out["agents"]}
+    assert by["product_manager"]["status"] == WORKING
+    # And it says WHAT it is doing, not just that it is busy.
+    assert "panel" in by["product_manager"]["task"]
+    assert "round1" in by["product_manager"]["task"]
+    # An agent not in the room is not working because someone else is.
+    assert by["qa"]["status"] == IDLE
+
+
+def test_every_seat_counts_not_just_the_registered_ones():
+    # The default panel is product_manager, engineer, ux_designer, privacy_safety, operations —
+    # and only the first is a registered role. Rendering one of five would be the old bug in a
+    # new place: the screen would say one agent is in a meeting of five.
+    seats = ("product_manager", "engineer", "ux_designer", "privacy_safety", "operations")
+    out = workforce(FakeConn(roles=[role("product_manager")],
+                             meetings=[meeting_run(seats=seats)]), "p1")
+    by = {a["id"]: a for a in out["agents"]}
+    for seat in seats:
+        assert seat in by, f"{seat} is in the room and not on the screen"
+        assert by[seat]["status"] == WORKING
+    # The unregistered ones are marked rather than hidden — an agent doing work with nothing
+    # governing it is precisely the one to know about.
+    assert by["engineer"]["registered"] is False
+    assert by["product_manager"]["registered"] is True
+
+
+def test_research_in_flight_is_an_agent_working():
+    out = workforce(FakeConn(roles=[role("qa")], discoveries=[discovery_run()]), "p1")
+    by = {a["id"]: a for a in out["agents"]}
+    assert "researcher" in by, "a discovery sweep is running and nobody is shown doing it"
+    assert by["researcher"]["status"] == WORKING
+    assert "research" in by["researcher"]["task"]
+    # Credited to `researcher`, NOT to a registered agent picked by resemblance — that would
+    # report a trust score and an autonomy level for work they did not do.
+    assert by["researcher"]["registered"] is False
+    assert by["qa"]["status"] == IDLE
+
+
+def test_the_agent_answering_the_operator_is_working_too():
+    out = workforce(FakeConn(roles=[role("metatron")],
+                             agent_runs=[{"id": "ar_1", "step": 3}]), "p1")
+    by = {a["id"]: a for a in out["agents"]}
+    assert by["metatron"]["status"] == WORKING
+    assert "answering" in by["metatron"]["task"]
+
+
+def test_nothing_running_still_means_idle():
+    # The failure mode of this fix is the opposite one: a screen where everything says WORKING
+    # says nothing. Empty sources must leave every agent alone.
+    out = workforce(FakeConn(roles=[role("qa"), role("pm")]), "p1")
+    assert {a["status"] for a in out["agents"]} == {IDLE}
+
+
+def test_a_finished_meeting_does_not_keep_its_seats_busy():
+    # Only `status = 'running'` is read; a completed panel is history. Asserted on the SQL
+    # because the fake cannot filter — and this is the clause that stops every agent that has
+    # ever sat on a panel from reading WORKING forever.
+    conn = FakeConn(roles=[role("product_manager")], meetings=[meeting_run()])
+    workforce(conn, "p1")
+    meeting_sql = [s for s, _ in conn.statements if "from meeting_runs" in s.lower()]
+    assert meeting_sql, "meeting runs are never queried"
+    assert "status = 'running'" in meeting_sql[0]

@@ -168,8 +168,13 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # Working = seen in the process steps OR credited with model calls. The second half is what
     # was missing: architect and reviewer do all their work through llm_calls and appeared
     # nowhere, while BOSS was busy attributing spend to them.
+    # `live` BELONGS IN HERE. Without it an agent whose ONLY evidence is work in flight — a
+    # panel seat, the research agent — is computed as working and then never rendered, because
+    # the roster is built from finished work and this set is what adds the unregistered ones.
+    # That is the difference between "shows IDLE" and "does not appear at all", and the panel
+    # seats (engineer, ux_designer, privacy_safety, operations) are in the second category.
     working = ({s["role_key"] for s in steps if s.get("role_key")}
-               | set(spend) | set(step_work))
+               | set(spend) | set(step_work) | set(live))
     for extra in sorted(working - registered):
         roles.append({
             "role_key": extra,
@@ -437,6 +442,87 @@ def _live_work(connection, project_id: str) -> dict[str, dict]:
             "run_id": row.get("run_id"),
             "title": "",
         })
+
+    # A PANEL IN SESSION IS FIVE AGENTS WORKING.
+    #
+    # Everything above reads `code_task_runs` and `agent_process_steps` — the CODING pipeline.
+    # So an agent showed WORKING while it was writing code and IDLE while it sat on a panel
+    # arguing a PRD, which is the operator's report: "the Agents weren't showing Working when
+    # they are doing research or meeting panel, only when they are doing the coding task".
+    #
+    # A meeting run carries its seats in `role_keys`, so the panel already knows exactly who is
+    # in the room. Every one of them is an agent doing work right now.
+    for row in connection.execute(
+        sql(
+            """
+            SELECT id, phase, directive, role_keys
+            FROM meeting_runs
+            WHERE project_id = :p AND status = 'running'
+            ORDER BY updated_at DESC
+            LIMIT 20
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        seats = row.get("role_keys")
+        seats = seats if isinstance(seats, list) else []
+        for seat in seats:
+            key = str(seat or "").strip()
+            if not key:
+                continue
+            out.setdefault(key, {
+                "phase": f"panel · {str(row.get('phase') or 'in session')}",
+                "run_id": row["id"],
+                "title": str(row.get("directive") or "")[:80],
+            })
+
+    # RESEARCH IS AN AGENT WORKING TOO, and this one has no role recorded anywhere: discovery
+    # runs a single research agent with no role key, which is why nothing could attribute it.
+    #
+    # Credited to `researcher` rather than to a registered agent chosen by resemblance. It will
+    # appear as an agent with no registered role, which is exactly what it is — BOSS runs a
+    # research agent that nothing in the registry governs. Picking the nearest registered role
+    # instead would report a trust score and an autonomy level for work they did not do.
+    for row in connection.execute(
+        sql(
+            """
+            SELECT id, phase, title
+            FROM discovery_runs
+            WHERE project_id = :p AND status = 'running'
+            ORDER BY updated_at DESC
+            LIMIT 10
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        out.setdefault("researcher", {
+            "phase": f"research · {str(row.get('phase') or 'running')}",
+            "run_id": row["id"],
+            "title": str(row.get("title") or "")[:80],
+        })
+
+    # THE AGENT ANSWERING THE OPERATOR. A dock turn that reads the database, the host and the
+    # code is the same agent doing the same kind of work as any other; it was invisible here
+    # because it belongs to none of the pipelines above.
+    for row in connection.execute(
+        sql(
+            """
+            SELECT id, step
+            FROM agent_runs
+            WHERE project_id = :p AND status = 'running'
+              AND updated_at > now() - interval '30 minutes'
+            ORDER BY updated_at DESC
+            LIMIT 10
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        out.setdefault("metatron", {
+            "phase": f"answering · step {row.get('step') or 0}",
+            "run_id": row["id"],
+            "title": "",
+        })
+
     return out
 
 
