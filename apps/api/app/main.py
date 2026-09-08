@@ -11075,10 +11075,28 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         if owner["pending_plan_id"]:
             pending = {"plan_id": owner["pending_plan_id"],
                        **(owner["pending_plan_summary"] or {})}
+        # IS A TURN ACTUALLY STILL RUNNING?
+        #
+        # The console assumed one was. Past its 240s bound it told the operator "Nothing was
+        # cancelled … the answer will appear here on its own", then polled for twenty minutes
+        # and went quiet. Measured on the live system while the chat said "BOSS is working…":
+        # no agent run in flight at all. The turn had died, and every sentence the console
+        # showed after that was a promise it had no basis for.
+        #
+        # There is no thread id on agent_runs, so this answers the honest question — "is BOSS
+        # working on anything for this project right now" — rather than a precise one it cannot
+        # ask. A false "yes" costs a little more waiting; a false "no" would tell someone their
+        # turn is dead while it runs, so the doubt is spent in that direction deliberately.
+        working = bool(connection.execute(
+            text("SELECT 1 FROM agent_runs WHERE project_id = :p AND status = 'running' "
+                 "AND updated_at > now() - interval '30 minutes' LIMIT 1"),
+            {"p": project_id},
+        ).first())
         return {
             "thread_id": thread_id,
             "messages": orchestration_agent.list_messages(connection, thread_id),
             "pending_confirmation": pending,
+            "working": working,
         }
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
@@ -302,16 +302,18 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // this thread when it finishes. Polling for that is the difference between "reopen this in a
   // moment and see" and the answer simply appearing, which is what the operator expected when
   // they pressed send.
+  const quiet = useRef(0);
   useEffect(() => {
     if (!landing || !threadId) return;
     let alive = true;
+    quiet.current = 0;
     const started = Date.now();
     const id = window.setInterval(() => {
       if (!alive) return;
       // Twenty minutes: longer than any turn measured, and it stops rather than polling for
       // ever if the turn really did die.
       if (Date.now() - started > 20 * 60_000) { setLanding(false); return; }
-      void read<{ messages?: Msg[] }>(
+      void read<{ messages?: Msg[]; working?: boolean }>(
         { view: "messages", project_id: projectId, actor, thread_id: threadId }).then((d) => {
         if (!alive || !d?.messages) return;
         const last = d.messages[d.messages.length - 1];
@@ -320,6 +322,25 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         if (last && last.role === "assistant") {
           setMessages(d.messages);
           setLanding(false);
+          return;
+        }
+        // NOTHING IS RUNNING, SO STOP SAYING IT IS.
+        //
+        // The panel promised "the answer will appear here on its own" and then polled for
+        // twenty minutes in silence. Measured live while the chat read "BOSS is working…":
+        // no agent run in flight. The turn had died, and every reassurance after that had no
+        // basis. Two consecutive not-working reads before giving up, because a turn between
+        // steps can briefly show as idle and one sample would call that death.
+        if (d.working === false) {
+          quiet.current += 1;
+          if (quiet.current >= 2) {
+            setLanding(false);
+            setMessages((m) => [...m, { role: "assistant", content:
+              "That turn ended without an answer — nothing is running now. Whatever it had "
+              + "already done still stands; ask again and it will pick up from the thread." }]);
+          }
+        } else {
+          quiet.current = 0;
         }
       });
     }, 4000);
@@ -500,16 +521,32 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // it is imminent and say so in the transcript; whatever the turn did still stands, and
       // reopening the thread shows it.
       const stalled = Symbol("stalled");
-      const r = await Promise.race([
+      // A TURN THAT FAILS TO START MUST NOT LOOK LIKE ONE THAT IS RUNNING.
+      //
+      // There was no catch here at all. `askBossAction` is a server action, so the CALL can
+      // reject even though the action itself returns errors as data — a dropped round trip, a
+      // proxy timeout, or a queue behind another pending action. The rejection escaped the
+      // transition, nothing was appended, and the panel sat on "BOSS is working…" forever.
+      // Measured on the live system: the operator's message was never recorded — the thread
+      // still held four messages — while the console showed a turn in flight.
+      let r: Awaited<ReturnType<typeof askBossAction>> | typeof stalled;
+      try {
+        r = await Promise.race([
         // NOT agentChatAction: that one calls revalidatePath("/"), so the transition stays
         // pending while the entire 8 MB console re-renders. The answer painted and the
         // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
         // page depends on a question having been asked; the thread list is refreshed
         // explicitly below.
-        askBossAction(null, fd),
+          askBossAction(null, fd),
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
-      ]);
+        ]);
+      } catch (e) {
+        setMessages((m) => [...m, { role: "assistant", content:
+          "That message did not reach BOSS — " + String((e as Error)?.message ?? e)
+          + ". Nothing was started, so nothing is running. Send it again." }]);
+        return;
+      }
       if (r === stalled) {
         // "REOPEN THIS THREAD IN A MOMENT" IS WORK THE CONSOLE CAN DO ITSELF.
         //
