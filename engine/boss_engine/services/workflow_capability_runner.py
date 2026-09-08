@@ -533,119 +533,123 @@ def _from_any_step(context: dict[str, Any], field: str) -> Any:
 def _write_the_record(
     connection: Connection, project_id: str, context: dict[str, Any], inputs: dict[str, Any]
 ) -> dict[str, Any]:
-    """Assemble this run's record from what its steps actually produced, and store it.
+    """Assemble this run's record from what its steps produced, and store it as a document.
 
-    THE STEP THAT DOCUMENTED NOTHING. `document` declares `produces=("document_id",)` and had
-    `tool=None`, so it fell through to the honest-no-op branch below and reported:
+    THE STEP THAT DOCUMENTED NOTHING, then documented it badly. `document` had `tool=None` and
+    fell through to the no-op branch, so a Research-Led Discovery run — a workflow whose own
+    description is "ends in a decision and a document" — finished 4-of-4 green with no document.
+    The first fix concatenated each step's output, which produced a readable-by-nobody dump: the
+    build brief including its shared quality bar, the directive twice, and twenty-three research
+    findings as inline JSON dicts. Worse, it buried the finding that mattered — that research had
+    contradicted the premise.
 
-        succeeded · 0s · 'Document' is recorded from the work it accompanies.
+    Composition now lives in `change_record`, which leads with a summary and reads the discovery
+    run's OWN structured state rather than the flattened brief the panel was handed. A PDF is
+    rendered alongside, because a document nobody can open is the same problem in a new format.
 
-    There was nothing accompanying it to be recorded from. For Research-Led Discovery that is
-    not a cosmetic gap — the workflow's own description is "Ends in a decision and a document,
-    not in code", so the document IS the deliverable, and the run finished 4-of-4 green having
-    produced no document at all. The operator asked the obvious question.
-
-    Nothing here is invented. Every line comes from a step that ran: the directive the run was
-    started with, the dossier research cited, the PRD the panel wrote, the decision a person
-    made, and the pull request if one exists. A record that padded itself with plausible prose
-    would be worse than the no-op it replaces — the no-op at least did not claim to know
-    anything.
+    Nothing is invented: every line is a field some step recorded, and the gaps are listed.
     """
     from ..config import get_settings
+    from . import change_record
     from .core import create_artifact
 
     run_input = context.get("input") or {}
     title = (str(inputs.get("title") or "").strip()
              or str(run_input.get("title") or "").strip()
-             or str(run_input.get("directive") or "").strip()[:80]
+             or str(run_input.get("directive") or "").strip().split("\n")[0].strip()[:80]
              or "Change record")
     directive = str(run_input.get("directive") or "").strip()
 
-    dossier = _from_any_step(context, "dossier")
-    discovery_id = _from_any_step(context, "discovery_id")
-    prd = _from_any_step(context, "prd_markdown")
-    meeting_run_id = _from_any_step(context, "meeting_run_id")
-    decision_id = _from_any_step(context, "decision_id")
-    pr_url = _from_any_step(context, "pull_request_url")
-    code_task_run_id = _build_run_id(context)
+    dossier_text = _from_any_step(context, "dossier")
+    dossier_text = dossier_text if isinstance(dossier_text, str) else ""
+    discovery_id = str(_from_any_step(context, "discovery_id") or "")
+    prd = str(_from_any_step(context, "prd_markdown") or "")
+    meeting_run_id = str(_from_any_step(context, "meeting_run_id") or "")
+    decision_id = str(_from_any_step(context, "decision_id") or "")
+    pr_url = str(_from_any_step(context, "pull_request_url") or "")
+    code_task_run_id = _build_run_id(context) or ""
 
-    lines: list[str] = [f"# {title}", ""]
-    if directive:
-        lines += ["## What was asked for", "", directive, ""]
+    # THE DOSSIER, FROM THE RESEARCH RUN ITSELF. `_dossier_brief` flattens lists to JSON on
+    # purpose — it is written to be fed to a language model — and reading it back for a human
+    # document is what put `{"angle": "competitor", "finding": ...}` on the page.
+    dossier_state: Optional[dict[str, Any]] = None
+    if discovery_id:
+        try:
+            state = connection.execute(
+                text("SELECT state FROM discovery_runs WHERE id=:d AND project_id=:p"),
+                {"d": discovery_id, "p": project_id},
+            ).scalar()
+            dossier_state = state if isinstance(state, dict) else None
+        except Exception as error:  # noqa: BLE001 — an unreadable dossier must not sink the run
+            log.warning("cannot read discovery %s for the record: %s", discovery_id, error)
 
-    if dossier:
-        body = dossier if isinstance(dossier, str) else json.dumps(dossier, indent=2)
-        lines += ["## What the research found", "", body.strip(), ""]
-        if discovery_id:
-            lines += [f"_Discovery run: `{discovery_id}`_", ""]
-    elif discovery_id:
-        lines += ["## What the research found", "",
-                  f"Research ran as `{discovery_id}`; its dossier is on the discovery run.", ""]
-
-    if prd:
-        lines += ["## The spec the panel produced", "", str(prd).strip(), ""]
-        if meeting_run_id:
-            lines += [f"_Panel: `{meeting_run_id}`_", ""]
-
+    decision: Optional[dict[str, Any]] = None
     if decision_id:
-        row = None
         try:
             row = connection.execute(
                 text("SELECT question, status, approved_by, resolution_note FROM decisions "
                      "WHERE id = :d AND project_id = :p"),
                 {"d": decision_id, "p": project_id},
             ).mappings().first()
-        except Exception as error:  # noqa: BLE001 — a missing decision must not sink the run
+            decision = dict(row) if row else None
+        except Exception as error:  # noqa: BLE001
             log.warning("cannot read decision %s for the record: %s", decision_id, error)
-        lines += ["## The decision", ""]
-        if row:
-            who = row["approved_by"] or "nobody yet"
-            lines += [f"**{row['question']}** — {row['status']}, by {who}."]
-            if row["resolution_note"]:
-                lines += ["", str(row["resolution_note"]).strip()]
-        else:
-            lines += [f"Recorded as `{decision_id}`."]
-        lines += [""]
 
-    if pr_url or code_task_run_id:
-        lines += ["## What was built", ""]
-        if pr_url:
-            lines += [f"Pull request: {pr_url}"]
-        if code_task_run_id:
-            lines += [f"Code task run: `{code_task_run_id}`"]
-        lines += [""]
+    markdown, sections = change_record.compose(
+        title=title, directive=directive, dossier_state=dossier_state,
+        dossier_text=dossier_text, discovery_id=discovery_id, prd=prd,
+        meeting_run_id=meeting_run_id, decision=decision, decision_id=decision_id,
+        pull_request_url=pr_url, code_task_run_id=code_task_run_id,
+        workflow_name=str(context.get("workflow_name") or ""),
+        objective=str(context.get("objective") or ""),
+    )
 
-    # WHAT IS NOT IN HERE, said out loud. A record whose gaps are invisible reads as complete,
-    # and this one is assembled from whatever the run happened to contain.
-    missing = [name for name, present in (
-        ("research", bool(dossier or discovery_id)),
-        ("a panel spec", bool(prd)),
-        ("a decision", bool(decision_id)),
-        ("a build", bool(pr_url or code_task_run_id)),
-    ) if not present]
-    if missing:
-        lines += ["## Not part of this run", "",
-                  "This workflow did not include " + ", ".join(missing) + ".", ""]
+    # WHAT A CHECKLIST CAN SEE, checked. Deterministic and free, so it runs every time and
+    # always terminates — unlike asking an agent whether the prose is good, which is a taste
+    # judgement and can be argued forever. Findings are RECORDED rather than used to block: a
+    # document held back for a defect nobody can see is worse than one that names its defects.
+    defects = change_record.review(markdown, sections)
 
-    markdown = "\n".join(lines).rstrip() + "\n"
-    sections = [name for name, present in (
-        ("directive", bool(directive)), ("research", bool(dossier or discovery_id)),
-        ("spec", bool(prd)), ("decision", bool(decision_id)),
-        ("build", bool(pr_url or code_task_run_id)),
-    ) if present]
+    pdf_bytes = b""
+    pdf_error = ""
+    try:
+        from .pdf_render import render_markdown_pdf
+        # The renderer draws its own title block, so the markdown's H1 is handed over rather
+        # than left in the body — the first PDF printed the title twice, two lines apart.
+        pdf_title, pdf_subtitle, pdf_body = change_record.body_for_pdf(markdown)
+        pdf_bytes = render_markdown_pdf(
+            pdf_body, title=pdf_title or title, subtitle=pdf_subtitle or None)
+    except Exception as error:  # noqa: BLE001 — no PDF is a worse document, not a failed step
+        pdf_error = f"{type(error).__name__}: {error}"
+        log.warning("could not render the change record to PDF: %s", pdf_error)
+
+    settings = get_settings()
+    pdf_path = ""
+    if pdf_bytes:
+        try:
+            directory = settings.artifact_root / project_id
+            directory.mkdir(parents=True, exist_ok=True)
+            pdf_path = str(directory / f"record-{context.get('run_id') or 'run'}.pdf")
+            with open(pdf_path, "wb") as handle:
+                handle.write(pdf_bytes)
+        except Exception as error:  # noqa: BLE001
+            pdf_error = f"{type(error).__name__}: {error}"
+            pdf_path = ""
 
     document_id = create_artifact(
         connection,
-        get_settings(),
+        settings,
         project_id,
-        # The context carries steps, input, run_id and step_index — no task id. The panel
-        # produces one, and hanging the record off it is what puts it on the task's own page.
         _from_any_step(context, "task_id") or (context.get("input") or {}).get("task_id"),
         "change_record",
         title,
         {
             "markdown": markdown,
             "sections": sections,
+            "defects": defects,
+            "pdf_path": pdf_path,
+            "pdf_bytes": len(pdf_bytes),
+            "pdf_error": pdf_error,
             "workflow_run_id": context.get("run_id"),
             "discovery_id": discovery_id,
             "meeting_run_id": meeting_run_id,
@@ -654,15 +658,20 @@ def _write_the_record(
             "pull_request_url": pr_url,
         },
     )
+    note = (f"Change record written from {', '.join(sections)}."
+            if sections else
+            "Change record written, but this run produced nothing to put in it.")
+    if defects:
+        note += f" {len(defects)} thing(s) the checks flagged."
     return {
         "capability": "document",
         "tool": None,
         "status": "published",
         "document_id": document_id,
         "sections": sections,
-        "note": (f"Change record written from {', '.join(sections)}."
-                 if sections else
-                 "Change record written, but this run produced nothing to put in it."),
+        "defects": defects,
+        "pdf": bool(pdf_bytes),
+        "note": note,
     }
 
 

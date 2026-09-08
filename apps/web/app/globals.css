@@ -8853,8 +8853,23 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-record > summary::before { content: "▸ "; }
 .dw-record[open] > summary::before { content: "▾ "; }
 .dw-record-body {
-  margin: 8px 0 0; padding: 12px 14px; max-height: 420px; overflow: auto;
+  margin: 8px 0 0; padding: 14px 18px; max-height: 560px; overflow: auto;
   border: 1px solid var(--border); border-radius: 10px;
   background: color-mix(in srgb, var(--ink) 3%, transparent);
-  font-size: .8rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  font-size: .84rem; line-height: 1.6;
+}
+.dw-record-body h1 { font-size: 1.25rem; margin: 0 0 4px; }
+.dw-record-body h2 { font-size: 1rem; margin: 18px 0 6px; }
+.dw-record-body h3 { font-size: .88rem; margin: 14px 0 4px; color: var(--muted); }
+.dw-record-body ul, .dw-record-body ol { margin: 6px 0; padding-left: 20px; }
+.dw-record-body li { margin: 3px 0; }
+.dw-record-body p { margin: 6px 0; }
+.dw-record-body hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+.dw-record-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+/* What the automatic checks found, shown on the document rather than buried in a log. */
+.dw-record-defects {
+  margin: 6px 0 0; padding: 10px 14px 10px 30px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--amber, #d29922) 40%, transparent);
+  background: color-mix(in srgb, var(--amber, #d29922) 7%, transparent);
+  font-size: .8rem; line-height: 1.5;
 }

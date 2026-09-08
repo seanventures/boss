@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
+import { Markdown } from "./markdown";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -2711,7 +2712,8 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
  */
 function ChangeRecord({ documentId }: { documentId: string }) {
   const [state, setState] = useState<
-    { kind: "shut" } | { kind: "loading" } | { kind: "text"; markdown: string }
+    { kind: "shut" } | { kind: "loading" }
+    | { kind: "text"; markdown: string; defects: Array<{ kind: string; detail: string }> }
     | { kind: "failed"; why: string }>({ kind: "shut" });
 
   const open = async () => {
@@ -2726,8 +2728,9 @@ function ChangeRecord({ documentId }: { documentId: string }) {
         return;
       }
       const markdown = String(body?.content?.markdown ?? "").trim();
+      const defects = Array.isArray(body?.content?.defects) ? body.content.defects : [];
       setState(markdown
-        ? { kind: "text", markdown }
+        ? { kind: "text", markdown, defects }
         // Stored but empty is a different fact from unreadable, and saying "failed" for it
         // would send someone looking for a fault that is not there.
         : { kind: "failed", why: "the record was stored with no body" });
@@ -2746,7 +2749,32 @@ function ChangeRecord({ documentId }: { documentId: string }) {
           Could not read it — {state.why}.
         </p>
       ) : null}
-      {state.kind === "text" ? <pre className="dw-record-body">{state.markdown}</pre> : null}
+      {state.kind === "text" ? (
+        <>
+          <div className="dw-record-acts">
+            {/* A DOCUMENT SOMEBODY CAN OPEN. Markdown in a <pre> is the right storage format
+                shown in the wrong delivery format — "I dont think anyone will be able to read
+                that". Rendered server-side on demand, so a record written before the PDF
+                existed still downloads. */}
+            <a className="cap-btn" href={`/api/artifacts/${encodeURIComponent(documentId)}/pdf`}
+               data-testid="dw-record-pdf" target="_blank" rel="noreferrer">
+              Download as PDF
+            </a>
+            <span className="detail">{state.defects.length
+              ? `${state.defects.length} check${state.defects.length === 1 ? "" : "s"} flagged this document`
+              : "Passed every check BOSS can make automatically."}</span>
+          </div>
+          {/* What the checks found, in the document's own view rather than in a log. */}
+          {state.defects.length ? (
+            <ul className="dw-record-defects" data-testid="dw-record-defects">
+              {state.defects.map((d) => <li key={d.kind}>{d.detail}</li>)}
+            </ul>
+          ) : null}
+          <div className="dw-record-body">
+            <Markdown text={state.markdown} />
+          </div>
+        </>
+      ) : null}
     </details>
   );
 }

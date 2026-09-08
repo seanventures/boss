@@ -12550,6 +12550,49 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
         return artifact_detail_from_row(row)
 
 
+@app.get("/v1/artifacts/{artifact_id}/pdf")
+def get_artifact_pdf(artifact_id: str) -> Response:
+    """A document as a PDF anyone can open, mail, or put in a folder.
+
+    The change record is markdown, which is the right storage format and the wrong DELIVERY
+    format: the console rendered it in a <pre> and the operator's verdict was "I dont think
+    anyone will be able to read that". Rendered on demand rather than served from the file the
+    step wrote, so a record that predates the PDF, or one whose file has been cleaned up,
+    still downloads.
+    """
+    from boss_engine.services import change_record
+    from .services.pdf_render import pdf_page_count, render_markdown_pdf
+
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT title, content FROM artifacts WHERE id = :a"),
+            {"a": artifact_id},
+        ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    content = row["content"] if isinstance(row["content"], dict) else {}
+    markdown = str(content.get("markdown") or "").strip()
+    if not markdown:
+        raise HTTPException(status_code=409, detail="this artifact has no document body")
+    title, subtitle, body = change_record.body_for_pdf(markdown)
+    try:
+        pdf_bytes = render_markdown_pdf(body, title=title or row["title"],
+                                        subtitle=subtitle or None)
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500, detail=f"PDF render failed: {type(error).__name__}: {error}"
+        ) from error
+    name = re.sub(r"[^A-Za-z0-9]+", "-", str(row["title"] or "document")).strip("-").lower()
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name or "document"}.pdf"',
+            "X-PDF-Page-Count": str(pdf_page_count(pdf_bytes)),
+        },
+    )
+
+
 @app.get("/v1/roles", response_model=RoleListResponse)
 def list_roles(project_id: str) -> RoleListResponse:
     with begin(engine) as connection:

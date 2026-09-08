@@ -1,0 +1,78 @@
+{
+ "gate": {
+  "verdict": "promising",
+  "confidence": 0.45,
+  "cited_sources": 23
+ },
+ "critique": {
+  "biggest_risk": "The pitch's central differentiator \u2014 'no one else surfaces panel disagreement as a first-class signal' \u2014 is factually wrong; Metaview already does this and is priced at $0\u2013$60/user",
+  "disconfirming_evidence": [
+   "Metaview already ships inter-rater reliability metrics and a calibration dashboard as part of its interview scorecard pr",
+   "Metaview's actual per-seat pricing ($0\u2013$60/user/month) is far below the analysis's cited $100\u2013$300/user/month, meaning a"
+  ]
+ },
+ "research_brief": {
+  "questions": [
+   "Is the pain real, frequent, and severe?",
+   "Who owns the market today?"
+  ],
+  "sources_consulted": [
+   "https://www.greenhouse.com/guidance/how-scorecard-peeking-can-create-bias-in-hiring",
+   "https://support.greenhouse.io/hc/en-us/articles/360004923452-Bias-reducing-behaviors",
+   "https://brighthire.com/pricing/",
+   "https://www.metaview.ai/resources/blog/create-effective-interview-scorecards",
+   "https://skillseek.eu/answers/structured-interview-software-comparison"
+  ]
+ },
+ "market_analysis": {
+  "problem": {
+   "is_real": true,
+   "frequency": "frequent",
+   "statement": "Panel interviewers who see a colleague's score before submitting their own anchor to it, converging on identical ratings and materially changing hire/no-hire outcomes rather than just opinions.",
+   "severity_0_5": 4
+  },
+  "competition": {
+   "landscape": "Greenhouse (dominant ATS) bundles anti-peeking as a permission toggle inside a full recruiting platform, not a standalone scorecard product. BrightHir",
+   "our_wedge": "Be the only purpose-built, standalone tool that server-side enforces hidden-until-submit scoring, gates submission on written evidence, and leads the "
+  },
+  "timing": "SkillSeek's comparison is dated 2026 and frames inter-rater reliability and validated scoring as a current, still-unsolved gap across both ATS-embedde"
+ },
+ "signal_findings": [
+  {
+   "angle": "competitor",
+   "finding": "Greenhouse (the dominant ATS, market leader in structured hiring) already ships the core anti-anchoring mechanic as a permission default: 'Only after ",
+   "evidence": "Greenhouse's own guidance article gives named-example bias data (the 'Deidre' case: candidate pass rate dropped from 14% to <6% after she saw a collea",
+   "citation_url": "https://www.greenhouse.com/guidance/how-scorecard-peeking-can-create-bias-in-hiring"
+  },
+  {
+   "angle": "competitor",
+   "finding": "Greenhouse's blind-scoring is a permission toggle bundled inside a full ATS, not a purpose-built scorecard product \u2014 teams that just want the scorecar",
+   "evidence": "Greenhouse Support docs describe the visibility setting as one of several 'bias-reducing behaviors' and admin permissions inside the broader Greenhous",
+   "citation_url": "https://support.greenhouse.io/hc/en-us/articles/360004923452-Bias-reducing-behaviors"
+  },
+  {
+   "angle": "competitor",
+   "finding": "BrightHire (interview intelligence category leader) is priced opaquely and at enterprise scale \u2014 roughly $15K/yr for small teams up to $100K+/yr for l",
+   "evidence": "BrightHire's public pricing page lists only named tiers (Recruiters/Teams/Enterprises) with no dollar figures, directing everyone to 'Request a Demo';",
+   "citation_url": "https://brighthire.com/pricing/"
+  }
+ ],
+ "candidate_outcomes": [
+  {
+   "wedge": "Not 'first to surface disagreement' (Metaview already ships inter-rater reliability and calibration dashboards, and undercuts the price point this analysis assumed) \u2014 the real wedge is being a zero-se",
+   "outcome": "A minimal standalone panel-scoring tool that does exactly four things and nothing else: define a role's competencies once, force each interviewer to submit an independently-written score plus evidence",
+   "rationale": "The anchoring/peeking-bias problem is the one claim in this research that survived critique fully intact (Greenhouse's own published data: 3.6% more identical ratings, pass-through crashing from 14% t",
+   "target_pilot": "2-3 small hiring teams (startups or a single hiring manager's function within a larger company) currently running structured panel interviews with spreadsheets or Google Forms, who are NOT already usi",
+   "confidence_0_1": 0.45,
+   "validation_plan": "Prototype the four-screen loop and run it on 3-5 real candidate panels per pilot team for free. Measure: (1) do interviewers actually complete the evidence field with substantive notes rather than one",
+   "supporting_signals": [
+    "Greenhouse: 3.6% more identical ratings under peeking, ~750K interviews affected, pass-through 14%->under 6% (verified/supported)",
+    "Critique: 85% adoption figure is a free ATS toggle, not standalone paid demand (weak)",
+    "Critique: Metaview already ships inter-rater reliability + calibration dashboard, contradicting the 'no tool surfaces disagreement' wedge claim (unsupported)",
+    "Critique: Metaview actual pricing $0-$60/user/month, not $100-300, meaning an affordable competitor with overlapping features already exists (unsupported as stated)",
+    "SkillSeek '1-in-3 teams have validated scoring process' stat is unverified/weak sourcing, excluded from rationale"
+   ],
+   "first_prototype_slice": "A single role, single rubric, 3-interviewer panel flow: role/competency setup screen, blind scoring form that server-side blocks viewing peers' scores until your own is submitted and blocks submission"
+  }
+ ]
+}
