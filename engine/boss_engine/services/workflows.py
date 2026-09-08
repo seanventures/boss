@@ -1269,6 +1269,23 @@ def start_run(
         text("UPDATE workflow_runs SET status='running', updated_at=now() WHERE id=:id"),
         {"id": run_id},
     )
+    # WHO IS ON THIS, seeded before the first step can be refused for not knowing.
+    #
+    # Assignment is enforced at the gates, so an app that starts with nobody on it would have
+    # every gate refuse — the feature would read as breakage rather than governance. The seed is
+    # exactly the agents that would have done the work anyway: the STAGE_ROLES set BOSS already
+    # attributes every model call to, plus whatever this workflow names as an approver. An app
+    # that already has an assignment is left alone, so a re-run never overwrites a decision.
+    try:
+        from . import agent_assignment
+        app_name = str((input_data or {}).get("title")
+                       or (input_data or {}).get("directive") or "").strip()
+        if app_name:
+            agent_assignment.ensure_defaults(
+                connection, project_id=project_id, app_name=app_name,
+                actor=actor, spec=spec)
+    except Exception as error:  # noqa: BLE001 — a run must not fail because seeding did
+        logger.warning("could not seed agent assignment for %s: %s", run_id, error)
     emit_event(
         connection,
         project_id,

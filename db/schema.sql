@@ -5898,3 +5898,32 @@ CREATE INDEX IF NOT EXISTS idx_investigations_status
 ALTER TABLE investigations ADD COLUMN IF NOT EXISTS token TEXT;
 CREATE INDEX IF NOT EXISTS idx_investigations_token ON investigations(token)
   WHERE token IS NOT NULL;
+
+-- Which agents are on which piece of work.
+--
+-- BOSS had no answer to "who is on this". `roles` says an agent EXISTS in a project; a workflow
+-- step names an `approver_role` and nothing else; the only implicit assignment is
+-- llm_telemetry.STAGE_ROLES, which maps a pipeline stage to a role for COST ATTRIBUTION at
+-- write time and is never consulted for scheduling or permission. So the console could show 26
+-- agents and not say which of them were working on the app in front of you.
+--
+-- Keyed on the APP rather than on a run id: an app is re-run, re-tried and re-deployed, and an
+-- assignment that evaporated on the second run would be worse than none. `app_key` is
+-- naming.identity_key of the app's name, which is how the rest of BOSS decides two names are
+-- one app ('Lead‐Triage Inbox' carries a U+2010 hyphen and would not match by string equality).
+CREATE TABLE IF NOT EXISTS project_agents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key TEXT NOT NULL,
+  app_name TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  -- `default` was seeded from the stages that would have run anyway; `operator` was chosen by a
+  -- person. Kept apart so "nobody picked these" is answerable, and so re-seeding defaults never
+  -- silently removes a human decision.
+  source TEXT NOT NULL DEFAULT 'operator',
+  assigned_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, app_key, role_key)
+);
+CREATE INDEX IF NOT EXISTS idx_project_agents_app ON project_agents (project_id, app_key);
+CREATE INDEX IF NOT EXISTS idx_project_agents_role ON project_agents (project_id, role_key);

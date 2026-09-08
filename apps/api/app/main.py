@@ -12277,6 +12277,75 @@ def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
         return workforce(connection, project_id, hours=max(1, min(int(hours), 24 * 30)))
 
 
+@app.get("/v1/console/v2/agents/{role_key}")
+def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720) -> dict:
+    """One agent: every app it has worked on, its metrics, and the spec that governs it.
+
+    The roster's card was an `<article>` — not a link, no detail view behind it — so an agent
+    was a row of numbers with no way in. Everything this returns was already recorded; none of
+    it was reachable from the agent it describes.
+    """
+    from boss_engine.services.console_v2_workforce import agent_detail
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return agent_detail(connection, project_id, role_key,
+                            hours=max(1, min(int(hours), 24 * 90)))
+
+
+@app.get("/v1/projects/{project_id}/agents")
+def list_project_agents(project_id: str, app: str = "") -> dict:
+    """Who is assigned to an app — or, with no app, every assignment in the project."""
+    from boss_engine.services import agent_assignment
+    from boss_engine.services.naming import identity_key
+
+    with begin(engine) as connection:
+        if app.strip():
+            return {"project_id": project_id, "app": app,
+                    "agents": agent_assignment.assigned(
+                        connection, project_id, identity_key(app))}
+        rows = connection.execute(
+            text("SELECT app_key, app_name, role_key, source FROM project_agents "
+                 "WHERE project_id = :p ORDER BY app_name, role_key"),
+            {"p": project_id},
+        ).mappings().all()
+    by_app: dict[str, dict] = {}
+    for row in rows:
+        entry = by_app.setdefault(row["app_key"],
+                                  {"app_name": row["app_name"], "agents": []})
+        entry["agents"].append({"role_key": row["role_key"], "source": row["source"]})
+    return {"project_id": project_id, "apps": by_app}
+
+
+@app.post("/v1/projects/{project_id}/agents")
+def assign_project_agents(project_id: str, payload: dict = Body(...)) -> dict:
+    """Put agents on an app, take them off, or seed the ones that would have run anyway."""
+    from boss_engine.services import agent_assignment
+
+    app_name = str(payload.get("app") or payload.get("app_name") or "").strip()
+    actor = str(payload.get("actor") or "operator").strip()
+    action = str(payload.get("action") or "assign").strip()
+    if not app_name:
+        raise HTTPException(status_code=400, detail="app is required")
+    with begin(engine) as connection:
+        if action == "unassign":
+            role_key = str(payload.get("role_key") or "").strip()
+            if not role_key:
+                raise HTTPException(status_code=400, detail="role_key is required to unassign")
+            return agent_assignment.unassign(
+                connection, project_id=project_id, app_name=app_name, role_key=role_key)
+        if action == "defaults":
+            return agent_assignment.ensure_defaults(
+                connection, project_id=project_id, app_name=app_name, actor=actor)
+        roles = payload.get("role_keys") or ([payload["role_key"]]
+                                             if payload.get("role_key") else [])
+        if not roles:
+            raise HTTPException(status_code=400, detail="role_keys is required")
+        return agent_assignment.assign(connection, project_id=project_id, app_name=app_name,
+                                       role_keys=roles, actor=actor)
+
+
 @app.get("/v1/console/v2/org")
 def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
     """Who hands work to whom, counted.

@@ -812,3 +812,123 @@ def org_chart(connection, project_id: str, *, hours: int = 168) -> dict[str, Any
         ),
         "isolated": [n["id"] for n in nodes if not n["connected"]],
     }
+
+
+def agent_detail(connection, project_id: str, role_key: str, *,
+                 hours: float = SCORE_WINDOW_HOURS) -> dict[str, Any]:
+    """One agent: what it is, what it has worked on, and what governs it.
+
+    THE PAGE THAT DID NOT EXIST. An agent card in the roster was an `<article>` — not a link,
+    not addressable, with no detail view behind it. Everything below was already in the database
+    and none of it was reachable from the agent it describes:
+
+      * which APPS it worked on, from the model calls attributed to its stages. The roster shows
+        one `run_id` — the newest process step — for 7 of 26 agents; this is the whole history.
+      * its SPEC: mission, boundaries, allowed and forbidden skills, output contracts, eval
+        rubric. Twenty-two role YAMLs are installed into `roles.spec` and the console's
+        `RoleFeedItem` drops the column entirely, so the richest capability model BOSS has was
+        invisible.
+      * what it is ASSIGNED to, which is a different question from what it has touched — and the
+        gap between the two is worth looking at.
+    """
+    from .llm_telemetry import STAGE_ROLES, canonical_role
+    from . import agent_assignment
+
+    role_key = canonical_role(role_key) or role_key
+    role = connection.execute(
+        sql("SELECT role_key, display_name, spec, autonomy_level, trust_score, successful_runs, "
+            "policy_violation_count, scope_violation_count, hidden_failure_count, reports_to, "
+            "last_reviewed_at, last_violation_at "
+            "FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": role_key},
+    ).mappings().first()
+
+    # THE STAGES THIS AGENT OWNS, which is what makes the app query answerable at all: llm_calls
+    # records a stage, never a role, so the join runs through the same map BOSS attributes spend
+    # with. Using anything else here would put an agent's work under a different agent's name.
+    stages = sorted(s for s, r in STAGE_ROLES.items() if canonical_role(r) == role_key)
+
+    apps: list[dict[str, Any]] = []
+    if stages:
+        rows = connection.execute(
+            sql("""
+                SELECT COALESCE(NULLIF(t.title, ''), 'untitled')   AS app_name,
+                       count(*)                                    AS calls,
+                       COALESCE(sum(c.total_tokens), 0)            AS tokens,
+                       COALESCE(sum(c.cost_usd_micros), 0)         AS micros,
+                       count(*) FILTER (WHERE c.ok)                AS ok_calls,
+                       max(c.created_at)                           AS last_at,
+                       array_agg(DISTINCT c.stage)                 AS stages
+                FROM llm_calls c
+                JOIN code_task_runs t ON t.id = c.code_task_run_id
+                WHERE c.project_id = :p
+                  AND c.stage = ANY(:stages)
+                  AND c.created_at > now() - make_interval(hours => :h)
+                GROUP BY 1
+                ORDER BY max(c.created_at) DESC
+                LIMIT 40
+                """),
+            {"p": project_id, "stages": stages, "h": int(hours)},
+        ).mappings().all()
+        for row in rows:
+            apps.append({
+                "app": row["app_name"],
+                "calls": int(row["calls"] or 0),
+                "tokens": int(row["tokens"] or 0),
+                "spend_usd": round(int(row["micros"] or 0) / 1_000_000, 4),
+                "ok_calls": int(row["ok_calls"] or 0),
+                "last_at": row["last_at"].isoformat() if row["last_at"] else None,
+                "stages": sorted(s for s in (row["stages"] or []) if s),
+            })
+
+    # PANELS ARE WORK TOO. An agent that sat on six PRD panels and wrote no code would otherwise
+    # show an empty history, which is the same blindness the workforce screen had.
+    panels = [dict(r) for r in connection.execute(
+        sql("""
+            SELECT id, directive, status, phase, updated_at
+            FROM meeting_runs
+            WHERE project_id = :p AND role_keys ? :r
+            ORDER BY updated_at DESC LIMIT 20
+            """),
+        {"p": project_id, "r": role_key},
+    ).mappings().all()]
+
+    spec = role["spec"] if role and isinstance(role["spec"], dict) else {}
+    return {
+        "project_id": project_id,
+        "role_key": role_key,
+        "name": (role["display_name"] if role else None) or _humanise(role_key),
+        # An agent doing work with no `roles` row has no trust score, no autonomy level and
+        # nothing governing it. Said plainly rather than rendered as zeros.
+        "registered": bool(role),
+        "autonomy_level": int(role["autonomy_level"] or 0) if role else None,
+        "trust_score": int(role["trust_score"] or 0) if role else None,
+        "successful_runs": int(role["successful_runs"] or 0) if role else None,
+        "violations": ((int(role["policy_violation_count"] or 0)
+                        + int(role["scope_violation_count"] or 0)) if role else None),
+        "hidden_failures": int(role["hidden_failure_count"] or 0) if role else None,
+        "reports_to": role["reports_to"] if role else None,
+        "last_reviewed_at": (role["last_reviewed_at"].isoformat()
+                             if role and role["last_reviewed_at"] else None),
+        # THE CAPABILITY MODEL, surfaced. Written by spec packs, never once displayed.
+        "spec": {
+            "mission": spec.get("mission") or "",
+            "primary_outcomes": spec.get("primary_outcomes") or [],
+            "boundaries": spec.get("boundaries") or {},
+            "decision_rights": spec.get("decision_rights") or [],
+            "allowed_skills": ((spec.get("permissions") or {}).get("allowed_skills") or []),
+            "forbidden_skills": ((spec.get("permissions") or {}).get("forbidden_skills") or []),
+            "output_contracts": spec.get("output_contracts") or [],
+            "eval_rubric": spec.get("eval_rubric") or {},
+            "knowledge": spec.get("knowledge") or "",
+        },
+        "owns_stages": stages,
+        "apps": apps,
+        "panels": [{"id": p["id"], "subject": str(p["directive"] or "")[:120],
+                    "status": p["status"], "phase": p["phase"],
+                    "at": p["updated_at"].isoformat() if p["updated_at"] else None}
+                   for p in panels],
+        # What it is SUPPOSED to be on, which is not the same as what it has touched.
+        "assigned_to": agent_assignment.apps_for_role(connection, project_id, role_key),
+        "window_hours": hours,
+    }

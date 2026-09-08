@@ -1820,6 +1820,42 @@ def _open_gate(
     spec_step = step_row.get("_spec") or {}
     subject = step_row["_subject"]
     approval = spec_step.get("approval") or {}
+
+    # ASSIGNMENT, ENFORCED WHERE IT MATTERS: at the gate.
+    #
+    # A gate names an `approver_role` and BOSS has never checked whether that agent is on this
+    # piece of work. Assignment that changes nothing is decoration, and this codebase has
+    # shipped decoration before — the template tags that rendered as labels and never filtered.
+    #
+    # It refuses only when the project has MADE a decision that this contradicts. An app with no
+    # assignment at all passes: enforcement should stop work that goes against somebody's
+    # choice, not work on something nobody has chosen about yet, or every app that predates the
+    # table becomes unrunnable.
+    approver = str(approval.get("approver_role") or "").strip()
+    app_name = str((run.get("input") or {}).get("title")
+                   or (run.get("input") or {}).get("directive") or "").strip()
+    if approver and app_name:
+        try:
+            from . import agent_assignment
+            verdict = agent_assignment.may_act(
+                connection, project_id=project_id, app_name=app_name, role_key=approver)
+        except Exception as error:  # noqa: BLE001 — an unreadable table must not stop a gate
+            log.warning("assignment check failed for %s: %s", approver, error)
+            verdict = {"allowed": True}
+        if not verdict.get("allowed"):
+            connection.execute(
+                text("UPDATE workflow_step_runs SET status='failed', "
+                     "last_error=:e, updated_at=now() WHERE id=:i"),
+                {"e": verdict.get("reason") or f"{approver} is not assigned to this app.",
+                 "i": step_row["id"]},
+            )
+            emit_event(
+                connection, project_id, "workflow.assignment_refused",
+                run.get("actor") or "workflow", "workflow_step_run", step_row["id"],
+                {"approver_role": approver, "app": app_name,
+                 "assigned": verdict.get("assigned") or []},
+            )
+            return
     # Matches core.create_blocking_decision exactly: it takes a question and a recommendation,
     # returns the decision id, and defaults to HOLD — which is the behaviour a gate wants. A
     # gate that defaulted to "proceed" would be a gate in name only.
