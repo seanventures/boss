@@ -74,6 +74,13 @@ export async function GET(req: Request) {
       `/v1/agent/threads/${encodeURIComponent(thread)}/messages?project_id=${p}&actor=${a}`);
   }
 
+  if (view === "roles") {
+    // Every agent this project has, for the "Agents on this" picker. The workforce endpoint
+    // would also answer this, but it computes spend and live status for 26 agents to do it —
+    // a picker should not cost a scoreboard.
+    return upstream(`/v1/roles?project_id=${p}`);
+  }
+
   if (view === "starters") {
     const role = (params.get("role") ?? "").trim();
     if (!role) return NextResponse.json({ error: "missing role" }, { status: 400 });

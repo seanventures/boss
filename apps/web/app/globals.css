@@ -8920,3 +8920,43 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .ad-must { color: var(--green, #3fb950); }
 .ad-mustnot { color: hsl(0 70% 68%); }
+
+/* ── Who is on this app ───────────────────────────────────────────────────────────────────
+   A workflow showed eight steps and named exactly one role — the gate's approver — while the
+   agents that build, review, test and ship it went unmentioned. */
+.aot {
+  margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+.aot-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.aot-label {
+  font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
+}
+.aot-bad { color: hsl(0 70% 68%); }
+.aot-list { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.aot-agent {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 3px 6px 3px 11px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: .8rem;
+}
+/* Seeded by BOSS from the stages that would have run, versus chosen by a person. The gate
+   refuses on both, so which one it is matters when the refusal arrives. */
+.aot-agent[data-source="operator"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.aot-name { color: var(--ink); text-decoration: none; }
+.aot-name:hover { text-decoration: underline; }
+.aot-src { font-size: .62rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.aot-x {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: .8rem; line-height: 1; padding: 2px 4px; border-radius: 6px;
+}
+.aot-x:hover { color: hsl(0 70% 68%); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.aot-add {
+  padding: 4px 12px; border-radius: 999px; cursor: pointer; font-size: .78rem;
+  border: 1px dashed var(--border); background: transparent; color: var(--muted);
+}
+.aot-add:hover { color: var(--ink); border-color: var(--muted); }
+.aot-pick { font-size: .78rem; }
+.aot-note { margin: 8px 0 0; }

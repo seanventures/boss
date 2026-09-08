@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
+import { AgentsOnThis } from "./agents-on-this";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -386,6 +387,22 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // of the deploy decision, and a gate that only says yes/no cannot express "yes, to staging".
   const [targets, setTargets] = useState<DeployTarget[]>([]);
   const [hosts, setHosts] = useState<DeployHost[]>([]);
+  // EVERY AGENT THIS PROJECT HAS, so "assign" can offer them by name rather than by role_key.
+  // One fetch for the whole screen: a picker per run would be one request per run.
+  const [roles, setRoles] = useState<Array<{ role_key: string; display_name?: string | null }>>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/agent?view=roles&project_id=${encodeURIComponent(projectId)}`,
+                              { cache: "no-store" });
+        if (!r.ok) return;
+        const body = await r.json();
+        if (alive) setRoles((body.items ?? body.roles ?? []) as typeof roles);
+      } catch { /* the panel still lists who is assigned; it just cannot offer new ones */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
 
   /* RE-READ AFTER BINDING — the reason "Set target" looked like it had done nothing.
    *
@@ -725,6 +742,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           projectId={projectId}
           runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
           capabilities={capabilities} targets={targets} hosts={hosts}
+          actor={actor} roles={roles}
           // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
           // waiting on a person cannot be ticked forward — and a button that always says
           // "done" is indistinguishable from a button that does nothing.
@@ -1492,10 +1510,13 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                    onRetryStep, onRerun, onRecheck, onSetTarget, onPrepareTarget, onRunPreview,
-                   onBound, projectId,
+                   onBound, projectId, actor, roles,
                    previewStarting,
                    targets, hosts }: {
   projectId: string;
+  actor: string;
+  /** Every agent this project has, for the "Agents on this" picker. */
+  roles: Array<{ role_key: string; display_name?: string | null }>;
   runs: Run[];
   openRun: string | null;
   setOpenRun: (id: string | null) => void;
@@ -1622,6 +1643,12 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
               </p>
             ) : null}
             {open ? (
+              <>
+              {/* WHO IS ON THIS, above the chain that shows what happens to it. The page listed
+                  eight steps and named exactly one role — the gate's approver — while the
+                  agents that build, review, test and ship it went unmentioned. */}
+              <AgentsOnThis projectId={projectId} actor={actor} roles={roles}
+                            appName={appIdentity(run.input as AppRun).name} />
               <StepPath run={run} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
@@ -1632,6 +1659,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onBound={onBound}
                         projectId={projectId}
                         previewStarting={previewStarting} />
+              </>
             ) : null}
           </article>
         );
