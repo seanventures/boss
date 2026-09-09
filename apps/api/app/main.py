@@ -10359,15 +10359,10 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         # no agent run in flight at all. The turn had died, and every sentence the console
         # showed after that was a promise it had no basis for.
         #
-        # There is no thread id on agent_runs, so this answers the honest question — "is BOSS
-        # working on anything for this project right now" — rather than a precise one it cannot
-        # ask. A false "yes" costs a little more waiting; a false "no" would tell someone their
-        # turn is dead while it runs, so the doubt is spent in that direction deliberately.
-        working = bool(connection.execute(
-            text("SELECT 1 FROM agent_runs WHERE project_id = :p AND status = 'running' "
-                 "AND updated_at > now() - interval '30 minutes' LIMIT 1"),
-            {"p": project_id},
-        ).first())
+        # Console chat commits progress independently of its final messages.
+        from boss_engine.services.agent_turn_status import thread_is_working
+
+        working = thread_is_working(connection, project_id, thread_id)
         history = orchestration_agent.list_messages(connection, thread_id)
         # THE BUTTONS COME BACK WITH THE CONVERSATION.
         #

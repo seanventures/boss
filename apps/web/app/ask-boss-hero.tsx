@@ -21,6 +21,7 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 
+import { landingAnswerArrived } from "../lib/chat-landing";
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
 import { facetsOf } from "./template-brief";
@@ -1026,6 +1027,7 @@ export function AskBossHero({
   const [steps, setSteps] = useState<string[]>([]);
   const [probe, setProbe] = useState<{ id: string } | null>(null);
   const [landing, setLanding] = useState(false);
+  const landingFor = useRef("");
   //: THE GALLERY. Compared against lovable.dev/templates — 204 templates in a grid — ours were
   //: sixteen cards on a conveyor you cannot scan. "See all" fixes that; facets were tried and
   //: removed, because sixteen items that fit on one screen do not need filtering.
@@ -1164,6 +1166,7 @@ export function AskBossHero({
         // "ASK AGAIN IN A MOMENT" IS WORK THIS PAGE CAN DO. The turn was not cancelled, its
         // steps are still arriving above, and its answer lands in the thread by itself — so
         // this watches for it. Asking again would start a SECOND turn and pay for it twice.
+        landingFor.current = message;
         setLanding(true);
         setError(
           `Still working — past ${STALL_SECONDS}s. Nothing was cancelled; the answer will ` +
@@ -1228,6 +1231,9 @@ export function AskBossHero({
         .then((r) => (r.ok ? r.json() : null))
         .then((d: { messages?: Array<Record<string, unknown>> } | null) => {
           if (!alive || !d?.messages?.length) return;
+          // THIS turn. The previous assistant bubble is still the last committed row
+          // until the new user line and its reply commit together.
+          if (!landingAnswerArrived(d.messages, landingFor.current)) return;
           const last = [...d.messages].reverse().find((m) => m.role === "assistant");
           if (!last) return;
           setReply(String(last.content ?? ""));

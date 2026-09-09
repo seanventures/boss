@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
+import { landingAnswerArrived } from "../lib/chat-landing";
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
 
@@ -449,10 +450,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   };
 
   const quiet = useRef(0);
+  const landingFor = useRef("");
+  const sawWorking = useRef(false);
   useEffect(() => {
     if (!landing || !threadId) return;
     let alive = true;
     quiet.current = 0;
+    sawWorking.current = false;
     const started = Date.now();
     const id = window.setInterval(() => {
       if (!alive) return;
@@ -462,22 +466,32 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       void read<{ messages?: Msg[]; working?: boolean }>(
         { view: "messages", project_id: projectId, actor, thread_id: threadId }).then((d) => {
         if (!alive || !d?.messages) return;
-        const last = d.messages[d.messages.length - 1];
-        // The note this component added locally is not in the thread, so any assistant message
-        // that IS there and is newer than the note is the real answer.
-        if (last && last.role === "assistant") {
-          setMessages(d.messages);
+        // THIS TURN, NOT THE PREVIOUS ONE.
+        //
+        // The user line and the reply commit together. Until then the thread still ends on
+        // the last turn's assistant message. Treating that leftover as arrival replaced the
+        // transcript and dropped the question the operator had just typed.
+        if (landingAnswerArrived(d.messages, landingFor.current)) {
+          const server = d.messages;
+          setMessages((local) => {
+            const lastLocal = local[local.length - 1];
+            const serverHasIt =
+              !lastLocal ||
+              lastLocal.role !== "user" ||
+              server.some((m) => m.role === "user" && (m.content ?? "").includes(lastLocal.content ?? ""));
+            return serverHasIt ? server : [...server, lastLocal];
+          });
           setLanding(false);
           return;
         }
-        // NOTHING IS RUNNING, SO STOP SAYING IT IS.
-        //
-        // The panel promised "the answer will appear here on its own" and then polled for
-        // twenty minutes in silence. Measured live while the chat read "BOSS is working…":
-        // no agent run in flight. The turn had died, and every reassurance after that had no
-        // basis. Two consecutive not-working reads before giving up, because a turn between
-        // steps can briefly show as idle and one sample would call that death.
-        if (d.working === false) {
+        // NOTHING IS RUNNING, SO STOP SAYING IT IS — but only after this turn has been
+        // seen working. A false on the first sample is "no tool has started yet", which
+        // is how every turn begins. Two consecutive not-working reads after that, because
+        // a turn between steps can briefly show as idle and one sample would call that death.
+        if (d.working === true) {
+          sawWorking.current = true;
+          quiet.current = 0;
+        } else if (d.working === false && sawWorking.current) {
           quiet.current += 1;
           if (quiet.current >= 2) {
             setLanding(false);
@@ -485,8 +499,6 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               "That turn ended without an answer — nothing is running now. Whatever it had "
               + "already done still stands; ask again and it will pick up from the thread." }]);
           }
-        } else {
-          quiet.current = 0;
         }
       });
     }, 4000);
@@ -753,6 +765,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // operator to come back and look was not: the turn IS still running, its steps are
         // still streaming into this very panel, and the answer lands in the thread by itself.
         // Watching for it is one poll.
+        landingFor.current = typed;
         setLanding(true);
         setMessages((m) => [...m, { role: "assistant", content:
           `Still working — past ${AGENT_STALL_SECONDS}s. Nothing was cancelled and you can ` +
