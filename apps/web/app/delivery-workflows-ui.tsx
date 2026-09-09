@@ -1956,7 +1956,11 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
             data-picked={showAgents ? "true" : undefined} data-testid="dw-node-agents">
           <button type="button" className="dw-node-btn"
                   onClick={() => setPicked(showAgents ? (initial?.step_id ?? null) : AGENTS_NODE)}>
-            <span className="dw-node-dot" aria-hidden>◇</span>
+            {/* `dw-dot` for the GRID BEHAVIOUR, not the colour: it spans both rows, so the
+                first column is the width of the marker. Without it the marker sat in row 1 and
+                "auto-confirmed" in row 2 of the SAME column, which sized that column to the
+                word and pushed "Agents" to the far right of its own node. */}
+            <span className="dw-dot dw-node-dot" aria-hidden>◇</span>
             <span className="dw-node-name">Agents</span>
             <span className="dw-node-meta">
               <span className="detail">{terminal ? "as run" : "auto-confirmed"}</span>
@@ -2659,7 +2663,14 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
       {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the
           step said everything except that: the target it shipped to, the run id, the health
           key names — and no link. The address is on the target it is bound to. */}
-      {isDeployStep(step, capability) && shippedTo && buildRunId ? (
+      {/* NOT AFTER IT HAS BEEN APPROVED.
+          The gate is signed off and a worker is about to ship it — the panel says so, two lines
+          below — and "Deploy now" was still offered beside that sentence. Pressing it would
+          start a SECOND deploy of the same build while the first was being picked up. An
+          approved gate is a decision already taken; the button that takes it does not belong
+          on screen any more. */}
+      {isDeployStep(step, capability) && shippedTo && buildRunId
+        && decidedButNotMoved(step) !== "approved" ? (
         <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
                  appName={typeof runInput.title === "string" ? runInput.title : shippedTo.app_name}
                  alreadyLive={!!liveAppUrl} onDone={onBound} />

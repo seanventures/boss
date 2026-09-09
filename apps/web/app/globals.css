@@ -8972,9 +8972,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   color: var(--accent);
 }
 .roster-new:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-/* Step one of the rail: who is on this. A diamond rather than the numbered dot the real steps
-   carry — it is where assignment is decided, not something the runtime executed. */
-.dw-node-agents .dw-node-dot { color: var(--muted); font-size: .8rem; }
 .dw-node-agents[data-picked="true"] .dw-node-name { color: var(--accent); }
 /* The project's default team, beside the workflow picker. One control per level: what this
    project starts with here, what this app uses on its own workflow. */
@@ -9008,3 +9005,10 @@ a.agent-chip-name:hover { text-decoration: underline; }
 .agent-chip-note {
   font-size: .64rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
 }
+/* Step one of the rail is a marker, not a numbered step: a hollow diamond rather than the
+   filled disc the runtime's own steps carry. It borrows `.dw-dot` for the grid span only. */
+.dw-node-agents .dw-dot {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--muted); font-weight: 400;
+}
+.dw-node-agents[data-picked="true"] .dw-dot { border-color: var(--live, #58a6ff); }
