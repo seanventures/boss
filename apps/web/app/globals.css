@@ -6550,8 +6550,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-sub { margin: 6px 0 0; max-width: 62ch; color: var(--ink-soft, #9FB0D0); font-size: .9rem; line-height: 1.5; }
 
 .askboss-box {
-  display: flex; align-items: flex-end; gap: 10px;
-  padding: 10px 10px 10px 16px;
+  /* A COLUMN, NOT A ROW. Six controls shared one line with the textarea and it shrank to half
+     its width while they marched toward the right edge. What you are writing gets the full
+     width; what acts on it sits underneath. */
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  padding: 12px 14px;
   border-radius: 14px;
   border: 1px solid var(--border, #1C2740);
   background: rgba(4, 9, 22, .62);
@@ -6842,8 +6845,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 /* The composer holds a multi-line brief now, so it must not clip to one row. */
-.askboss-input { min-height: 44px; }
-.askboss-box { align-items: flex-end; }
+.askboss-input { min-height: 68px; }
 
 @media (prefers-reduced-motion: reduce) {
   .askboss-assign:hover:not(:disabled) { transform: none; }
@@ -7826,8 +7828,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    now a short label and a select sized to its content, and it wraps to its own line before it
    squeezes the buttons. */
 .askboss-wf {
+  /* On the control bar now, not squeezed into the textarea's row. `margin-left: 4px` was
+     holding it against the buttons it used to sit beside. */
   display: inline-flex; align-items: center; gap: 6px;
-  flex: 0 1 auto; min-width: 0; margin-left: 4px;
+  flex: 0 1 auto; min-width: 0;
 }
 .askboss-wf-label {
   font-size: 0.7rem; color: var(--faint); white-space: nowrap;
@@ -8977,11 +8981,14 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    project starts with here, what this app uses on its own workflow. */
 .askboss-agents-toggle {
   border: 0; background: transparent; cursor: pointer; padding: 0;
-  color: var(--muted); font-size: inherit;
+  color: var(--muted); font-size: .7rem; letter-spacing: .02em; white-space: nowrap;
 }
 .askboss-agents-toggle:hover { color: var(--ink); }
 .askboss-agents-panel {
-  flex-basis: 100%; margin-top: 8px; padding: 10px 12px; border-radius: 10px;
+  /* Opens BELOW the bar rather than inside it: a panel that expands in a flex row shoves
+     everything beside it sideways, which is how this row got crowded in the first place. */
+  position: absolute; left: 0; right: 0; top: calc(100% + 8px); z-index: 20;
+  padding: 10px 12px; border-radius: 10px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--ink) 3%, transparent);
 }
@@ -9012,3 +9019,61 @@ a.agent-chip-name:hover { text-decoration: underline; }
   color: var(--muted); font-weight: 400;
 }
 .dw-node-agents[data-picked="true"] .dw-dot { border-color: var(--live, #58a6ff); }
+
+/* ── The composer's control bar ───────────────────────────────────────────────────────────
+   Settings on the left, the action on the right, on a line of their own beneath what you are
+   writing. Wraps rather than squeezing: on a narrow console the settings drop below the
+   button instead of the textarea losing width to them. */
+.askboss-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  border-top: 1px solid var(--border, #1C2740); padding-top: 10px;
+}
+.askboss-bar-settings {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap; min-width: 0;
+}
+
+/* One button that does the usual thing, with the rest behind a caret. Three peers said the
+   three actions were equally likely; asking is free and constant, building spends money once. */
+.split-action { position: relative; display: inline-flex; flex: 0 0 auto; }
+.split-action-main {
+  min-width: 84px; height: 40px; padding: 0 18px;
+  border: 0; border-radius: 10px 0 0 10px; cursor: pointer;
+  background: var(--brand-grad-2, linear-gradient(135deg, #2ED1C3, #4C8DF6));
+  color: #04121f; font: inherit; font-weight: 700; font-size: .95rem;
+}
+.split-action-caret {
+  width: 34px; height: 40px; cursor: pointer;
+  border: 0; border-left: 1px solid rgba(4, 18, 31, .28); border-radius: 0 10px 10px 0;
+  background: var(--brand-grad-2, linear-gradient(135deg, #2ED1C3, #4C8DF6));
+  color: #04121f; font-size: .8rem;
+}
+.split-action-main:disabled, .split-action-caret:disabled { opacity: .45; cursor: default; }
+.split-action-main:hover:not(:disabled), .split-action-caret:hover:not(:disabled) {
+  filter: brightness(1.07);
+}
+.split-action-menu {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30;
+  min-width: 288px; padding: 6px; border-radius: 12px;
+  border: 1px solid var(--border, #1C2740); background: var(--surface, #101A30);
+  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .6);
+}
+.split-action-item {
+  display: grid; gap: 2px; width: 100%; text-align: left; cursor: pointer;
+  padding: 9px 11px; border: 0; border-radius: 8px; background: transparent; color: inherit;
+  font: inherit;
+}
+.split-action-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.split-action-item-head {
+  display: flex; align-items: baseline; gap: 8px; font-size: .9rem; font-weight: 600;
+}
+/* What it costs, on the item — a menu that hides the expensive option among the free ones is
+   how somebody spends money by accident. */
+.split-action-cost {
+  font-style: normal; font-size: .64rem; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--amber, #d29922);
+}
+.split-action-item-hint { font-size: .78rem; color: var(--muted); line-height: 1.45; }
+.askboss-agents { position: relative; }

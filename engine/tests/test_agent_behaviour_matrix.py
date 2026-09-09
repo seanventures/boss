@@ -860,7 +860,11 @@ def test_the_composer_can_research_not_only_ask_and_build():
     # startDiscoveryAction, and broke when that Server Action was replaced by a route handler
     # to stop it waiting on a full console re-render. Research still has to exist either way.
     assert "/api/discoveries" in src, "no way to start a research run"
-    assert "askboss-research" in src, "no Research action on the composer"
+    # The test id moved when the three peer buttons became one split action — `split-research`
+    # rather than `askboss-research`. The CAPABILITY is what matters and is what is asserted;
+    # pinning the old id would fail a change that kept research and only moved its button.
+    assert "split-research" in src or "askboss-research" in src, \
+        "no Research action on the composer"
     assert "RESEARCH" in src and src.count("seed:") >= 4, "no research starters"
 
 

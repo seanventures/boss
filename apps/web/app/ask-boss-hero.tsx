@@ -26,6 +26,7 @@ import { notifyChanged } from "./changed";
 import { facetsOf } from "./template-brief";
 import { CRAFT, DETAILS, buildBrief } from "./template-details";
 import { DefaultAgentPicker } from "./default-agent-picker";
+import { SplitAction } from "./split-action";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
@@ -1475,46 +1476,37 @@ export function AskBossHero({
               }}
               data-testid="askboss-input"
             />
-            <div className="askboss-actions-inline">
-              <button
-                className="askboss-send"
-                type="submit"
+            {/* THE CONTROLS, ON THEIR OWN LINE.
+                Six things shared one flex row — the textarea, three peer buttons, the workflow
+                picker and the agent picker — so the textarea collapsed to half its width and
+                the buttons marched toward the right edge. A composer's box is for what you are
+                writing; everything that acts on it belongs beneath. */}
+            <div className="askboss-bar">
+              <div className="askboss-bar-settings">
+                <DefaultWorkflowPicker projectId={projectId} />
+                {/* WHO RUNS IT, chosen where the workflow is chosen. Build does not create a
+                    project — it sends the directive down panel → PRD → code — so there is no
+                    app here to assign anyone to. What can be set is what this project does by
+                    default, which then seeds every app that follows. */}
+                <DefaultAgentPicker projectId={projectId} actor={actor} />
+              </div>
+              <SplitAction
+                busy={busy}
                 disabled={busy || !input.trim()}
-                data-testid="askboss-send"
-                title="Answer this from live control-plane state"
-              >
-                {busy ? <span className="askboss-spinner" aria-hidden /> : "Ask"}
-              </button>
-              <button
-                className="askboss-assign"
-                type="button"
-                disabled={busy || !input.trim()}
-                data-testid="askboss-research"
-                title="Research this first — web sources, cited dossier, candidate outcomes"
-                onClick={() => research(input)}
-              >
-                Research
-              </button>
-              <button
-                className="askboss-assign"
-                type="button"
-                disabled={busy || !input.trim()}
-                data-testid="askboss-assign"
-                title="Send this down the governed path — panel, PRD, then code"
-                onClick={() => assign(input)}
-              >
-                Build →
-              </button>
+                primary={{
+                  id: "ask", label: "Ask", onRun: () => ask(input),
+                  hint: "Answer this from live control-plane state",
+                }}
+                others={[
+                  { id: "research", label: "Research", cost: "spends money",
+                    hint: "Web sources first, into a cited dossier and candidate outcomes",
+                    onRun: () => research(input) },
+                  { id: "build", label: "Build", cost: "spends money",
+                    hint: "Down the governed path — a panel, a PRD you approve, then code",
+                    onRun: () => assign(input) },
+                ]}
+              />
             </div>
-            <DefaultWorkflowPicker projectId={projectId} />
-            {/* WHO RUNS IT, chosen where the workflow is chosen.
-                "I did not see option in the command center to assign the agents at the time of
-                creation" — and there could not be one for a specific app, because Build does
-                not create a project: it sends the directive down panel → PRD → code, and no app
-                exists until the panel produces one. What CAN be set here is the same shape as
-                the control beside it — what this project does by default — which then seeds
-                every app that follows and is customisable per app on its workflow. */}
-            <DefaultAgentPicker projectId={projectId} actor={actor} />
           </div>
 
           {!reply && !busy ? (

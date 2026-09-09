@@ -76,7 +76,7 @@ export function DefaultAgentPicker({ projectId, actor }: {
   const available = roles.filter((r) => !current.includes(r.role_key));
 
   return (
-    <div className="askboss-wf" data-testid="askboss-default-agents">
+    <div className="askboss-wf askboss-agents" data-testid="askboss-default-agents">
       <button type="button" className="askboss-wf-label askboss-agents-toggle"
               onClick={() => setOpen((o) => !o)}
               title="The agents every new project here starts with">
