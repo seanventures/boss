@@ -8976,3 +8976,16 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    carry — it is where assignment is decided, not something the runtime executed. */
 .dw-node-agents .dw-node-dot { color: var(--muted); font-size: .8rem; }
 .dw-node-agents[data-picked="true"] .dw-node-name { color: var(--accent); }
+/* The project's default team, beside the workflow picker. One control per level: what this
+   project starts with here, what this app uses on its own workflow. */
+.askboss-agents-toggle {
+  border: 0; background: transparent; cursor: pointer; padding: 0;
+  color: var(--muted); font-size: inherit;
+}
+.askboss-agents-toggle:hover { color: var(--ink); }
+.askboss-agents-panel {
+  flex-basis: 100%; margin-top: 8px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+.askboss-agents-panel .detail { margin: 0 0 8px; }

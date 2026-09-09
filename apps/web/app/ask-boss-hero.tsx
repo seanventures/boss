@@ -25,6 +25,7 @@ import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
 import { facetsOf } from "./template-brief";
 import { CRAFT, DETAILS, buildBrief } from "./template-details";
+import { DefaultAgentPicker } from "./default-agent-picker";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
@@ -1506,6 +1507,14 @@ export function AskBossHero({
               </button>
             </div>
             <DefaultWorkflowPicker projectId={projectId} />
+            {/* WHO RUNS IT, chosen where the workflow is chosen.
+                "I did not see option in the command center to assign the agents at the time of
+                creation" — and there could not be one for a specific app, because Build does
+                not create a project: it sends the directive down panel → PRD → code, and no app
+                exists until the panel produces one. What CAN be set here is the same shape as
+                the control beside it — what this project does by default — which then seeds
+                every app that follows and is customisable per app on its workflow. */}
+            <DefaultAgentPicker projectId={projectId} actor={actor} />
           </div>
 
           {!reply && !busy ? (
