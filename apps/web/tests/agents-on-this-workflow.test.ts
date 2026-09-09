@@ -19,14 +19,35 @@ const WORKFLOWS = codeOnly("app/delivery-workflows-ui.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("who is on this app", () => {
-  it("the panel is rendered on the run, above the step chain", () => {
+  it("assignment is the FIRST node in the step rail", () => {
+    // It began as a block above the rail and could not be found — "where when creating a new
+    // project do we have the option to assign the agents?" A panel over the chain is something
+    // you have to notice; a node in the chain is where a reader of the steps already is.
+    expect(WORKFLOWS).toContain('data-testid="dw-node-agents"');
+    const node = WORKFLOWS.indexOf('data-testid="dw-node-agents"');
+    const realSteps = WORKFLOWS.indexOf("{steps.map((step, index) => {");
+    expect(node).toBeGreaterThan(-1);
+    expect(node).toBeLessThan(realSteps);
     expect(WORKFLOWS).toContain("<AgentsOnThis");
-    // Above StepPath, not below it: the question "who is doing this" comes before "what are
-    // the steps", and a reader who has already scrolled the chain has stopped asking.
-    const panel = WORKFLOWS.indexOf("<AgentsOnThis");
-    const chain = WORKFLOWS.indexOf("<StepPath run={run}");
-    expect(panel).toBeGreaterThan(-1);
-    expect(panel).toBeLessThan(chain);
+  });
+
+  it("but it is not a runtime step: no duration, no status badge", () => {
+    // A real step would mean editing all twelve catalogue workflows and adding something that
+    // can execute, fail and block a run. This one does not run, and must not look like it did.
+    const at = WORKFLOWS.indexOf('data-testid="dw-node-agents"');
+    const node = WORKFLOWS.slice(at, at + 700);
+    expect(node).not.toContain("stepDuration");
+    expect(node).not.toContain("dw-node-you");
+    expect(node).toContain("auto-confirmed");
+  });
+
+  it("and a finished run shows it as a record, not a setting", () => {
+    // Offering "+ Assign" on a completed workflow invites a change that cannot affect
+    // anything: the work is done and the gates it would have governed are already answered.
+    expect(WORKFLOWS).toContain("readOnly={terminal}");
+    expect(WORKFLOWS).toContain('["completed", "cancelled", "failed", "deadlettered"]');
+    expect(PANEL).toContain("readOnly ? null : (");
+    expect(PANEL).toContain("a record now, not a setting");
   });
 
   it("and it is a panel, not a step in the chain", () => {
@@ -44,7 +65,7 @@ describe("who is on this app", () => {
     // decision, not work nobody has decided about. Saying "unassigned" alone would read as
     // broken.
     expect(PANEL).toContain("Nobody is assigned, so any agent may work on this");
-    expect(PANEL).toContain("Assign someone to make that a");
+    expect(PANEL).toContain("Assign someone to make that ");
   });
 
   it("a seeded default is distinguishable from a person's choice", () => {

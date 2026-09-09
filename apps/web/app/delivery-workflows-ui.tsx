@@ -1749,14 +1749,11 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                   : run.blocked_reason}
               </p>
             ) : null}
+            {/* The "Agents on this" panel is the rail's FIRST NODE now, not a block above it.
+                A panel over the chain is a thing you have to notice; a node in the chain is
+                where somebody reading the steps already is. */}
             {open ? (
-              <>
-              {/* WHO IS ON THIS, above the chain that shows what happens to it. The page listed
-                  eight steps and named exactly one role — the gate's approver — while the
-                  agents that build, review, test and ship it went unmentioned. */}
-              <AgentsOnThis projectId={projectId} actor={actor} roles={roles}
-                            appName={appIdentity(run.input as AppRun).name} />
-              <StepPath run={run} capabilities={capabilities} targets={targets} hosts={hosts}
+              <StepPath run={run} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
                         busy={busy}
@@ -1766,7 +1763,6 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onBound={onBound}
                         projectId={projectId}
                         previewStarting={previewStarting} />
-              </>
             ) : null}
           </article>
         );
@@ -1861,8 +1857,10 @@ export function decidedButNotMoved(step: RunStep): string {
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
-                   previewStarting, busy }: {
+                   previewStarting, busy, actor, roles }: {
   projectId: string;
+  actor: string;
+  roles: Array<{ role_key: string; display_name?: string | null }>;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
@@ -1890,6 +1888,10 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
   })();
   const byKey = new Map(capabilities.map((c) => [c.key, c]));
   const steps = run.steps;
+  // A FINISHED RUN'S ASSIGNMENT IS HISTORY. Offering "+ Assign" on a completed workflow invites
+  // a change that cannot affect anything — the work is done and the gates it would have
+  // governed are already answered. Shown, not editable.
+  const terminal = ["completed", "cancelled", "failed", "deadlettered"].includes(run.status);
   // Open on the step that wants attention, then the one in flight, then the first. Landing on
   // "research succeeded" when a gate three steps along is waiting for you is the wrong answer
   // to "what is happening".
@@ -1898,9 +1900,34 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
   const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
 
+  // ASSIGNMENT IS STEP ONE, in the chain where it can be seen.
+  //
+  // It was a panel above the rail and the operator could not find it — "where when creating a
+  // new project do we have the option to assign the agents?" It is in the wizard's second
+  // screen, which is exactly the problem: a thing you have to go looking for.
+  //
+  // A UI NODE, NOT A CAPABILITY. Making it a real step would mean editing all twelve catalogue
+  // workflows, a new capability in the runtime, and a step that can execute, fail and block a
+  // run. Assignment is a property of the app, not a stage of its delivery — so the rail shows
+  // it first and the runtime never sees it. It carries no duration and no status badge,
+  // because it does not run.
+  const AGENTS_NODE = "__agents__";
+  const showAgents = picked === AGENTS_NODE;
+
   return (
     <div className="dw-path" data-testid="dw-path">
       <ol className="dw-rail" aria-label="Workflow steps">
+        <li className="dw-node dw-node-agents" data-phase="done"
+            data-picked={showAgents ? "true" : undefined} data-testid="dw-node-agents">
+          <button type="button" className="dw-node-btn"
+                  onClick={() => setPicked(showAgents ? (initial?.step_id ?? null) : AGENTS_NODE)}>
+            <span className="dw-node-dot" aria-hidden>◇</span>
+            <span className="dw-node-name">Agents</span>
+            <span className="dw-node-meta">
+              <span className="detail">{terminal ? "as run" : "auto-confirmed"}</span>
+            </span>
+          </button>
+        </li>
         {steps.map((step, index) => {
           const phase = phaseOf(step);
           const capability = step.capability ? byKey.get(step.capability) : undefined;
@@ -1948,7 +1975,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
           );
         })}
       </ol>
-      {current ? (
+      {showAgents ? (
+        <AgentsOnThis projectId={projectId} actor={actor} roles={roles}
+                      appName={appIdentity(run.input as AppRun).name}
+                      readOnly={terminal} />
+      ) : null}
+      {current && !showAgents ? (
         <StepDetail
           step={current}
           capability={current.capability ? byKey.get(current.capability) : undefined}

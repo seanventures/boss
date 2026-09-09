@@ -8,9 +8,16 @@
  * agent out of the several that build, review, test and ship the thing. The implicit assignment
  * lived in `STAGE_ROLES`, a map used for cost attribution at write time and never displayed.
  *
- * WHY THIS IS A PANEL AND NOT A STEP. Making it a step would put it in the chain, where it
- * could execute, fail, and block a run — and it would have to be added to all twelve catalogue
- * workflows. Assignment is a property of the app, not a stage of its delivery. Panel.
+ * FIRST IN THE CHAIN, BUT NOT A CAPABILITY. This began as a panel above the rail and the
+ * operator could not find it — "where when creating a new project do we have the option to
+ * assign the agents?" A block over the chain is something you have to notice; a node IN the
+ * chain is where somebody reading the steps already is. So it renders as step one.
+ *
+ * It is still not a workflow capability. A real step would mean editing all twelve catalogue
+ * workflows, a new capability in the runtime, and something that can execute, fail and block a
+ * run — and assignment is a property of the app, not a stage of its delivery. The node carries
+ * no duration and no status badge, because it does not run: it says "auto-confirmed", which is
+ * exactly what happened when start_run seeded it.
  *
  * The badge on each name is the part worth reading: `default` means BOSS seeded the agents that
  * would have done the work anyway, and nobody has looked. `assigned` means somebody chose.
@@ -22,13 +29,17 @@ import { notifyChanged, onChanged } from "./changed";
 
 type Assigned = { role_key: string; source: string; assigned_by?: string | null };
 
-export function AgentsOnThis({ projectId, appName, actor, roles }: {
+export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = false }: {
   projectId: string;
   /** The app, by the name the run carries. Assignment is keyed on its identity, not this text. */
   appName: string;
   actor: string;
   /** Every agent this project has, to choose from. */
   roles: Array<{ role_key: string; display_name?: string | null }>;
+  /** A FINISHED RUN'S ASSIGNMENT IS HISTORY. Offering "+ Assign" on a completed workflow invites
+   *  a change that cannot affect anything: the work is done and the gates it would have governed
+   *  are already answered. Shown, never editable. */
+  readOnly?: boolean;
 }) {
   const [agents, setAgents] = useState<Assigned[] | null>(null);
   const [adding, setAdding] = useState(false);
@@ -97,8 +108,10 @@ export function AgentsOnThis({ projectId, appName, actor, roles }: {
         // agent act — enforcement stops work that contradicts a decision, not work nobody has
         // decided about — and saying so is the difference between "unconfigured" and "blocked".
         <p className="detail" data-testid="aot-empty">
-          Nobody is assigned, so any agent may work on this. Assign someone to make that a
-          decision rather than a default.
+          {readOnly
+            ? "Nobody was assigned to this run, so any agent could work on it."
+            : "Nobody is assigned, so any agent may work on this. Assign someone to make that "
+              + "a decision rather than a default."}
         </p>
       ) : null}
 
@@ -112,16 +125,18 @@ export function AgentsOnThis({ projectId, appName, actor, roles }: {
                 a person choosing is a decision. The gate refuses on both, so which one it is
                 matters when the refusal arrives. */}
             <span className="aot-src">{a.source === "default" ? "default" : "assigned"}</span>
-            <button type="button" className="aot-x" aria-label={`Remove ${nameOf(a.role_key)}`}
-                    disabled={!!busy}
-                    onClick={() => void act({ action: "unassign", role_key: a.role_key },
-                                            a.role_key)}>
-              {busy === a.role_key ? "…" : "✕"}
-            </button>
+            {readOnly ? null : (
+              <button type="button" className="aot-x" aria-label={`Remove ${nameOf(a.role_key)}`}
+                      disabled={!!busy}
+                      onClick={() => void act({ action: "unassign", role_key: a.role_key },
+                                              a.role_key)}>
+                {busy === a.role_key ? "…" : "✕"}
+              </button>
+            )}
           </span>
         ))}
 
-        {adding ? (
+        {readOnly ? null : adding ? (
           <select className="mr-select aot-pick" defaultValue="" disabled={!!busy}
                   data-testid="aot-pick"
                   onChange={(e) => {
@@ -146,8 +161,10 @@ export function AgentsOnThis({ projectId, appName, actor, roles }: {
 
       {assigned.length ? (
         <p className="detail aot-note">
-          Only these agents may sign off this app&rsquo;s gates. Anyone else is refused, and the
-          refusal names who is on it.
+          {readOnly
+            ? "This run is finished — who was on it is a record now, not a setting."
+            : "Only these agents may sign off this app\u2019s gates. Anyone else is refused, "
+              + "and the refusal names who is on it."}
         </p>
       ) : null}
     </section>

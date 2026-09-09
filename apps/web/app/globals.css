@@ -8972,3 +8972,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   color: var(--accent);
 }
 .roster-new:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* Step one of the rail: who is on this. A diamond rather than the numbered dot the real steps
+   carry — it is where assignment is decided, not something the runtime executed. */
+.dw-node-agents .dw-node-dot { color: var(--muted); font-size: .8rem; }
+.dw-node-agents[data-picked="true"] .dw-node-name { color: var(--accent); }
