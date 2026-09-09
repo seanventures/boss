@@ -102,15 +102,23 @@ def main() -> int:
           "release_manager" in aa.default_roles(
               {"steps": [{"approval": {"approver_role": "release_manager"}}]}))
 
-    print("== assigning ==")
+    print("== assigning ADDS, it does not replace ==")
+    # "when I try to add more agents all other agents are getting cleared." They were not being
+    # cleared. An app with nothing recorded SHOWS the effective team — no row is not no one —
+    # and writing the first real row made that fallback stop applying, so five became one. The
+    # first write now materialises what the app was already running.
     conn = FakeConn()
     out = aa.assign(conn, project_id="p1", app_name="Interview Scorecard App",
-                    role_keys=["qa", "software_engineer"], actor="param")
-    check("it reports what it added", set(out["added"]) == {"qa", "software_engineer"}, str(out))
-    check("and who is now on it", set(out["assigned"]) == {"qa", "software_engineer"}, str(out))
+                    role_keys=["release_manager"], actor="param")
+    check("the agents it was already running are kept",
+          set(aa.default_roles()) <= set(out["assigned"]), str(out["assigned"]))
+    check("and the new one is there too", "release_manager" in out["assigned"],
+          str(out["assigned"]))
+    check("only the genuinely new one counts as added", out["added"] == ["release_manager"],
+          str(out["added"]))
     again = aa.assign(conn, project_id="p1", app_name="Interview Scorecard App",
-                      role_keys=["qa"], actor="param")
-    check("assigning twice adds nothing", again["added"] == [], str(again))
+                      role_keys=["release_manager"], actor="param")
+    check("assigning the same one twice adds nothing", again["added"] == [], str(again))
 
     print("== identity, not string equality ==")
     # 'Lead‐Triage Inbox' as stored carries a U+2010 hyphen. Matching by string would file the
@@ -124,10 +132,12 @@ def main() -> int:
     yes = aa.may_act(conn, project_id="p1", app_name="Interview Scorecard App", role_key="qa")
     check("an assigned agent may act", yes["allowed"], str(yes))
     no = aa.may_act(conn, project_id="p1", app_name="Interview Scorecard App",
-                    role_key="release_manager")
+                    role_key="ux_engineer")
     check("an unassigned one may not", not no["allowed"], str(no))
     check("and the refusal names who IS assigned",
           "qa" in (no.get("reason") or ""), no.get("reason"))
+    check("naming an agent that is genuinely not on it",
+          "ux_engineer" in (no.get("reason") or ""), no.get("reason"))
     check("and says how to fix it", "Assign them" in (no.get("reason") or ""), no.get("reason"))
 
     print("== and does NOT stop what nobody has decided about ==")
@@ -141,10 +151,11 @@ def main() -> int:
     print("== seeding never overwrites a person's decision ==")
     seeded = FakeConn()
     aa.assign(seeded, project_id="p1", app_name="Change Calendar",
-              role_keys=["qa"], actor="param")
+              role_keys=["release_manager"], actor="param")
     out = aa.ensure_defaults(seeded, project_id="p1", app_name="Change Calendar")
-    check("an app that already has somebody is left alone",
-          out["assigned"] == ["qa"] and out["seeded"] == [], str(out))
+    check("an app that already has somebody is left alone", out["seeded"] == [], str(out))
+    check("and keeps the person's choice",
+          "release_manager" in out["assigned"], str(out["assigned"]))
     fresh = FakeConn()
     out = aa.ensure_defaults(fresh, project_id="p1", app_name="Brand New App")
     check("an app with nobody gets the defaults",
@@ -235,21 +246,31 @@ def no_row_is_not_no_one() -> int:
           {t["role_key"] for t in team} == set(aa.default_roles()),
           str(sorted(t["role_key"] for t in team)))
 
-    print("== a recorded assignment wins over the default ==")
-    aa.assign(conn, project_id="p1", app_name="Some App", role_keys=["qa"], actor="param")
-    now = aa.effective(conn, "p1", aa.app_key("Some App"))
-    check("only what was recorded", [t["role_key"] for t in now] == ["qa"], str(now))
-    check("and not marked builtin", now[0]["source"] == aa.OPERATOR, str(now[0]))
+    print("== a recorded assignment is the app's own list from then on ==")
+    aa.assign(conn, project_id="p1", app_name="Some App", role_keys=["ux_engineer"],
+              actor="param")
+    now = {t["role_key"]: t["source"] for t in aa.effective(conn, "p1", aa.app_key("Some App"))}
+    check("the added one is recorded as a choice", now.get("ux_engineer") == aa.OPERATOR,
+          str(now))
+    check("the ones it was already running are kept, marked as seeded",
+          all(now.get(r) == aa.DEFAULT for r in aa.default_roles()), str(now))
+    check("and nothing is builtin any more — this app has its own list",
+          aa.BUILTIN not in now.values(), str(now))
 
     print("== the project's own team, chosen once, seeds every app ==")
-    aa.assign(conn, project_id="p1", app_name=aa.PROJECT_DEFAULT,
-              role_keys=["qa", "chief_architect"], actor="param")
-    check("project_team reads it",
-          set(aa.project_team(conn, "p1")) == {"qa", "chief_architect"},
-          str(aa.project_team(conn, "p1")))
-    fresh = aa.effective(conn, "p1", aa.app_key("A Brand New App"))
-    check("and an app with no row runs it",
-          {t["role_key"] for t in fresh} == {"qa", "chief_architect"}, str(fresh))
+    # Adding to the project team ALSO adds rather than replaces — the Command Center shows
+    # BOSS's built-in set when nobody has chosen one, and adding a seventh agent must not leave
+    # a team of one.
+    team = FakeConn()
+    aa.assign(team, project_id="p1", app_name=aa.PROJECT_DEFAULT,
+              role_keys=["ux_engineer"], actor="param")
+    check("project_team keeps the built-in set and adds to it",
+          set(aa.project_team(team, "p1")) == set(aa.default_roles()) | {"ux_engineer"},
+          str(aa.project_team(team, "p1")))
+    fresh = aa.effective(team, "p1", aa.app_key("A Brand New App"))
+    check("and an app with no row runs that team",
+          {t["role_key"] for t in fresh} == set(aa.default_roles()) | {"ux_engineer"},
+          str(sorted(t["role_key"] for t in fresh)))
 
     print()
     if failures:

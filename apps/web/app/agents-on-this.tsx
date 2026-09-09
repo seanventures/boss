@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { AgentChip } from "./agent-chip";
 import { notifyChanged, onChanged } from "./changed";
 
 type Assigned = { role_key: string; source: string; assigned_by?: string | null };
@@ -131,15 +132,14 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
       ) : null}
 
       <div className="aot-list">
+        {/* A FACE AND A NAME, the way the meeting room has always drawn a panel. These were
+            bare text with a tiny uppercase source word after each — "Adversarial Reviewer BY
+            DEFAULT  Chief Architect BY DEFAULT" — a run-on line where the label competed with
+            the name and nothing separated one agent from the next. */}
         {assigned.map((a) => (
-          <span className="aot-agent" key={a.role_key} data-source={a.source}
-                data-testid={`aot-${a.role_key}`}>
-            <a href={`?area=workforce&role=${encodeURIComponent(a.role_key)}`}
-               className="aot-name">{nameOf(a.role_key)}</a>
-            {/* SEEDED OR CHOSEN. A default is BOSS guessing from the stages that would have run;
-                a person choosing is a decision. The gate refuses on both, so which one it is
-                matters when the refusal arrives. */}
-            <span className="aot-src">{SOURCE_LABEL[a.source] ?? a.source}</span>
+          <AgentChip key={a.role_key} roleKey={a.role_key} label={nameOf(a.role_key)}
+                     note={SOURCE_LABEL[a.source] ?? a.source}
+                     href={`?area=workforce&role=${encodeURIComponent(a.role_key)}`}>
             {readOnly ? null : (
               <button type="button" className="aot-x" aria-label={`Remove ${nameOf(a.role_key)}`}
                       disabled={!!busy}
@@ -148,7 +148,7 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
                 {busy === a.role_key ? "…" : "✕"}
               </button>
             )}
-          </span>
+          </AgentChip>
         ))}
 
         {readOnly ? null : adding ? (

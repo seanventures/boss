@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { AgentChip } from "./agent-chip";
 import { notifyChanged } from "./changed";
 
 const PROJECT_DEFAULT = "*";
@@ -95,13 +96,12 @@ export function DefaultAgentPicker({ projectId, actor }: {
           </p>
           <div className="aot-list">
             {current.map((key) => (
-              <span className="aot-agent" key={key} data-source="operator">
-                <a className="aot-name"
-                   href={`?area=workforce&role=${encodeURIComponent(key)}`}>{nameOf(key)}</a>
+              <AgentChip key={key} roleKey={key} label={nameOf(key)}
+                         href={`?area=workforce&role=${encodeURIComponent(key)}`}>
                 <button type="button" className="aot-x" disabled={busy}
                         aria-label={`Remove ${nameOf(key)}`}
                         onClick={() => void act({ action: "unassign", role_key: key })}>✕</button>
-              </span>
+              </AgentChip>
             ))}
             <select className="mr-select aot-pick" value="" disabled={busy}
                     data-testid="askboss-agent-add"

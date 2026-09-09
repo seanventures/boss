@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
+import { AgentChip } from "./agent-chip";
 import { AgentsOnThis } from "./agents-on-this";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
@@ -1379,17 +1380,14 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
           </span>
           <div className="aot-list" data-testid="dw-wiz-agents">
             {(draft.agents.length ? draft.agents : defaultAgents).map((key) => (
-              <span className="aot-agent" key={key}
-                    data-source={draft.agents.length ? "operator" : "default"}>
-                <span className="aot-name">
-                  {allRoles.find((r) => r.role_key === key)?.display_name
-                    || key.replace(/_/g, " ")}
-                </span>
+              <AgentChip key={key} roleKey={key}
+                         label={allRoles.find((r) => r.role_key === key)?.display_name
+                                || key.replace(/_/g, " ")}>
                 <button type="button" className="aot-x" aria-label={`Remove ${key}`}
                         onClick={() => set("agents",
                           (draft.agents.length ? draft.agents : defaultAgents)
                             .filter((k) => k !== key))}>✕</button>
-              </span>
+              </AgentChip>
             ))}
             <select className="mr-select aot-pick" value="" data-testid="dw-wiz-agent-add"
                     onChange={(e) => {
@@ -1502,6 +1500,43 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
             <dt>Repository</dt>
             <dd data-testid="dw-review-repo">
               {draft.repository || suggested?.name || "the project default"}
+            </dd>
+            {/* WHO RUNS IT, on the screen that says what the press does.
+                It is chosen on step 2 and was reported twice as missing — a thing on a screen
+                you have to click through to is a thing nobody finds. Repeated here, where
+                everything about to happen is confirmed, and editable in place. */}
+            <dt>Agents</dt>
+            <dd data-testid="dw-review-agents">
+              <div className="aot-list">
+                {(draft.agents.length ? draft.agents : defaultAgents).map((key) => (
+                  <AgentChip key={key} roleKey={key}
+                             label={allRoles.find((r) => r.role_key === key)?.display_name
+                                    || key.replace(/_/g, " ")}
+                             note={draft.agents.length ? "chosen" : "by default"}>
+                    <button type="button" className="aot-x" aria-label={`Remove ${key}`}
+                            onClick={() => set("agents",
+                              (draft.agents.length ? draft.agents : defaultAgents)
+                                .filter((k) => k !== key))}>✕</button>
+                  </AgentChip>
+                ))}
+                <select className="mr-select aot-pick" value=""
+                        data-testid="dw-review-agent-add"
+                        onChange={(e) => {
+                          if (!e.target.value) return;
+                          const now = draft.agents.length ? draft.agents : defaultAgents;
+                          set("agents", [...now, e.target.value]);
+                        }}>
+                  <option value="">+ Add an agent…</option>
+                  {allRoles
+                    .filter((r) => !(draft.agents.length ? draft.agents : defaultAgents)
+                      .includes(r.role_key))
+                    .map((r) => (
+                      <option key={r.role_key} value={r.role_key}>
+                        {r.display_name || r.role_key}
+                      </option>
+                    ))}
+                </select>
+              </div>
             </dd>
             {criteriaFrom(draft).length ? (
               <>

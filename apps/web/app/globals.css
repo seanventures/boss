@@ -8989,3 +8989,22 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: color-mix(in srgb, var(--ink) 3%, transparent);
 }
 .askboss-agents-panel .detail { margin: 0 0 8px; }
+
+/* ── An agent, as a face and a name ───────────────────────────────────────────────────────
+   The assignment lists were bare text with a tiny uppercase source word after each one —
+   "Adversarial Reviewer BY DEFAULT  Chief Architect BY DEFAULT" — a run-on line where the
+   label competed with the name and nothing separated one agent from the next. The meeting
+   room has drawn a panel correctly all along; this is that, reused. */
+.agent-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 10px 4px 5px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: .84rem;
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+.agent-chip .mr-avatar { width: 24px; height: 24px; font-size: .62rem; }
+.agent-chip-name { color: var(--ink); text-decoration: none; white-space: nowrap; }
+a.agent-chip-name:hover { text-decoration: underline; }
+/* Secondary to the name, never louder — the old layout had the source word shouting beside it. */
+.agent-chip-note {
+  font-size: .64rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+}

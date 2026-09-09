@@ -140,6 +140,32 @@ def assign(connection, *, project_id: str, app_name: str, role_keys: Iterable[st
     key = app_key(app_name)
     if not key:
         return {"ok": False, "error": "an assignment needs an app to be about"}
+
+    # ADDING ONE MUST NOT DROP THE REST.
+    #
+    # An app with nothing recorded SHOWS the effective team — BOSS's built-in set, or the
+    # project's — because "no row" is not "no one". Assigning a single agent to it then wrote
+    # one row, and from that moment `effective` returned that row alone: the screen went from
+    # five agents to one, which reads as "adding an agent cleared the others". It did not clear
+    # anything; the fallback stopped applying the instant something real existed.
+    #
+    # So the first write to an app materialises what it was already running. The list the
+    # operator was looking at is the list they keep, plus whoever they just added.
+    # Same rule for the project's own team: the Command Center shows BOSS's built-in set when
+    # nobody has chosen one, and adding a seventh agent must not leave a team of one.
+    if not assigned(connection, project_id, key):
+        already = (default_roles() if key == PROJECT_DEFAULT
+                   else project_team(connection, project_id))
+        for existing in already:
+            connection.execute(
+                sql("INSERT INTO project_agents "
+                    "(id, project_id, app_key, app_name, role_key, source, assigned_by) "
+                    "VALUES (:i, :p, :a, :n, :r, :s, :by) "
+                    "ON CONFLICT (project_id, app_key, role_key) DO NOTHING"),
+                {"i": make_id("pag"), "p": project_id, "a": key, "n": app_name.strip(),
+                 "r": existing, "s": DEFAULT, "by": "boss"},
+            )
+
     added: list[str] = []
     for role_key in role_keys:
         role_key = str(role_key or "").strip()
