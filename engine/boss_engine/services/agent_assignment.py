@@ -30,13 +30,43 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import text as sql
 
 from .core import make_id
-from .naming import identity_key
+from .naming import identity_key, project_name
 
 log = logging.getLogger(__name__)
 
 #: Where a row came from. `default` was seeded; `operator` was chosen by a person, and is never
-#: removed by re-seeding.
-DEFAULT, OPERATOR = "default", "operator"
+#: removed by re-seeding. `builtin` is not stored at all — it is what BOSS runs when nothing has
+#: been recorded, computed on read.
+DEFAULT, OPERATOR, BUILTIN = "default", "operator", "builtin"
+
+#: The project's own default team, kept as an assignment against this pseudo-app.
+#:
+#: The Command Center's Build does not create a project — it sends the directive down panel →
+#: PRD → code — so at the moment of pressing it there is no app to assign anyone to. The choice
+#: that IS available there is the same shape as the workflow picker beside it: what this project
+#: does by default. Per-app customisation then happens on the run, where an app exists.
+PROJECT_DEFAULT = "*"
+
+
+def app_key(app_name: str) -> str:
+    """The key an app is filed under, from any of the names it goes by.
+
+    THE MISMATCH THAT MADE EVERY SEEDED ASSIGNMENT INVISIBLE. `start_run` seeded using the run's
+    raw input title — "Build a pricing experiment log.\nWho it is for: a team changing prices…"
+    — and the console asked for the app by its DISPLAY name, "Pricing Experiment Log", because
+    that is what `appIdentity` gives every other card. Two different identity keys for one app:
+
+        raw title  -> "build a pricing experiment log who it is for a team changing prices"
+        display    -> "pricing experiment log"
+
+    So the row was written and never found, and the panel reported "nobody is assigned" over a
+    live run that had seven agents seeded onto it. Normalising HERE rather than at each call site
+    is the fix: every caller converges on the same key whichever name it happens to hold.
+    """
+    name = str(app_name or "").strip()
+    if name == PROJECT_DEFAULT:
+        return PROJECT_DEFAULT
+    return identity_key(project_name(name)[0] if name else "")
 
 
 def default_roles(spec: Optional[dict[str, Any]] = None) -> list[str]:
@@ -59,8 +89,39 @@ def default_roles(spec: Optional[dict[str, Any]] = None) -> list[str]:
     return sorted(r for r in roles if r)
 
 
+def project_team(connection, project_id: str) -> list[str]:
+    """The project's default team, or BOSS's built-in set if nobody has chosen one."""
+    rows = connection.execute(
+        sql("SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = :a "
+            "ORDER BY role_key"),
+        {"p": project_id, "a": PROJECT_DEFAULT},
+    ).mappings().all()
+    return [r["role_key"] for r in rows] or default_roles()
+
+
+def effective(connection, project_id: str, app_key: str) -> list[dict[str, Any]]:
+    """Who runs this app — recorded if anything was, and otherwise who runs it ANYWAY.
+
+    "NOBODY IS ASSIGNED" WAS A LIE, and the worst kind: it reported an empty table as a fact
+    about the world. Agents unquestionably ran those workflows — research has a research agent,
+    a panel has five seats, a build has software_engineer, qa and the reviewers — and the panel
+    said none of them were there because `project_agents` had no row.
+
+    An app with no record is not unstaffed. It is running the project's default team, and that
+    is what this returns, marked `builtin` so the screen can say "by default" rather than
+    claiming somebody chose.
+    """
+    rows = assigned(connection, project_id, app_key)
+    if rows:
+        return rows
+    return [{"role_key": key, "source": BUILTIN, "assigned_by": None,
+             "created_at": None, "app_name": ""}
+            for key in project_team(connection, project_id)]
+
+
 def assigned(connection, project_id: str, app_key: str) -> list[dict[str, Any]]:
-    """Everyone on this app, with where each assignment came from."""
+    """Everyone RECORDED on this app. Empty means nothing was recorded, not that nobody runs it —
+    see `effective`, which is what a screen should show."""
     rows = connection.execute(
         sql("SELECT role_key, source, assigned_by, created_at, app_name FROM project_agents "
             "WHERE project_id = :p AND app_key = :a ORDER BY role_key"),
@@ -76,7 +137,7 @@ def assign(connection, *, project_id: str, app_name: str, role_keys: Iterable[st
     A re-seed that overwrote `operator` with `default` would quietly undo a decision somebody
     made — the same class of bug as a target picker that forgets what it was told.
     """
-    key = identity_key(app_name)
+    key = app_key(app_name)
     if not key:
         return {"ok": False, "error": "an assignment needs an app to be about"}
     added: list[str] = []
@@ -110,7 +171,7 @@ def unassign(connection, *, project_id: str, app_name: str, role_key: str) -> di
     Allowed even for a seeded default: a project that genuinely does not want a security
     reviewer should be able to say so, and the refusal it causes later will name the reason.
     """
-    key = identity_key(app_name)
+    key = app_key(app_name)
     removed = connection.execute(
         sql("DELETE FROM project_agents WHERE project_id = :p AND app_key = :a "
             "AND role_key = :r RETURNING role_key"),
@@ -128,15 +189,30 @@ def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = 
     existed is not stuck permanently unassignable — and so enforcement cannot refuse work on the
     grounds that a table was added after the app was.
     """
-    key = identity_key(app_name)
+    key = app_key(app_name)
     if not key:
         return {"ok": False, "error": "no app name"}
     existing = assigned(connection, project_id, key)
     if existing:
         return {"ok": True, "seeded": [], "assigned": [r["role_key"] for r in existing]}
+    # THE PROJECT'S OWN TEAM FIRST, if somebody set one. Seeding BOSS's built-in list over a
+    # choice the operator made in the Command Center would ignore the one control that path
+    # offers.
+    chosen = connection.execute(
+        sql("SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = :a"),
+        {"p": project_id, "a": PROJECT_DEFAULT},
+    ).mappings().all()
+    seeds = ([r["role_key"] for r in chosen] or default_roles(spec)) if True else []
+    if chosen and spec:
+        # A workflow's own approver roles are added on top: a gate naming release_manager with
+        # nobody assigned to it is the refusal this seeding exists to avoid.
+        for step in (spec.get("steps") or []):
+            approver = ((step.get("approval") or {}).get("approver_role") or "").strip()
+            if approver and approver not in seeds:
+                seeds.append(approver)
     return {**assign(connection, project_id=project_id, app_name=app_name,
-                     role_keys=default_roles(spec), actor=actor, source=DEFAULT),
-            "seeded": default_roles(spec)}
+                     role_keys=seeds, actor=actor, source=DEFAULT),
+            "seeded": seeds}
 
 
 def may_act(connection, *, project_id: str, app_name: str, role_key: str) -> dict[str, Any]:
@@ -146,7 +222,7 @@ def may_act(connection, *, project_id: str, app_name: str, role_key: str) -> dic
     work that contradicts a decision somebody made, not work on something nobody has decided
     about yet. Refusing by default would turn every pre-existing app into a broken one.
     """
-    key = identity_key(app_name)
+    key = app_key(app_name)
     role_key = str(role_key or "").strip()
     if not key or not role_key:
         return {"allowed": True, "reason": "nothing to check"}
@@ -173,5 +249,6 @@ def apps_for_role(connection, project_id: str, role_key: str) -> list[dict[str, 
     return [dict(r) for r in rows]
 
 
-__all__ = ["assign", "unassign", "assigned", "ensure_defaults", "may_act", "apps_for_role",
-           "default_roles", "DEFAULT", "OPERATOR"]
+__all__ = ["assign", "unassign", "assigned", "effective", "ensure_defaults", "may_act",
+           "apps_for_role", "project_team", "default_roles", "app_key",
+           "DEFAULT", "OPERATOR", "BUILTIN", "PROJECT_DEFAULT"]

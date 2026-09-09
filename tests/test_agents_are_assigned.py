@@ -45,7 +45,13 @@ class FakeConn:
         raw = " ".join(str(statement).split()).lower()
         params = dict(params or {})
         rows: list[dict] = []
-        if raw.startswith("select role_key, source"):
+        if raw.startswith("select role_key from project_agents"):
+            # project_team / the seeding lookup. Distinct from the one below: it selects only
+            # the key, and routing it to the same branch would have hidden the fallback.
+            rows = [{"role_key": r["role_key"]} for r in self.rows
+                    if r["project_id"] == params["p"] and r["app_key"] == params["a"]]
+            rows.sort(key=lambda r: r["role_key"])
+        elif raw.startswith("select role_key, source"):
             rows = [r for r in self.rows
                     if r["project_id"] == params["p"] and r["app_key"] == params["a"]]
             rows.sort(key=lambda r: r["role_key"])
@@ -179,6 +185,77 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print("assignment means something")
+    return no_row_is_not_no_one()
+
+
+
+
+def no_row_is_not_no_one() -> int:
+    """"Nobody is assigned" was a lie, and the key mismatch is why it kept appearing.
+
+    Two defects, one symptom. The panel reported an empty table as a fact about the world —
+    agents unquestionably ran those workflows — and the table was empty because the row had been
+    written under a DIFFERENT KEY than the one the console asked for:
+
+        start_run seeded  "Build a pricing experiment log.\\nWho it is for: a team changing…"
+                          -> "build a pricing experiment log who it is for a team changing…"
+        console asked     "Pricing Experiment Log"   (appIdentity, as every card is titled)
+                          -> "pricing experiment log"
+
+    So the seeding worked, the row existed, and nothing could ever find it. Observed live on a
+    running Standard Product Delivery v2 with ten steps and seven agents seeded onto it.
+    """
+    failures: list[str] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}{'' if ok else f'  <- {detail}'}")
+        if not ok:
+            failures.append(name)
+
+    print("== one key, whichever name the caller holds ==")
+    raw = "Build a pricing experiment log.\nWho it is for: a team changing prices"
+    check("the raw directive and the display name agree",
+          aa.app_key(raw) == aa.app_key("Pricing Experiment Log"),
+          f"{aa.app_key(raw)!r} vs {aa.app_key('Pricing Experiment Log')!r}")
+    check("and it is the display name's key", aa.app_key(raw) == "pricing experiment log",
+          aa.app_key(raw))
+    # The U+2010 case still holds through the namer.
+    check("a U+2010 hyphen still matches",
+          aa.app_key("Lead‐Triage Inbox") == aa.app_key("Lead-Triage Inbox"))
+    check("the project-default pseudo-app is not mangled",
+          aa.app_key(aa.PROJECT_DEFAULT) == aa.PROJECT_DEFAULT)
+
+    print("== an app with no row is running the project's team, not nobody ==")
+    conn = FakeConn()
+    team = aa.effective(conn, "p1", aa.app_key("Some App"))
+    check("it returns agents", bool(team), str(team))
+    check("marked builtin, so the screen can say 'by default'",
+          all(t["source"] == aa.BUILTIN for t in team), str(team[:2]))
+    check("and they are the ones that actually run it",
+          {t["role_key"] for t in team} == set(aa.default_roles()),
+          str(sorted(t["role_key"] for t in team)))
+
+    print("== a recorded assignment wins over the default ==")
+    aa.assign(conn, project_id="p1", app_name="Some App", role_keys=["qa"], actor="param")
+    now = aa.effective(conn, "p1", aa.app_key("Some App"))
+    check("only what was recorded", [t["role_key"] for t in now] == ["qa"], str(now))
+    check("and not marked builtin", now[0]["source"] == aa.OPERATOR, str(now[0]))
+
+    print("== the project's own team, chosen once, seeds every app ==")
+    aa.assign(conn, project_id="p1", app_name=aa.PROJECT_DEFAULT,
+              role_keys=["qa", "chief_architect"], actor="param")
+    check("project_team reads it",
+          set(aa.project_team(conn, "p1")) == {"qa", "chief_architect"},
+          str(aa.project_team(conn, "p1")))
+    fresh = aa.effective(conn, "p1", aa.app_key("A Brand New App"))
+    check("and an app with no row runs it",
+          {t["role_key"] for t in fresh} == {"qa", "chief_architect"}, str(fresh))
+
+    print()
+    if failures:
+        print(f"{len(failures)} FAILURE(S): {', '.join(failures)}")
+        return 1
+    print("no row is not no one")
     return 0
 
 

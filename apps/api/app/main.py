@@ -12304,7 +12304,6 @@ def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
     showing a guess of its own would drift from what start_run actually seeds.
     """
     from boss_engine.services import agent_assignment
-    from boss_engine.services.naming import identity_key
 
     if defaults:
         spec = None
@@ -12323,9 +12322,13 @@ def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
 
     with begin(engine) as connection:
         if app.strip():
+            # `effective`, not `assigned`: an app with no recorded row is not unstaffed, it is
+            # running the project's team. Returning [] here is what let the console say "nobody
+            # is assigned" over a live run that had seven agents on it.
             return {"project_id": project_id, "app": app,
-                    "agents": agent_assignment.assigned(
-                        connection, project_id, identity_key(app))}
+                    "agents": agent_assignment.effective(
+                        connection, project_id, agent_assignment.app_key(app)),
+                    "team": agent_assignment.project_team(connection, project_id)}
         rows = connection.execute(
             text("SELECT app_key, app_name, role_key, source FROM project_agents "
                  "WHERE project_id = :p ORDER BY app_name, role_key"),

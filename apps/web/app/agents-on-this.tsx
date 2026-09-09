@@ -29,6 +29,17 @@ import { notifyChanged, onChanged } from "./changed";
 
 type Assigned = { role_key: string; source: string; assigned_by?: string | null };
 
+/** What each badge means, said in words rather than left as a status word.
+ *
+ *  `builtin` is the one that matters: nothing is recorded for this app, and BOSS runs the
+ *  project's team on it anyway. Calling that "nobody is assigned" reported an empty table as a
+ *  fact about the world, over a live run with seven agents on it. */
+const SOURCE_LABEL: Record<string, string> = {
+  builtin: "by default",
+  default: "seeded",
+  operator: "chosen",
+};
+
 export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = false }: {
   projectId: string;
   /** The app, by the name the run carries. Assignment is keyed on its identity, not this text. */
@@ -90,6 +101,9 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
   if (!appName.trim()) return null;
 
   const assigned = agents ?? [];
+  // NOTHING RECORDED, but agents run it anyway — the project's team. The distinction the panel
+  // must never lose: "no row" is not "no one".
+  const builtin = assigned.length > 0 && assigned.every((a) => a.source === "builtin");
   const onIt = new Set(assigned.map((a) => a.role_key));
   const available = roles.filter((r) => !onIt.has(r.role_key));
   const nameOf = (key: string) =>
@@ -108,10 +122,11 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
         // agent act — enforcement stops work that contradicts a decision, not work nobody has
         // decided about — and saying so is the difference between "unconfigured" and "blocked".
         <p className="detail" data-testid="aot-empty">
+          {/* Reached only when the project itself has no team AND nothing is recorded, which is
+              a real state and a rare one. It still does not claim nobody works on it. */}
           {readOnly
-            ? "Nobody was assigned to this run, so any agent could work on it."
-            : "Nobody is assigned, so any agent may work on this. Assign someone to make that "
-              + "a decision rather than a default."}
+            ? "No agents were recorded for this run."
+            : "No agents are recorded for this app yet."}
         </p>
       ) : null}
 
@@ -124,7 +139,7 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
             {/* SEEDED OR CHOSEN. A default is BOSS guessing from the stages that would have run;
                 a person choosing is a decision. The gate refuses on both, so which one it is
                 matters when the refusal arrives. */}
-            <span className="aot-src">{a.source === "default" ? "default" : "assigned"}</span>
+            <span className="aot-src">{SOURCE_LABEL[a.source] ?? a.source}</span>
             {readOnly ? null : (
               <button type="button" className="aot-x" aria-label={`Remove ${nameOf(a.role_key)}`}
                       disabled={!!busy}
@@ -162,9 +177,12 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
       {assigned.length ? (
         <p className="detail aot-note">
           {readOnly
-            ? "This run is finished — who was on it is a record now, not a setting."
-            : "Only these agents may sign off this app\u2019s gates. Anyone else is refused, "
-              + "and the refusal names who is on it."}
+            ? "This run is finished \u2014 who was on it is a record now, not a setting."
+            : builtin
+              ? "These run by default. Add or remove one and it becomes this app\u2019s own "
+                + "list, and only those agents may sign off its gates."
+              : "Only these agents may sign off this app\u2019s gates. Anyone else is refused, "
+                + "and the refusal names who is on it."}
         </p>
       ) : null}
     </section>

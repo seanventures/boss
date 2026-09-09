@@ -60,18 +60,30 @@ describe("who is on this app", () => {
     expect(WORKFLOWS).toContain("appName={appIdentity(run.input as AppRun).name}");
   });
 
-  it("nobody assigned is stated as a choice not yet made, not as a fault", () => {
-    // An app with no assignment lets any agent act — enforcement stops work that contradicts a
-    // decision, not work nobody has decided about. Saying "unassigned" alone would read as
-    // broken.
-    expect(PANEL).toContain("Nobody is assigned, so any agent may work on this");
-    expect(PANEL).toContain("Assign someone to make that ");
+  it("an empty table is never reported as nobody working", () => {
+    // THE LIE. "Nobody is assigned, so any agent may work on this" appeared over a LIVE
+    // Standard Product Delivery run with ten steps — agents were unquestionably running it.
+    // The panel was reporting the state of a table as a fact about the world.
+    expect(PANEL).not.toContain("Nobody is assigned");
+    expect(PANEL).not.toContain("Nobody was assigned to this run");
+    // An app with no row is running the project's team, and that is what it shows.
+    expect(PANEL).toContain("These run by default");
+    expect(PANEL).toContain('builtin: "by default"');
+  });
+
+  it("and the three sources are told apart in words", () => {
+    // `builtin` is the one that matters: nothing recorded, and BOSS runs the project's team
+    // anyway. `seeded` was written when the run started. `chosen` is a person.
+    expect(PANEL).toContain("SOURCE_LABEL");
+    for (const word of ["by default", "seeded", "chosen"]) {
+      expect(PANEL).toContain(word);
+    }
   });
 
   it("a seeded default is distinguishable from a person's choice", () => {
     // BOSS seeds the agents that would have run anyway. That is a guess; a person choosing is
     // a decision. The gate refuses on both, so which one it is matters when it refuses.
-    expect(PANEL).toContain('a.source === "default" ? "default" : "assigned"');
+    expect(PANEL).toContain("SOURCE_LABEL[a.source]");
     expect(CSS).toContain('.aot-agent[data-source="operator"]');
   });
 
