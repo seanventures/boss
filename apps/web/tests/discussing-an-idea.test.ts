@@ -22,6 +22,7 @@ import { codeOnly } from "./_helpers/source";
 
 const HERO = codeOnly("app/ask-boss-hero.tsx");
 const DOCK = codeOnly("app/agent-ui.tsx");
+const SHELL = codeOnly("app/ConsoleShell.tsx");
 const ROUTER = codeOnly("../../engine/boss_engine/services/intent_router.py");
 
 describe("the idea surface exists and is reachable", () => {
@@ -136,5 +137,32 @@ describe("the conversation becomes the thing you build", () => {
 
   it("and the marker is not left in the prose", () => {
     expect(DOCK).toContain("withoutBrief");
+  });
+});
+
+describe("a new idea gets a new conversation", () => {
+  // The header said DISCUSSING AN IDEA and underneath it sat "Is anything starving or stuck in a
+  // queue?" with its old answer — the dock had reopened the newest general thread and put the new
+  // idea below it. Remounting the panel was not enough: the panel restores a thread on mount.
+  it("the dock asks for a fresh one when it opens a discussion", () => {
+    expect(SHELL).toContain("fresh={dockDiscussing}");
+  });
+
+  it("and the panel declines to reopen the last thread when asked", () => {
+    expect(DOCK).toContain("if (fresh) {");
+    const at = DOCK.indexOf("if (fresh) {");
+    // Before the restore, not after it — otherwise the old thread loads anyway.
+    expect(at).toBeLessThan(DOCK.indexOf("openThreadAndContext(initialTaskId || GENERAL, ths)"));
+  });
+
+  it("the restore still runs for every other way of opening the dock", () => {
+    // A run, a role, a returning operator: those want their history back.
+    expect(DOCK).toContain("openThreadAndContext(initialTaskId || GENERAL, ths)");
+  });
+
+  it("and the mode does not outlive the panel it was set for", () => {
+    // Left in the URL, the next dock opened for any reason arrives as an idea discussion.
+    const at = SHELL.indexOf("const closeDock");
+    expect(SHELL.slice(at, at + 600)).toContain('url.searchParams.delete("dock_mode")');
   });
 });

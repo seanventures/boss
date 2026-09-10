@@ -680,6 +680,10 @@ export default function ConsoleShell({
   const closeDock = useCallback(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("agent");
+    // AND WHAT IT WAS FOR. Left behind, `dock_mode=discuss` makes the next dock opened for any
+    // reason — a run, a role, a question about a deploy — arrive as an idea discussion that
+    // refuses to start anything.
+    url.searchParams.delete("dock_mode");
     window.history.pushState({}, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, []);
@@ -1130,6 +1134,7 @@ export default function ConsoleShell({
                          // `dockFresh` in the key so starting a discussion remounts with no
                          // thread and no history, rather than the component unpicking its own
                          // state — a reset that has to remember every field misses one.
+                         fresh={dockDiscussing}
                          key={`${dockAsk}|${dockRole}|${dockDiscussing}|${dockFresh}`} />
             </div>
           </aside>

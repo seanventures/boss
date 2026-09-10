@@ -9058,7 +9058,10 @@ a.agent-chip-name:hover { text-decoration: underline; }
   filter: brightness(1.07);
 }
 .split-action-menu {
-  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30;
+  /* DOWNWARD. With three items it no longer fits above the composer and the first one — the
+     primary alternative — was clipped by the panel's top edge. There is always room below: the
+     bar sits at the bottom of the box and the menu is opaque and above the page. */
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
   min-width: 288px; padding: 6px; border-radius: 12px;
   border: 1px solid var(--border, #1C2740); background: var(--surface, #101A30);
   box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .6);

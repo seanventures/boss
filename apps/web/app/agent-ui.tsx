@@ -156,7 +156,8 @@ async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T |
 }
 
 
-export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName }: {
+export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName,
+                           fresh }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
    *
@@ -167,6 +168,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   /** Whose conversation this is. The dock is not always "BOSS": in Infra you are talking to
    *  the Deployment Manager, and calling that BOSS hides which role answers for the work. */
   roleName?: string;
+  /** Start a NEW conversation rather than reopening the last one.
+   *
+   *  On mount this panel calls `openThreadAndContext(GENERAL)`, which loads the most recent
+   *  general thread — right for a dock you are returning to, wrong for an idea you have just
+   *  decided to discuss. Pressing Discuss on a stock-trading site reopened a thread about
+   *  starved queues and put the idea underneath it, so the model would have answered the new
+   *  question with the old conversation in context. */
+  fresh?: boolean;
   /** What BOSS already knows about the app this conversation is about. */
 }) {
   /**
@@ -485,10 +494,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         return;
       }
       if (roleRef) { setLoadingThread(false); return; }   // this role has no history yet
+      // A NEW IDEA IS A NEW CONVERSATION. The thread list still holds the old ones; this only
+      // declines to reopen the newest by default.
+      if (fresh) { setSel(GENERAL); setLoadingThread(false); return; }
       openThreadAndContext(initialTaskId || GENERAL, ths);
     });
     return () => { alive = false; };
-  }, [projectId, actor, initialTaskId, roleRef, openThreadAndContext]);
+  }, [projectId, actor, initialTaskId, roleRef, fresh, openThreadAndContext]);
 
   // WHAT TO ASK *THIS* ROLE.
   //
