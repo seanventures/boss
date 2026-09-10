@@ -858,9 +858,29 @@ def acted_without_checking(actions: list, tool_calls: list) -> bool:
 
 
 def _same_offer(a: dict, b: dict) -> bool:
-    """Two buttons that would do exactly the same thing."""
+    """Two buttons an operator could not choose between.
+
+    ARGS ARE NOT THE ONLY WAY TWO OFFERS COLLIDE. This compared tool and arguments, so two
+    proposals with different `run_id`s always survived — and the operator got, verbatim:
+
+        [ Fix consent link so drafts can launch ]
+          Extends run crun_6eec724c252b4a828da4 on its existing branch and PR #194
+        [ Fix consent link so drafts can launch ]
+          Extends the existing app on branch boss/code/crun_e161609e077445e4986c and PR #194
+
+    Two runs of the same app, both landing on PR #194: the same outcome, offered twice, under
+    one label. The arguments differed, so the check passed them both.
+
+    A button is what its label says. Two buttons that say the same thing cannot be told apart by
+    the person pressing one, whatever the arguments behind them are — so showing both asks them
+    to guess. If two genuinely different actions want the same label, the fix is a label that
+    distinguishes them, not a second identical button.
+    """
     if str(a.get("tool") or "") != str(b.get("tool") or ""):
         return False
+    label = lambda d: " ".join(str(d.get("label") or "").lower().split())  # noqa: E731
+    if label(a) and label(a) == label(b):
+        return True
     strip = lambda d: {k: v for k, v in (d or {}).items() if not str(k).startswith("_")}  # noqa: E731
     return strip(a.get("args")) == strip(b.get("args"))
 
