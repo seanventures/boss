@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import re
 
+import re
+
 from boss_engine.services.observability_stack import render_docker_run, stack_files
 
 
@@ -25,6 +27,19 @@ from boss_engine.services.observability_stack import render_docker_run, stack_fi
 from boss_engine.services.observability_stack import DEFAULT_PORTS
 
 PORTS = dict(DEFAULT_PORTS)
+
+
+
+def _started_containers(script: str) -> list[str]:
+    """Every container the script starts, by name. Derived, not counted.
+
+    The two assertions below pinned the literal 3, so adding blackbox, node-exporter and
+    cadvisor failed a change that made the stack MORE complete. The property they protect is
+    that every container joins the network and carries the ownership label — which is a
+    statement about the set, not about its size.
+    """
+    import re
+    return re.findall(r"docker run -d --name (\S+)", script)
 
 
 class TestTheFallbackStartsTheWholeStack:
@@ -39,7 +54,8 @@ class TestTheFallbackStartsTheWholeStack:
     def test_they_share_a_network_so_prometheus_is_reachable_by_name(self):
         script = render_docker_run(PORTS)
         assert "docker network create boss-obs" in script
-        assert script.count("--network boss-obs") == 3
+        # EVERY container, whatever the set is today.
+        assert script.count("--network boss-obs") == len(_started_containers(script))
 
     def test_the_collector_can_still_reach_the_host(self):
         """Scrape targets are on the host, not in the network — the compose file used
@@ -60,7 +76,28 @@ class TestTheFallbackStartsTheWholeStack:
     def test_it_is_labelled_like_every_other_boss_deployment(self):
         """Teardown proves ownership by label before removing anything."""
         script = render_docker_run(PORTS)
-        assert script.count("--label boss.app=observability") == 3
+        assert (script.count("--label boss.app=observability")
+                == len(_started_containers(script)))
+
+    def test_the_fallback_starts_the_same_containers_as_compose(self):
+        """The two paths diverging is how blackbox went missing on hetzner-ci-01.
+
+        `render_compose` started it and the Prometheus config pointed a `service-health` job at
+        it, but the docker-run fallback — which is what that host actually uses, having no
+        Compose — started three containers and not that one. Every `probe_success` panel there
+        had no data, on a stack `stack_status` called healthy because it counted to three.
+        """
+        from boss_engine.services.observability_stack import render_compose
+        fallback = set(_started_containers(render_docker_run(PORTS)))
+        compose = set(re.findall(r"container_name: (\S+)", render_compose(PORTS)))
+        assert fallback == compose, f"only in one path: {fallback ^ compose}"
+
+    def test_the_host_and_its_containers_are_measured(self):
+        """Asked for directly: host and container memory, cpu, rss. An app graph that shows a
+        latency spike and cannot say whether the box was out of memory is half an answer."""
+        script = render_docker_run(PORTS)
+        assert "boss-node-exporter" in script
+        assert "boss-cadvisor" in script
 
     def test_rerunning_replaces_rather_than_collides(self):
         """Re-running the deploy is how a newly onboarded app gets a dashboard."""

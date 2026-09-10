@@ -489,16 +489,66 @@ def _observed_monitoring(
         })
 
     probed = [w for w in watched if w["last_probe"]]
+
+    # AND IS THERE A DASHBOARD? "Set up monitoring" set nothing up.
+    #
+    # The step reported health probing, which BOSS does for every active target on a sweep
+    # regardless — so the step was true and useless. Meanwhile the Grafana dashboard and the
+    # Prometheus scrape config are only written by an explicit stack deploy that nothing calls
+    # automatically, so an app onboarded after the last one had a console link to a dashboard
+    # that had never been created. Nine apps deployed, three dashboards.
+    #
+    # It still does not deploy the stack from here: that SSHes to a host, and a workflow step
+    # that silently reconfigures shared infrastructure is a worse failure than a missing panel.
+    # It REPORTS the gap, so the step stops claiming a setup it never did and names the one
+    # action that closes it.
+    dashboard: dict[str, Any] = {}
+    try:
+        from .observability_stack import DEFAULT_PORTS, dashboard_uid, provisioned_dashboards
+        host = _monitoring_host(connection, project_id)
+        if host:
+            base = f"http://{host}:{DEFAULT_PORTS['grafana']}"
+            have = provisioned_dashboards(base)
+            if have is not None:
+                missing = sorted({w["app"] for w in watched
+                                  if dashboard_uid(w["app"]) not in have})
+                dashboard = {"grafana": base, "missing_dashboards": missing}
+    except Exception as error:  # noqa: BLE001 — an unreachable Grafana must not fail the step
+        log.warning("could not check dashboards for %s: %s", project_id, error)
+
+    missing = dashboard.get("missing_dashboards") or []
     return {
         "capability": "monitor",
         "tool": None,
         "status": "observed",
         "targets": watched,
+        **dashboard,
         "note": (
             f"{len(watched)} target(s) under health probing"
             + (f", {len(probed)} probed so far." if probed else ", none probed yet.")
+            + (f" {len(missing)} of them have no Grafana dashboard yet "
+               f"({', '.join(missing[:3])}"
+               f"{'…' if len(missing) > 3 else ''}) — redeploy the observability stack from "
+               f"Infra and Models to create them." if missing else "")
         ),
     }
+
+
+def _monitoring_host(connection: Connection, project_id: str) -> str:
+    """The host the observability stack runs on, from the targets it already watches.
+
+    Read rather than configured: every deployment target already names the machine it ships to,
+    and the stack lives on the same one. A second place to record it is a second place for it to
+    be wrong.
+    """
+    row = connection.execute(
+        text("SELECT h.address FROM deployment_targets t "
+             "JOIN deployment_hosts h ON h.id = t.host_id "
+             "WHERE t.project_id = :p AND t.status = 'active' AND h.address <> '' "
+             "ORDER BY t.created_at LIMIT 1"),
+        {"p": project_id},
+    ).scalar()
+    return str(row or "").strip()
 
 
 def _build_run_id(context: dict[str, Any]) -> Optional[str]:

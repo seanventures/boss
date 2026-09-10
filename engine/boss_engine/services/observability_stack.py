@@ -26,6 +26,7 @@ Four decisions worth stating, because each closes a failure this codebase has al
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 from ..config import Settings
@@ -231,7 +232,25 @@ scrape_configs:
       - targets: ['boss-otel-collector:{ports['otel_metrics']}']
   - job_name: prometheus
     static_configs:
-      - targets: ['localhost:9090']{blackbox_job}
+      - targets: ['localhost:9090']
+  # THE HOST AND ITS CONTAINERS. Without these two jobs an app graph can show a latency spike
+  # and say nothing about whether the box was out of memory or the container was throttled —
+  # which is the question anybody asks second.
+  - job_name: host
+    static_configs:
+      - targets: ['boss-node-exporter:9100']
+  - job_name: containers
+    static_configs:
+      - targets: ['boss-cadvisor:8080']
+    metric_relabel_configs:
+      # cAdvisor emits a series per cgroup, most of them noise. Keep the named containers and
+      # the four families actually plotted; a 15-day retention fills fast otherwise.
+      - source_labels: [__name__]
+        regex: 'container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_rss|spec_memory_limit_bytes|network_.*_bytes_total|last_seen)'
+        action: keep
+      - source_labels: [name]
+        regex: '.+'
+        action: keep{blackbox_job}
 """
 
 
@@ -275,7 +294,55 @@ def dashboard_uid(app: str) -> str:
     return f"boss-{slug}"
 
 
-def render_dashboard(target: dict) -> str:
+def _container_name_hint(target: dict) -> str:
+    """A cAdvisor `name` matcher for this app's container.
+
+    Deploys name the container after the app, lowercased and hyphenated. A regex rather than an
+    equality so a suffix (`-staging`, a replica number) still matches; a wrong match here shows
+    a neighbour's CPU, so it is anchored at the front.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", str(target.get("app") or "").lower()).strip("-")
+    return f"{slug}.*" if slug else ".+"
+
+
+def discover_feature_metrics(scrape_url: str, timeout: float = 4.0
+                             ) -> list[tuple[str, str]]:
+    """The app's OWN metric names, read from the app.
+
+    Nothing in BOSS can know these in advance — that is the point of them. Change Calendar emits
+    `collisions_detected_total`, Pricing Experiment Log emits `overlap_overrides_total`, and
+    each was written to match one acceptance criterion of that app. So they are read from the
+    exposition itself at dashboard-build time.
+
+    Excludes the platform metrics every app is required to emit (`http_*`, `app_*`) because
+    those already have dedicated panels, and the runtime families (`go_*`, `process_*`,
+    `python_*`) because they describe the language, not the feature.
+    """
+    import urllib.request
+
+    skip = ("http_request", "http_requests", "app_info", "app_uptime", "go_", "process_",
+            "python_", "promhttp_", "scrape_")
+    found: list[tuple[str, str]] = []
+    try:
+        url = scrape_url if scrape_url.startswith("http") else f"http://{scrape_url}"
+        with urllib.request.urlopen(url.rstrip("/") + "/metrics", timeout=timeout) as r:
+            body = r.read(400_000).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — an app that is down still gets its other panels
+        return []
+    for line in body.splitlines():
+        if not line.startswith("# HELP "):
+            continue
+        parts = line[len("# HELP "):].split(" ", 1)
+        name = parts[0].strip()
+        if not name or any(name.startswith(p) for p in skip):
+            continue
+        found.append((name, parts[1].strip() if len(parts) > 1 else ""))
+    # Bounded: a dashboard with forty panels is one nobody reads at 3am.
+    return found[:8]
+
+
+def render_dashboard(target: dict,
+                     feature_metrics: Optional[list[tuple[str, str]]] = None) -> str:
     """One dashboard per app: the four questions asked first during an incident.
 
     Deliberately small. A dashboard with forty panels is one nobody reads at 3am; these are
@@ -366,8 +433,43 @@ def render_dashboard(target: dict) -> str:
          "timeseries"),
         ("Scrape duration (s)", f'scrape_duration_seconds{{{sel}}}', "timeseries"),
     ]
-    grid = [{"h": 8, "w": 12, "x": 0, "y": 10}, {"h": 8, "w": 12, "x": 12, "y": 10},
-            {"h": 8, "w": 12, "x": 0, "y": 18}, {"h": 8, "w": 12, "x": 12, "y": 18}]
+    # THE APP'S OWN METRICS, which is the only reason it was instrumented.
+    #
+    # Every app BOSS builds is required to emit a counter per acceptance criterion — Change
+    # Calendar has `changes_created_total`, `collisions_detected_total`, `freeze_overrides_total`;
+    # Pricing Experiment Log has `experiments_launched_total`, `decisions_recorded_total`,
+    # `overlap_overrides_total`. They were all being emitted and NONE of them was on a dashboard:
+    # every panel here was generic HTTP traffic, identical for every app.
+    #
+    # Discovered from the app's own /metrics rather than listed here, because the whole point is
+    # that they differ per app and nothing in BOSS can know them in advance. A dashboard is
+    # regenerated on every stack deploy, so a metric added later appears on the next one.
+    # Bounded HERE as well as at discovery: this function accepts whatever it is handed, and a
+    # dashboard with forty panels is one nobody reads at 3am.
+    for name, help_text in (feature_metrics or [])[:8]:
+        panels.append((
+            help_text or name.replace("_", " ").strip().capitalize(),
+            # A counter is only meaningful as a rate; a gauge is meaningful as itself.
+            f'sum(rate({name}{{{sel}}}[5m]))' if name.endswith("_total")
+            else f'sum({name}{{{sel}}})',
+            "timeseries"))
+
+    # THE BOX UNDERNEATH IT. An app graph that shows a latency spike and cannot say whether the
+    # host was out of memory or the container was throttled is half an answer.
+    container = f'name=~"{_container_name_hint(target)}"'
+    panels += [
+        ("Container CPU (cores)",
+         f'sum(rate(container_cpu_usage_seconds_total{{{container}}}[5m]))', "timeseries"),
+        ("Container memory — working set / RSS (bytes)",
+         f'sum(container_memory_working_set_bytes{{{container}}}) '
+         f'or sum(container_memory_rss{{{container}}})', "timeseries"),
+        ("Host memory available (bytes)", "node_memory_MemAvailable_bytes", "timeseries"),
+        ("Host CPU busy (%)",
+         '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', "timeseries"),
+    ]
+
+    grid = [{"h": 8, "w": 12, "x": (i % 2) * 12, "y": 10 + (i // 2) * 8}
+            for i in range(len(panels))]
 
     return json.dumps({
         "uid": dashboard_uid(app),
@@ -411,6 +513,38 @@ services:
       - {STACK_DIR}/otel-config.yaml:/etc/otel/config.yaml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    labels:
+      boss.managed: "true"
+      boss.app: "observability"
+    networks: [boss-obs]
+
+  # THE HOST AND ITS CONTAINERS. Kept in step with `render_docker_run`: two hosts running
+  # different sets of containers because one path was updated and the other was not is exactly
+  # how blackbox came to be missing on hetzner-ci-01 for as long as it was.
+  boss-node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: boss-node-exporter
+    restart: unless-stopped
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    labels:
+      boss.managed: "true"
+      boss.app: "observability"
+    networks: [boss-obs]
+
+  boss-cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: boss-cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
     labels:
       boss.managed: "true"
       boss.app: "observability"
@@ -500,7 +634,37 @@ def render_docker_run(ports: dict) -> str:
         "docker network create boss-obs 2>/dev/null || true",
         "docker volume create boss-prometheus-data >/dev/null 2>&1 || true",
         "docker volume create boss-grafana-data >/dev/null 2>&1 || true",
-        "docker rm -f boss-otel-collector boss-prometheus boss-grafana >/dev/null 2>&1 || true",
+        ("docker rm -f boss-otel-collector boss-prometheus boss-grafana boss-blackbox "
+         "boss-node-exporter boss-cadvisor >/dev/null 2>&1 || true"),
+        # THE PROBER, MISSING FROM THIS PATH ENTIRELY.
+        #
+        # `render_compose` starts it and `render_prometheus_config` points the `service-health`
+        # job at `boss-blackbox:9115` — but this fallback, which is what hetzner-ci-01 actually
+        # uses because it has no Compose, started three containers and not this one. So every
+        # `probe_success` panel on that host — "Service reachable", "Availability 24h",
+        # "Response time" — had no data and no explanation, on a stack `stack_status` called
+        # healthy because it only counts three containers.
+        (f"docker run -d --name boss-blackbox --restart unless-stopped "
+         f"--network boss-obs --add-host host.docker.internal:host-gateway "
+         f"--label boss.managed=true --label boss.app=observability "
+         f"-v {STACK_DIR}/blackbox.yml:/etc/blackbox_exporter/config.yml:ro "
+         f"prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml"),
+        # THE HOST ITSELF. Asked for directly: "expose some system metrics too.. like system
+        # host and container memory (available and util), cpu, rss". An app graph that shows a
+        # latency spike and cannot say whether the box was out of memory is half an answer.
+        (f"docker run -d --name boss-node-exporter --restart unless-stopped "
+         f"--network boss-obs --pid host "
+         f"--label boss.managed=true --label boss.app=observability "
+         f"-v /:/host:ro,rslave "
+         f"prom/node-exporter:v1.8.2 --path.rootfs=/host"),
+        # PER-CONTAINER cpu/memory/rss, which node-exporter does not break down. Read-only
+        # mounts of the paths cAdvisor needs; it is given no ability to change anything.
+        (f"docker run -d --name boss-cadvisor --restart unless-stopped "
+         f"--network boss-obs --privileged "
+         f"--label boss.managed=true --label boss.app=observability "
+         f"-v /:/rootfs:ro -v /var/run:/var/run:ro -v /sys:/sys:ro "
+         f"-v /var/lib/docker/:/var/lib/docker:ro -v /dev/disk/:/dev/disk:ro "
+         f"gcr.io/cadvisor/cadvisor:v0.49.1"),
         (f"docker run -d --name boss-otel-collector --restart unless-stopped "
          f"--network boss-obs --add-host host.docker.internal:host-gateway "
          f"--label boss.managed=true --label boss.app=observability "
@@ -535,13 +699,45 @@ def stack_files(targets: list[dict], ports: dict) -> dict[str, str]:
         "grafana/dashboards/boss.yaml": render_grafana_dashboard_provider(),
     }
     for t in targets:
-        files[f"grafana/dashboards/boss/{dashboard_uid(t['app'])}.json"] = render_dashboard(t)
+        # Read the app's own metric names now, while building the files. A dashboard is
+        # regenerated on every stack deploy, so a metric added later appears on the next one.
+        features = discover_feature_metrics(str(t.get("public_url") or t.get("scrape_url") or ""))
+        files[f"grafana/dashboards/boss/{dashboard_uid(t['app'])}.json"] = render_dashboard(
+            t, feature_metrics=features)
     return files
 
 
 def grafana_url(base: str, app: str) -> str:
     """Where the console sends someone for this app."""
     return f"{base.rstrip('/')}/d/{dashboard_uid(app)}"
+
+
+def provisioned_dashboards(base: str, timeout: float = 4.0) -> Optional[set[str]]:
+    """The dashboard uids Grafana ACTUALLY has. None when Grafana cannot be asked.
+
+    THE LINK WAS A GUESS. `grafana_url` builds `/d/boss-<slug>` by string concatenation, and the
+    stack endpoint emitted one for every target that had ever deployed — but the dashboard JSON
+    only exists on the host if somebody re-ran the stack deploy AFTER that app was onboarded.
+    Nothing does that automatically, so a new app got a working-looking link immediately and a
+    Grafana 404 for as long as nobody noticed.
+
+    It is worse than an ordinary broken link: Grafana is a single-page app and answers 200 to
+    ANY `/d/...` path, rendering "Dashboard not found" client-side. So a link to a dashboard
+    that was never created is indistinguishable from one that works — to a person, and to any
+    check that looks at the status code.
+
+    Asking Grafana is authoritative and cannot drift from what was provisioned, which a flag
+    stored on our side would.
+    """
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+                f"{base.rstrip('/')}/api/search?type=dash-db", timeout=timeout) as r:
+            rows = json.loads(r.read(400_000).decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001 — unreachable Grafana is not the same as an empty one
+        return None
+    return {str(x.get("uid") or "") for x in rows if isinstance(x, dict)}
 
 
 def deploy_stack(engine, settings: Settings, *, project_id: str, host_target_id: str,
@@ -695,7 +891,22 @@ def stack_status(engine, settings: Settings, *, host_target_id: str) -> dict[str
 
     containers = [dict(zip(("name", "status"), line.split("|", 1)))
                   for line in (res.stdout or "").splitlines() if "|" in line]
-    return {"running": len(containers) >= 3, "containers": containers, "host": host}
+    # WHAT IS MISSING, BY NAME. `>= 3` called the stack healthy while blackbox was absent —
+    # so every probe panel had no data and the status said everything was fine. A count cannot
+    # tell you which container is gone; a set can.
+    expected = {"boss-otel-collector", "boss-prometheus", "boss-grafana", "boss-blackbox",
+                "boss-node-exporter", "boss-cadvisor"}
+    present = {str(c.get("name") or "").strip() for c in containers}
+    missing = sorted(expected - present)
+    return {
+        # Grafana and Prometheus are what "running" has always meant to the console; the rest
+        # being absent degrades what you can see rather than stopping the stack.
+        "running": {"boss-prometheus", "boss-grafana"} <= present,
+        "containers": containers,
+        "missing": missing,
+        "degraded": bool(missing),
+        "host": host,
+    }
 
 
 def register_source(connection, settings: Settings, *, project_id: str,

@@ -8051,7 +8051,8 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.observability_stack import (DEFAULT_PORTS, grafana_url, scrape_targets,
+    from .services.observability_stack import (DEFAULT_PORTS, dashboard_uid, grafana_url,
+                                               provisioned_dashboards, scrape_targets,
                                                stack_status)
     with begin(engine) as connection:
         targets = scrape_targets(connection, project_id)
@@ -8064,13 +8065,33 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
               if host_target_id else {"running": None})
     host = status.get("host") or ""
     base = f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else ""
+    # ONLY LINK TO A DASHBOARD THAT EXISTS.
+    #
+    # This emitted `/d/boss-<slug>` for every target unconditionally, and the dashboard JSON is
+    # only on the host if somebody re-ran the stack deploy after that app was onboarded. Grafana
+    # answers 200 to any `/d/...` path and renders "Dashboard not found" client-side, so a link
+    # to a dashboard that was never created looked exactly like a working one.
+    #
+    # `None` means Grafana could not be asked — different from "asked, and it is not there" —
+    # so in that case the link is offered as before rather than withheld on a network blip.
+    existing = provisioned_dashboards(base) if base else None
+    def _dashboard(app: str) -> Optional[str]:
+        if not base:
+            return None
+        if existing is not None and dashboard_uid(app) not in existing:
+            return None
+        return grafana_url(base, app)
+
     return {
         "project_id": project_id,
         "deployed": bool(source),
         "prometheus": (source or {}).get("config"),
         "grafana_url": base,
         "status": status,
-        "apps": [{**t, "dashboard_url": grafana_url(base, t["app"]) if base else None}
+        "apps": [{**t, "dashboard_url": _dashboard(t["app"]),
+                  # Why there is no link, so the console can say it rather than showing nothing.
+                  "dashboard_missing": bool(base and existing is not None
+                                            and dashboard_uid(t["app"]) not in existing)}
                  for t in targets],
     }
 
