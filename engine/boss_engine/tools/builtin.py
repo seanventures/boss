@@ -896,10 +896,30 @@ _PLACEHOLDER_MARKERS = (
 )
 
 
+#: Arguments whose VALUE IS PROSE, exempt from the marker scan.
+#:
+#: The markers are substrings, and they are substrings of ordinary English. A real directive —
+#: "…the rule fires and records its inputs before any LLM… never 'buy' as an instruction… a
+#: margin that survives realistic commission" — was refused as invented because it contains
+#: "..." and would equally have been refused for "<", "bar" or "some-". The operator wrote a
+#: careful brief, pressed the button, and BOSS told them their own words looked made up.
+#:
+#: The check is for FABRICATED IDENTIFIERS: a run_id the model did not look up, a repository
+#: called owner/name, a domain at example.com. Those are id-shaped and short. Prose is neither,
+#: and a long directive is exactly what a well-specified run needs.
+_FREE_TEXT_ARGS = frozenset({
+    "directive", "instructions", "reason", "note", "fix_note", "message", "why", "seed",
+    "context", "title", "label", "hint", "question", "summary", "description", "brief",
+    "purpose", "body", "content", "feedback", "agenda", "objective",
+})
+
+
 def _placeholder_argument(args: dict) -> str:
     """The first argument that looks invented, described for the model, or ''."""
     for key, value in (args or {}).items():
         if not isinstance(value, str):
+            continue
+        if str(key).lower() in _FREE_TEXT_ARGS:
             continue
         low = value.strip().lower()
         if not low:

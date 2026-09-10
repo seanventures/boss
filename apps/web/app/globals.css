@@ -9058,13 +9058,21 @@ a.agent-chip-name:hover { text-decoration: underline; }
   filter: brightness(1.07);
 }
 .split-action-menu {
-  /* DOWNWARD. With three items it no longer fits above the composer and the first one — the
-     primary alternative — was clipped by the panel's top edge. There is always room below: the
-     bar sits at the bottom of the box and the menu is opaque and above the page. */
-  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
-  min-width: 288px; padding: 6px; border-radius: 12px;
-  border: 1px solid var(--border, #1C2740); background: var(--surface, #101A30);
+  /* FIXED, AND ON THE BODY. Positioned from the button's rect by split-action.tsx: the composer
+     box has a backdrop-filter, so anything inside it is trapped in that stacking context and
+     the reply below painted straight through the menu — two sets of text on top of each other.
+     `up` flips it above the button when there is no room underneath. */
+  position: fixed; z-index: 240;
+  min-width: 288px; max-width: min(360px, calc(100vw - 16px)); padding: 6px; border-radius: 12px;
+  border: 1px solid var(--border, #1C2740);
+  /* OPAQUE ON PURPOSE — not var(--surface), which a theme is free to make translucent. A menu
+     you can read the page through is a menu you cannot read. */
+  background: #101A30;
   box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .6);
+}
+:root[data-theme="light"] .split-action-menu { background: #FFFFFF; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .split-action-menu { background: #FFFFFF; }
 }
 .split-action-item {
   display: grid; gap: 2px; width: 100%; text-align: left; cursor: pointer;

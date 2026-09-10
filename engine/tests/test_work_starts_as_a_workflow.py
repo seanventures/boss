@@ -51,3 +51,32 @@ def test_the_discussion_offers_the_workflow_not_a_research_run():
     brief = _discussion_brief()
     assert "Research-Led Discovery WORKFLOW" in brief
     assert "never a thing started on its own" in brief
+
+
+def test_a_real_directive_is_not_mistaken_for_an_invented_one():
+    """"The earlier propose_action refusal was a length artefact."
+
+    The placeholder guard scans for SUBSTRINGS — "...", "<", "bar", "some-", "foo" — and those
+    are substrings of ordinary English. A carefully written directive was refused as invented,
+    so the operator was told their own words looked made up and the button never appeared.
+    """
+    from boss_engine.tools.builtin import _placeholder_argument
+
+    directive = (
+        "Decide go/no-go on a US-equity signal screener. The rule must fire and record its "
+        "inputs before any LLM runs; rationale is generated only from recorded values; the "
+        "triggering numbers are on screen; one identical screen for everyone, no "
+        "personalisation; never the word 'buy' as an instruction... Done when the dossier "
+        "states a clear go or no-go and does not soften a no-go into a go."
+    )
+    assert _placeholder_argument(
+        {"directive": directive, "workflow_key": "research_led_discovery"}) == ""
+
+
+def test_but_an_invented_identifier_is_still_refused():
+    """The guard exists for fabricated ids, and that has not been relaxed."""
+    from boss_engine.tools.builtin import _placeholder_argument
+
+    assert _placeholder_argument({"run_id": "crun_placeholder"})
+    assert _placeholder_argument({"repository": "owner/name"})
+    assert _placeholder_argument({"domain": "living-colors.example.com"})

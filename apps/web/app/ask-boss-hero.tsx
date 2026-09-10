@@ -1501,7 +1501,9 @@ export function AskBossHero({
 
         <form
           className="askboss-form"
-          onSubmit={(e) => { e.preventDefault(); ask(input); }}
+          // THE SAME ACTION THE PRIMARY BUTTON RUNS. A form whose submit handler disagrees with
+          // the button sitting in it is how "Build" ran Ask for a day.
+          onSubmit={(e) => { e.preventDefault(); if (input.trim()) assign(input); }}
         >
           <div
             className="askboss-box"
