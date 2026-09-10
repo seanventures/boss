@@ -50,6 +50,42 @@ describe("the idea surface exists and is reachable", () => {
   });
 });
 
+describe("a discussion is a new conversation with nobody in particular", () => {
+  const SHELL = codeOnly("app/ConsoleShell.tsx");
+
+  it("it does not open as the Deployment Manager", () => {
+    // The general dock DEFAULTS to that role — reasonable for operating the factory, wrong
+    // here. "Discuss it" opened under "Continuing with the Deployment Manager" and resumed
+    // that role's week-old thread about probe latencies with the new idea typed into it.
+    expect(SHELL).toContain("roleName={dockDiscussing");
+    const at = SHELL.indexOf("roleName={dockDiscussing");
+    expect(SHELL.slice(at, at + 240)).toContain("? undefined");
+  });
+
+  it("and the header says what the panel is for", () => {
+    expect(SHELL).toContain('"Discussing an idea"');
+  });
+
+  it("a stale role in the URL cannot leak into it either", () => {
+    expect(HERO).toContain('url.searchParams.delete("dock_role")');
+  });
+
+  it("it starts a NEW thread rather than resuming the last one", () => {
+    // The heading was the visible half; the real damage is that a resumed thread's history
+    // goes into the model's context, so an idea gets answered next to probe latencies.
+    expect(HERO).toContain('url.searchParams.set("dock_fresh", "1")');
+    expect(SHELL).toContain("setDockFresh((n) => n + 1)");
+    expect(SHELL).toContain("${dockFresh}");
+  });
+
+  it("and the fresh flag is consumed once, not left in the URL", () => {
+    // Left there it would reset the thread on every re-render and every back button, wiping a
+    // discussion mid-sentence.
+    const at = SHELL.indexOf('params.get("dock_fresh")');
+    expect(SHELL.slice(at, at + 400)).toContain('searchParams.delete("dock_fresh")');
+  });
+});
+
 describe("what the discussing agent is told", () => {
   it("it is told this is not the factory", () => {
     expect(ROUTER).toContain("YOU ARE DISCUSSING AN IDEA, NOT OPERATING THE FACTORY");

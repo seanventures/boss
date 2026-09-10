@@ -1311,7 +1311,19 @@ export function AskBossHero({
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("agent", "general");
+      // NOT AS A NAMED AGENT, AND NOT IN AN OLD THREAD.
+      //
+      // `dock_role` survives in the URL from any earlier "Ask <someone>", and the dock resumes
+      // whatever thread that role already has. So pressing Discuss on a new idea reopened a
+      // week-old Deployment Manager conversation about health checks, put the idea in its
+      // composer, and headed the panel "Continuing with the Deployment Manager".
+      //
+      // Worse than the wrong heading: that thread's history goes into the model's context, so
+      // an idea about a trading website would have been answered next to a discussion of probe
+      // latencies. A new idea is a new conversation with BOSS in general.
+      url.searchParams.delete("dock_role");
       url.searchParams.set("dock_mode", "discuss");
+      url.searchParams.set("dock_fresh", "1");
       url.searchParams.set("dock_ask", seed);
       window.history.pushState(null, "", url.toString());
       window.dispatchEvent(new PopStateEvent("popstate"));

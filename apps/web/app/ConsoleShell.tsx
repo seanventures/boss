@@ -612,6 +612,13 @@ export default function ConsoleShell({
   // looking at — to have one question answered. The dock exists for exactly this, and it can
   // carry an identity as easily as a run id.
   const [dockRole, setDockRole] = useState<string>("");
+  //: Bumped when the dock is asked to start fresh. Passed to AgentChat as a key, so React
+  //: remounts it with no thread and no history rather than the component having to unpick its
+  //: own state — a reset that has to remember every field is a reset that misses one.
+  const [dockFresh, setDockFresh] = useState(0);
+  //: Whether this dock is for thinking about an idea rather than operating the factory. It
+  //: changes who is answering — nobody in particular — as well as how they answer.
+  const [dockDiscussing, setDockDiscussing] = useState(false);
   useEffect(() => {
     const read = () => {
       // The run id is the whole handoff now. It goes to the server as `external_ref`, which
@@ -619,6 +626,17 @@ export default function ConsoleShell({
       const params = new URLSearchParams(window.location.search);
       setDockedRun(params.get("agent"));
       setDockRole(params.get("dock_role") ?? "");
+      setDockDiscussing(params.get("dock_mode") === "discuss");
+      // START A NEW CONVERSATION, consumed once. Left in the URL it would reset the thread on
+      // every re-render and every back button, wiping a discussion mid-sentence.
+      if (params.get("dock_fresh") === "1") {
+        setDockFresh((n) => n + 1);
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("dock_fresh");
+          window.history.replaceState(null, "", url.toString());
+        } catch { /* non-browser */ }
+      }
       const asked = params.get("dock_ask");
       if (asked) {
         setDockAsk(asked);
@@ -1066,9 +1084,16 @@ export default function ConsoleShell({
                   Manager about a HOST has no run to name, so the sentinel gets the role's name
                   instead of a meaningless token. */}
               <span className="eyebrow" data-testid="bx-dock-who">
-                {dockRole || (dockedRun === DOCK_GENERAL ? "Deployment Manager" : "Ask BOSS")}
+                {dockDiscussing
+                  ? "Discussing an idea"
+                  : dockRole || (dockedRun === DOCK_GENERAL
+                                 ? "Deployment Manager" : "Ask BOSS")}
               </span>
-              {dockRole
+              {dockDiscussing
+                ? <span className="detail">
+                    BOSS asks what it needs to know and pushes back &mdash; nothing starts
+                  </span>
+                : dockRole
                 ? <span className="detail">answering from this role&rsquo;s own work here</span>
                 : dockedRun === DOCK_GENERAL
                   ? <span className="detail">hosts, releases, rollback readiness</span>
@@ -1089,9 +1114,23 @@ export default function ConsoleShell({
                          actor={scope.actorId ?? scope.actor}
                          initialTaskId={dockedRun === DOCK_GENERAL ? undefined : dockedRun}
                          initialMessage={dockAsk || undefined}
-                         roleName={dockRole
-                           || (dockedRun === DOCK_GENERAL ? "the Deployment Manager" : undefined)}
-                         key={`${dockAsk}|${dockRole}`} />
+                         // NOBODY IN PARTICULAR, WHEN DISCUSSING AN IDEA.
+                         //
+                         // The general dock defaults to the Deployment Manager — reasonable
+                         // when the dock is for operating the factory, and wrong here. It made
+                         // "Discuss it" open under "Continuing with the Deployment Manager",
+                         // resuming that role's week-old thread about probe latencies with the
+                         // new idea typed into it. The heading was the visible half; the real
+                         // damage is that the thread's history goes into the model's context.
+                         roleName={dockDiscussing
+                           ? undefined
+                           : (dockRole
+                              || (dockedRun === DOCK_GENERAL
+                                  ? "the Deployment Manager" : undefined))}
+                         // `dockFresh` in the key so starting a discussion remounts with no
+                         // thread and no history, rather than the component unpicking its own
+                         // state — a reset that has to remember every field misses one.
+                         key={`${dockAsk}|${dockRole}|${dockDiscussing}|${dockFresh}`} />
             </div>
           </aside>
         ) : null}
