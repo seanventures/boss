@@ -509,6 +509,19 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // are questions for a dashboard, and a dashboard is what a named expert is not. The server
   // builds them from the role's lens AND its own record here, so they name real apps, this
   // project's last failure, and positions this role actually took.
+  // AND NOT FOR AN IDEA EITHER. "Which runs failed and why?" under a half-formed product idea
+  // is the console asking about itself while the operator is trying to think.
+  useEffect(() => {
+    if (!discussing) return;
+    // Phrased as things the OPERATOR says. A chip sends its text as their message, so
+    // "Who is this for?" would have them asking their own question back to themselves.
+    setSuggestions([
+      "Push back — where is this weak?",
+      "What is the smallest version worth building?",
+      "Who would actually pay for this?",
+    ]);
+  }, [discussing]);
+
   useEffect(() => {
     if (!roleName) return;
     let alive = true;
@@ -812,7 +825,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                                        ?? { thread_id: threadId }))
                    : roleName
                      ? `Ask ${roleName}`
-                     : "What do you want to do?"}</h2>
+                     : discussing
+                       ? "Let's think this through."
+                       : "What do you want to do?"}</h2>
             {threadId && messages.length ? (
               <button type="button" className="linklike agent-clear" data-testid="agent-clear"
                       disabled={clearing} onClick={() => void clearChat()}
@@ -829,6 +844,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             ) : roleName ? (
               <p>Answering from this role&rsquo;s own lens and what it has actually argued on
                  this project — not from the general assistant.</p>
+            ) : discussing ? (
+              /* NOT THE GENERAL ASSISTANT'S PITCH. Opening a discussion and being told to
+                 order code, a meeting, a PRD or a deployment invites the one thing this
+                 surface exists to postpone. */
+              <p>Say the idea however it comes out. BOSS will ask what it needs to know, argue
+                 the parts that look wrong, and write it up when it is worth writing up.
+                 Nothing starts until you press Build.</p>
             ) : (
               <p>Ask anything, or tell BOSS to do it — code, research, a meeting, a PRD, a
                  deployment. Work on one app from its card in Factory, where the app context
@@ -859,7 +881,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           ) : messages.length === 0 ? (
             <div className="agent-chat-empty">
               <div className="agent-empty-mark" aria-hidden>◆</div>
-              <p className="agent-empty-lead">Ask {roleName ?? "BOSS"} about this work.</p>
+              <p className="agent-empty-lead">{discussing
+                ? "Nothing here yet — say the idea."
+                : `Ask ${roleName ?? "BOSS"} about this work.`}</p>
             </div>
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>

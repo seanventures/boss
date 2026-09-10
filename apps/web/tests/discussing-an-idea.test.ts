@@ -166,3 +166,24 @@ describe("a new idea gets a new conversation", () => {
     expect(SHELL.slice(at, at + 600)).toContain('url.searchParams.delete("dock_mode")');
   });
 });
+
+describe("the panel reads as a discussion, not the general assistant", () => {
+  it("it does not open by offering to start things", () => {
+    // "code, research, a meeting, a PRD, a deployment" is the invitation this surface exists
+    // to postpone.
+    const at = DOCK.indexOf("</h2>");
+    expect(DOCK.slice(at, at + 1400)).toContain("discussing ?");
+    expect(DOCK).toContain("Nothing starts until you press Build");
+  });
+
+  it("and the starters are about the idea, not about the console", () => {
+    expect(DOCK).toContain("What is the smallest version worth building?");
+    const at = DOCK.indexOf("if (!discussing) return;");
+    expect(at).toBeGreaterThan(-1);
+    expect(DOCK.slice(at, at + 500)).toContain("setSuggestions");
+  });
+
+  it("the dashboard starters still stand everywhere else", () => {
+    expect(DOCK).toContain('"Which runs failed and why?"');
+  });
+});
