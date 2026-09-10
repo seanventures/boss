@@ -188,7 +188,12 @@ const ICONS = {
  *  permanent nav entries for things you arrive at from somewhere else is two rows of standing
  *  cost for a trip nobody takes deliberately. Reachable by URL and by every link that names
  *  them — hidden from the rail, not removed from the console. */
-const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+//  DISCOVERY CAME BACK. That reasoning held while a dossier could only be produced BY a
+//  workflow. It can now be started from a conversation — "set up the research" in the idea
+//  dock spends a research run — and a discovery started that way belongs to no run, so
+//  nothing in the console links to it. One completed dossier on a stock-recommendation site
+//  sat unreachable for exactly that reason while its operator asked where it had gone.
+const OFF_THE_NAV = new Set<AreaId>(["meetings"]);
 
 const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
@@ -619,6 +624,20 @@ export default function ConsoleShell({
   //: Whether this dock is for thinking about an idea rather than operating the factory. It
   //: changes who is answering — nobody in particular — as well as how they answer.
   const [dockDiscussing, setDockDiscussing] = useState(false);
+  //: WHICH BUMP HAS ALREADY BEEN SPENT ON A MOUNT.
+  //:
+  //: `fresh={dockDiscussing}` cost an operator a conversation. Discuss mode lives in the URL,
+  //: so every later mount — a reload, reopening the dock, a starter question — also asked for
+  //: a new thread, and a real discussion about a stock-recommendation site came back as an
+  //: empty panel with the idea still in the box. The thread was in the database the whole
+  //: time; the console simply refused to open it. Starting fresh belongs to the PRESS, not to
+  //: the mode.
+  const spentFresh = useRef(0);
+  const startFresh = dockDiscussing && dockFresh > spentFresh.current;
+  useEffect(() => {
+    // Parent effects run after the child's, so the dock has already decided by now.
+    if (startFresh) spentFresh.current = dockFresh;
+  }, [startFresh, dockFresh]);
   useEffect(() => {
     const read = () => {
       // The run id is the whole handoff now. It goes to the server as `external_ref`, which
@@ -1134,7 +1153,7 @@ export default function ConsoleShell({
                          // `dockFresh` in the key so starting a discussion remounts with no
                          // thread and no history, rather than the component unpicking its own
                          // state — a reset that has to remember every field misses one.
-                         fresh={dockDiscussing}
+                         fresh={startFresh}
                          key={`${dockAsk}|${dockRole}|${dockDiscussing}|${dockFresh}`} />
             </div>
           </aside>

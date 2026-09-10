@@ -2875,6 +2875,11 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   content TEXT NOT NULL,
   tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
   actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- OFFERS THE OPERATOR NEVER GOT BACK. `actions` holds writes that RAN; the buttons a turn
+  -- put above the reply lived only in the HTTP response, so reopening a conversation showed
+  -- the sentence "I've put two buttons above" over no buttons, with no way to reach what was
+  -- offered. Stored per message so a restored thread is the thread, not a transcript of it.
+  proposed_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (role IN ('user', 'assistant', 'tool'))
 );

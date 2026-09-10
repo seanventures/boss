@@ -144,8 +144,13 @@ describe("a new idea gets a new conversation", () => {
   // The header said DISCUSSING AN IDEA and underneath it sat "Is anything starving or stuck in a
   // queue?" with its old answer — the dock had reopened the newest general thread and put the new
   // idea below it. Remounting the panel was not enough: the panel restores a thread on mount.
-  it("the dock asks for a fresh one when it opens a discussion", () => {
-    expect(SHELL).toContain("fresh={dockDiscussing}");
+  it("the dock asks for a fresh one when Discuss is PRESSED — not for the whole mode", () => {
+    // `fresh={dockDiscussing}` lost a real conversation: discuss mode lives in the URL, so
+    // every later mount asked for a new thread and the panel refused to open the one in the
+    // database.
+    expect(SHELL).toContain("fresh={startFresh}");
+    expect(SHELL).toContain("dockFresh > spentFresh.current");
+    expect(SHELL).not.toContain("fresh={dockDiscussing}");
   });
 
   it("and the panel declines to reopen the last thread when asked", () => {
@@ -185,5 +190,41 @@ describe("the panel reads as a discussion, not the general assistant", () => {
 
   it("the dashboard starters still stand everywhere else", () => {
     expect(DOCK).toContain('"Which runs failed and why?"');
+  });
+});
+
+describe("what a turn offered survives the conversation being reopened", () => {
+  const SERVICE = codeOnly("../../engine/boss_engine/services/agent_service.py");
+  const API = codeOnly("../../apps/api/app/main.py");
+  const SCHEMA = codeOnly("../../db/schema.sql");
+
+  it("the offers are stored on the message, not only returned once", () => {
+    // "I've put two buttons above" over no buttons: they lived in the HTTP response alone.
+    expect(SCHEMA).toContain("proposed_actions JSONB NOT NULL DEFAULT '[]'::jsonb");
+    expect(SERVICE).toContain("proposed_actions: Optional[list[dict[str, Any]]] = None");
+    expect(SERVICE).toContain('"proposed": json.dumps(proposed_actions or [])');
+  });
+
+  it("and they are read back with the history", () => {
+    expect(SERVICE).toContain('SELECT id, role, content, tool_calls, actions, proposed_actions, created_at');
+    expect(SERVICE).toContain('"proposed_actions": value("proposed_actions")');
+    expect(API).toContain('"proposed_actions": offers');
+  });
+
+  it("only the newest reply's offers stand", () => {
+    // An offer two turns back was already answered by the turns after it.
+    const at = API.indexOf("offers: list = []");
+    expect(API.slice(at, at + 300)).toContain("for message in reversed(history)");
+  });
+
+  it("the console restores them", () => {
+    expect(DOCK).toContain("d.proposed_actions");
+  });
+});
+
+describe("work started from a conversation is reachable", () => {
+  it("Discovery is on the rail again", () => {
+    // A discovery started from chat belongs to no run, so no run links to it.
+    expect(SHELL).toContain('const OFF_THE_NAV = new Set<AreaId>(["meetings"])');
   });
 });

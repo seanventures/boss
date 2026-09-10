@@ -121,18 +121,22 @@ class AgentService:
         content: str,
         tool_calls: Optional[list[dict[str, Any]]] = None,
         actions: Optional[list[dict[str, Any]]] = None,
+        #: The buttons this reply put above itself. Not writes that ran — offers, which is
+        #: why they are not in `actions`. Stored so reopening the thread restores them.
+        proposed_actions: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         row = connection.execute(
             text(
                 """
                 INSERT INTO agent_messages (
-                    id, thread_id, role, content, tool_calls, actions
+                    id, thread_id, role, content, tool_calls, actions, proposed_actions
                 )
                 VALUES (
                     :id, :thread_id, :role, :content,
-                    CAST(:tool_calls AS JSONB), CAST(:actions AS JSONB)
+                    CAST(:tool_calls AS JSONB), CAST(:actions AS JSONB),
+                    CAST(:proposed AS JSONB)
                 )
-                RETURNING id, role, content, tool_calls, actions, created_at
+                RETURNING id, role, content, tool_calls, actions, proposed_actions, created_at
                 """
             ),
             {
@@ -142,6 +146,7 @@ class AgentService:
                 "content": content,
                 "tool_calls": json.dumps(tool_calls or []),
                 "actions": json.dumps(actions or []),
+                "proposed": json.dumps(proposed_actions or []),
             },
         ).mappings().one()
         connection.execute(
@@ -156,7 +161,7 @@ class AgentService:
         rows = connection.execute(
             text(
                 """
-                SELECT id, role, content, tool_calls, actions, created_at
+                SELECT id, role, content, tool_calls, actions, proposed_actions, created_at
                 FROM agent_messages
                 WHERE thread_id = :thread_id
                 -- A TURN'S ROWS SHARE ONE TIMESTAMP, SO THE TIEBREAK DECIDES THE TRANSCRIPT.
@@ -386,6 +391,7 @@ class AgentService:
             content=turn.reply,
             tool_calls=turn.tool_calls,
             actions=turn.actions,
+            proposed_actions=getattr(turn, "proposed_actions", []) or [],
         )
 
         pending = turn.pending_confirmation
@@ -460,6 +466,7 @@ class AgentService:
             "content": row["content"],
             "tool_calls": value("tool_calls"),
             "actions": value("actions"),
+            "proposed_actions": value("proposed_actions"),
             "created_at": created_at.isoformat()
             if hasattr(created_at, "isoformat")
             else str(created_at),

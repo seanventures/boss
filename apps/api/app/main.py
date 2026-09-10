@@ -11133,10 +11133,25 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
                  "AND updated_at > now() - interval '30 minutes' LIMIT 1"),
             {"p": project_id},
         ).first())
+        history = orchestration_agent.list_messages(connection, thread_id)
+        # THE BUTTONS COME BACK WITH THE CONVERSATION.
+        #
+        # A restored thread showed "I've put two buttons above" over nothing: the offers were
+        # only ever in the live HTTP response. They are stored per message now, and the ones
+        # still standing are the NEWEST reply's — an offer two turns back was already answered
+        # by the turns after it, and re-rendering it invites pressing something the
+        # conversation has moved past.
+        offers: list = []
+        for message in reversed(history):
+            if message.get("role") != "assistant":
+                continue
+            offers = list(message.get("proposed_actions") or [])
+            break
         return {
             "thread_id": thread_id,
-            "messages": orchestration_agent.list_messages(connection, thread_id),
+            "messages": history,
             "pending_confirmation": pending,
+            "proposed_actions": offers,
             "working": working,
         }
 
