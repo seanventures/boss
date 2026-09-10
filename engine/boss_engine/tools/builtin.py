@@ -638,6 +638,78 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         return {"status": "running", "run_id": run_id, "project_id": pid}
 
     @reg.tool(
+        "start_workflow",
+        "THE way to start new work. Runs a whole delivery workflow — research, the PRD panel, "
+        "the approval gates and the written record are STEPS of it — so the operator watches "
+        "one run in the Workflow area and reads one outcome at the end. Pick the workflow_key "
+        "whose objective matches the ask: research_led_discovery to find out whether something "
+        "is worth building at all (ends in a decision and a document, not code), "
+        "standard_product_delivery / major_feature / minor_feature / fast_fix to build it, "
+        "ux_certification, security_hardening, backend_service_setup, data_migration, "
+        "compliance_release, third_party_integration, deprecation_sunset for the rest. "
+        "Never start a bare research run or a bare panel: those produce an artefact that "
+        "belongs to no run, which nothing in the console links to.",
+        _obj(
+            {
+                "directive": {"type": "string",
+                              "description": "the work, in the operator's terms"},
+                "workflow_key": {"type": "string",
+                                 "description": "which workflow to run, by key"},
+                "title": {"type": "string",
+                          "description": "short name for the run and its document"},
+                "project_id": {"type": "string"},
+            },
+            ["directive", "workflow_key"],
+        ),
+        kind="write",
+        reversibility="costs_money",
+    )
+    def start_workflow(ctx, *, project_id, actor, args):
+        from uuid import uuid4
+
+        pid = args.get("project_id") or project_id
+        directive = (args.get("directive") or "").strip()
+        key = (args.get("workflow_key") or "").strip()
+        title = (args.get("title") or directive[:120] or "New work").strip()
+        wf = services_module("workflows")
+        with ctx.begin() as c:
+            version_id = c.execute(
+                _text(
+                    "SELECT v.id FROM workflow_versions v "
+                    "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                    "WHERE d.project_id=:p AND d.workflow_key=:k "
+                    "AND COALESCE(d.namespace,'system')='product' "
+                    "ORDER BY v.version DESC LIMIT 1"
+                ),
+                {"p": pid, "k": key},
+            ).scalar()
+            if not version_id:
+                # NAMING WHAT EXISTS beats "not found": the model picked a key and the only
+                # useful correction is the list it should have picked from.
+                available = [
+                    row[0] for row in c.execute(
+                        _text("SELECT DISTINCT workflow_key FROM workflow_definitions "
+                             "WHERE project_id=:p AND COALESCE(namespace,'system')='product' "
+                             "ORDER BY workflow_key"),
+                        {"p": pid},
+                    ).all()
+                ]
+                return {"ok": False,
+                        "error": f"no workflow {key!r} in this project",
+                        "available": available}
+            try:
+                run = wf.start_run(
+                    c, project_id=pid, actor=actor,
+                    input_data={"directive": directive, "title": title},
+                    dedupe_key=f"agent:{key}:{uuid4().hex[:12]}",
+                    workflow_version_id=version_id,
+                )
+            except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
+                return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+        return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
+                "project_id": pid, "title": title}
+
+    @reg.tool(
         "request_meeting",
         "THE way to kick off new work in BOSS: convene a governed multi-agent PRD "
         "meeting. A cross-functional agent panel debates the directive inside BOSS "
@@ -4327,8 +4399,15 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "mandate_standard",
     # Writing the fix. A customer's bug is repaired with code.
     "create_code_task",
-    "create_discovery",
-    "request_meeting",
+    # STARTING WORK MEANS STARTING A WORKFLOW.
+    #
+    # `create_discovery` and `request_meeting` are deliberately NOT here. Research and the PRD
+    # panel are steps of a workflow, and one started on its own belongs to no run: the operator
+    # asked BOSS to research a stock-recommendation site, BOSS ran a bare discovery, and the
+    # finished dossier was reachable from nothing — no run linked to it, and the console has no
+    # standing page for one because nobody should be starting them individually. The workflow is
+    # the unit of work and its document is the outcome.
+    "start_workflow",
     # Delivery and environment
     # A shell on the operator's own host. Gated a second time by BOSS_AGENT_HOST_SHELL, so
     # admitting it here does not by itself hand anybody a shell.
@@ -4346,6 +4425,17 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # a narrower form.
     "write_db",
 })
+
+#: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
+#:
+#: Every other write in the default registry is chat-reachable on purpose — owning a tool and
+#: not being allowed to use it is how "BOSS only gives advice" happened, and a test enforces
+#: it. These two are the stated exception: they are how the workflow's `research` and `meeting`
+#: STEPS do their work (see workflow_capabilities), and they must keep working there. What they
+#: must not be is a way for a conversation to start one on its own — the operator's rule is
+#: that research and the panel only ever happen inside a workflow, so that the run is what you
+#: open and its document is the outcome. `start_workflow` is the chat's way in.
+_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
 
 
 def build_discuss_read_registry() -> ToolRegistry:

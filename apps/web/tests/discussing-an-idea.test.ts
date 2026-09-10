@@ -223,8 +223,10 @@ describe("what a turn offered survives the conversation being reopened", () => {
 });
 
 describe("work started from a conversation is reachable", () => {
-  it("Discovery is on the rail again", () => {
-    // A discovery started from chat belongs to no run, so no run links to it.
-    expect(SHELL).toContain('const OFF_THE_NAV = new Set<AreaId>(["meetings"])');
+  it("by being a workflow run, not a loose artefact", () => {
+    // A bare discovery belongs to no run, and the console deliberately has no standing page
+    // for one — so the dossier was reachable from nothing. Fixed at the source: the chat agent
+    // starts the workflow, and the rail stays as it was.
+    expect(SHELL).toContain('const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"])');
   });
 });

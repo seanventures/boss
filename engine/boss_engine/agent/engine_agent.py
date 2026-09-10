@@ -103,10 +103,13 @@ def _propose_label(tool: str, args: dict) -> str:
         return f"Retry {run_id[:20]}" if run_id else "Retry the run"
     if tool == "extend_code_task":
         return f"Keep working on {run_id[:20]}" if run_id else "Continue the run"
-    if tool == "create_discovery":
-        return f"Research: {title}"[:70] if title else "Start research"
-    if tool == "request_meeting":
-        return "Convene a PRD panel"
+    if tool == "start_workflow":
+        # NAME THE WORKFLOW, not the tool. "Research-Led Discovery: …" tells the operator which
+        # of twelve processes is about to run and therefore what they get at the end; "start
+        # workflow" tells them nothing they did not already know from asking.
+        key = str((args or {}).get("workflow_key") or "").strip()
+        name = key.replace("_", " ").title() if key else "Workflow"
+        return f"{name}: {title}"[:70] if title else f"Start {name}"
     return tool.replace("_", " ")
 
 def _report_from_trace(trace: list[dict]) -> str:
@@ -386,7 +389,14 @@ class EngineAgent:
     #: else — redeploy, previews, priorities, cancels, decisions, write_db — still executes
     #: directly, because those are cheap, reversible, or exactly what "fix it" means.
     PROPOSE_ONLY = frozenset({
-        "create_code_task", "create_discovery", "request_meeting",
+        "create_code_task",
+        # A whole workflow — research, panel, gates, document — is the most expensive thing
+        # BOSS can start from a sentence. It is offered; the operator presses it.
+        #
+        # `create_discovery` and `request_meeting` used to be here. They are not offerable at
+        # all any more: research and the panel are STEPS, and one started on its own produces
+        # an artefact no run links to. See _WORKFLOW_ONLY_TOOLS in tools/builtin.py.
+        "start_workflow",
         "retry_code_task", "extend_code_task",
         # EVERY CALL COSTS MONEY. An image is billed per generation, and an agent that decides
         # on its own that a page "needs a hero image" can spend real money on a hunch. The

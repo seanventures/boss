@@ -84,16 +84,28 @@ def test_writing_the_fix_is_a_fix_tool():
     do.
     """
     names = set(build_discuss_read_registry().names())
-    for fix in ("create_code_task", "create_discovery", "request_meeting", "register_repository"):
+    for fix in ("create_code_task", "start_workflow", "register_repository"):
         assert fix in names, f"BOSS cannot write the fix: {fix} is unreachable"
+    # NOT create_discovery / request_meeting. Not a third invented boundary — the opposite: a
+    # bare research run or panel produces an artefact that belongs to no run, and the console
+    # deliberately has no page for one. `start_workflow` starts the whole process, so research
+    # and the panel still happen; they happen as steps, and the run is what the operator opens.
+    for step_only in ("create_discovery", "request_meeting"):
+        assert step_only not in names
 
 
 def test_every_write_the_registry_has_is_reachable():
     """If a tool should not be reachable, remove it from the REGISTRY. Silently disarming it in
-    the allow-list is how BOSS ended up owning eighteen tools and being allowed five."""
+    the allow-list is how BOSS ended up owning eighteen tools and being allowed five.
+
+    The exception is written down and enumerated — `_WORKFLOW_ONLY_TOOLS` — so withholding one
+    is a decision on the record rather than a quiet edit to an allow-list.
+    """
+    from boss_engine.tools.builtin import _WORKFLOW_ONLY_TOOLS
+
     reg_writes = {s.name for s in build_default_registry().specs(kind="write")}
-    assert reg_writes == set(_DISCUSS_OPERATIONS_TOOLS), (
-        f"unreachable writes: {sorted(reg_writes - set(_DISCUSS_OPERATIONS_TOOLS))}")
+    unreachable = reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) - set(_WORKFLOW_ONLY_TOOLS)
+    assert not unreachable, f"unreachable writes: {sorted(unreachable)}"
 
 
 def test_boss_does_not_patch_its_own_foundation():

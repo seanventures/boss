@@ -188,12 +188,12 @@ const ICONS = {
  *  permanent nav entries for things you arrive at from somewhere else is two rows of standing
  *  cost for a trip nobody takes deliberately. Reachable by URL and by every link that names
  *  them — hidden from the rail, not removed from the console. */
-//  DISCOVERY CAME BACK. That reasoning held while a dossier could only be produced BY a
-//  workflow. It can now be started from a conversation — "set up the research" in the idea
-//  dock spends a research run — and a discovery started that way belongs to no run, so
-//  nothing in the console links to it. One completed dossier on a stock-recommendation site
-//  sat unreachable for exactly that reason while its operator asked where it had gone.
-const OFF_THE_NAV = new Set<AreaId>(["meetings"]);
+//  AND THE ANSWER TO AN UNREACHABLE DOSSIER IS NOT A NAV ROW. A discovery started from chat
+//  belonged to no run, so nothing linked to it — briefly fixed here by putting Discovery back
+//  on the rail, which is the wrong end of the problem: it advertises starting one on its own,
+//  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
+//  so the dossier is a step's output and the run is what you open.
+const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
 
 const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },

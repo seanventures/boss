@@ -40,7 +40,7 @@ def test_the_expensive_tools_are_named_here_not_just_counted():
     """Guarding a set by iterating it is self-defeating: empty the set and the parametrized
     tests below do not fail, they DISAPPEAR (an empty parametrize is a skip). Mutation-testing
     this file found exactly that. So name them, and make removing one a failure."""
-    assert {"create_code_task", "create_discovery", "request_meeting",
+    assert {"create_code_task", "start_workflow",
             "retry_code_task", "extend_code_task"} <= EngineAgent.PROPOSE_ONLY
 
 
@@ -126,10 +126,18 @@ def test_boss_owns_a_tool_for_what_operators_ask(ask, tool):
 
 
 def test_no_write_is_registered_but_unreachable():
-    """Owning eighteen tools and being allowed five is how "it only recommends" happened."""
+    """Owning eighteen tools and being allowed five is how "it only recommends" happened.
+
+    The one exception is NAMED, not a slackened rule: `create_discovery` and `request_meeting`
+    are how the workflow's research and meeting steps do their work, and are withheld from chat
+    so that a conversation cannot start either on its own. Anything else going missing is the
+    old regression coming back.
+    """
+    from boss_engine.tools.builtin import _WORKFLOW_ONLY_TOOLS
+
     reg_writes = {s.name for s in build_default_registry().specs(kind="write")}
-    assert reg_writes == set(_DISCUSS_OPERATIONS_TOOLS), (
-        f"unreachable: {sorted(reg_writes - set(_DISCUSS_OPERATIONS_TOOLS))}")
+    assert reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) == set(_WORKFLOW_ONLY_TOOLS), (
+        f"unreachable: {sorted(reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) - _WORKFLOW_ONLY_TOOLS)}")
 
 
 def test_the_ability_to_act_is_not_narrowed_again():

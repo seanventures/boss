@@ -66,7 +66,7 @@ _ACTING_CACHE: "frozenset[str] | None" = None
 #: Only if the registry cannot be read at all.
 _ACTING_FALLBACK = frozenset({
     "redeploy", "retry_code_task", "extend_code_task", "steer_code_task", "cancel_code_task",
-    "create_code_task", "create_discovery", "request_meeting", "register_repository",
+    "create_code_task", "start_workflow", "register_repository",
     "start_preview", "stop_preview", "cancel_job", "set_job_priority", "close_orphaned_runs",
     "link_run_origin", "decide", "waive_gates", "send_feedback", "write_db",
     "deploy_app", "merge_apps", "retarget_app", "generate_image", "run_on_host",
@@ -1169,7 +1169,9 @@ def _discussion_brief() -> str:
         "cheap answer and usually the useless one.\n"
         "- Say when you do not know. If the answer turns on evidence you do not have — market "
         "size, whether somebody already sells this — say which fact would settle it and offer "
-        "Research, rather than guessing confidently.\n"
+        "the Research-Led Discovery WORKFLOW, rather than guessing confidently. Research is a "
+        "step of that workflow, never a thing started on its own: a dossier that belongs to no "
+        "run is one nothing in the console links to, and the operator cannot find it again.\n"
         "- Keep it conversational. A few sentences and a question beats a report. They are "
         "talking, not commissioning.\n\n"
         "WHAT YOU MAY READ: this project's own history, when it bears on the idea — whether "
@@ -1431,7 +1433,7 @@ class IntentRouter:
         # state of the run, and the regex has never seen it.
         #
         # The agent can. It holds every capability the deterministic branches below actuate —
-        # create_code_task, request_meeting, create_discovery — plus the reads to decide
+        # create_code_task, start_workflow — plus the reads to decide
         # between them. Handing it the sentence IS the routing decision, and it is the same
         # design every competent coding agent uses: tools, a model, and no keyword layer in
         # front deciding what the model is allowed to consider.

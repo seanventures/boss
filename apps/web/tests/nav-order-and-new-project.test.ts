@@ -32,21 +32,17 @@ describe("the Run group order", () => {
     ]);
   });
 
-  it("keeps the PRD panel as an AREA, off the rail", () => {
-    // A panel is a step of a workflow, not a destination: the workflow convenes it and the run
-    // links to it. Hidden from the rail — not removed, or every link naming it would 404.
+  it("keeps Discovery and Meetings as AREAS, off the rail", () => {
+    // They are steps of a workflow, not destinations: nobody should start a research run or a
+    // panel on its own, and a rail row advertises exactly that. A dossier started outside a
+    // workflow was briefly answered by putting Discovery back here — the wrong end of the
+    // problem; the chat agent starts a workflow now instead. Hidden from the rail, not
+    // removed, or every link naming them would 404.
+    expect(runOrder()).toContain("discovery");
     expect(runOrder()).toContain("meetings");
     expect(SHELL).toContain("const OFF_THE_NAV");
-    expect(SHELL).toContain('new Set<AreaId>(["meetings"])');
+    expect(SHELL).toContain('new Set<AreaId>(["discovery", "meetings"])');
     expect(SHELL).toContain("!OFF_THE_NAV.has(a.id)");
-  });
-
-  it("but Discovery is back on it", () => {
-    // The same reasoning held only while a dossier could ONLY come from a workflow. Research
-    // can now be started from a conversation, and a discovery started that way belongs to no
-    // run — so nothing in the console links to it, and it was unreachable.
-    expect(runOrder()).toContain("discovery");
-    expect(SHELL).not.toContain('new Set<AreaId>(["discovery"');
   });
 
   it("lists each area exactly once", () => {
