@@ -10,9 +10,14 @@
  * constant, building spends money and happens once. One split action says that; three buttons
  * of equal weight say the opposite.
  *
- * WHY "ASK" IS THE FACE. Enter sends — the one convention a composer cannot break — and Enter
- * fires the primary button. A face reading "Build" would mean a stray Enter starts a governed
- * pipeline that spends money.
+ * BUILD IS THE FACE, on the operator's call after I argued for Ask: "most of the time we hit
+ * Build to trigger the complete workflow." Their product, their decision.
+ *
+ * The hazard I raised is real and is solved a different way rather than by argument. Enter used
+ * to send, which is right when the primary is free; the primary now convenes a panel, writes a
+ * PRD and starts code. A box whose main content is a multi-line brief is a box where Shift is
+ * pressed dozens of times, and one slip would start a governed pipeline. So Enter is a newline
+ * and Cmd/Ctrl+Enter submits — the convention every composer uses when submitting is expensive.
  */
 import { describe, expect, it } from "vitest";
 
@@ -44,7 +49,14 @@ describe("the box is for writing; the controls sit beneath it", () => {
     // A panel that expands inside a flex row shoves everything beside it sideways, which is
     // how this row got crowded in the first place.
     const at = CSS.indexOf(".askboss-agents-panel {");
-    expect(CSS.slice(at, at + 260)).toContain("position: absolute");
+    const rule = CSS.slice(at, at + 700);
+    expect(rule).toContain("position: absolute");
+    // AND IT NEEDS ITS OWN WIDTH. `right: 0` stretched it to its inline-flex parent — about
+    // 150px — so every word wrapped onto its own line and the text spilled over the cards
+    // underneath. An opaque background, because it now overlaps them.
+    expect(rule).toContain("min-width:");
+    expect(rule).not.toContain("right: 0");
+    expect(rule).toContain("background: var(--surface");
   });
 });
 
@@ -54,24 +66,33 @@ describe("one action, with the rest behind a caret", () => {
     expect(HERO).not.toContain('className="askboss-actions-inline"');
   });
 
-  it("Ask is the face, because Enter fires it", () => {
-    const at = HERO.indexOf("<SplitAction");
-    const block = HERO.slice(at, at + 900);
-    expect(block).toContain('id: "ask"');
-    // And the primary is a submit, so the button and the Enter key do the same thing.
-    expect(SPLIT).toContain('type="submit"');
-    expect(HERO).toContain("e.preventDefault(); ask(input);");
+  it("Build is the face — the action taken most of the time", () => {
+    const at = HERO.indexOf("primary={{");
+    expect(HERO.slice(at, at + 200)).toContain('id: "build"');
   });
 
-  it("Research and Build are in the menu, and say what they cost", () => {
-    const at = HERO.indexOf("<SplitAction");
-    const block = HERO.slice(at, at + 1200);
+  it("and a bare Enter cannot start it", () => {
+    // The primary convenes a panel, writes a PRD and starts code. A multi-line brief means
+    // Shift is pressed dozens of times; one slip must not spend money.
+    expect(HERO).toContain("e.metaKey || e.ctrlKey");
+    expect(HERO).not.toContain('if (e.key === "Enter" && !e.shiftKey)');
+  });
+
+  it("Ask and Research are in the menu, each saying what it costs", () => {
+    const at = HERO.indexOf("others={[");
+    const block = HERO.slice(at, at + 900);
+    expect(block).toContain('id: "ask"');
     expect(block).toContain('id: "research"');
-    expect(block).toContain('id: "build"');
-    // A menu that hides the expensive option among the free ones is how somebody spends money
-    // by accident.
-    expect(block.match(/cost: "spends money"/g)?.length).toBe(2);
+    // Free and expensive are labelled as such: a menu that does not distinguish them is how
+    // somebody spends money reaching for an answer.
+    expect(block).toContain('cost: "free"');
+    expect(block).toContain('cost: "spends money"');
     expect(SPLIT).toContain("split-action-cost");
+  });
+
+  it("the placeholder leads with what the button now does", () => {
+    // It said "Ask a question, or describe something to build" while the primary was Build.
+    expect(HERO).toContain("Describe what to build");
   });
 
   it("each item says what it does, not just its name", () => {

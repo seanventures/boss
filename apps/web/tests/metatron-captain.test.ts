@@ -94,7 +94,11 @@ describe("Metatron Captain island", () => {
     // type into — not the name of a field that no longer exists.
     const hero = readFileSync(resolve(__dirname, "../app/ask-boss-hero.tsx"), "utf8");
     expect(hero).toContain('className="askboss-input"');
-    expect(hero).toMatch(/placeholder="Ask a question, or describe something to build/);
+    // The PROPERTY, not the sentence: there is a box, and its placeholder tells you what to
+    // put in it. The wording moved when Build became the primary action — a placeholder
+    // leading with "Ask" beside a Build button describes the previous design — and pinning the
+    // old string failed a change that kept the box exactly where it was.
+    expect(hero).toMatch(/placeholder="[^"]*build/i);
     // ONE ENTRY IN THE RAIL, NOT TWO. The captain's own nav item is gone; what it claimed to
     // be — a captain with the whole factory in view — is what the agent area now does.
     expect(shellSource).not.toContain('label: "Metatron"');

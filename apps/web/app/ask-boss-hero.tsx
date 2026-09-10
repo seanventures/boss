@@ -1462,17 +1462,25 @@ export function AskBossHero({
               value={input}
               rows={1}
               disabled={busy}
-              placeholder="Ask a question, or describe something to build…"
+              placeholder="Describe what to build \u2014 or pick Ask from the menu to just ask\u2026"
               onChange={(e) => {
                 setInput(e.target.value);
                 // A brief is many lines; a fixed one-row box hid all but the first.
                 e.target.style.height = "auto";
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 320)}px`;
               }}
-              // Enter sends; Shift+Enter is a newline. A chat box that needs a mouse to send
-              // is not a chat box.
+              // ENTER IS A NEWLINE HERE, and Cmd/Ctrl+Enter is send.
+              //
+              // Enter used to send, which is right when the primary action is free. The primary
+              // is Build now — it convenes a panel, writes a PRD and starts code — and a box
+              // whose main content is a multi-line brief is a box where Shift is pressed dozens
+              // of times. One slip and a governed pipeline starts. So the modifier is required,
+              // the way it is in every other composer that submits something expensive.
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(input); }
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  if (input.trim()) assign(input);
+                }
               }}
               data-testid="askboss-input"
             />
@@ -1494,16 +1502,16 @@ export function AskBossHero({
                 busy={busy}
                 disabled={busy || !input.trim()}
                 primary={{
-                  id: "ask", label: "Ask", onRun: () => ask(input),
-                  hint: "Answer this from live control-plane state",
+                  id: "build", label: "Build →", onRun: () => assign(input),
+                  hint: "Down the governed path — a panel, a PRD you approve, then code",
                 }}
                 others={[
+                  { id: "ask", label: "Ask", cost: "free",
+                    hint: "Answer this from live control-plane state, without starting work",
+                    onRun: () => ask(input) },
                   { id: "research", label: "Research", cost: "spends money",
                     hint: "Web sources first, into a cited dossier and candidate outcomes",
                     onRun: () => research(input) },
-                  { id: "build", label: "Build", cost: "spends money",
-                    hint: "Down the governed path — a panel, a PRD you approve, then code",
-                    onRun: () => assign(input) },
                 ]}
               />
             </div>

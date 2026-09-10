@@ -8986,11 +8986,16 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-agents-toggle:hover { color: var(--ink); }
 .askboss-agents-panel {
   /* Opens BELOW the bar rather than inside it: a panel that expands in a flex row shoves
-     everything beside it sideways, which is how this row got crowded in the first place. */
-  position: absolute; left: 0; right: 0; top: calc(100% + 8px); z-index: 20;
-  padding: 10px 12px; border-radius: 10px;
+     everything beside it sideways, which is how this row got crowded in the first place.
+     `right: 0` was the bug — it stretched the panel to the width of its inline-flex parent,
+     about 150px, so every word wrapped onto its own line and the text spilled over the cards
+     underneath. It needs its own width and an opaque background. */
+  position: absolute; left: 0; top: calc(100% + 8px); z-index: 40;
+  width: max-content; min-width: 320px; max-width: min(620px, 80vw);
+  padding: 12px 14px; border-radius: 12px;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  background: var(--surface, #101A30);
+  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .6);
 }
 .askboss-agents-panel .detail { margin: 0 0 8px; }
 
