@@ -8063,7 +8063,26 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
 
     status = (stack_status(engine, settings, host_target_id=host_target_id)
               if host_target_id else {"running": None})
+    # WHERE GRAFANA IS, from the registry rather than from a live SSH round-trip.
+    #
+    # `base` came only from `stack_status`, which SSHes to the host to run `docker ps`. So one
+    # unreachable key, one changed port, one call without `host_target_id` — and every dashboard
+    # link on the page silently became null, including for the dashboards that do exist.
+    # Observed: `stack_status` answered "no such target" for a perfectly good host, because it
+    # looks the id up in `deployment_targets` while the console holds a `deployment_hosts` id.
+    #
+    # The address is already recorded on the host every app deploys to. Whether the stack is UP
+    # is still asked over SSH and still reported — but it no longer decides whether a link that
+    # works is shown.
     host = status.get("host") or ""
+    if not host:
+        with begin(engine) as connection:
+            host = str(connection.execute(
+                text("SELECT h.address FROM deployment_targets t "
+                     "JOIN deployment_hosts h ON h.id = t.host_id "
+                     "WHERE t.project_id = :p AND t.status = 'active' AND h.address <> '' "
+                     "ORDER BY t.created_at LIMIT 1"),
+                {"p": project_id}).scalar() or "").strip()
     base = f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else ""
     # ONLY LINK TO A DASHBOARD THAT EXISTS.
     #
