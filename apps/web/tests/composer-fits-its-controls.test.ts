@@ -78,11 +78,14 @@ describe("one action, with the rest behind a caret", () => {
     expect(HERO).not.toContain('if (e.key === "Enter" && !e.shiftKey)');
   });
 
-  it("Ask and Research are in the menu, each saying what it costs", () => {
+  it("the alternatives are in the menu, each saying what it costs", () => {
     const at = HERO.indexOf("others={[");
-    const block = HERO.slice(at, at + 900);
-    expect(block).toContain('id: "ask"');
+    const block = HERO.slice(at, at + 1400);
+    // Two entries, not three: talking to BOSS about an idea and asking about the running
+    // system were merged into one conversation that decides which the question is.
+    expect(block).toContain('id: "discuss"');
     expect(block).toContain('id: "research"');
+    expect(block).not.toContain('id: "ask"');
     // Free and expensive are labelled as such: a menu that does not distinguish them is how
     // somebody spends money reaching for an answer.
     expect(block).toContain('cost: "free"');

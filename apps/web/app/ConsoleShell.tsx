@@ -1108,13 +1108,13 @@ export default function ConsoleShell({
                   instead of a meaningless token. */}
               <span className="eyebrow" data-testid="bx-dock-who">
                 {dockDiscussing
-                  ? "Discussing an idea"
+                  ? "Talking to BOSS"
                   : dockRole || (dockedRun === DOCK_GENERAL
                                  ? "Deployment Manager" : "Ask BOSS")}
               </span>
               {dockDiscussing
                 ? <span className="detail">
-                    BOSS asks what it needs to know and pushes back &mdash; nothing starts
+                    an idea or the running system &mdash; nothing starts unless you say so
                   </span>
                 : dockRole
                 ? <span className="detail">answering from this role&rsquo;s own work here</span>

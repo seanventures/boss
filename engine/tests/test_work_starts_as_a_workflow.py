@@ -46,9 +46,9 @@ def test_the_button_names_the_workflow_rather_than_the_tool():
 
 
 def test_the_discussion_offers_the_workflow_not_a_research_run():
-    from boss_engine.services.intent_router import _discussion_brief
+    from boss_engine.services.intent_router import _one_conversation_brief
 
-    brief = _discussion_brief()
+    brief = _one_conversation_brief()
     assert "Research-Led Discovery WORKFLOW" in brief
     assert "never a thing started on its own" in brief
 
@@ -80,3 +80,27 @@ def test_but_an_invented_identifier_is_still_refused():
     assert _placeholder_argument({"run_id": "crun_placeholder"})
     assert _placeholder_argument({"repository": "owner/name"})
     assert _placeholder_argument({"domain": "living-colors.example.com"})
+
+
+def test_one_conversation_covers_both_kinds_of_question():
+    """"Why can't we have a single system doing both?" Nothing stopped it.
+
+    Discuss and Ask ran the same model over the same tool registry writing into the same
+    threads. The only difference was one paragraph of system prompt — so the menu was asking the
+    operator to classify their own question before they were allowed to ask it.
+    """
+    from boss_engine.services.intent_router import _one_conversation_brief
+
+    brief = _one_conversation_brief()
+    assert "TWO KINDS OF QUESTION ARRIVE HERE" in brief
+    assert "re-decide every turn" in brief
+
+
+def test_merging_does_not_soften_the_operating_agent():
+    """The whole risk: "start nothing" bleeding into "fix it"."""
+    from boss_engine.services.intent_router import _one_conversation_brief
+
+    brief = _one_conversation_brief()
+    assert "Nothing below changes any of that." in brief
+    assert "This restriction is about IDEAS only" in brief
+    assert "a button to retry a failed run" in brief.lower()

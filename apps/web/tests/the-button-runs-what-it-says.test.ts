@@ -45,9 +45,9 @@ describe("the composer's form agrees with the button inside it", () => {
     expect(primary).toContain("assign(input)");
   });
 
-  it("Ask is reachable, but only from the menu", () => {
-    const others = HERO.slice(HERO.indexOf("others={["), HERO.indexOf("others={[") + 900);
-    expect(others).toContain("ask(input)");
+  it("the free conversation is reachable, but only from the menu", () => {
+    const others = HERO.slice(HERO.indexOf("others={["), HERO.indexOf("others={[") + 1400);
+    expect(others).toContain("discuss(input)");
   });
 });
 

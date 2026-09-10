@@ -1304,7 +1304,7 @@ export function AskBossHero({
    * on a one-line spec nobody had read. It drafts now: the operator edits the brief, then
    * presses Build when they mean it.
    */
-  /** Open the idea conversation with what they have typed. */
+  /** Open the conversation with whatever they have typed — an idea, or a question. */
   const discuss = useCallback((text: string) => {
     const seed = text.trim();
     if (!seed) return;
@@ -1560,13 +1560,16 @@ export function AskBossHero({
                   hint: "Down the governed path — a panel, a PRD you approve, then code",
                 }}
                 others={[
-                  { id: "discuss", label: "Discuss it", cost: "free",
-                    hint: "Talk the idea through — BOSS asks what it needs to know and "
-                          + "pushes back. Nothing starts.",
+                  /* ONE DOOR. "Discuss it" and "Ask about the system" were the same model over
+                     the same tools writing into the same threads, separated by a paragraph of
+                     system prompt — so the menu was asking the operator to classify their own
+                     question before they were allowed to ask it. The agent decides now, per
+                     turn, which is also the only way a conversation that starts as an idea and
+                     turns into "why did the last one fail" works at all. */
+                  { id: "discuss", label: "Talk to BOSS", cost: "free",
+                    hint: "An idea or the running system — BOSS asks what it needs to know, "
+                          + "pushes back, and starts nothing unless you say so.",
                     onRun: () => discuss(input) },
-                  { id: "ask", label: "Ask about the system", cost: "free",
-                    hint: "One answer from live control-plane state — runs, deploys, spend",
-                    onRun: () => ask(input) },
                   { id: "research", label: "Research", cost: "spends money",
                     hint: "Web sources first, into a cited dossier and candidate outcomes",
                     onRun: () => research(input) },

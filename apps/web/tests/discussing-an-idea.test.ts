@@ -38,15 +38,18 @@ describe("the idea surface exists and is reachable", () => {
     expect(HERO).toContain('url.searchParams.set("dock_ask", seed)');
   });
 
-  it("Ask survives, renamed for what it actually does", () => {
-    // It answers from live control-plane state. Calling it "Ask" beside an idea box implied it
-    // would think about the idea; it reads deployments.
-    expect(HERO).toContain('label: "Ask about the system"');
+  it("there is ONE entry, not one per kind of question", () => {
+    // "Discuss it" and "Ask about the system" were the same model over the same tools writing
+    // into the same threads, separated by a paragraph of prompt — so the menu asked the
+    // operator to classify their own question before they were allowed to ask it.
+    expect(HERO).toContain('label: "Talk to BOSS"');
+    expect(HERO).not.toContain('label: "Ask about the system"');
   });
 
-  it("the dock carries the mode on every turn of the thread", () => {
-    // Read from the URL, not held in state, so reopening the thread keeps its purpose.
-    expect(DOCK).toContain('fd.set("mode", "discuss")');
+  it("and the console no longer classifies the question on the wire", () => {
+    expect(DOCK).not.toContain('fd.set("mode", "discuss")');
+    // The flag that remains says how the dock was OPENED — with a subject in hand — not which
+    // of two agents is answering.
     expect(DOCK).toContain('get("dock_mode") === "discuss"');
   });
 });
@@ -64,7 +67,7 @@ describe("a discussion is a new conversation with nobody in particular", () => {
   });
 
   it("and the header says what the panel is for", () => {
-    expect(SHELL).toContain('"Discussing an idea"');
+    expect(SHELL).toContain('"Talking to BOSS"');
   });
 
   it("a stale role in the URL cannot leak into it either", () => {
@@ -87,9 +90,17 @@ describe("a discussion is a new conversation with nobody in particular", () => {
   });
 });
 
-describe("what the discussing agent is told", () => {
-  it("it is told this is not the factory", () => {
-    expect(ROUTER).toContain("YOU ARE DISCUSSING AN IDEA, NOT OPERATING THE FACTORY");
+describe("what the one agent is told", () => {
+  it("it is told to work out which kind of question this is", () => {
+    expect(ROUTER).toContain("TWO KINDS OF QUESTION ARRIVE HERE");
+    expect(ROUTER).toContain("re-decide every turn");
+  });
+
+  it("and that operating behaviour is not softened by sharing a door", () => {
+    // The whole risk of merging: a prompt that says "start nothing" bleeding into "fix it".
+    expect(ROUTER).toContain("Nothing ");
+    expect(ROUTER).toContain("below changes any of that");
+    expect(ROUTER).toContain("This restriction is about IDEAS only");
   });
 
   it("to ask, and to disagree", () => {
@@ -103,15 +114,17 @@ describe("what the discussing agent is told", () => {
     expect(ROUTER).toContain("say which fact would settle it and offer");
   });
 
-  it("and to start nothing at all", () => {
+  it("and to start nothing for an IDEA", () => {
     // Not even offered as a button: this is the stage before committing.
-    expect(ROUTER).toContain("No build, no research run, no code task, no ");
-    expect(ROUTER).toContain("not even offered as a button");
+    expect(ROUTER).toContain("- Start NOTHING for an idea");
+    expect(ROUTER).toContain("no build, no research run, no code task, no spend");
+    expect(ROUTER).toContain("even offered as a button");
   });
 
-  it("the mode is off by default, so the operating agent is unchanged", () => {
-    expect(ROUTER).toContain('mode: str = "operate"');
-    expect(ROUTER).toContain('_discussion_brief() if mode == "discuss" else ""');
+  it("it applies to the general conversation only", () => {
+    // A run-scoped thread is about that run and a role thread is about that role's remit;
+    // neither is where somebody arrives with a product idea.
+    expect(ROUTER).toContain("_one_conversation_brief() if not role and not external_ref");
   });
 });
 

@@ -223,7 +223,10 @@ export async function askBossAction(
     message,
     confirm_plan_id: String(formData.get("confirm_plan_id") ?? "").trim() || undefined,
     surface: "chat",
-    // "discuss" is the idea surface — see _discussion_brief in intent_router.
+    // STILL ACCEPTED, NO LONGER SENT BY THIS CONSOLE. The two entrances were merged — one
+    // conversation answers both an idea and a question about the factory, and the agent
+    // decides which per turn (_one_conversation_brief). Kept on the wire so an older bundle
+    // or an API client that still passes it is not broken by the change.
     mode: String(formData.get("mode") ?? "").trim() === "discuss" ? "discuss" : undefined,
     external_ref: String(formData.get("external_ref") ?? "").trim() || undefined,
     // WHO IS BEING ASKED. The dock has set this on every turn since roles were addressable and

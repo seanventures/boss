@@ -311,8 +311,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // this thread when it finishes. Polling for that is the difference between "reopen this in a
   // moment and see" and the answer simply appearing, which is what the operator expected when
   // they pressed send.
-  // WHAT THIS CONVERSATION IS FOR. `?dock_mode=discuss` opens the idea surface: the agent asks
-  // the questions that decide, disagrees when it has reason to, and starts nothing.
+  // HOW THIS DOCK WAS OPENED. `?dock_mode=discuss` means the operator brought a subject with
+  // them from the composer rather than clicking into a run — so the panel starts a new thread
+  // and frames itself around the conversation. It no longer selects a different AGENT: one
+  // conversation answers both an idea and a question about the factory (_one_conversation_brief).
   const [discussing, setDiscussing] = useState(false);
   useEffect(() => {
     const sync = () => {
@@ -509,16 +511,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // are questions for a dashboard, and a dashboard is what a named expert is not. The server
   // builds them from the role's lens AND its own record here, so they name real apps, this
   // project's last failure, and positions this role actually took.
-  // AND NOT FOR AN IDEA EITHER. "Which runs failed and why?" under a half-formed product idea
-  // is the console asking about itself while the operator is trying to think.
+  // ONE SURFACE, SO THE STARTERS COVER BOTH. "Which runs failed and why?" alone said this was
+  // a dashboard; three product questions alone said it could not answer about the factory.
+  // Phrased as things the OPERATOR says — a chip sends its text as their message, so "Who is
+  // this for?" would have them asking their own question back to themselves.
   useEffect(() => {
     if (!discussing) return;
-    // Phrased as things the OPERATOR says. A chip sends its text as their message, so
-    // "Who is this for?" would have them asking their own question back to themselves.
     setSuggestions([
       "Push back — where is this weak?",
       "What is the smallest version worth building?",
-      "Who would actually pay for this?",
+      "What changed today?",
     ]);
   }, [discussing]);
 
@@ -575,7 +577,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     fd.set("message", typed);
     // AN IDEA CONVERSATION, when the dock was opened for one. Read from the URL rather than
     // held in state so the link that opens it decides, and reopening the thread keeps it.
-    if (discussing) fd.set("mode", "discuss");
+    // `mode` IS GONE FROM THE WIRE. The agent classifies the question itself now — see
+    // _one_conversation_brief — so the console no longer decides on the operator's behalf
+    // which of two heads answers.
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     else if (roleRef) fd.set("external_ref", roleRef);  // ...or to this role's own thread
@@ -826,7 +830,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                    : roleName
                      ? `Ask ${roleName}`
                      : discussing
-                       ? "Let's think this through."
+                       ? "What's on your mind?"
                        : "What do you want to do?"}</h2>
             {threadId && messages.length ? (
               <button type="button" className="linklike agent-clear" data-testid="agent-clear"
@@ -845,12 +849,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               <p>Answering from this role&rsquo;s own lens and what it has actually argued on
                  this project — not from the general assistant.</p>
             ) : discussing ? (
-              /* NOT THE GENERAL ASSISTANT'S PITCH. Opening a discussion and being told to
-                 order code, a meeting, a PRD or a deployment invites the one thing this
-                 surface exists to postpone. */
-              <p>Say the idea however it comes out. BOSS will ask what it needs to know, argue
-                 the parts that look wrong, and write it up when it is worth writing up.
-                 Nothing starts until you press Build.</p>
+              /* ONE SURFACE, BOTH KINDS OF QUESTION — so the copy names both rather than
+                 promising a discussion and then answering about deploys, or the reverse. */
+              <p>An idea, or what the factory is doing — ask either. BOSS will ask what it
+                 needs to know, argue the parts that look wrong, and read live state when the
+                 question turns on it. Nothing starts until you press Build.</p>
             ) : (
               <p>Ask anything, or tell BOSS to do it — code, research, a meeting, a PRD, a
                  deployment. Work on one app from its card in Factory, where the app context
@@ -882,7 +885,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             <div className="agent-chat-empty">
               <div className="agent-empty-mark" aria-hidden>◆</div>
               <p className="agent-empty-lead">{discussing
-                ? "Nothing here yet — say the idea."
+                ? "Nothing here yet — ask away."
                 : `Ask ${roleName ?? "BOSS"} about this work.`}</p>
             </div>
           ) : messages.map((m, i) => (

@@ -1127,38 +1127,52 @@ def asked_only_to_look(message: str) -> bool:
 BRIEF_OPEN, BRIEF_CLOSE = "<<<BOSS-BRIEF", "BOSS-BRIEF>>>"
 
 
-def _discussion_brief() -> str:
-    """Think about an IDEA, rather than report on the factory.
+def _one_conversation_brief() -> str:
+    """One head, two kinds of question — because they were never two systems.
 
-    "BOSS has no good back-and-forth surface for an idea... I want to discuss back and forth
-    just like discussing with chatgpt."
+    "Can we merge Discuss It and Ask about the system — why can't we have a single system doing
+    both?" Nothing stopped it. Both ran the same model over the same tool registry writing into
+    the same threads; the only difference was one paragraph of system prompt. They were split
+    because the operating prompt, asked whether an idea was worth building, went and read
+    deployments — and the fix chosen at the time was a second door rather than telling the one
+    agent that two kinds of question arrive at it. A menu that makes the operator classify their
+    own question before they are allowed to ask it is a menu doing the model's job.
 
-    The chat existed; its head was in the wrong place. The system prompt above is entirely about
-    the running system — report status, create work, ground every claim in a tool result — so
-    asked whether an idea is worth building it went and read deployments. Correct behaviour for
-    the question it thought it had been asked, and useless for the one actually asked.
+    So the classification lives here, in the prompt, decided per turn. It costs no extra call:
+    the same turn that answers also decides which kind of answer it is. And it fixes something
+    the two doors could not — a conversation that starts as an idea and turns into "why did the
+    last one fail", which is most of them, no longer needs the operator to leave and come back
+    through the other entrance.
 
-    WHAT IS DIFFERENT HERE, and why each part is deliberate:
+    WHAT SURVIVES FROM THE IDEA SIDE, and why each part is deliberate:
 
     * It ASKS. The value of talking an idea through is being asked the question you had not
-      considered — who is this for, what do they do today, what is the smallest thing that
-      proves it. An assistant that answers a half-formed idea with an implementation plan has
+      considered. An assistant that answers a half-formed idea with an implementation plan has
       skipped the only useful part.
     * It DISAGREES. Research on the interview scorecard came back "the central differentiator
       is factually wrong; Metaview already ships it" and that was the most valuable sentence in
       it. A discussion that agrees with everything is a slower way to be wrong.
-    * It STARTS NOTHING. No build, no research, no spend, until asked in plain words. This is
-      the stage before committing, and a surface for thinking that quietly commits is not one.
-    * It ENDS IN SOMETHING. When the shape is clear it can hand back a brief in the same form
-      every template produces, so the conversation becomes the thing you press Build on instead
-      of something to summarise by hand.
+    * It STARTS NOTHING on an idea until asked in plain words. Not even a button: a button is an
+      invitation, and this is the stage before committing.
+    * It ENDS IN SOMETHING. When the shape is clear it hands back a brief in the same form every
+      template produces, so the conversation becomes the thing you press Build on.
+
+    None of that applies to "why did this deploy fail", and the prompt says so explicitly, so
+    the operating behaviour this console depends on is not softened by sharing a door with it.
     """
     return (
-        "\n\n=== YOU ARE DISCUSSING AN IDEA, NOT OPERATING THE FACTORY ===\n"
-        "The operator is thinking about whether and what to build. They have not asked you to "
-        "check the running system, and reading deployments to answer a question about an idea "
-        "is answering a question nobody asked.\n\n"
-        "YOUR JOB IS TO MAKE THE IDEA BETTER OR TO TALK THEM OUT OF IT.\n"
+        "\n\n=== TWO KINDS OF QUESTION ARRIVE HERE. DECIDE WHICH ONE THIS IS ===\n"
+        "This is the general conversation, so the operator may be asking about the RUNNING "
+        "SYSTEM or about an IDEA THAT DOES NOT EXIST YET. They are not required to say which. "
+        "Work it out from what they wrote, and re-decide every turn — a conversation that "
+        "starts as an idea often turns into a question about the last one.\n\n"
+        "ABOUT THE RUNNING SYSTEM — runs, deploys, spend, why something failed, what is "
+        "blocked, fix this, retry that. Answer exactly as instructed above: investigate with "
+        "tools, ground every claim in what you read, and act when they ask you to act. Nothing "
+        "below changes any of that.\n\n"
+        "ABOUT AN IDEA — should I build this, is it worth it, what would it need to be, who is "
+        "it for. Reading deployments to answer this is answering a question nobody asked. "
+        "Instead:\n"
         "- Ask the question that decides it. Who specifically is this for; what do they do "
         "today instead; what would have to be true for this to be worth their switching; what "
         "is the smallest version that would prove it. One or two at a time, not a "
@@ -1172,14 +1186,16 @@ def _discussion_brief() -> str:
         "the Research-Led Discovery WORKFLOW, rather than guessing confidently. Research is a "
         "step of that workflow, never a thing started on its own: a dossier that belongs to no "
         "run is one nothing in the console links to, and the operator cannot find it again.\n"
+        "- Start NOTHING for an idea — no build, no research run, no code task, no spend, not "
+        "even offered as a button — until they ask in plain words. This is the stage before "
+        "committing, and an offer is an invitation. This restriction is about IDEAS only: a "
+        "button to retry a failed run, or to fix something that is broken, is always welcome.\n"
         "- Keep it conversational. A few sentences and a question beats a report. They are "
-        "talking, not commissioning.\n\n"
-        "WHAT YOU MAY READ: this project's own history, when it bears on the idea — whether "
-        "something like this has already been built here, what it cost, whether it is still "
-        "running. That is context they cannot get anywhere else. Do not go looking otherwise.\n\n"
-        "WHAT YOU MUST NOT DO: start anything. No build, no research run, no code task, no "
-        "spend — not even offered as a button — until they ask in plain words. This is the "
-        "stage before committing.\n\n"
+        "thinking, not commissioning.\n\n"
+        "WHAT YOU MAY READ FOR AN IDEA: this project's own history, when it bears on the idea — "
+        "whether something like this has already been built here, what it cost, whether it is "
+        "still running. That is context they cannot get anywhere else. Do not go looking "
+        "otherwise.\n\n"
         "WHEN THE SHAPE IS CLEAR — and only when they ask for it, or when the idea has enough "
         "in it to build from — hand back a brief wrapped exactly like this so it can be used "
         "in one press:\n"
@@ -1805,7 +1821,12 @@ class IntentRouter:
             "and that you'll start once they confirm (e.g. 'build it' / 'go') — do NOT claim "
             "you already started anything, and do NOT invent facts."
             + _role_identity(role)
-            + (_discussion_brief() if mode == "discuss" else "")
+            # THE GENERAL CONVERSATION, AND ONLY IT. A run-scoped thread is about that run and a
+            # role thread is about that role's remit — neither is where somebody arrives with a
+            # product idea, and both depend on the operating behaviour above being unqualified.
+            # `mode` is no longer read: the console used to classify the question on the
+            # operator's behalf, which is the thing this merge removes.
+            + (_one_conversation_brief() if not role and not external_ref else "")
         )
         # WHICH APP THIS CONVERSATION IS ABOUT — in the SYSTEM prompt, not in their message.
         #
