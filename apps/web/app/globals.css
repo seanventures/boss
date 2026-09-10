@@ -9065,14 +9065,13 @@ a.agent-chip-name:hover { text-decoration: underline; }
   position: fixed; z-index: 240;
   min-width: 288px; max-width: min(360px, calc(100vw - 16px)); padding: 6px; border-radius: 12px;
   border: 1px solid var(--border, #1C2740);
-  /* OPAQUE ON PURPOSE — not var(--surface), which a theme is free to make translucent. A menu
-     you can read the page through is a menu you cannot read. */
-  background: #101A30;
+  /* OPAQUE, AND DARK UNCONDITIONALLY. Two mistakes were made here in one day: a translucent
+     background you could read the page through, then a prefers-color-scheme override that
+     painted the menu WHITE on an operator whose OS is in light mode — while the rest of this
+     console, which has no light theme at all, stayed dark. The items inherit light ink, so the
+     menu went blank. This console is dark; the menu is dark; the ink is named, not inherited. */
+  background: #101A30; color: var(--ink, #EEF3FB);
   box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .6);
-}
-:root[data-theme="light"] .split-action-menu { background: #FFFFFF; }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .split-action-menu { background: #FFFFFF; }
 }
 .split-action-item {
   display: grid; gap: 2px; width: 100%; text-align: left; cursor: pointer;

@@ -65,8 +65,17 @@ describe("the options are readable when they open", () => {
 
   it("and it is opaque, not whatever --surface happens to be", () => {
     const at = CSS.indexOf(".split-action-menu {");
-    expect(CSS.slice(at, at + 700)).toContain("background: #101A30");
-    expect(CSS.slice(at, at + 700)).not.toContain("var(--surface");
+    expect(CSS.slice(at, at + 900)).toContain("background: #101A30");
+    expect(CSS.slice(at, at + 900)).not.toContain("var(--surface");
+  });
+
+  it("and it does not turn white because the OPERATING SYSTEM is in light mode", () => {
+    // This console has no light theme — every other surface stays dark whatever the OS says.
+    // A prefers-color-scheme override painted the menu white and its light ink vanished.
+    const at = CSS.indexOf(".split-action-menu {");
+    const block = CSS.slice(at, at + 900);
+    expect(block).not.toContain("prefers-color-scheme");
+    expect(block).toContain("color: var(--ink");
   });
 
   it("click-away asks the portalled menu too", () => {
