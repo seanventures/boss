@@ -338,6 +338,9 @@ class AgentService:
         #: Answer as this member of the workforce, rather than as BOSS in general.
         #: See _role_identity in intent_router for what it changes.
         role: Optional[str] = None,
+        #: "discuss" thinks about an idea and starts nothing; anything else operates the
+        #: factory. See _discussion_brief in intent_router.
+        mode: str = "operate",
     ) -> dict[str, Any]:
         thread = self.start_or_load_thread(
             connection,
@@ -370,6 +373,7 @@ class AgentService:
             # app branch (extend the PR) instead of a fresh build on main.
             external_ref=thread.get("external_ref"),
             role=role,
+            mode=mode,
             # So the turn can report what it is doing while it does it. See agent_progress:
             # a chat turn is one HTTP request, and an investigation that now runs six or more
             # lookups would otherwise be two minutes of a pulsing dot.

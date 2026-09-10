@@ -223,6 +223,8 @@ export async function askBossAction(
     message,
     confirm_plan_id: String(formData.get("confirm_plan_id") ?? "").trim() || undefined,
     surface: "chat",
+    // "discuss" is the idea surface — see _discussion_brief in intent_router.
+    mode: String(formData.get("mode") ?? "").trim() === "discuss" ? "discuss" : undefined,
     external_ref: String(formData.get("external_ref") ?? "").trim() || undefined,
     // WHO IS BEING ASKED. The dock has set this on every turn since roles were addressable and
     // it was dropped here, so the whole role-addressed path — read this role's own record,

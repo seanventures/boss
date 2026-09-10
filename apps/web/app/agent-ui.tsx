@@ -302,6 +302,41 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // this thread when it finishes. Polling for that is the difference between "reopen this in a
   // moment and see" and the answer simply appearing, which is what the operator expected when
   // they pressed send.
+  // WHAT THIS CONVERSATION IS FOR. `?dock_mode=discuss` opens the idea surface: the agent asks
+  // the questions that decide, disagrees when it has reason to, and starts nothing.
+  const [discussing, setDiscussing] = useState(false);
+  useEffect(() => {
+    const sync = () => {
+      try {
+        setDiscussing(new URLSearchParams(window.location.search).get("dock_mode") === "discuss");
+      } catch { /* non-browser */ }
+    };
+    sync();
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+
+  /** A brief the agent wrapped for one-press use, if this message carries one. */
+  const briefIn = (text: string): string | null => {
+    const m = /<<<BOSS-BRIEF\s*([\s\S]*?)BOSS-BRIEF>>>/.exec(text || "");
+    return m ? m[1].trim() : null;
+  };
+  /** The same message with the wrapped brief removed — it is rendered as its own block. */
+  const withoutBrief = (text: string): string =>
+    (text || "").replace(/<<<BOSS-BRIEF[\s\S]*?BOSS-BRIEF>>>/g, "").trim();
+  /** Hand the brief to the Command Center composer. Still a press away from building. */
+  const useBrief = (brief: string): void => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("area", "overview");
+      url.searchParams.set("compose", brief);
+      url.searchParams.delete("agent");
+      url.searchParams.delete("dock_mode");
+      window.history.pushState(null, "", url.toString());
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch { /* non-browser */ }
+  };
+
   const quiet = useRef(0);
   useEffect(() => {
     if (!landing || !threadId) return;
@@ -513,6 +548,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     // Scope now travels in `external_ref` (below) and the server puts it in the SYSTEM prompt,
     // where it is invisible; the agent calls read_spec to fetch the real PRD itself.
     fd.set("message", typed);
+    // AN IDEA CONVERSATION, when the dock was opened for one. Read from the URL rather than
+    // held in state so the link that opens it decides, and reopening the thread keeps it.
+    if (discussing) fd.set("mode", "discuss");
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     else if (roleRef) fd.set("external_ref", roleRef);  // ...or to this role's own thread
@@ -827,7 +865,28 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                   A USER's message stays plain: they typed characters, not markup, and turning
                   their underscores into italics rewrites what they said. */}
               {m.role === "assistant" ? (
-                <Markdown className="agent-md" text={stripAppFacts(m.content)} />
+                <>
+                  <Markdown className="agent-md"
+                            text={stripAppFacts(withoutBrief(m.content))} />
+                  {/* THE CONVERSATION BECOMES THE THING YOU BUILD.
+                      A discussion that ends with "now go and type all that into the composer"
+                      wastes the part that took the effort. When the agent hands back a brief,
+                      it is one press to the composer — and still a press, because a chat that
+                      quietly starts a build is the opposite of a surface for thinking. */}
+                  {briefIn(m.content) ? (
+                    <div className="agent-brief" data-testid="agent-brief">
+                      <pre>{briefIn(m.content)}</pre>
+                      <button type="button" className="cap-btn primary"
+                              data-testid="agent-brief-use"
+                              onClick={() => useBrief(briefIn(m.content)!)}>
+                        Use this as the brief →
+                      </button>
+                      <span className="detail">
+                        Drops it into the Command Center. Nothing starts until you press Build.
+                      </span>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                   {stripAppFacts(m.content)}

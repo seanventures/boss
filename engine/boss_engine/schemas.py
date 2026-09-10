@@ -1157,6 +1157,14 @@ class AgentChatRequest(BaseModel):
     message: str = ""
     confirm_plan_id: Optional[str] = None
     surface: Literal["chat", "github"] = "chat"
+    #: WHAT THIS CONVERSATION IS FOR.
+    #:
+    #: "operate" is the agent that runs the factory — reads runs, fixes what is stuck, starts
+    #: work on request. "discuss" is the one for thinking about an idea BEFORE any of that: it
+    #: asks the questions that decide, disagrees when it has reason to, and starts nothing.
+    #: The chat always existed; asked whether an idea was worth building it went and read
+    #: deployments, because that is what its prompt is about.
+    mode: Literal["operate", "discuss"] = "operate"
     external_ref: Optional[str] = None
 
     @model_validator(mode="after")

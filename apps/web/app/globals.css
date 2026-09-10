@@ -9082,3 +9082,15 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 .split-action-item-hint { font-size: .78rem; color: var(--muted); line-height: 1.45; }
 .askboss-agents { position: relative; }
+
+/* A brief handed back from a discussion: the conversation, turned into the thing you build. */
+.agent-brief {
+  display: grid; gap: 8px; justify-items: start;
+  margin: 10px 0 0; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.agent-brief pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-size: .82rem; line-height: 1.55; font-family: inherit;
+}

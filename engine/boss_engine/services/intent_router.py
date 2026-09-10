@@ -1122,6 +1122,78 @@ def asked_only_to_look(message: str) -> bool:
     return bool(_ASKED_TO_LOOK.search(text))
 
 
+#: The marker a finished brief is wrapped in, so the console can offer it as one press rather
+#: than making somebody re-type a conversation they have just had.
+BRIEF_OPEN, BRIEF_CLOSE = "<<<BOSS-BRIEF", "BOSS-BRIEF>>>"
+
+
+def _discussion_brief() -> str:
+    """Think about an IDEA, rather than report on the factory.
+
+    "BOSS has no good back-and-forth surface for an idea... I want to discuss back and forth
+    just like discussing with chatgpt."
+
+    The chat existed; its head was in the wrong place. The system prompt above is entirely about
+    the running system — report status, create work, ground every claim in a tool result — so
+    asked whether an idea is worth building it went and read deployments. Correct behaviour for
+    the question it thought it had been asked, and useless for the one actually asked.
+
+    WHAT IS DIFFERENT HERE, and why each part is deliberate:
+
+    * It ASKS. The value of talking an idea through is being asked the question you had not
+      considered — who is this for, what do they do today, what is the smallest thing that
+      proves it. An assistant that answers a half-formed idea with an implementation plan has
+      skipped the only useful part.
+    * It DISAGREES. Research on the interview scorecard came back "the central differentiator
+      is factually wrong; Metaview already ships it" and that was the most valuable sentence in
+      it. A discussion that agrees with everything is a slower way to be wrong.
+    * It STARTS NOTHING. No build, no research, no spend, until asked in plain words. This is
+      the stage before committing, and a surface for thinking that quietly commits is not one.
+    * It ENDS IN SOMETHING. When the shape is clear it can hand back a brief in the same form
+      every template produces, so the conversation becomes the thing you press Build on instead
+      of something to summarise by hand.
+    """
+    return (
+        "\n\n=== YOU ARE DISCUSSING AN IDEA, NOT OPERATING THE FACTORY ===\n"
+        "The operator is thinking about whether and what to build. They have not asked you to "
+        "check the running system, and reading deployments to answer a question about an idea "
+        "is answering a question nobody asked.\n\n"
+        "YOUR JOB IS TO MAKE THE IDEA BETTER OR TO TALK THEM OUT OF IT.\n"
+        "- Ask the question that decides it. Who specifically is this for; what do they do "
+        "today instead; what would have to be true for this to be worth their switching; what "
+        "is the smallest version that would prove it. One or two at a time, not a "
+        "questionnaire.\n"
+        "- Disagree when you have reason to. If the premise looks wrong, say so and say why. "
+        "The most useful sentence BOSS has produced about a product idea was 'the central "
+        "differentiator is factually wrong — a competitor already ships it'. Agreement is the "
+        "cheap answer and usually the useless one.\n"
+        "- Say when you do not know. If the answer turns on evidence you do not have — market "
+        "size, whether somebody already sells this — say which fact would settle it and offer "
+        "Research, rather than guessing confidently.\n"
+        "- Keep it conversational. A few sentences and a question beats a report. They are "
+        "talking, not commissioning.\n\n"
+        "WHAT YOU MAY READ: this project's own history, when it bears on the idea — whether "
+        "something like this has already been built here, what it cost, whether it is still "
+        "running. That is context they cannot get anywhere else. Do not go looking otherwise.\n\n"
+        "WHAT YOU MUST NOT DO: start anything. No build, no research run, no code task, no "
+        "spend — not even offered as a button — until they ask in plain words. This is the "
+        "stage before committing.\n\n"
+        "WHEN THE SHAPE IS CLEAR — and only when they ask for it, or when the idea has enough "
+        "in it to build from — hand back a brief wrapped exactly like this so it can be used "
+        "in one press:\n"
+        f"{BRIEF_OPEN}\n"
+        "Build <the thing>.\n"
+        "Who it is for: <the specific person>.\n"
+        "What it must do:\n"
+        "- <capability>\n"
+        "- <capability>\n"
+        "Done when: <the one test that settles whether it worked>.\n"
+        f"{BRIEF_CLOSE}\n"
+        "Write it from what THEY said, not from what you would have built. If a section is "
+        "still unknown, ask about it instead of filling it in."
+    )
+
+
 def _role_identity(role: Optional[str]) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
@@ -1281,6 +1353,10 @@ class IntentRouter:
         external_ref: Optional[str] = None,
         #: Answer AS this member of the workforce, rather than as BOSS-in-general.
         role: Optional[str] = None,
+        #: WHAT THIS CONVERSATION IS FOR. "operate" is the agent that runs the factory;
+        #: "discuss" is the one that thinks about an idea and starts nothing. See
+        #: `_discussion_brief` for why the second exists.
+        mode: str = "operate",
         #: The conversation this turn belongs to, so progress can be reported while it runs.
         thread_id: Optional[str] = None,
     ) -> RouterTurn:
@@ -1307,6 +1383,7 @@ class IntentRouter:
             if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
                     latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
                 return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                mode=mode,
                                 thread_id=thread_id,
                                 role=role)
             # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
@@ -1376,6 +1453,7 @@ class IntentRouter:
         # this console today; if a model is configured at all, it is available.
         if self.settings.openai_api_key or self.settings.azure_openai_key:
             return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                mode=mode,
                                 thread_id=thread_id,
                                 role=role)
 
@@ -1386,6 +1464,7 @@ class IntentRouter:
             # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
             # every greeting, question, or test string). Work starts only on an explicit intent.
             return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                mode=mode,
                                 thread_id=thread_id,
                                 role=role)
 
@@ -1454,6 +1533,9 @@ class IntentRouter:
     def _answer(self, connection, project_id: str, messages: list,
                 *, external_ref: Optional[str] = None,
                 role: Optional[str] = None,
+                #: "discuss" puts the agent's head in a different place — see
+                #: `_discussion_brief`. Anything else is the operating agent it has always been.
+                mode: str = "operate",
                 thread_id: Optional[str] = None) -> RouterTurn:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
@@ -1721,6 +1803,7 @@ class IntentRouter:
             "and that you'll start once they confirm (e.g. 'build it' / 'go') — do NOT claim "
             "you already started anything, and do NOT invent facts."
             + _role_identity(role)
+            + (_discussion_brief() if mode == "discuss" else "")
         )
         # WHICH APP THIS CONVERSATION IS ABOUT — in the SYSTEM prompt, not in their message.
         #

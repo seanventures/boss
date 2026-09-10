@@ -10850,6 +10850,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
                 surface=payload.surface,
                 external_ref=payload.external_ref,
                 role=payload.role,
+                mode=payload.mode,
             )
         except AgentThreadNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

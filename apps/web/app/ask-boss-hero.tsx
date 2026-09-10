@@ -1304,6 +1304,46 @@ export function AskBossHero({
    * on a one-line spec nobody had read. It drafts now: the operator edits the brief, then
    * presses Build when they mean it.
    */
+  /** Open the idea conversation with what they have typed. */
+  const discuss = useCallback((text: string) => {
+    const seed = text.trim();
+    if (!seed) return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("agent", "general");
+      url.searchParams.set("dock_mode", "discuss");
+      url.searchParams.set("dock_ask", seed);
+      window.history.pushState(null, "", url.toString());
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch { /* non-browser */ }
+  }, []);
+
+  // A BRIEF HANDED BACK FROM A DISCUSSION. The conversation is where the thinking happened;
+  // arriving here with an empty box would throw it away and ask them to retype it.
+  useEffect(() => {
+    const take = () => {
+      try {
+        const url = new URL(window.location.href);
+        const brief = url.searchParams.get("compose");
+        if (!brief) return;
+        setInput(brief);
+        url.searchParams.delete("compose");
+        window.history.replaceState(null, "", url.toString());
+        window.requestAnimationFrame(() => {
+          const box = boxRef.current;
+          if (!box) return;
+          box.focus();
+          box.setSelectionRange(box.value.length, box.value.length);
+          box.style.height = "auto";
+          box.style.height = `${Math.min(box.scrollHeight, 320)}px`;
+        });
+      } catch { /* non-browser */ }
+    };
+    take();
+    window.addEventListener("popstate", take);
+    return () => window.removeEventListener("popstate", take);
+  }, []);
+
   const draftIdea = useCallback((idea: Idea) => {
     setInput(idea.brief);
     setError(""); setReply(""); setProposed([]);
@@ -1506,8 +1546,12 @@ export function AskBossHero({
                   hint: "Down the governed path — a panel, a PRD you approve, then code",
                 }}
                 others={[
-                  { id: "ask", label: "Ask", cost: "free",
-                    hint: "Answer this from live control-plane state, without starting work",
+                  { id: "discuss", label: "Discuss it", cost: "free",
+                    hint: "Talk the idea through — BOSS asks what it needs to know and "
+                          + "pushes back. Nothing starts.",
+                    onRun: () => discuss(input) },
+                  { id: "ask", label: "Ask about the system", cost: "free",
+                    hint: "One answer from live control-plane state — runs, deploys, spend",
                     onRun: () => ask(input) },
                   { id: "research", label: "Research", cost: "spends money",
                     hint: "Web sources first, into a cited dossier and candidate outcomes",

@@ -42,6 +42,9 @@ export async function POST(req: Request) {
         actor,
         message,
         surface: "chat",
+        // WHAT THIS CONVERSATION IS FOR. "discuss" is the idea surface: it asks the questions
+        // that decide, disagrees when it has reason to, and starts nothing.
+        mode: String(body.mode ?? "").trim() === "discuss" ? "discuss" : undefined,
         // WHO IS BEING ASKED. Without it the reply comes from BOSS-in-general even when the
         // operator clicked "Ask" on a named member of the workforce.
         role: String(body.role ?? "").trim() || undefined,
