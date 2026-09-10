@@ -1462,7 +1462,7 @@ export function AskBossHero({
               value={input}
               rows={1}
               disabled={busy}
-              placeholder="Describe what to build \u2014 or pick Ask from the menu to just ask\u2026"
+              placeholder="Describe what to build — or pick Ask from the menu to just ask…"
               onChange={(e) => {
                 setInput(e.target.value);
                 // A brief is many lines; a fixed one-row box hid all but the first.
