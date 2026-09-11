@@ -999,6 +999,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           // travels is the evidence, not the panel: a Research-Led Discovery panel answered a
           // go/no-go, so the delivery run holds its own and argues FROM the findings.
           onBuildOnThis={(run) => act("Build on this research", "start", {
+            // NAME THE WORKFLOW, NOT THE CLASS. `project.new` is shared by Research-Led
+            // Discovery (once applied as the default), Backend Service Setup, and Standard
+            // Product Delivery. Sending only the class either restarts discovery — the thing
+            // this button exists to leave behind — or 409s when nothing is mapped yet, which
+            // is every project that started research by key. The label promises Standard
+            // Product Delivery; the payload has to.
+            workflow_key: "standard_product_delivery",
             work_class: "project.new", from_run: run.id,
             input: inputForRerun(run.input),
           })}

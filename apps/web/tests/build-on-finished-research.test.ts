@@ -48,13 +48,22 @@ describe("a finished run can be built on", () => {
     // `adopt_*` from a client is stripped at the API, on purpose. The button sends a source id
     // and lets the server draw the conclusion.
     const at = UI.indexOf("onBuildOnThis={(run) =>");
-    const block = UI.slice(at, at + 400);
+    const block = UI.slice(at, at + 700);
     expect(block).toContain("from_run: run.id");
     expect(block).not.toContain("adopt_discovery_run_id");
   });
 
+  it("starts Standard Product Delivery by key, not by the class research already occupies", () => {
+    // `work_class: "project.new"` is shared. After Research-Led Discovery is applied as the
+    // default — or when nothing is mapped yet and start resolves the class — the button would
+    // either commission another discovery or 409, while promising a build.
+    const at = UI.indexOf("onBuildOnThis={(run) =>");
+    const block = UI.slice(at, at + 700);
+    expect(block).toContain('workflow_key: "standard_product_delivery"');
+  });
+
   it("and it carries the directive, not the old adoptions", () => {
     const at = UI.indexOf("onBuildOnThis={(run) =>");
-    expect(UI.slice(at, at + 400)).toContain("inputForRerun(run.input)");
+    expect(UI.slice(at, at + 700)).toContain("inputForRerun(run.input)");
   });
 });
