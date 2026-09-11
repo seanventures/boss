@@ -16,7 +16,8 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
-type Step = { id: string; title: string; done: boolean; detail: string };
+type Step = { id: string; title: string; done: boolean; detail: string;
+              from_environment?: boolean; repository?: string | null };
 type Status = {
   ready?: boolean; steps?: Step[]; repositories?: number;
   model_sources?: number; model_from_environment?: boolean;
@@ -89,6 +90,17 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
               <span>
                 <b>{step.title}</b>
                 <span className="detail"> — {step.detail}</span>
+                {/* AN INSTALL CONFIGURED THE OLD WAY IS CONFIGURED. Saying "not connected" to
+                    somebody whose BOSS is already opening pull requests would be a falsehood
+                    about their own system — and saying nothing about WHERE it came from leaves
+                    them hunting for a setting the wizard never wrote. */}
+                {step.from_environment ? (
+                  <span className="detail" data-testid={`setup-env-${step.id}`}>
+                    {" "}Already set up from this install&rsquo;s environment
+                    {step.repository ? ` — ${step.repository}` : ""}. Connecting one here would
+                    replace it.
+                  </span>
+                ) : null}
               </span>
             </li>
           ))}

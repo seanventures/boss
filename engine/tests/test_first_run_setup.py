@@ -100,3 +100,27 @@ def test_a_subscription_is_redirected_rather_than_offered_a_key_box():
     source = api.read_text(encoding="utf-8")
     assert 'is a subscription, not an API key' in source
     assert "/connect" in source
+
+
+def test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured():
+    """Measured on the live deployment: no github_connections row, and it has been opening pull
+    requests against paramg/boss-sandbox for weeks. A wizard that says "not connected" to that
+    operator has told them a falsehood about their own system."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    source = inspect.getsource(setup_service.setup_status)
+    assert "env_github" in source
+    assert 'bool((connections and repos) or env_github)' in source
+    assert '"from_environment": env_github' in source
+
+
+def test_and_is_told_where_that_configuration_came_from():
+    """Saying nothing about WHERE leaves them hunting for a setting the wizard never wrote."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    source = inspect.getsource(setup_service.setup_status)
+    assert '"repository": f"{env_owner}/{env_repo}"' in source

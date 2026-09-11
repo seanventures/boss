@@ -172,22 +172,31 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
              "WHERE project_id = :p AND credential_secret_ref_id IS NOT NULL"),
         {"p": project_id},
     ).scalar() or 0
-    # THE ENVIRONMENT COUNTS TOO. An install configured the old way — a key in the API's env —
-    # is set up, and a wizard that says "no model configured" to somebody whose BOSS is
-    # answering questions has just told them a falsehood about their own system.
+    # THE ENVIRONMENT COUNTS TOO, FOR BOTH STEPS. An install configured the old way — a token
+    # and a key in the API's env — IS set up, and a wizard that says "not connected" to somebody
+    # whose BOSS is already opening pull requests has told them a falsehood about their own
+    # system. Measured on this very deployment, which has no github_connections row and has been
+    # building against paramg/boss-sandbox for weeks.
     env_model = bool(str(getattr(settings, "openai_api_key", "") or "").strip())
+    env_repo = str(getattr(settings, "target_github_repo", "") or "").strip()
+    env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()
+    env_github = bool(str(getattr(settings, "github_token", "") or "").strip()
+                      and env_repo and env_owner)
     steps = [
         {
             "id": "github",
             "title": "Connect a repository",
-            "done": bool(connections and repos),
+            "done": bool((connections and repos) or env_github),
             "detail": ("BOSS writes code on a branch and opens a pull request. It needs a "
                        "repository it is allowed to push to."),
+            "from_environment": env_github and not (connections and repos),
+            "repository": f"{env_owner}/{env_repo}" if env_github else None,
         },
         {
             "id": "model",
             "title": "Connect a model",
             "done": bool(models or env_model),
+            "from_environment": env_model and not models,
             "detail": ("An API key, anything that speaks the OpenAI API, or a subscription "
                        "you already pay for."),
         },
@@ -200,4 +209,5 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         "repositories": int(repos),
         "model_sources": int(models),
         "model_from_environment": env_model,
+        "github_from_environment": env_github,
     }
