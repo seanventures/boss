@@ -235,7 +235,22 @@ export async function askBossAction(
     // "Engineering Captain" and BOSS-in-general answered, which is the exact failure the role
     // work existed to remove.
     role: String(formData.get("role") ?? "").trim() || undefined,
+    // WHAT THEY BROUGHT WITH THEM — a screenshot of the error, a log too long to paste.
+    // Parsed rather than forwarded blind: a malformed blob would otherwise reach the API as a
+    // 422 the operator sees as "request failed".
+    attachments: parseAttachments(formData.get("attachments")),
   });
+}
+
+/** The files on this message, or none. Never throws: a bad blob loses the files, not the turn. */
+function parseAttachments(raw: FormDataEntryValue | null): unknown[] | undefined {
+  if (typeof raw !== "string" || !raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function agentChatAction(

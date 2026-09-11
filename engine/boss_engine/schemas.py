@@ -1143,6 +1143,47 @@ class AgentMessageSummary(BaseModel):
     created_at: str
 
 
+#: Enough for a few screenshots or a long log; small enough that a turn stays a turn.
+_MAX_ATTACHMENTS = 5
+_MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024
+
+#: What BOSS can actually read. An unknown type is refused by name rather than sent to the model
+#: as base64 noise it will describe as "an unreadable file".
+_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+
+
+class AgentAttachment(BaseModel):
+    """One file on one message: a screenshot, or text too long to paste."""
+
+    name: str = "file"
+    media_type: str = "application/octet-stream"
+    #: base64 for an image; the file's own text for anything textual.
+    data: str = ""
+
+    @model_validator(mode="after")
+    def validate_attachment(self):
+        self.name = (self.name or "file").strip()[:200]
+        self.media_type = (self.media_type or "").strip().lower()
+        if not self.data:
+            raise ValueError(f"{self.name} is empty.")
+        if self.media_type in _IMAGE_TYPES:
+            return self
+        # TEXT IS ANYTHING A PERSON WOULD READ. text/*, plus the application/* types that are
+        # text in everything but their label — json, yaml, a .log served as octet-stream.
+        if (self.media_type.startswith("text/")
+                or self.media_type in {"application/json", "application/xml",
+                                       "application/x-yaml", "application/yaml",
+                                       "application/octet-stream", ""}):
+            return self
+        raise ValueError(
+            f"{self.name}: BOSS cannot read {self.media_type}. Images "
+            f"({', '.join(sorted(t.split('/')[1] for t in _IMAGE_TYPES))}) and text files.")
+
+    @property
+    def kind(self) -> str:
+        return "image" if self.media_type in _IMAGE_TYPES else "text"
+
+
 class AgentChatRequest(BaseModel):
     project_id: str
     actor: str = "executive_console"
@@ -1166,14 +1207,32 @@ class AgentChatRequest(BaseModel):
     #: deployments, because that is what its prompt is about.
     mode: Literal["operate", "discuss"] = "operate"
     external_ref: Optional[str] = None
+    #: WHAT THE OPERATOR BROUGHT WITH THEM — a screenshot of the error, a log too long to paste.
+    #:
+    #: Describing a screen to an agent that cannot see it is the slowest possible way to report
+    #: a UI fault, and pasting six thousand lines of log into a chat box ruins the transcript
+    #: for every later turn. Both arrive here instead.
+    attachments: list["AgentAttachment"] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_turn(self):
         self.project_id = _require_text(self.project_id, "project_id")
         self.actor = _require_text(self.actor, "actor")
         self.message = self.message.strip()
-        if not self.message and not self.confirm_plan_id:
+        if not self.message and not self.confirm_plan_id and not self.attachments:
             raise ValueError("message or confirm_plan_id is required.")
+        # A BOUND, NOT A HOPE. Every attachment is re-sent as part of the turn, so a handful of
+        # large images is a request that fails slowly and expensively rather than one that is
+        # refused immediately with a reason the operator can act on.
+        if len(self.attachments) > _MAX_ATTACHMENTS:
+            raise ValueError(
+                f"at most {_MAX_ATTACHMENTS} files per message; "
+                f"{len(self.attachments)} were sent.")
+        total = sum(len(a.data) for a in self.attachments)
+        if total > _MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"those files come to {total // 1024}KB; the limit is "
+                f"{_MAX_ATTACHMENT_BYTES // 1024}KB per message. Send the relevant part.")
         return self
 
 

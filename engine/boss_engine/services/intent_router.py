@@ -1212,6 +1212,51 @@ def _one_conversation_brief() -> str:
     )
 
 
+#: How much of one text file reaches the model. A turn also carries the system prompt, the tool
+#: schemas and twelve turns of history; a log pasted whole would crowd out all of it. Generous
+#: enough for a stack trace or a config, and the truncation SAYS it happened rather than
+#: silently answering about the first half of the evidence.
+_ATTACHED_TEXT_CHARS = 24000
+
+
+def _with_attachments(
+    text_in: str, attachments: list[dict[str, Any]]
+) -> tuple[str, Optional[list[dict[str, Any]]]]:
+    """The operator's message, plus the files they sent with it.
+
+    Returns (text, blocks). The TEXT is always a plain string and is what every heuristic in
+    this file goes on reading — `asked_only_to_look`, `under_investigated`, the deploy-subject
+    match. Returning content blocks in its place would have handed a list to three regexes and
+    turned "send a screenshot" into a TypeError. The blocks, when an image is attached, are what
+    the MODEL is given.
+    """
+    body = str(text_in or "")
+    blocks: list[dict[str, Any]] = []
+    for item in attachments or []:
+        name = str(item.get("name") or "file")
+        data = str(item.get("data") or "")
+        if not data:
+            continue
+        if str(item.get("kind")) == "image":
+            media_type = str(item.get("media_type") or "image/png")
+            blocks.append({"type": "image_url",
+                           "image_url": {"url": f"data:{media_type};base64,{data}"}})
+            body += f"\n\n[attached image: {name}]"
+            continue
+        clipped = data[:_ATTACHED_TEXT_CHARS]
+        note = ("" if len(data) <= _ATTACHED_TEXT_CHARS else
+                f"\n… truncated — {len(data)} characters in total, "
+                f"first {_ATTACHED_TEXT_CHARS} shown.")
+        # DELIMITED, because a file pasted flat becomes indistinguishable from the question. The
+        # marker also tells the model the text is EVIDENCE rather than an instruction, which
+        # matters when the file is somebody else's log full of imperative sentences.
+        body += (f"\n\n--- attached file: {name} ---\n{clipped}{note}\n"
+                 f"--- end of {name} ---")
+    if not blocks:
+        return body, None
+    return body, [{"type": "text", "text": body}, *blocks]
+
+
 def _role_identity(role: Optional[str]) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
@@ -1848,6 +1893,17 @@ class IntentRouter:
         latest = convo[-1]["content"] if convo and convo[-1]["role"] == "user" else (
             convo[-1]["content"] if convo else "")
         history = convo[:-1] if convo else []
+        # WHAT THEY ATTACHED TO THIS MESSAGE.
+        #
+        # Text goes into the prompt with its filename around it, so the model can tell the
+        # operator's own words from six thousand lines of log. Images become content blocks —
+        # the gateway is OpenAI-shaped and the model behind it reads them — which is the whole
+        # point: describing a broken screen to something that cannot see it is the slowest way
+        # to report a UI fault there is.
+        attached = (messages[-1] or {}).get("attachments") if messages else None
+        latest_blocks: Optional[list[dict[str, Any]]] = None
+        if attached:
+            latest, latest_blocks = _with_attachments(latest, attached)
         reply = ""
         # WHY THE ANSWER IS MISSING, IF IT IS.
         #
@@ -1888,7 +1944,9 @@ class IntentRouter:
                     self._answer_agent().ambient = {"_thread_id": thread_id}
                     turn = _with_transient_retry(lambda: self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
-                        message=latest, history=history, system=system,
+                        # The blocks when there is an image, the text otherwise. Everything
+                        # else in this method keeps reading `latest`, which is always a string.
+                        message=latest_blocks or latest, history=history, system=system,
                         # FOUR STEPS WAS THE BUG, not a tuning choice.
                         #
                         # A step is one model round-trip, and a step that calls tools produces

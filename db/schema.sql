@@ -2886,6 +2886,31 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_created
   ON agent_messages(thread_id, created_at, id);
 
+-- WHAT THE OPERATOR BROUGHT WITH THEM: a screenshot of the error, a log too long to paste.
+--
+-- Deliberately a table and not the message body. An image is hundreds of kilobytes of base64
+-- and the body is read on every thread load, rendered in the transcript, and re-sent as history
+-- on every turn — inlining one would make all three worse forever. Here it is fetched only when
+-- a turn actually needs it, and `ON DELETE CASCADE` means clearing a chat takes its files too.
+CREATE TABLE IF NOT EXISTS agent_attachments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES agent_messages(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  kind TEXT NOT NULL,                        -- image | text
+  -- base64 for an image, the file's own text for a text file.
+  data TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('image', 'text'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_attachments_message
+  ON agent_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_agent_attachments_thread
+  ON agent_attachments(thread_id, created_at DESC);
+
 -- Metatron Captain: goals, durable memory, watch ticks (always-on oversight).
 -- Chat persistence reuses agent_threads (surface=chat, external_ref=metatron:captain).
 CREATE TABLE IF NOT EXISTS metatron_goals (

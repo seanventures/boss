@@ -241,7 +241,10 @@ class EngineAgent:
         *,
         project_id: str,
         actor: str = "user",
-        message: str,
+        #: The operator's text, or OpenAI content blocks when they attached an image. A list
+        #: is passed straight to the model and never to a string operation — see
+        #: `_operator_text` below, which every heuristic in this class reads instead.
+        message: Any,
         allow_writes: bool = False,
         max_steps: int = 6,
         history: Optional[list[dict]] = None,
@@ -255,7 +258,14 @@ class EngineAgent:
         write actions that were held for confirmation. `system` overrides the
         default system prompt (the router's answer path passes its own
         discuss-don't-claim-you-started framing)."""
-        self._operator_text = message or ""
+        # THE WORDS, WHATEVER SHAPE THE MESSAGE ARRIVED IN. `_operator_text` is matched against
+        # regexes all over this class; a list of content blocks reaching one of them turns a
+        # screenshot into a TypeError.
+        self._operator_text = (
+            message if isinstance(message, str)
+            else " ".join(str(b.get("text") or "") for b in (message or [])
+                          if isinstance(b, dict) and b.get("type") == "text")
+        ) or ""
         self._notes = []
         schemas = self.registry.openai_schema()
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]

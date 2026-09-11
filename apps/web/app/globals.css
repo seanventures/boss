@@ -9104,3 +9104,27 @@ a.agent-chip-name:hover { text-decoration: underline; }
   margin: 0; white-space: pre-wrap; word-break: break-word;
   font-size: .82rem; line-height: 1.55; font-family: inherit;
 }
+
+/* Files on a message — on the composer while it is being written, and in the transcript after.
+   Deliberately the same chip in both places: the thing you attached and the thing that was sent
+   are the same thing, and two different treatments would invite the question of whether they
+   are. */
+.agent-attached { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.agent-attached-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: 999px;
+  border: 1px solid var(--border, #1C2740); background: var(--surface-2, #0F1830);
+  font-size: .76rem; color: var(--ink-soft, #D4E0F4); max-width: 260px;
+}
+.agent-attached-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-attached-drop {
+  border: 0; background: transparent; color: var(--faint, #8092B3);
+  cursor: pointer; font-size: .9rem; line-height: 1; padding: 0 2px;
+}
+.agent-attached-drop:hover { color: var(--ink, #EEF3FB); }
+.agent-attached-error { margin: 4px 0 0; font-size: .78rem; color: var(--amber, #d29922); }
+.agent-attach {
+  border: 1px solid var(--border, #1C2740); background: transparent; cursor: pointer;
+  border-radius: 8px; padding: 4px 8px; font-size: .9rem; line-height: 1;
+}
+.agent-attach:hover { border-color: var(--accent, #4C8DF6); }

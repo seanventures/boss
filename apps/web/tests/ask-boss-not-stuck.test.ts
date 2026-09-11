@@ -36,9 +36,10 @@ describe("ask boss does not lock the operator out", () => {
   });
 
   it("still holds SEND while a turn is in flight", () => {
-    // Two turns at once is a different bug.
+    // Two turns at once is a different bug. The second half of the condition grew when files
+    // could be attached — a screenshot with no words is a message — but `busy` still holds it.
     const bar = SRC.slice(SRC.indexOf("agent-composer-bar"));
-    expect(bar).toContain("disabled={busy || !input.trim()}");
+    expect(bar).toContain("disabled={busy || (!input.trim() && !files.length)}");
   });
 
   it("bounds the wait rather than the work", () => {

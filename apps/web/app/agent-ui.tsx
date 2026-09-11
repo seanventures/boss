@@ -10,7 +10,37 @@ import {
   runAgentActionAction,
 } from "./actions";
 
-type Msg = { role: string; content: string; actions?: Array<{ kind: string }>; created_at?: string };
+type Msg = { role: string; content: string; actions?: Array<{ kind: string }>; created_at?: string;
+             attachments?: Array<{ name: string; kind: string }> };
+
+/** A file the operator attached to the message they are writing. */
+type Attached = { name: string; media_type: string; kind: "image" | "text"; data: string };
+
+//: The same bound the API enforces, said before the upload rather than after it. Five files and
+//: 12MB: enough for a few screenshots or a long log, small enough that a turn stays a turn.
+const MAX_FILES = 5;
+const MAX_BYTES = 12 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+/** Read one dropped/pasted/picked file into what the turn carries. */
+async function readAttachment(file: File): Promise<Attached> {
+  const media = (file.type || "").toLowerCase();
+  if (IMAGE_TYPES.has(media)) {
+    const buffer = await file.arrayBuffer();
+    // Chunked rather than String.fromCharCode(...bytes): spreading a megabyte of bytes into
+    // arguments overflows the call stack, which is a crash on exactly the large screenshot the
+    // operator most wanted to send.
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    }
+    return { name: file.name || "screenshot.png", media_type: media, kind: "image",
+             data: btoa(binary) };
+  }
+  return { name: file.name || "file.txt", media_type: media || "text/plain", kind: "text",
+           data: await file.text() };
+}
 type Task = { id?: string; task_id?: string; title?: string; status?: string };
 type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string; title?: string | null; message_count?: number };
 type CodeTask = { id?: string; status?: string; phase?: string; pull_request_url?: string; pull_request_number?: number; task_id?: string };
@@ -199,6 +229,39 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [messages, setMessages] = useState<Msg[]>([]);
   const [context, setContext] = useState<{ task?: Record<string, unknown>; code_tasks?: CodeTask[] } | null>(null);
   const [input, setInput] = useState(initialMessage ?? "");
+  //: Files on the message being written. Cleared when it is sent, so they belong to one turn.
+  const [files, setFiles] = useState<Attached[]>([]);
+  const [fileError, setFileError] = useState("");
+  const picker = useRef<HTMLInputElement>(null);
+
+  /** Take files from the picker, a paste, or a drop — refusing, with a reason, before upload. */
+  const attach = useCallback(async (incoming: FileList | File[] | null) => {
+    const list = Array.from(incoming ?? []);
+    if (!list.length) return;
+    setFileError("");
+    const next: Attached[] = [];
+    for (const file of list) {
+      if (files.length + next.length >= MAX_FILES) {
+        setFileError(`At most ${MAX_FILES} files on one message.`);
+        break;
+      }
+      try {
+        next.push(await readAttachment(file));
+      } catch {
+        // SAY WHICH ONE. "Upload failed" over three files is a message that cannot be acted on.
+        setFileError(`Could not read ${file.name || "that file"}.`);
+      }
+    }
+    const total = [...files, ...next].reduce((sum, f) => sum + f.data.length, 0);
+    if (total > MAX_BYTES) {
+      // BEFORE THE ROUND TRIP, not after it. The API enforces the same bound; being told by the
+      // server means waiting for an upload that was never going to be accepted.
+      setFileError(`Those come to ${Math.round(total / 1024)}KB — the limit is `
+                   + `${Math.round(MAX_BYTES / 1024)}KB per message.`);
+      return;
+    }
+    if (next.length) setFiles((f) => [...f, ...next]);
+  }, [files]);
   // ADDRESSED FROM SOMEWHERE ELSE. The Agents page sends the operator here with the message
   // already opened — "@QA Lead — " — so asking one of them something is a click from the card
   // that named them, rather than navigating here and retyping who you meant.
@@ -680,12 +743,21 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const send = useCallback(() => {
     const msg = input.trim();
-    if (!msg || busy) return;
-    setMessages((m) => [...m, { role: "user", content: msg }]);
+    // A SCREENSHOT ON ITS OWN IS A MESSAGE. "Look at this" is the most natural way to report a
+    // broken screen, and requiring words alongside it would be the console insisting on
+    // ceremony the operator did not need.
+    if ((!msg && !files.length) || busy) return;
+    const shown = msg || "Look at what I've attached.";
+    setMessages((m) => [...m, {
+      role: "user", content: shown,
+      attachments: files.map((f) => ({ name: f.name, kind: f.kind })),
+    }]);
     setInput("");
     const fd = new FormData(); fd.set("message", msg);
+    if (files.length) fd.set("attachments", JSON.stringify(files));
+    setFiles([]);
     runTurn(fd);
-  }, [input, busy, runTurn]);
+  }, [input, files, busy, runTurn]);
 
   /**
    * Clear THIS conversation, and only this one.
@@ -832,14 +904,6 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                      : discussing
                        ? "What's on your mind?"
                        : "What do you want to do?"}</h2>
-            {threadId && messages.length ? (
-              <button type="button" className="linklike agent-clear" data-testid="agent-clear"
-                      disabled={clearing} onClick={() => void clearChat()}
-                      title={`Start ${roleName ?? "this"} conversation again. The messages are `
-                             + "archived, not deleted, and no other chat is touched."}>
-                {clearing ? "Clearing…" : "Clear this chat"}
-              </button>
-            ) : null}
             {threadId ? (
               roleName ? (
                 <p className="detail">Picking up where you left off — this conversation is kept
@@ -878,6 +942,21 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           </div>
         )}
 
+        {/* ONE CONTROL, EVERY CONVERSATION.
+            This lived inside the general branch above, so a chat opened on a RUN — the dock's
+            most common state, reached from a card or a workflow step — had no way to start over
+            while the general one did. Same component, same thread machinery, two behaviours
+            depending on which branch rendered. `clearChat` was never the limitation: it takes a
+            thread_id and has always worked for any of them. */}
+        {threadId && messages.length ? (
+          <button type="button" className="linklike agent-clear" data-testid="agent-clear"
+                  disabled={clearing} onClick={() => void clearChat()}
+                  title={`Start ${roleName ?? "this"} conversation again. The messages are `
+                         + "archived, not deleted, and no other chat is touched."}>
+            {clearing ? "Clearing…" : "Clear this chat"}
+          </button>
+        ) : null}
+
         <div className="agent-chat-log" aria-live="polite" aria-label="Agent conversation">
           {loadingThread ? (
             <p className="detail">Loading conversation…</p>
@@ -891,6 +970,19 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>
               <span>{m.role === "assistant" ? "BOSS" : m.role === "user" ? "You" : "tool"}</span>
+              {/* WHAT WAS SENT WITH IT. Without this the transcript shows "Look at what I've
+                  attached." over nothing, and neither the operator nor a later reader can tell
+                  whether the file arrived. */}
+              {m.attachments?.length ? (
+                <div className="agent-attached" data-testid="agent-message-attached">
+                  {m.attachments.map((a, n) => (
+                    <span className="agent-attached-chip" key={`${a.name}-${n}`}>
+                      <span aria-hidden>{a.kind === "image" ? "▣" : "▤"}</span>
+                      <span className="agent-attached-name">{a.name}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {/* The app-facts block is addressed to the MODEL, not to the reader. It was
                   prepended to the outgoing message and then echoed back in the transcript, so
                   every question appeared with a wall of run_id / live_preview / "use your
@@ -1114,15 +1206,48 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
+            // CMD+V IS HOW A SCREENSHOT ARRIVES. Every operator already has the image on their
+            // clipboard when they decide to report the bug; making them save it to disk first
+            // so they can pick it from a dialog is the console adding a step.
+            onPaste={(e) => {
+              const dropped = Array.from(e.clipboardData?.files ?? []);
+              if (dropped.length) { e.preventDefault(); void attach(dropped); }
+            }}
             style={{ resize: "none", overflowY: "auto", minHeight: 64, maxHeight: 220,
                      lineHeight: 1.55, fontFamily: "inherit" }} />
+          {files.length ? (
+            <div className="agent-attached" data-testid="agent-attached">
+              {files.map((f, i) => (
+                <span className="agent-attached-chip" key={`${f.name}-${i}`}>
+                  <span aria-hidden>{f.kind === "image" ? "▣" : "▤"}</span>
+                  <span className="agent-attached-name">{f.name}</span>
+                  <button type="button" className="agent-attached-drop"
+                          aria-label={`Remove ${f.name}`}
+                          onClick={() => setFiles((list) => list.filter((_, n) => n !== i))}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {fileError ? <p className="agent-attached-error">{fileError}</p> : null}
           <div className="agent-composer-bar">
+            <input ref={picker} type="file" multiple hidden
+                   data-testid="agent-file-input"
+                   accept="image/png,image/jpeg,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,.log,.txt,.md,.json,.yaml,.yml,.csv"
+                   onChange={(e) => { void attach(e.target.files); e.target.value = ""; }} />
+            <button type="button" className="agent-attach" data-testid="agent-attach"
+                    onClick={() => picker.current?.click()}
+                    title="Attach a screenshot or a text file — or just paste an image here">
+              📎
+            </button>
             <span className="agent-composer-hint">
               {busy ? "BOSS is working…" : "Enter to send · Shift+Enter for a new line"}
             </span>
             {/* Circular, and disabled until there is something to send — a live-looking button
                 that does nothing is worse than one that says it is not ready. */}
-            <button type="submit" className="agent-send" disabled={busy || !input.trim()}
+            <button type="submit" className="agent-send"
+                    disabled={busy || (!input.trim() && !files.length)}
                     aria-label="Send message" data-testid="agent-send">
               {busy ? <span className="agent-send-spin" aria-hidden /> : "↑"}
             </button>

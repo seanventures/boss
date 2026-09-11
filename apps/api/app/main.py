@@ -10851,6 +10851,11 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
                 external_ref=payload.external_ref,
                 role=payload.role,
                 mode=payload.mode,
+                attachments=[
+                    {"name": a.name, "media_type": a.media_type, "kind": a.kind,
+                     "data": a.data}
+                    for a in (payload.attachments or [])
+                ],
             )
         except AgentThreadNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

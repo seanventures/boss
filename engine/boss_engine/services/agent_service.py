@@ -186,7 +186,26 @@ class AgentService:
             ),
             {"thread_id": thread_id},
         ).mappings().all()
-        return [self._serialize_message(row) for row in rows]
+        # NAMES ONLY, and in one query. A restored thread has to show that a file was sent —
+        # otherwise "Look at what I've attached." hangs over nothing and no reader can tell
+        # whether it arrived — but the DATA is hundreds of kilobytes per image and no reader of
+        # a transcript needs it. It is fetched only when a turn actually uses it.
+        files: dict[str, list[dict[str, Any]]] = {}
+        for row in connection.execute(
+            text("SELECT message_id, name, kind FROM agent_attachments "
+                 "WHERE thread_id = :thread_id ORDER BY created_at"),
+            {"thread_id": thread_id},
+        ).mappings().all():
+            files.setdefault(str(row["message_id"]), []).append(
+                {"name": row["name"], "kind": row["kind"]})
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            message = self._serialize_message(row)
+            attached = files.get(str(message["id"]))
+            if attached:
+                message["attachments"] = attached
+            out.append(message)
+        return out
 
     def clear_thread(
         self,
@@ -344,8 +363,11 @@ class AgentService:
         #: See _role_identity in intent_router for what it changes.
         role: Optional[str] = None,
         #: "discuss" thinks about an idea and starts nothing; anything else operates the
-        #: factory. See _discussion_brief in intent_router.
+        #: factory. See _one_conversation_brief in intent_router.
         mode: str = "operate",
+        #: Files the operator attached to THIS message — a screenshot of the error, a log too
+        #: long to paste. Each is {name, media_type, kind, data}.
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         thread = self.start_or_load_thread(
             connection,
@@ -356,13 +378,26 @@ class AgentService:
             external_ref=external_ref,
         )
         user_content = message.strip() or f"Confirm plan {confirm_plan_id}"
-        self.append_message(
+        if not user_content and attachments:
+            # A SCREENSHOT IS A QUESTION. Sending one with no words is the most natural thing an
+            # operator does — "look at this" — and an empty message body would otherwise read as
+            # a blank turn to every later reader of the thread.
+            user_content = "Look at what I've attached."
+        written = self.append_message(
             connection,
             thread_id=thread["id"],
             role="user",
             content=user_content,
         )
+        stored = self._store_attachments(
+            connection, project_id=project_id, thread_id=thread["id"],
+            message_id=written["id"], attachments=attachments or [])
         messages = self.list_messages(connection, thread["id"])
+        if stored:
+            # ONLY ON THE NEWEST TURN. The files belong to the message the operator just sent;
+            # re-attaching every image in a thread's history to every later turn is how a
+            # conversation becomes unaffordable after the third screenshot.
+            messages[-1] = {**messages[-1], "attachments": stored}
         # Build exactly once for the turn. The router receives the resolved
         # object and never reaches back into the feature catalog per tool call.
         manifest = build_manifest(connection, self.settings, project_id)
@@ -452,6 +487,45 @@ class AgentService:
             "tool_calls": getattr(turn, "tool_calls", []) or [],
             "messages": [*messages, assistant],
         }
+
+    def _store_attachments(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        thread_id: str,
+        message_id: str,
+        attachments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Write this message's files, and hand back what the turn should carry."""
+        out: list[dict[str, Any]] = []
+        for item in attachments:
+            data = str(item.get("data") or "")
+            if not data:
+                continue
+            name = str(item.get("name") or "file")[:200]
+            media_type = str(item.get("media_type") or "application/octet-stream")
+            kind = str(item.get("kind") or ("image" if media_type.startswith("image/") else "text"))
+            attachment_id = make_id("aatt")
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO agent_attachments (
+                        id, project_id, thread_id, message_id, name, media_type, kind,
+                        data, bytes
+                    ) VALUES (
+                        :id, :project_id, :thread_id, :message_id, :name, :media_type, :kind,
+                        :data, :bytes
+                    )
+                    """
+                ),
+                {"id": attachment_id, "project_id": project_id, "thread_id": thread_id,
+                 "message_id": message_id, "name": name, "media_type": media_type,
+                 "kind": kind, "data": data, "bytes": len(data)},
+            )
+            out.append({"id": attachment_id, "name": name, "media_type": media_type,
+                        "kind": kind, "data": data})
+        return out
 
     @staticmethod
     def _serialize_message(row) -> dict[str, Any]:
