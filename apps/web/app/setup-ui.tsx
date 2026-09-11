@@ -291,16 +291,35 @@ function ModelStep({ projectId, actor, providers, onDone }: {
           </>
         )}
       </div>
-      {/* NOT A KEY BOX THAT WOULD BE REJECTED ON SUBMIT. A subscription is authorised through
-          its provider's own login — BOSS refuses a pasted credential for one by policy — so the
-          wizard says so rather than offering a field that cannot work. */}
+      {/* SAY WHAT ACTUALLY HAPPENS TODAY.
+          The first version of this promised a connection session "once the provider's login
+          flow is wired up", which reads as though BOSS shares a live session with your CLI.
+          It does not, and `/connect` would not give it one: that endpoint RECORDS a connection
+          from a reference the caller already has — it performs no login and no token exchange,
+          so pointing the wizard at it would produce a green tick with nothing authorised.
+          What genuinely works is the headless token the CLI mints for exactly this purpose. */}
       {subscription ? (
-        <p className="detail" data-testid="setup-model-subscription">
-          {chosen?.note} BOSS does not accept a pasted credential for a subscription — it is
-          authorised through a connection session, which is where this will take you once the
-          provider&rsquo;s login flow is wired up. Until then, use an API key above, or set the
-          provider&rsquo;s own environment variable on this install.
-        </p>
+        <div className="detail" data-testid="setup-model-subscription">
+          <p>
+            {chosen?.note} There is no browser login here and BOSS does not hold a live session
+            from your machine. What it uses is the long-lived token the CLI mints for headless
+            use — you authorise once, on your own machine, and paste the result.
+          </p>
+          {chosen?.provider === "claude_code" ? (
+            <p>
+              Run <code>claude setup-token</code>, then set{" "}
+              <code>CLAUDE_CODE_OAUTH_TOKEN</code> on this install. The coding pipeline picks it
+              up for the builder agents.{" "}
+              <b>It powers builds, not this chat</b> — the conversation you are reading uses the
+              model configured above.
+            </p>
+          ) : (
+            <p>
+              Set the provider&rsquo;s own headless token on this install. BOSS has no wizard
+              step for it yet, and saying otherwise would be a green tick over nothing.
+            </p>
+          )}
+        </div>
       ) : null}
       {chosen?.key_url ? (
         <p className="detail">

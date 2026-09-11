@@ -61,6 +61,23 @@ describe("connecting a model", () => {
     expect(UI).toContain("{subscription ? null : (");
   });
 
+  it("and it describes what actually happens, not a flow that does not exist", () => {
+    // The first version promised a connection session "once the provider's login flow is wired
+    // up", which reads as though BOSS shares a live session with your CLI. It does not, and
+    // /connect would not give it one — that endpoint RECORDS a connection from a reference the
+    // caller already holds. Pointing the wizard at it would be a green tick over nothing.
+    expect(UI).toContain("claude setup-token");
+    expect(UI).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(UI).not.toContain("once the provider");
+  });
+
+  it("and says which half of BOSS the subscription actually powers", () => {
+    // It reaches the builder agents in the sandbox. The chat uses whatever model is configured
+    // above — somebody who connects a subscription and sees no change in the chat is not
+    // looking at a bug.
+    expect(UI).toContain("It powers builds, not this chat");
+  });
+
   it("and the key is wiped after the attempt too", () => {
     expect(UI).toContain("setApiKey(\"\")");
   });
