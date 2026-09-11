@@ -32,15 +32,29 @@ describe("it survives docking", () => {
   it("lives in the detail column, which never docks", () => {
     // Not in `.ct-split-list` — that pane collapses to a 44px rail, and a back button that
     // disappears when you tidy the pane is a trap.
-    const head = SRC.slice(SRC.indexOf('className="ct-detail-head"'),
-                           SRC.indexOf('<h3>{run.title}</h3>'));
-    expect(head).toContain('data-testid="ct-detail-back"');
+    //
+    // Asserted as a PROPERTY, not an address. This used to pin the control to
+    // `.ct-detail-head` and failed when it moved to a better place inside the same
+    // undockable column — which is a test defending a layout rather than the rule.
+    const back = SRC.indexOf('data-testid="ct-detail-back"');
+    const detail = SRC.indexOf('className="ct-split-detail"');
+    expect(back).toBeGreaterThan(-1);
+    expect(back).toBeGreaterThan(detail);
+  });
+
+  it("and above the title of the thing it leaves, where one is looked for", () => {
+    // It sat on the RUN's header while what it leaves is the APP — so it landed under the app's
+    // action bar, beside the run title, and an operator had to scan past five buttons to find
+    // the way out.
+    const back = SRC.indexOf('data-testid="ct-detail-back"');
+    expect(back).toBeLessThan(SRC.indexOf("<h3>{appIdentity(active).name}</h3>"));
+    expect(back).toBeLessThan(SRC.indexOf('className="ct-detail-actions"'));
   });
 
   it("is not rendered conditionally on the dock state", () => {
-    const head = SRC.slice(SRC.indexOf('className="ct-detail-head"'),
-                           SRC.indexOf('<h3>{run.title}</h3>'));
-    expect(head).not.toContain("listDocked");
+    const at = SRC.indexOf('className="ct-detail-eyebrow"');
+    const block = SRC.slice(at, at + 500);
+    expect(block).not.toContain("listDocked");
   });
 
   it("costs no row of its own", () => {

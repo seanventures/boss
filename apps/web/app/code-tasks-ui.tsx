@@ -2253,7 +2253,7 @@ function WorkflowLink({ run }: { run: CodeTaskRun }) {
   );
 }
 
-function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
+function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: PreviewRec[] }) {
   const st = run.state ?? {};
   const tests = structuredCodeTaskTests(st);
   // Operator View: running first, then verified-test with an open_url.
@@ -2306,20 +2306,13 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {/* No back button here. It said "← All code tasks" while the one above said "← All
           apps", and both called setSelected(null) — two names for one action, on one screen.
           The surviving control sits at the top of the split, outside the dockable pane. */}
+      {/* NO BACK BUTTON HERE EITHER, and this is the third place it has been.
+          It sat on this row — the RUN's header — while what it leaves is the APP. So it landed
+          under the app's action bar, beside the run title, reading as a control on the run, and
+          an operator had to scan past five buttons to find the way out. A back control belongs
+          at the TOP-LEFT of the pane it leaves, above the title of the thing being shown; it is
+          now on the app heading's eyebrow line, which already existed and was nearly empty. */}
       <div className="ct-detail-head">
-        {/* THE WAY OUT, ON A ROW THAT ALREADY EXISTS.
-            It had a row of its own above the split — a whole line of vertical space for one
-            button, on a page whose header already spends four lines before any content. It
-            also used to live INSIDE the dockable run list, so docking the list took the only
-            way back with it; the workaround for that was to drop its label when docked, which
-            left an unexplained "»" on the rail.
-            Here it costs nothing, sits beside the thing it leaves, and the detail column never
-            docks — so it cannot disappear. Styled as a distinct back control rather than
-            another flat chip: it is the only thing in this header that NAVIGATES. */}
-        <button type="button" className="ct-back" onClick={onBack}
-                data-testid="ct-detail-back" title="Back to all projects">
-          <span aria-hidden>←</span> All projects
-        </button>
         <h3>{run.title}</h3>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
         <WorkflowLink run={run} />
@@ -2950,7 +2943,19 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                 meta line, Ask BOSS only on the card back in the list. */}
             <div className="ct-detail-actionbar" data-testid="ct-detail-actionbar">
               <div className="ct-detail-heading">
-                <span className="eyebrow">{appIdentity(active).kind || "App"}</span>
+                {/* THE WAY OUT, FIRST AND ABOVE THE TITLE.
+                    Costs no vertical space — the eyebrow line was one short word — and it is
+                    where a back control is looked for: top-left of the detail pane, above the
+                    name of what you are looking at, outside the dockable list so docking cannot
+                    take it away. Styled as a back control rather than another flat chip,
+                    because it is the only thing in this header that NAVIGATES. */}
+                <div className="ct-detail-eyebrow">
+                  <button type="button" className="ct-back" onClick={() => setSelected(null)}
+                          data-testid="ct-detail-back" title="Back to all projects">
+                    <span aria-hidden>←</span> All projects
+                  </button>
+                  <span className="eyebrow">{appIdentity(active).kind || "App"}</span>
+                </div>
                 <h3>{appIdentity(active).name}</h3>
               </div>
               <div className="ct-detail-actions">
@@ -3029,7 +3034,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                 </button>
               </div>
             </div>
-            <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+            <CodeTaskDetail run={active} previews={previews} />
           </section>
         </div>
       </>
