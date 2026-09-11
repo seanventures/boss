@@ -21545,10 +21545,14 @@ def start_delivery_workflow(payload: dict) -> dict:
                 if not owner or owner["project_id"] != project_id:
                     raise HTTPException(status_code=404, detail="source run not found")
                 if not source_discovery:
+                    # BY WHAT IT PRODUCED, NOT WHAT IT IS CALLED. `step_kind` on a capability
+                    # step is the literal "capability" — "research" is the step's id — and a
+                    # customer may rename their steps. A discovery id in the output is the
+                    # contract, and it is the thing being looked for.
                     found = connection.execute(
                         text("SELECT output FROM workflow_step_runs "
-                             "WHERE workflow_run_id = :r AND step_kind = 'research' "
-                             "AND status = 'succeeded' "
+                             "WHERE workflow_run_id = :r AND status = 'succeeded' "
+                             "AND output ? 'discovery_id' "
                              "ORDER BY completed_at DESC NULLS LAST LIMIT 1"),
                         {"r": source_run},
                     ).scalar()

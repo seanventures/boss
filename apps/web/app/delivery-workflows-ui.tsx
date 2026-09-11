@@ -1921,8 +1921,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
   // DID THIS RUN ACTUALLY RESEARCH ANYTHING? Offering "build on this research" on a run with
   // no dossier would start an ordinary delivery run while telling the operator they had skipped
   // the expensive step — they would pay for research a second time believing they had not.
+  // READ THE OUTPUT, NOT THE STEP'S NAME. `kind` on a capability step is the literal string
+  // "capability" — the catalogue's "research" is its id — and a customer can rename their steps
+  // anyway. What a research step leaves behind is a discovery id, which is the contract. Keyed
+  // on the name, this rendered nothing on a run whose dossier was right there.
   const researched = run.steps.some((step) => {
-    if (step.kind !== "research" || step.status !== "succeeded") return false;
+    if (step.status !== "succeeded") return false;
     const produced = (step.output ?? {}) as Record<string, unknown>;
     const awaited = produced.await as { kind?: string; id?: string } | undefined;
     return typeof produced.discovery_id === "string"

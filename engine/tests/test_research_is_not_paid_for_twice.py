@@ -60,6 +60,8 @@ def test_the_api_resolves_a_named_source_rather_than_trusting_a_claim(field):
     assert f'payload.get("{field}")' in source
     # Ownership and completeness are checked before the adopt key is set.
     assert 'detail="research run not found"' in source
+    # Found by what it produced, not by a step name a customer may have changed.
+    assert "output ? 'discovery_id'" in source
     assert "not completed — " in source
     # And the blanket strip of caller-supplied adoption is still there.
     assert 'k.startswith("adopt_")' in source

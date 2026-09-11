@@ -21,8 +21,18 @@ describe("a finished run can be built on", () => {
     // Offered on a run with no research, it would start an ordinary delivery run while telling
     // the operator they had skipped the expensive step.
     expect(UI).toContain("const researched = run.steps.some(");
-    expect(UI).toContain('step.kind !== "research" || step.status !== "succeeded"');
     expect(UI).toContain("&& researched ?");
+  });
+
+  it("and it looks at what the step PRODUCED, not what it is called", () => {
+    // `kind` on a capability step is the literal string "capability" — "research" is the step's
+    // id — so keying on the name rendered nothing on a run whose dossier was right there. And a
+    // customer can rename their steps; a discovery id in the output is the contract.
+    const at = UI.indexOf("const researched = run.steps.some(");
+    const block = UI.slice(at, at + 500);
+    expect(block).toContain('typeof produced.discovery_id === "string"');
+    expect(block).toContain('awaited?.kind === "discovery"');
+    expect(block).not.toContain('step.kind !== "research"');
   });
 
   it("and not while the run is still going", () => {
