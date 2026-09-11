@@ -104,6 +104,7 @@ _EXPECTED_TOOLS: set[str] = {
     "recall_role_experience",
     "describe_role",
     "read_logs",
+    "read_preview_log",
     "register_repository",
     "repo_activity",
     "request_meeting",
@@ -133,10 +134,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 78, (
+    assert len(reg.names()) == 79, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 49
+    assert len(read) == 50
     assert len(write) == 29
     # the capabilities the user explicitly asked the agent to cover
     for name in (

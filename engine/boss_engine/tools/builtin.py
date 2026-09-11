@@ -168,8 +168,12 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "list_previews",
-        "Live app previews (running 1-box apps) with their open URLs, so the agent "
-        "can hand a customer a link to preview a task's built app.",
+        "App previews with their open URLs AND, for the failed ones, why they failed: "
+        "`failure_kind` (port_timeout / clone_failed / command_missing / boot_crash) and the "
+        "error, which usually names the real fault — a build error, a missing entry file, a "
+        "port the app did not honour. Read `read_preview_log` for the full startup log, then "
+        "repair: an app-side fault is fixed with extend_code_task or steer_code_task on the "
+        "run, and start_preview tries again.",
         _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
     )
     def list_previews(ctx, *, project_id, actor, args):
@@ -186,15 +190,67 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                     "url": p.get("url"),
                     "open_url": p.get("open_url") or p.get("url"),
                     "substrate": p.get("substrate"),
+                    # WHY IT FAILED, WHICH THIS TOOL USED TO THROW AWAY.
+                    #
+                    # The row carries `error` and `failure_kind`; the tool selected neither. So
+                    # asked "the preview is failing, please fix it", BOSS could see the word
+                    # "failed" and nothing else — no reason, no log, nothing to act on — and
+                    # answered with advice. The evidence was one column away the whole time:
+                    # prev_52cc502f's error reads "Could not resolve entry module index.html",
+                    # which names the fault exactly.
+                    **({"failure_kind": p.get("failure_kind"), "error": p.get("error")}
+                       if p.get("status") == "failed" else {}),
                 }
                 for p in previews
             ],
         }
 
     @reg.tool(
+        "read_preview_log",
+        "The startup log of one preview (prev_…) — the build output and the app's own stdout, "
+        "which is where the real reason a preview did not come up is written. Use it whenever a "
+        "preview is failed or stuck: `status` alone cannot be acted on. The fault is usually in "
+        "the APP, not in BOSS — a build error, a missing entry file, an app that ignores $PORT "
+        "or binds 127.0.0.1 — and the repair is extend_code_task or steer_code_task on the "
+        "run_id, then start_preview again.",
+        _obj({"preview_id": {"type": "string", "description": "prev_…"},
+              "project_id": {"type": "string"}},
+             ["preview_id"]),
+    )
+    def read_preview_log(ctx, *, project_id, actor, args):
+        from ..services.preview_service import preview_log_snapshot
+
+        pid = args.get("project_id") or project_id
+        preview_id = str(args.get("preview_id") or "").strip()
+        # THE TENANT FENCE. A preview id is guessable-shaped, and the snapshot is keyed by id
+        # alone — so the project is checked here, as every other by-id tool does.
+        with ctx.begin() as c:
+            owner = c.execute(
+                _text("SELECT project_id, run_id FROM app_previews WHERE id = :i"),
+                {"i": preview_id},
+            ).mappings().first()
+        if not owner or owner["project_id"] != pid:
+            return {"ok": False, "error": f"no preview {preview_id!r} in this project"}
+        try:
+            snapshot = preview_log_snapshot(ctx.engine, preview_id)
+        except ValueError as error:
+            return {"ok": False, "error": str(error)}
+        # THE RUN IS THE HANDLE ON THE FIX. Without it the agent has a diagnosis and no way to
+        # act on it: every repair tool for an app takes a crun_, not a prev_.
+        snapshot["run_id"] = owner["run_id"]
+        if not (snapshot.get("log") or "").strip():
+            snapshot["note"] = (
+                "No log body is readable from here — the file lives on the preview host. "
+                "`error` above is what was captured at the time and is usually enough to name "
+                "the fault."
+            )
+        return snapshot
+
+    @reg.tool(
         "get_task_preview",
         "The live preview URL(s) for one code-task run (crun_…), if any preview is "
-        "running. Answers 'preview this task / give me the link'.",
+        "running — and for the failed attempts, why each failed. Answers 'preview this task / "
+        "give me the link' and 'why will this app not come up'.",
         _obj({"run_id": {"type": "string"}, "project_id": {"type": "string"}}, ["run_id"]),
     )
     def get_task_preview(ctx, *, project_id, actor, args):
@@ -213,6 +269,10 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                     "status": p.get("status"),
                     "url": p.get("open_url") or p.get("url"),
                     "open_url": p.get("open_url") or p.get("url"),
+                    # Same reason as list_previews: "no live preview" is not an answer to "why
+                    # is the preview failing", and this is the tool that question lands on.
+                    **({"failure_kind": p.get("failure_kind"), "error": p.get("error")}
+                       if p.get("status") == "failed" else {}),
                 }
                 for p in previews
             ],
