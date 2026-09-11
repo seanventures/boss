@@ -657,6 +657,14 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                  "description": "which workflow to run, by key"},
                 "title": {"type": "string",
                           "description": "short name for the run and its document"},
+                "from_discovery": {
+                    "type": "string",
+                    "description": "a COMPLETED discovery run (drun_…) whose dossier this run "
+                                   "should build on. The research step adopts it instead of "
+                                   "commissioning more — use this whenever the operator says "
+                                   "they do not want the research repeated. Look the id up "
+                                   "with list_discovery; never guess one.",
+                },
                 "project_id": {"type": "string"},
             },
             ["directive", "workflow_key"],
@@ -697,17 +705,34 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 return {"ok": False,
                         "error": f"no workflow {key!r} in this project",
                         "available": available}
+            # CARRY FINISHED RESEARCH FORWARD. Checked here rather than trusted: the adopt key
+            # says "this work already happened", and a model must not be able to assert that.
+            adopted = (args.get("from_discovery") or "").strip()
+            run_input = {"directive": directive, "title": title}
+            if adopted:
+                found = c.execute(
+                    _text("SELECT project_id, status FROM discovery_runs WHERE id = :d"),
+                    {"d": adopted},
+                ).mappings().first()
+                if not found or found["project_id"] != pid:
+                    return {"ok": False, "error": f"no research run {adopted!r} in this project"}
+                if str(found["status"] or "") != "completed":
+                    return {"ok": False,
+                            "error": f"that research is {found['status']}, not completed — "
+                                     "there is nothing finished to build on yet"}
+                run_input["adopt_discovery_run_id"] = adopted
             try:
                 run = wf.start_run(
                     c, project_id=pid, actor=actor,
-                    input_data={"directive": directive, "title": title},
+                    input_data=run_input,
                     dedupe_key=f"agent:{key}:{uuid4().hex[:12]}",
                     workflow_version_id=version_id,
                 )
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
         return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
-                "project_id": pid, "title": title}
+                "project_id": pid, "title": title,
+                **({"built_on_research": adopted} if adopted else {})}
 
     @reg.tool(
         "request_meeting",

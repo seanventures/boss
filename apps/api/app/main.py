@@ -21515,6 +21515,73 @@ def start_delivery_workflow(payload: dict) -> dict:
     # it cannot be got wrong.
     dropped = sorted(k for k in run_input if k.startswith("adopt_"))
     run_input = {k: v for k, v in run_input.items() if not k.startswith("adopt_")}
+
+    # CARRY FINISHED RESEARCH FORWARD INSTEAD OF PAYING FOR IT TWICE.
+    #
+    # "I want to take that PRD and go to implementation instead of repeating the research
+    # again." The runtime could already do it — `adopt_discovery_run_id` makes the research step
+    # wait on a dossier that exists rather than commissioning another — but the field is an
+    # `adopt_*` key, and those are stripped from client input two lines above, for good reason:
+    # a caller must not be able to ASSERT that work already happened.
+    #
+    # So the caller names a source and the server draws the conclusion. `from_run` is a finished
+    # workflow run, `from_discovery` a dossier directly; either resolves here, is checked
+    # against this project, and only then does the server set the adopt key itself — the same
+    # rule as start_project_run, where the claim is true by construction.
+    #
+    # What travels is the DOSSIER, not the panel. A Research-Led Discovery panel answers a
+    # go/no-go — its own objective says "not an implementation plan" — so adopting its PRD as a
+    # build brief would hand the builder the wrong document. The new run holds its own panel,
+    # which then argues FROM the evidence rather than re-deriving it.
+    source_run = str(payload.get("from_run") or "").strip()
+    source_discovery = str(payload.get("from_discovery") or "").strip()
+    if source_run or source_discovery:
+        with begin(engine) as connection:
+            if source_run:
+                owner = connection.execute(
+                    text("SELECT project_id, input FROM workflow_runs WHERE id = :r"),
+                    {"r": source_run},
+                ).mappings().first()
+                if not owner or owner["project_id"] != project_id:
+                    raise HTTPException(status_code=404, detail="source run not found")
+                if not source_discovery:
+                    found = connection.execute(
+                        text("SELECT output FROM workflow_step_runs "
+                             "WHERE workflow_run_id = :r AND step_kind = 'research' "
+                             "AND status = 'succeeded' "
+                             "ORDER BY completed_at DESC NULLS LAST LIMIT 1"),
+                        {"r": source_run},
+                    ).scalar()
+                    if isinstance(found, str):
+                        found = json.loads(found)
+                    source_discovery = str((found or {}).get("discovery_id") or "").strip()
+                    if not source_discovery:
+                        source_discovery = str(
+                            (owner["input"] or {}).get("adopt_discovery_run_id") or "").strip()
+                if not source_discovery:
+                    # NAMING WHAT IS MISSING. "Carry it forward" on a run that never researched
+                    # anything would silently start an ordinary run, and the operator would pay
+                    # for research a second time believing they had skipped it.
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"{source_run} has no completed research step to carry forward")
+                if not run_input.get("directive"):
+                    run_input = {**(owner["input"] or {}), **run_input}
+                    run_input = {k: v for k, v in run_input.items()
+                                 if not k.startswith("adopt_")}
+            dossier = connection.execute(
+                text("SELECT project_id, status FROM discovery_runs WHERE id = :d"),
+                {"d": source_discovery},
+            ).mappings().first()
+            if not dossier or dossier["project_id"] != project_id:
+                raise HTTPException(status_code=404, detail="research run not found")
+            if str(dossier["status"] or "") != "completed":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"that research is {dossier['status']}, not completed — "
+                           "there is nothing finished to build on yet")
+        run_input["adopt_discovery_run_id"] = source_discovery
+
     if not project_id or not (work_class or workflow_key):
         raise HTTPException(
             status_code=400,

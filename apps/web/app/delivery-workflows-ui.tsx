@@ -778,6 +778,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
+          // BUILD ON WHAT THIS ALREADY FOUND. The server resolves the dossier from the run and
+          // sets the adopt key itself — a client may not assert that work has happened. What
+          // travels is the evidence, not the panel: a Research-Led Discovery panel answered a
+          // go/no-go, so the delivery run holds its own and argues FROM the findings.
+          onBuildOnThis={(run) => act("Build on this research", "start", {
+            work_class: "project.new", from_run: run.id,
+            input: inputForRerun(run.input),
+          })}
         />
       ) : tab === "catalogue" ? (
         <CatalogueView
@@ -1651,7 +1659,8 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onRecheck, onSetTarget, onPrepareTarget, onRunPreview,
+                   onRetryStep, onRerun, onBuildOnThis, onRecheck, onSetTarget, onPrepareTarget,
+                   onRunPreview,
                    onBound, projectId, actor, roles,
                    previewStarting,
                    targets, hosts }: {
@@ -1667,6 +1676,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   capabilities: Capability[];
   onRetryStep: (runId: string, stepId: string) => void;
   onRerun: (run: Run) => void;
+  onBuildOnThis: (run: Run) => void;
   onRecheck: (run: Run) => void;
   onSetTarget: (runId: string, targetId: string) => void;
   onPrepareTarget: (runId: string, hostId: string) => void;
@@ -1791,6 +1801,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
               <StepPath run={run} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
+                        onBuildOnThis={() => onBuildOnThis(run)}
                         busy={busy}
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
@@ -1889,7 +1900,8 @@ export function decidedButNotMoved(step: RunStep): string {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onRecheck,
+function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onBuildOnThis,
+                   onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
                    previewStarting, busy, actor, roles }: {
@@ -1898,6 +1910,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
   roles: Array<{ role_key: string; display_name?: string | null }>;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
+  onBuildOnThis: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
   /** Re-read the runs — used after a binding lands so the step shows it. */
@@ -1905,6 +1918,17 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
   previewStarting?: string;
   busy: string | null;
 }) {
+  // DID THIS RUN ACTUALLY RESEARCH ANYTHING? Offering "build on this research" on a run with
+  // no dossier would start an ordinary delivery run while telling the operator they had skipped
+  // the expensive step — they would pay for research a second time believing they had not.
+  const researched = run.steps.some((step) => {
+    if (step.kind !== "research" || step.status !== "succeeded") return false;
+    const produced = (step.output ?? {}) as Record<string, unknown>;
+    const awaited = produced.await as { kind?: string; id?: string } | undefined;
+    return typeof produced.discovery_id === "string"
+      || (awaited?.kind === "discovery" && !!awaited.id);
+  });
+
   // Has a preview been asked for on THIS build and not yet appeared? The URL is the finish
   // line; the POST returning is not.
   // THE BUILD A PREVIEW IS FOR. Read from whichever step produced it rather than a step named
@@ -2087,6 +2111,25 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onR
             </span>
           </>
         )}
+        {/* THE ANSWER TO "I DON'T WANT TO PAY FOR THAT RESEARCH TWICE".
+            Offered only where it means something: a finished run that actually produced a
+            dossier. The delivery run adopts THAT research and holds its own panel, because a
+            Research-Led Discovery panel answered a go/no-go — its objective says in as many
+            words that its PRD is not an implementation plan. */}
+        {!ACTIVE_RUN_STATES.has(run.status) && researched ? (
+          <>
+            <button type="button" className="cap-btn primary" onClick={onBuildOnThis}
+                    disabled={!!busy} data-testid="dw-build-on-this">
+              {busy === "Build on this research" ? "Starting…" : "Build on this research →"}
+            </button>
+            <span className="detail">
+              Starts Standard Product Delivery on the same directive and hands it this run&rsquo;s
+              dossier. The research step adopts what is already there — it does not run again,
+              and it does not cost anything a second time. The panel that follows argues from
+              those findings.
+            </span>
+          </>
+        ) : null}
       </div>
     </div>
   );
