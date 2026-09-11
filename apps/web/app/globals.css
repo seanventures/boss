@@ -9149,3 +9149,14 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 .setup-ok { margin-top: 10px; color: var(--green, #3FB950); font-size: .86rem; }
 .setup-bad { margin-top: 10px; color: var(--amber, #d29922); font-size: .86rem; }
+
+/* What an install is already running on. A definition list because that is what it is: a name
+   and the fact behind it, not a form. */
+.setup-facts { display: grid; gap: 14px; margin: 14px 0 10px; }
+.setup-facts dt {
+  display: flex; align-items: center; gap: 8px;
+  font-size: .78rem; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted, #B4C4E0);
+}
+.setup-facts dd { margin: 4px 0 0; color: var(--ink-soft, #D4E0F4); font-size: .9rem; }
+.setup-facts dd code { font-size: .82rem; color: var(--muted, #B4C4E0); }

@@ -97,3 +97,33 @@ describe("the route does not become a way to reach any endpoint", () => {
     expect(ROUTE).not.toContain("token=");
   });
 });
+
+describe("what the install is already running on", () => {
+  it("is shown, with a live verdict rather than a variable being non-empty", () => {
+    expect(UI).toContain('data-testid="setup-configured"');
+    expect(UI).toContain('data-testid="setup-env-github-fact"');
+    expect(UI).toContain('data-testid="setup-env-model-fact"');
+    expect(UI).toContain("Can push");
+    expect(UI).toContain("Answering");
+  });
+
+  it("and says it was checked just now, not read from a variable", () => {
+    expect(UI).toContain("Checked just now");
+  });
+
+  it("the card stays out of the way when nothing is configured", () => {
+    // On a genuinely fresh install this is noise above the two forms that matter.
+    expect(UI).toContain("if (!github?.configured && !model?.configured) return null;");
+  });
+
+  it("it shows the last four of a credential, never the credential", () => {
+    expect(UI).toContain("token_last4");
+    expect(UI).toContain("key_last4");
+    expect(UI).not.toContain("github.token}");
+    expect(UI).not.toContain("model.api_key");
+  });
+
+  it("and says what connecting something new would do to it", () => {
+    expect(UI).toContain("replaces what is here");
+  });
+});

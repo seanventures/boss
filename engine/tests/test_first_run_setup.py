@@ -124,3 +124,61 @@ def test_and_is_told_where_that_configuration_came_from():
 
     source = inspect.getsource(setup_service.setup_status)
     assert '"repository": f"{env_owner}/{env_repo}"' in source
+
+
+def test_what_the_install_already_runs_on_is_checked_not_assumed():
+    """"Connected" that means "an environment variable is not empty" is the status that stays
+    green while the first build dies at push time."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    github = inspect.getsource(setup_service.check_github)
+    assert "api.github.com/repos/" in github
+    # The caller's own permissions, so BOSS can say `push: true` rather than `token: present`.
+    assert 'permissions.get("push")' in github
+
+    model = inspect.getsource(setup_service.check_model)
+    assert '/models' in model
+
+
+def test_a_read_only_token_is_not_reported_as_connected():
+    """It looks connected and produces a pull request that never opens."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    source = inspect.getsource(setup_service.check_github)
+    assert "cannot push to it" in source
+    assert "Contents needs read and write" in source
+
+
+def test_the_credential_itself_never_leaves():
+    """Last four, so two installs can be told apart; never enough to use."""
+    from boss_engine.services.setup_service import _last4, check_github, check_model
+    import inspect
+
+    assert _last4("ghp_abcdefgh") == "efgh"
+    assert _last4("abc") == ""
+    for fn in (check_github, check_model):
+        source = inspect.getsource(fn)
+        assert '"token": token' not in source
+        assert '"api_key"' not in source
+
+
+def test_the_status_carries_it_so_the_screen_can_show_it():
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    source = inspect.getsource(setup_service.setup_status)
+    assert '"environment": {"github": check_github(settings), "model": check_model(settings)}' \
+        in source
+
+
+def test_a_probe_never_raises_at_somebody_on_their_first_run():
+    from boss_engine.services.setup_service import _probe
+
+    result = _probe("http://127.0.0.1:1/nope", {}, timeout=3)
+    assert result["ok"] is False
+    assert result["error"]

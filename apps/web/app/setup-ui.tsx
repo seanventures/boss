@@ -18,9 +18,17 @@ import React, { useCallback, useEffect, useState } from "react";
 
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
+type EnvCheck = {
+  configured?: boolean; ok?: boolean; error?: string; source?: string;
+  repository?: string; token_last4?: string; can_push?: boolean;
+  default_branch?: string; private?: boolean;
+  base_url?: string; model?: string; key_last4?: string;
+  models_available?: number; model_listed?: boolean; note?: string;
+};
 type Status = {
   ready?: boolean; steps?: Step[]; repositories?: number;
   model_sources?: number; model_from_environment?: boolean;
+  environment?: { github?: EnvCheck; model?: EnvCheck };
 };
 type Provider = {
   provider: string; label: string; kind: string; api: string;
@@ -107,9 +115,89 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
         </ol>
       </article>
 
+      <Configured env={status?.environment} />
+
       <GitHubStep projectId={projectId} actor={actor} onDone={reload} />
       <ModelStep projectId={projectId} actor={actor} providers={providers} onDone={reload} />
     </section>
+  );
+}
+
+/**
+ * What this install is ALREADY running on.
+ *
+ * The wizard answers "how do I set this up". It had no answer at all for the far more common
+ * state — already configured, from the environment, by somebody who now wants to know whether
+ * it still works. That operator was shown two empty forms, which reads as "nothing is connected"
+ * about a BOSS that has been opening pull requests for weeks.
+ *
+ * Every line here is CHECKED, not merely read. "Connected" that means "an environment variable
+ * is not empty" is the status that stays green while the first build dies at push time.
+ */
+function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) {
+  const github = env?.github;
+  const model = env?.model;
+  if (!github && !model) return null;
+  if (!github?.configured && !model?.configured) return null;
+
+  return (
+    <article className="stack-card" data-testid="setup-configured">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">Already on this install</span>
+          <h2>What BOSS is running on</h2>
+          <p className="detail">
+            Set from this install&rsquo;s environment. Checked just now against GitHub and the
+            model endpoint — not read from a variable and assumed.
+          </p>
+        </div>
+      </div>
+
+      <dl className="setup-facts">
+        {github?.configured ? (
+          <div data-testid="setup-env-github-fact">
+            <dt>
+              Repository
+              <span className={`cap-badge ${github.ok ? "tone-green" : "tone-amber"}`}>
+                {github.ok ? "Can push" : "Check failed"}
+              </span>
+            </dt>
+            <dd>
+              <b>{github.repository}</b>
+              {github.default_branch ? ` · default ${github.default_branch}` : ""}
+              {github.private === true ? " · private" : github.private === false ? " · public" : ""}
+              {/* THE LAST FOUR, never the token. Enough to tell two credentials apart when
+                  somebody is working out which one an install is using; never enough to use. */}
+              {github.token_last4 ? ` · token …${github.token_last4}` : ""}
+              {github.error ? <span className="setup-bad"> — {github.error}</span> : null}
+            </dd>
+          </div>
+        ) : null}
+
+        {model?.configured ? (
+          <div data-testid="setup-env-model-fact">
+            <dt>
+              Model
+              <span className={`cap-badge ${model.ok ? "tone-green" : "tone-amber"}`}>
+                {model.ok ? "Answering" : "Check failed"}
+              </span>
+            </dt>
+            <dd>
+              <b>{model.model || "not named"}</b>
+              {model.base_url ? <> · <code>{model.base_url}</code></> : null}
+              {model.key_last4 ? ` · key …${model.key_last4}` : ""}
+              {typeof model.models_available === "number"
+                ? ` · ${model.models_available} models offered` : ""}
+              {model.note ? <span className="detail"> — {model.note}</span> : null}
+              {model.error ? <span className="setup-bad"> — {model.error}</span> : null}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+      <p className="detail">
+        Connecting something below replaces what is here for this project.
+      </p>
+    </article>
   );
 }
 

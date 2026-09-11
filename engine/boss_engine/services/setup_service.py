@@ -155,6 +155,123 @@ def verify_model_key(
                 "error": f"could not reach {url_base}: {error.reason}"}
 
 
+def _last4(value: str) -> str:
+    """Enough to tell two credentials apart, never enough to use one."""
+    text_value = str(value or "").strip()
+    return text_value[-4:] if len(text_value) >= 4 else ""
+
+
+def _probe(url: str, headers: dict[str, str], timeout: int = 10) -> dict[str, Any]:
+    """A GET that never raises. Returns the parsed body on success, the reason on failure."""
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(200_000)
+        try:
+            return {"ok": True, "status": 200, "body": json.loads(raw.decode(errors="ignore"))}
+        except ValueError:
+            return {"ok": True, "status": 200, "body": {}}
+    except urllib.error.HTTPError as error:
+        return {"ok": False, "status": error.code,
+                "error": error.read().decode(errors="ignore")[:200]}
+    except urllib.error.URLError as error:
+        return {"ok": False, "status": 0, "error": str(error.reason)}
+
+
+def check_github(settings: Settings) -> dict[str, Any]:
+    """What this install is pointed at, and whether the token can actually push to it.
+
+    A READ, and free. "Connected" that means "an environment variable is not empty" is the kind
+    of status that reads green while the first build dies at push time — which is precisely the
+    failure this screen exists to make impossible. GET /repos returns the caller's own
+    permissions, so BOSS can say `push: true` rather than `token: present`.
+    """
+    token = str(getattr(settings, "github_token", "") or "").strip()
+    owner = str(getattr(settings, "target_github_owner", "") or "").strip()
+    repo = str(getattr(settings, "target_github_repo", "") or "").strip()
+    out: dict[str, Any] = {
+        "configured": bool(token and owner and repo),
+        "repository": f"{owner}/{repo}" if owner and repo else "",
+        "token_last4": _last4(token),
+        "source": "environment",
+    }
+    if not out["configured"]:
+        out["ok"] = False
+        out["error"] = ("BOSS_GITHUB_TOKEN, BOSS_TARGET_GITHUB_OWNER and "
+                        "BOSS_TARGET_GITHUB_REPO are not all set.")
+        return out
+    probe = _probe(
+        f"https://api.github.com/repos/{owner}/{repo}",
+        {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+         "User-Agent": "boss-setup-check"},
+    )
+    if not probe["ok"]:
+        out["ok"] = False
+        out["error"] = {
+            401: "the token was rejected by GitHub.",
+            403: "the token is valid but not allowed to see that repository.",
+            404: f"GitHub has no {owner}/{repo} visible to this token.",
+        }.get(probe.get("status"), probe.get("error") or "GitHub did not answer")
+        return out
+    body = probe.get("body") or {}
+    permissions = body.get("permissions") or {}
+    out["ok"] = bool(permissions.get("push"))
+    out["can_push"] = bool(permissions.get("push"))
+    out["default_branch"] = body.get("default_branch")
+    out["private"] = body.get("private")
+    if not out["ok"]:
+        # NAMING THE MISSING HALF. A token that can read but not push looks connected and
+        # produces a pull request that never opens.
+        out["error"] = ("the token can read that repository but cannot push to it — "
+                        "Contents needs read and write.")
+    return out
+
+
+def check_model(settings: Settings) -> dict[str, Any]:
+    """Which model endpoint this install uses, and whether it answers.
+
+    Deliberately `GET /models` and not a completion: it is free, it is the same credential, and
+    it proves reachability plus authentication. It cannot prove the chosen model will answer —
+    that is what the wizard's one-token completion is for when a key is first added.
+    """
+    key = str(getattr(settings, "openai_api_key", "") or "").strip()
+    base = (str(getattr(settings, "openai_base_url", "") or "").strip()
+            or "https://api.openai.com/v1")
+    model = (str(getattr(settings, "chat_model", "") or "").strip()
+             or str(getattr(settings, "openai_model", "") or "").strip())
+    out: dict[str, Any] = {
+        "configured": bool(key),
+        "base_url": base,
+        "model": model,
+        "key_last4": _last4(key),
+        "source": "environment",
+    }
+    if not key:
+        out["ok"] = False
+        out["error"] = "OPENAI_API_KEY is not set."
+        return out
+    probe = _probe(f"{base.rstrip('/')}/models", {"Authorization": f"Bearer {key}"})
+    if not probe["ok"]:
+        out["ok"] = False
+        out["error"] = {
+            401: "the key was rejected by the endpoint.",
+            404: "that endpoint has no /models — it may still work for completions.",
+        }.get(probe.get("status"), probe.get("error") or "the endpoint did not answer")
+        return out
+    listed = (probe.get("body") or {}).get("data") or []
+    names = [str(item.get("id")) for item in listed if isinstance(item, dict)][:60]
+    out["ok"] = True
+    out["models_available"] = len(names)
+    # WHETHER THE MODEL THIS INSTALL ASKS FOR IS ACTUALLY THERE. A gateway that answers and does
+    # not carry the configured alias is the failure that looks like the model being "slow".
+    if model and names:
+        out["model_listed"] = model in names
+        if not out["model_listed"]:
+            out["note"] = (f"the endpoint answered but does not list {model!r}; "
+                           f"it may still route it.")
+    return out
+
+
 def setup_status(connection: Connection, settings: Settings, project_id: str) -> dict[str, Any]:
     """What is connected, what is not, and what to do about it."""
     repos = connection.execute(
@@ -204,6 +321,11 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
     return {
         "project_id": project_id,
         "ready": all(step["done"] for step in steps),
+        # WHAT THIS INSTALL IS ACTUALLY RUNNING ON. The steps above answer "is it set up"; these
+        # answer "set up as WHAT, and does it work" — which is the question an operator has when
+        # they already believe it is configured, and the one a screen of empty forms refuses to
+        # answer.
+        "environment": {"github": check_github(settings), "model": check_model(settings)},
         "steps": steps,
         "github_connections": int(connections),
         "repositories": int(repos),
