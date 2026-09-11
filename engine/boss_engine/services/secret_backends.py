@@ -625,6 +625,38 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
     raise SecretUnavailable(f"no secret backend for {kind!r}")
 
 
+#: Tried in order when nobody has said where a secret should go. Most protected first.
+_BACKEND_PREFERENCE = ("platform_secret_store", "vault", "local_vault", "database")
+
+
+def default_secret_backend(settings: Settings) -> str:
+    """The best secret backend that actually works on THIS installation.
+
+    A setup wizard cannot ask a first-time user which secret store they have — the whole point
+    is that they have not configured anything yet — and it must not fail on the installation it
+    exists to serve. So it tries the most protected option first and falls back until one
+    answers: a managed store if the deployment has one, a vault if it is reachable, the local
+    encrypted file vault if a master key is present, and Postgres last.
+
+    `database` is last for a reason and is not a good place for a token; it is here because a
+    wizard that refuses to complete is worse than one that completes and can be improved, and
+    because the alternative an operator falls back to is a plaintext env var anyway.
+    """
+    for kind in _BACKEND_PREFERENCE:
+        try:
+            impl = backend_for(kind, settings)
+        except SecretUnavailable:
+            continue
+        try:
+            health = impl.health()
+        except Exception:  # noqa: BLE001 — an unhealthy backend is simply not this one
+            continue
+        if health.get("ok") is False:
+            continue
+        return kind
+    return "database"
+
+
 def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings) -> str:
     """THE place a stored reference becomes a value.
 

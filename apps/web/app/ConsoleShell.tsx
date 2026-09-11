@@ -98,6 +98,7 @@ type AreaId =
   | "ops"
   | "assurance"
   | "org"
+  | "setup"
   | "enterprise";
 
 type AreaDef = {
@@ -225,6 +226,7 @@ const AREAS: AreaDef[] = [
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
+  { id: "setup", label: "Setup", sub: "Connect a repository and a model — the two things a working install needs", group: "Settings", icon: ICONS.infra },
   { id: "budget", label: "Govern", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Settings", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },

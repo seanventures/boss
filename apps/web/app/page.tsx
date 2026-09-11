@@ -185,6 +185,7 @@ import { AssuranceCenter } from "./assurance-ui";
 import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
+import { SetupHome } from "./setup-ui";
 import { DeploymentManagerPanel } from "./deployment-manager-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
 import { PipelineView } from "./pipeline-ui";
@@ -1649,6 +1650,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
+        </section>
+
+        {/* THE FIRST TEN MINUTES. Before any of the areas below mean anything, an install
+            needs somewhere to write code and something to think with. */}
+        <section className="panel-stack" data-area="setup" aria-label="Setup">
+          <SetupHome projectId={activeProjectId} actor={activeActorId} />
         </section>
 
         <section className="panel-stack" data-area="budget" aria-label="Govern">

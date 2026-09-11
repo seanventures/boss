@@ -14405,6 +14405,103 @@ def release_model_gateway_lease(
         return ModelGatewayLeaseSummary(**lease)
 
 
+# --------------------------------------------------------------------------- #
+# FIRST-RUN SETUP. See services/setup_service for why this is its own surface.
+# --------------------------------------------------------------------------- #
+@app.get("/v1/setup/status")
+def setup_status_endpoint(project_id: str) -> dict:
+    """What is connected, what is not, and what to do about it."""
+    from .services.setup_service import setup_status
+
+    with begin(engine) as connection:
+        return setup_status(connection, settings, project_id)
+
+
+@app.get("/v1/setup/model-providers")
+def setup_model_providers() -> dict:
+    """The providers the wizard offers, with the base URL and an example model for each.
+
+    A catalogue rather than a free-text form: the two things a new user gets wrong are the base
+    URL and the model name, and both are knowable.
+    """
+    from .services.setup_service import provider_catalogue
+
+    return {"providers": provider_catalogue()}
+
+
+@app.post("/v1/setup/model", status_code=201)
+def setup_model_endpoint(payload: dict) -> dict:
+    """Prove a model key works, then store it and register the source.
+
+    IN THAT ORDER, deliberately. Storing first and verifying afterwards leaves a broken key
+    recorded as configured, and the operator learns an hour later when a build fails — by which
+    point the key is the last thing anyone suspects.
+    """
+    from .services.secret_backends import default_secret_backend
+    from .services.setup_service import PROVIDERS, SetupError, verify_model_key
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip() or "executive_console"
+    provider = str(payload.get("provider") or "").strip()
+    api_key = str(payload.get("api_key") or "").strip()
+    base_url = str(payload.get("base_url") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    if not project_id or not provider:
+        raise HTTPException(status_code=400, detail="project_id and provider are required")
+    spec = PROVIDERS.get(provider)
+    if spec is None:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown provider {provider!r}; "
+                                   f"one of: {', '.join(sorted(PROVIDERS))}")
+    if spec.get("kind") == "subscription":
+        # NOT A REFUSAL, A REDIRECT. BOSS's own policy is that a subscription is authenticated
+        # through its provider's login, never by a pasted credential — so the wizard says where
+        # that flow lives instead of showing a key box that would be rejected on submit.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{spec['label']} is a subscription, not an API key — it is authorised "
+                    f"through its own login. Use /v1/entitlements/sources/{{source_id}}/connect."))
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    try:
+        proof = verify_model_key(provider=provider, api_key=api_key,
+                                 base_url=base_url, model=model)
+    except SetupError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not proof.get("ok"):
+        # The key never reaches storage. A source recorded as configured against a key that does
+        # not work is worse than no source at all.
+        raise HTTPException(status_code=422, detail=proof.get("error") or "the key did not work")
+
+    source_id = f"setup-{provider}"
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "entitlement_manage")
+        entitlements.upsert_source(
+            connection,
+            {
+                "project_id": project_id, "provider": provider, "source_id": source_id,
+                "source_kind": "api", "entitlement_kind": "api_key",
+                "owner_type": "project", "owner_id": project_id,
+                "cost_mode": "usage_based_api", "auth_method": "api_key",
+                "status": "declared", "runtime_supported": True,
+                "supported_models": [proof["model"]],
+                "connection_metadata": {"base_url": base_url or spec.get("base_url") or "",
+                                        "verified_endpoint": proof.get("endpoint")},
+            },
+            actor=actor,
+        )
+        stored = model_gateway.upload_credential(
+            connection, project_id, source_id,
+            value=api_key, backend=default_secret_backend(settings), actor=actor,
+        )
+    secret = stored["secret"]
+    return {"ok": True, "provider": provider, "source_id": source_id,
+            "model": proof["model"], "verified": True,
+            "backend": secret["backend"], "last4": secret.get("last4"),
+            "raw_secret_stored": False}
+
+
 @app.get("/v1/entitlements/sources", response_model=EntitlementSourceListResponse)
 def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
     with begin(engine) as connection:
@@ -14851,6 +14948,7 @@ def easy_connect_github_to_project(
                 test_after_link=payload.test_after_link,
                 metadata=payload.metadata,
                 actor=payload.actor,
+                token=payload.token,
             )
         except GitHubConnectionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

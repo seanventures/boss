@@ -4947,6 +4947,17 @@ class GitHubEasyConnectRequest(BaseModel):
         "personal_access_token"
     )
     env_credential_key: str = "BOSS_GITHUB_TOKEN"
+    #: THE TOKEN ITSELF, for the setup wizard.
+    #:
+    #: "Operators never paste raw tokens into BOSS" was a fine rule for a platform whose
+    #: operators also own the server's environment. It is the wrong rule for self-hosted open
+    #: source: the first thing a new user is asked to do becomes "set an environment variable on
+    #: the API container and restart it", which is not onboarding, it is a support ticket.
+    #:
+    #: The token still never lands in a column. It is written THROUGH to the configured secret
+    #: backend by put_secret and only the reference is recorded — the same treatment every model
+    #: credential already gets. Absent, the env path is unchanged.
+    token: Optional[str] = None
     app_id: Optional[str] = None
     installation_id: Optional[str] = None
     api_base_url: str = "https://api.github.com"
@@ -4965,6 +4976,10 @@ class GitHubEasyConnectRequest(BaseModel):
         self.connection_label = _require_text(
             self.connection_label, "connection_label"
         )
+        if self.token is not None:
+            self.token = self.token.strip()
+            if not self.token:
+                raise ValueError("token was empty.")
         self.env_credential_key = _require_text(
             self.env_credential_key, "env_credential_key"
         ).upper()

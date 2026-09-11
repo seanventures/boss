@@ -89,6 +89,11 @@ ops:
   to: infra
   what: audit export and operational counts
 
+setup:
+  to: infra
+  what: connect a repository and a model — the first ten minutes of a self-hosted install
+  risk: a wizard that reports success without proving the credential works
+
 budget:
   to: infra
   what: spend against cap

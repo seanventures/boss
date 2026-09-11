@@ -775,6 +775,52 @@ class GitHubConnectionService:
         )
         return credential_ref
 
+    def store_token_credential(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        token: str,
+        auth_method: str,
+        label: str,
+        actor: str,
+    ) -> str:
+        """Write a pasted token through to the secret backend; return its credential_ref.
+
+        The value leaves BOSS inside `put_secret` and is never written to a column, logged, or
+        returned. What comes back is a reference the connection stores, resolved at use time by
+        `_resolve_secret` — which already handles every backend, so nothing downstream has to
+        know this token arrived by hand rather than from the environment.
+        """
+        from .secrets_service import put_secret
+
+        method = (auth_method or "").strip().lower()
+        secret_kind = "private_key" if method == "github_app" else "api_token"
+        # A NAME THAT SURVIVES A SECOND CONNECTION. `ref_key` is unique per project, so a fixed
+        # name would make a second GitHub account silently overwrite the first one's token.
+        slug = re.sub(r"[^a-z0-9]+", "_", (label or "github").strip().lower()).strip("_")
+        stored = put_secret(
+            connection,
+            self.settings,
+            project_id=project_id,
+            name=f"github_{slug or 'connection'}",
+            value=token.strip(),
+            secret_kind=secret_kind,
+            backend=self._preferred_backend(),
+            actor=actor,
+        )
+        connection.execute(
+            text("UPDATE secret_refs SET provider='github' WHERE id = :id"),
+            {"id": stored["secret_ref_id"]},
+        )
+        return f"{stored['backend']}:{stored['ref_key']}"
+
+    def _preferred_backend(self) -> str:
+        """Where a pasted secret goes: the best store that works on this installation."""
+        from .secret_backends import default_secret_backend
+
+        return default_secret_backend(self.settings)
+
     def easy_connect(
         self,
         connection: Connection,
@@ -792,19 +838,35 @@ class GitHubConnectionService:
         test_after_link: bool,
         metadata: dict[str, Any],
         actor: str,
+        #: A token pasted into the setup wizard. Stored through the secret backend; only the
+        #: reference is kept. Absent, the env-var path is used exactly as before.
+        token: Optional[str] = None,
     ) -> dict[str, Any]:
         """One-shot project GitHub connect: SecretRef → connection → optional repo bind/test.
 
-        Designed for Mission Control "easy auth": operator places a PAT or App private
-        key in the runtime environment, names the env var, and links owner/repo.
+        Two ways in, deliberately. An operator who owns the server names an environment
+        variable. An operator setting up self-hosted BOSS for the first time pastes a token into
+        the wizard — because "set an env var on the API container and restart it" is not a first
+        step anybody should have to take to try a product, and it is the step that ends most
+        open-source evaluations.
         """
-        credential_ref = self.ensure_env_credential_ref(
-            connection,
-            project_id=project_id,
-            env_key=env_credential_key,
-            auth_method=auth_method,
-            actor=actor,
-        )
+        if token and token.strip():
+            credential_ref = self.store_token_credential(
+                connection,
+                project_id=project_id,
+                token=token,
+                auth_method=auth_method,
+                label=connection_label,
+                actor=actor,
+            )
+        else:
+            credential_ref = self.ensure_env_credential_ref(
+                connection,
+                project_id=project_id,
+                env_key=env_credential_key,
+                auth_method=auth_method,
+                actor=actor,
+            )
         created_connection = self.create_connection(
             connection,
             project_id=project_id,

@@ -1911,6 +1911,7 @@ tr[data-expanded] { background: var(--surface-2); }
 .bx-content[data-active="foundations"] .frame > section:is([data-area="foundations"], :has([data-area="foundations"])),
 .bx-content[data-active="components"] .frame > section:is([data-area="components"], :has([data-area="components"])),
 .bx-content[data-active="discovery"] .frame > section:is([data-area="discovery"], :has([data-area="discovery"])),
+.bx-content[data-active="setup"] .frame > section:is([data-area="setup"], :has([data-area="setup"])),
 .bx-content[data-active="budget"] .frame > section:is([data-area="budget"], :has([data-area="budget"])),
 .bx-content[data-active="pipeline"] .frame > section:is([data-area="pipeline"], :has([data-area="pipeline"])),
 .bx-content[data-active="comms"] .frame > section:is([data-area="comms"], :has([data-area="comms"])),
@@ -9128,3 +9129,23 @@ a.agent-chip-name:hover { text-decoration: underline; }
   border-radius: 8px; padding: 4px 8px; font-size: .9rem; line-height: 1;
 }
 .agent-attach:hover { border-color: var(--accent, #4C8DF6); }
+
+/* Setup wizard. Deliberately plain: the one screen a first-time operator sees should read like
+   instructions, not like a product tour. */
+.setup-steps { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.setup-steps li { display: flex; gap: 10px; align-items: baseline; }
+.setup-steps li.is-done .setup-tick { color: var(--green, #3FB950); }
+.setup-tick { color: var(--faint, #8092B3); font-size: .95rem; width: 1em; }
+.setup-form { display: grid; gap: 12px; margin-top: 14px; max-width: 560px; }
+.setup-field { display: grid; gap: 4px; }
+.setup-field > span { font-size: .78rem; color: var(--muted, #B4C4E0); }
+.setup-field input, .setup-field select {
+  padding: 8px 10px; border-radius: 8px; font: inherit;
+  border: 1px solid var(--border, #1C2740); background: var(--surface-2, #0F1830);
+  color: var(--ink, #EEF3FB);
+}
+.setup-field input:focus, .setup-field select:focus {
+  outline: none; border-color: var(--accent, #4C8DF6);
+}
+.setup-ok { margin-top: 10px; color: var(--green, #3FB950); font-size: .86rem; }
+.setup-bad { margin-top: 10px; color: var(--amber, #d29922); font-size: .86rem; }
