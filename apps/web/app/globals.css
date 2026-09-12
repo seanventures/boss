@@ -8553,12 +8553,16 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   padding: 10px 12px 12px; border-radius: 10px;
   border: 1px solid transparent;
 }
-/* The one that still wants something, picked out — and only ever one of them at a time. */
+/* THE ONE THAT CAN BE ACTED ON, PICKED OUT — and only ever one of them at a time.
+   This used to key off `data-blocked`, which is set on the step whose prerequisite is NOT met.
+   So the box landed on the step the page was telling you would fail, and the step that actually
+   wanted doing was left flat. Blocked is now drawn as blocked: quieter, not louder. */
 .dw-ship-step[data-done="true"] { opacity: .92; }
-.dw-ship-step[data-blocked="true"] {
+.dw-ship-step[data-active="true"] {
   border-color: color-mix(in srgb, var(--amber, #d29922) 34%, var(--border));
   background: color-mix(in srgb, var(--amber, #d29922) 7%, transparent);
 }
+.dw-ship-step[data-blocked="true"] { opacity: .62; }
 .dw-ship-n {
   display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px;
   border-radius: 50%; border: 1px solid var(--border);
@@ -8578,7 +8582,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   color: var(--muted);
 }
 .dw-ship-step[data-done="true"] .dw-ship-state { color: var(--green, #3fb950); }
-.dw-ship-step[data-blocked="true"] .dw-ship-state { color: var(--amber, #d29922); }
+.dw-ship-step[data-active="true"] .dw-ship-state { color: var(--amber, #d29922); }
+/* NOT AMBER. Amber on both read as two things demanding attention; this one is waiting on the
+   other one, which is a different state and should not compete with it. */
+.dw-ship-step[data-blocked="true"] .dw-ship-state { color: var(--faint, #8092B3); }
 .dw-ship-hint { margin: 6px 0 0; line-height: 1.55; max-width: 78ch; }
 
 /* BOUND IS A FACT, NOT A FORM. The picker used to render whenever the console had not noticed

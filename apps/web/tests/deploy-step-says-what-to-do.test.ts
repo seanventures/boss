@@ -46,7 +46,7 @@ describe("shipping is two acts, in order", () => {
   it("the approve button lives inside the step it belongs to", () => {
     // It used to sit three blocks below, past "Ask BOSS about this step", which is how it came
     // to read as a peer of "Set target" rather than the act after it.
-    expect(UI).toContain("{needsYou(step) ? <ReviewAndDecide step={step} /> : null}");
+    expect(UI).toContain("{needsYou(step) ? <ReviewAndDecide step={step} premature={!shippedTo} />");
     expect(UI).toContain("needsYou(step) && !isDeployStep(step, capability)");
   });
 

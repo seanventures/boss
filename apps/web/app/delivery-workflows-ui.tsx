@@ -2389,11 +2389,17 @@ function askBossAbout(runRef: string, question: string): void {
  *  same call. Approving a deployment off a step badge is a decision made blind. The Approvals
  *  page is where that context lives, so this goes there with the decision already selected.
  */
-function ReviewAndDecide({ step }: { step: RunStep }) {
+function ReviewAndDecide({ step, premature = false }: {
+  step: RunStep;
+  /** The prerequisite is not met, so this press is known to fail. Still reachable — an operator
+   *  may want to read the decision — but not dressed as the thing to do next. */
+  premature?: boolean;
+}) {
   const role = (step.approval as { approver_role?: string })?.approver_role;
   return (
     <div className="dw-step-decide" data-testid="dw-step-decide">
-      <a className="cap-btn primary dw-decide-btn" data-testid="dw-step-review"
+      <a className={`cap-btn${premature ? "" : " primary"} dw-decide-btn`}
+         data-testid="dw-step-review"
          href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                            { area: "decisions", decision_filter: "needs_action",
                              decision: step.decision_id })}>
@@ -2716,18 +2722,40 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           start a SECOND deploy of the same build while the first was being picked up. An
           approved gate is a decision already taken; the button that takes it does not belong
           on screen any more. */}
+      {/* AND NOT WHILE THE GATE IS STILL OPEN.
+          This step is gated on release_manager and unanswered, and a blue "Redeploy" sat above
+          the gate — pressing it POSTs the deploy directly, with no decision, which is the one
+          thing a manual gate exists to prevent. It also read as proof the step was done: two
+          primary buttons saying the app is deployed, above a line asking for approval to
+          deploy it. While there is an answerable gate, the gate IS the way to ship; the button
+          comes back once the decision has been taken, for the re-ship case it was added for. */}
       {isDeployStep(step, capability) && shippedTo && buildRunId
+        && !needsYou(step)
         && decidedButNotMoved(step) !== "approved" ? (
         <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
                  appName={typeof runInput.title === "string" ? runInput.title : shippedTo.app_name}
                  alreadyLive={!!liveAppUrl} onDone={onBound} />
       ) : null}
 
+      {/* WHOSE DEPLOYMENT IS THAT, THOUGH.
+          An address answering does not mean THIS run shipped. This app had a deployment from a
+          run five days earlier, so a step still waiting for approval led with "Open the app —
+          shipped and answering": true about the app, false about the step, and read top-down it
+          says the deploy is done and then asks to approve the deploy. When this step has not
+          succeeded the same fact is stated as what it is — the previous release — and does not
+          take the primary button off the gate. */}
       {liveAppUrl ? (
         <p className="dw-step-live" data-testid="dw-step-live">
-          <a className="cap-btn primary" href={liveAppUrl} target="_blank" rel="noreferrer"
+          <a className={`cap-btn${
+               isDeployStep(step, capability) && step.status !== "succeeded" ? "" : " primary"}`}
+             href={liveAppUrl} target="_blank" rel="noreferrer"
              data-testid="dw-open-app">Open the app ↗</a>
-          <span className="detail">{liveAppUrl} — shipped and answering.</span>
+          <span className="detail" data-testid="dw-step-live-note">
+            {isDeployStep(step, capability) && step.status !== "succeeded"
+              ? <>{liveAppUrl} — answering, from an earlier release. This build has not
+                  shipped yet.</>
+              : <>{liveAppUrl} — shipped and answering.</>}
+          </span>
         </p>
       ) : null}
       {observedGates(step, runAppTitle) ? (
@@ -2760,7 +2788,15 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           releases is the whole fix. */}
       {isDeployStep(step, capability) ? (
         <ol className="dw-ship-plan" data-testid="dw-step-target">
+          {/* ACTIVE IS THE ONE THAT CAN BE ACTED ON, AND IT WAS THE OTHER ONE.
+              `data-blocked` went on step 2 exactly when step 1 was unfinished — and the CSS
+              drew that as the highlight, with the primary button inside it. So the screen boxed
+              the step it was simultaneously telling you would fail ("there is nowhere to put the
+              container until step 1 is done") while leaving the step that actually needed doing
+              flat and unmarked. Highlight follows the prerequisite now: step 1 until a target
+              exists, step 2 after. */}
           <li className="dw-ship-step" data-done={shippedTo ? "true" : undefined}
+              data-active={!shippedTo ? "true" : undefined}
               data-testid="dw-ship-where">
             <span className="dw-ship-n">1</span>
             <div className="dw-ship-body">
@@ -2785,13 +2821,18 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
             </div>
           </li>
           <li className="dw-ship-step" data-testid="dw-ship-approve"
+              data-active={shippedTo && needsYou(step) ? "true" : undefined}
               data-blocked={!shippedTo ? "true" : undefined}>
             <span className="dw-ship-n">2</span>
             <div className="dw-ship-body">
               <div className="dw-ship-title">
                 Approve the release
                 <span className="dw-ship-state">
-                  {step.status === "waiting" ? "waiting on you" : step.status}
+                  {/* "WAITING ON YOU" WAS THE OTHER HALF OF THE SAME LIE. It is waiting on
+                      step 1 — and saying it wants the operator, in amber, beside a button that
+                      would fail, is three signals all pointing at the wrong step. */}
+                  {!shippedTo ? "after step 1"
+                    : step.status === "waiting" ? "waiting on you" : step.status}
                 </span>
               </div>
               <p className="detail dw-ship-hint">
@@ -2806,7 +2847,7 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
               {/* THE BUTTON, INSIDE THE THING IT DOES. It used to sit three blocks further
                   down, past "Ask BOSS about this step", which is how it came to look like a
                   peer of "Set target" rather than the step after it. */}
-              {needsYou(step) ? <ReviewAndDecide step={step} /> : null}
+              {needsYou(step) ? <ReviewAndDecide step={step} premature={!shippedTo} /> : null}
             </div>
           </li>
         </ol>
