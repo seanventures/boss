@@ -9173,3 +9173,15 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 .setup-facts dd { margin: 4px 0 0; color: var(--ink-soft, #D4E0F4); font-size: .9rem; }
 .setup-facts dd code { font-size: .82rem; color: var(--muted, #B4C4E0); }
+
+/* Explain-this-step. Deliberately the quietest thing in the header: it is there for whoever
+   wants it, and invisible to everyone who has done this before. */
+.dw-help-toggle {
+  margin-left: auto; flex-shrink: 0;
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--faint, #8092B3); font-size: .74rem; line-height: 1; cursor: pointer;
+}
+.dw-help-toggle:hover, .dw-help-toggle[aria-expanded="true"] {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}

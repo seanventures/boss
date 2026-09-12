@@ -2389,16 +2389,13 @@ function askBossAbout(runRef: string, question: string): void {
  *  same call. Approving a deployment off a step badge is a decision made blind. The Approvals
  *  page is where that context lives, so this goes there with the decision already selected.
  */
-function ReviewAndDecide({ step, premature = false }: {
-  step: RunStep;
-  /** The prerequisite is not met, so this press is known to fail. Still reachable — an operator
-   *  may want to read the decision — but not dressed as the thing to do next. */
-  premature?: boolean;
-}) {
+function ReviewAndDecide({ step }: { step: RunStep }) {
   const role = (step.approval as { approver_role?: string })?.approver_role;
   return (
     <div className="dw-step-decide" data-testid="dw-step-decide">
-      <a className={`cap-btn${premature ? "" : " primary"} dw-decide-btn`}
+      {/* PRIMARY AGAIN, because it is now only rendered when it can actually be pressed — the
+          blocked case does not draw a button at all rather than a quieter one. */}
+      <a className="cap-btn primary dw-decide-btn"
          data-testid="dw-step-review"
          href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                            { area: "decisions", decision_filter: "needs_action",
@@ -2526,6 +2523,34 @@ export function isDeployStep(step: RunStep, capability?: Capability): boolean {
 }
 
 
+/**
+ * Teaching copy, shown until it has taught.
+ *
+ * Every sentence on the deploy step was added to fix a real confusion — "the user might click
+ * Review and decide without setting the target", "he may click Set target multiple times" — and
+ * each one is correct. What none of them accounted for is the twentieth reading. Eight lines of
+ * prose around three controls is right once and noise thereafter, and the feedback was exactly
+ * that: good information, reads as distraction.
+ *
+ * So it is not deleted, it is EARNED OUT. Verbose until the operator has completed the thing it
+ * explains, quiet after, and one press of `?` brings it all back for good. Per browser, because
+ * "have you done this before" is a fact about the person, not about the run.
+ */
+function useLearned(topic: string): [boolean, () => void] {
+  const key = `boss.learned.${topic}`;
+  // Starts false on the server AND on the first client paint, so the markup matches and the
+  // hint is never hydrated away mid-read; the effect below settles it.
+  const [learned, setLearned] = useState(false);
+  useEffect(() => {
+    try { setLearned(window.localStorage.getItem(key) === "1"); } catch { /* private mode */ }
+  }, [key]);
+  const mark = useCallback(() => {
+    try { window.localStorage.setItem(key, "1"); } catch { /* private mode */ }
+    setLearned(true);
+  }, [key]);
+  return [learned, mark];
+}
+
 function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
                      onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      previewStarting, busy }: {
@@ -2544,6 +2569,10 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   busy: string | null;
 }) {
   const phase = phaseOf(step);
+  // Has this operator shipped before? If not, the deploy step explains itself in full.
+  const [learnedDeploy, markDeployLearned] = useLearned("deploy_step");
+  const [helpOpen, setHelpOpen] = useState(false);
+  const showHelp = helpOpen || !learnedDeploy;
   // The sentence this step is actually showing the operator — its failure, or the note the
   // capability recorded. It is what makes the opening question specific instead of "help".
   // THE ADDRESS OF THE THING THAT WAS JUST SHIPPED.
@@ -2676,6 +2705,14 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
         ) : null}
         {step.timeout_applied ? (
           <span className="dw-timeout">{step.timeout_applied.replace("_", " ")}</span>
+        ) : null}
+        {/* ONE CONTROL FOR ALL OF IT. Eight sentences each with their own disclosure would be
+            eight more things on the screen; this is one, and it is the last item in the header
+            so it never competes with the step's name or its state. */}
+        {isDeployStep(step, capability) && learnedDeploy ? (
+          <button type="button" className="dw-help-toggle" data-testid="dw-help-toggle"
+                  aria-expanded={helpOpen} aria-label="Explain this step"
+                  onClick={() => setHelpOpen((o) => !o)}>?</button>
         ) : null}
       </header>
 
@@ -2810,9 +2847,11 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
                            buildRunId={buildRunId ?? ""} busy={busy}
                            bound={shippedTo} hostName={boundHostName}
                            onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
-                           onBound={onBound} />
-              {!shippedTo ? (
-                <p className="detail dw-ship-hint">
+                           // DONE IT ONCE. From here the step is quiet by default and `?`
+                           // brings the whole explanation back.
+                           onBound={() => { markDeployLearned(); onBound(); }} />
+              {!shippedTo && showHelp ? (
+                <p className="detail dw-ship-hint" data-testid="dw-help-where">
                   Pick the machine, confirm the name the container gets, and press Set target.
                   Leave the port blank and BOSS picks a free one. This creates the destination;
                   it does not ship anything.
@@ -2835,19 +2874,28 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
                     : step.status === "waiting" ? "waiting on you" : step.status}
                 </span>
               </div>
-              <p className="detail dw-ship-hint">
-                {shippedTo
-                  ? <>This is the press that ships it: BOSS builds a container from this app and
-                      runs it on {boundHostName || "the bound host"} at{" "}
-                      {(shippedTo.domains ?? []).find((d: string) => !!d) || "its address"}.
-                      Nothing is sent until it is approved.</>
-                  : <>Approving now would fail at the deploy — there is nowhere to put the
-                      container until step 1 is done.</>}
-              </p>
+              {/* A STEP THAT CANNOT RUN DOES NOT NEED A PARAGRAPH.
+                  Blocked, this was four lines — an explanation, a button that would fail and a
+                  note about who signs it off — taking the same footprint as the step that
+                  actually wanted doing. "after step 1" beside the title already says it; the
+                  rest is available under `?` for whoever wants it. */}
+              {shippedTo ? (
+                <p className="detail dw-ship-hint">
+                  This is the press that ships it: BOSS builds a container from this app and
+                  runs it on {boundHostName || "the bound host"} at{" "}
+                  {(shippedTo.domains ?? []).find((d: string) => !!d) || "its address"}.
+                  Nothing is sent until it is approved.
+                </p>
+              ) : showHelp ? (
+                <p className="detail dw-ship-hint" data-testid="dw-help-approve">
+                  Approving now would fail at the deploy — there is nowhere to put the container
+                  until step 1 is done.
+                </p>
+              ) : null}
               {/* THE BUTTON, INSIDE THE THING IT DOES. It used to sit three blocks further
                   down, past "Ask BOSS about this step", which is how it came to look like a
                   peer of "Set target" rather than the step after it. */}
-              {needsYou(step) ? <ReviewAndDecide step={step} premature={!shippedTo} /> : null}
+              {needsYou(step) && shippedTo ? <ReviewAndDecide step={step} /> : null}
             </div>
           </li>
         </ol>
@@ -2858,7 +2906,11 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           it alone. The dock can read the run, the code, the host and the logs — so the
           question it opens with is this step's own words, not a blank box. */}
       <div className="dw-step-ask">
+        {/* WHAT IT DOES, ON THE THING THAT DOES IT. This was a sentence of the same weight as
+            the button beside it — and a button labelled "Ask BOSS about this step" does not need
+            a line telling you it opens a chat about this step. */}
         <button type="button" className="cap-btn" data-testid="dw-ask-boss"
+                title="Opens the side dock with this step's state and message already filled in"
                 onClick={() => askBossAbout(
                   buildRunId || "",
                   `On the ${capability?.label ?? step.step_id} step`
@@ -2868,9 +2920,6 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
                   + " the host before answering.")}>
           Ask BOSS about this step
         </button>
-        <span className="detail">
-          Opens the side dock with this step&rsquo;s state and message already filled in.
-        </span>
       </div>
 
       {/* BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that

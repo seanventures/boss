@@ -35,11 +35,11 @@ describe("the highlight follows the prerequisite", () => {
 });
 
 describe("nothing else points at the step that cannot run", () => {
-  it("its button is not the primary call to action", () => {
-    // Still reachable — an operator may want to read the decision — but not dressed as the
-    // thing to do next.
-    expect(UI).toContain("premature={!shippedTo}");
-    expect(UI).toContain('`cap-btn${premature ? "" : " primary"} dw-decide-btn`');
+  it("its button is not drawn at all", () => {
+    // First it was made secondary; the layout pass went further, because a step that cannot run
+    // does not need a button OR the paragraph and role note that came with it — four lines with
+    // the same footprint as the step that actually wanted doing.
+    expect(UI).toContain("{needsYou(step) && shippedTo ? <ReviewAndDecide step={step} /> : null}");
   });
 
   it("and it does not claim to be waiting on the operator", () => {
