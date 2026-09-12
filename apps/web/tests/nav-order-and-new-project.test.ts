@@ -551,10 +551,13 @@ describe("deciding a release, and where it ships", () => {
     expect(DW3).toContain("no verified host");
   });
 
-  it("names who signs it off", () => {
-    // The gate says "release_manager" on the node; the control should say it too, so the
-    // operator knows whether the decision is theirs before they follow the link.
-    expect(DW3).toContain("signs this off");
+  it("names who signs it off — once", () => {
+    // The PROPERTY: before following the link, the operator can see whether the decision is
+    // theirs. That used to be asserted at the button, which is where the name appeared for the
+    // FOURTH time on one screen — run header, step badge, gate chip, button note. It is now on
+    // the step header chip, which is above the button and cannot be scrolled away from it.
+    expect(DW3).toContain('`needs ${approval.approver_role || "a person"}`');
+    expect(DW3).not.toContain("signs this off");
   });
 
   it("reads a denial as a decision rather than a fault", () => {

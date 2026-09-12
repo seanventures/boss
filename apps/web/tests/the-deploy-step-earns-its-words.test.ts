@@ -90,3 +90,45 @@ describe("a button that says what it does needs no sentence", () => {
     expect(UI).not.toContain("Opens the side dock with this step&rsquo;s state");
   });
 });
+
+describe("an operator who has already shipped is not lectured", () => {
+  it("an existing deployment target counts as having done it", () => {
+    // The flaw that made the first attempt invisible: keying only on localStorage meant an
+    // operator with bound targets and weeks of releases had no flag, so they got the full
+    // first-run copy and not even the `?` to close it. They looked at the build and correctly
+    // reported seeing no change.
+    expect(UI).toContain("const learnedDeploy = flaggedDeploy || targets.length > 0;");
+  });
+
+  it("and the browser flag still covers the genuinely first act", () => {
+    expect(UI).toContain('useLearned("deploy_step")');
+    expect(UI).toContain("onBound={() => { markDeployLearned(); onBound(); }}");
+  });
+});
+
+describe("one fact is stated once", () => {
+  it("a waiting gate is one chip, not a status and a gate saying half each", () => {
+    expect(UI).toContain('const gateWaiting = approval?.mode === "manual" && step.status === "waiting";');
+    expect(UI).toContain("{gateWaiting ? null : (");
+  });
+
+  it("and that chip says both halves", () => {
+    expect(UI).toContain('`needs ${approval.approver_role || "a person"}`');
+  });
+
+  it("the button no longer repeats the role", () => {
+    expect(UI).not.toContain("signs this off");
+    // It still explains itself when there is no role to have named.
+    expect(UI).toContain("Opens the approval with its recommendation, cost and risk.");
+  });
+});
+
+describe("the sub-step is not a third nested box", () => {
+  it("the active one is marked with a rule, not a container", () => {
+    const at = CSS.indexOf('.dw-ship-step[data-active="true"] {');
+    const block = CSS.slice(at, at + 320);
+    expect(block).toContain("border-left: 2px solid");
+    expect(block).toContain("background: transparent");
+    expect(block).toContain("border-color: transparent");
+  });
+});

@@ -980,6 +980,10 @@ h1, h2, h3, h4, h5, h6 {
 .dw-steps { margin: 0; padding: 0 14px 12px 34px; display: grid; gap: 6px; }
 .dw-step { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.78rem; }
 .dw-step-id { font-family: var(--mono, monospace); color: var(--ink-soft); }
+.dw-gate[data-tone="waiting"] {
+  color: var(--amber, #d29922);
+  border-color: color-mix(in srgb, var(--amber, #d29922) 45%, var(--border));
+}
 .dw-gate {
   font-family: var(--mono, monospace); font-size: 0.6rem; letter-spacing: .06em;
   color: var(--amber, #d29922); border: 1px solid rgba(210,153,34,.4);
@@ -8558,9 +8562,14 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    So the box landed on the step the page was telling you would fail, and the step that actually
    wanted doing was left flat. Blocked is now drawn as blocked: quieter, not louder. */
 .dw-ship-step[data-done="true"] { opacity: .92; }
+/* AN ACCENT, NOT A THIRD BOX. Run card inside step card inside sub-step card was three borders
+   deep for one action, and the innermost box was the loudest thing on the screen. The active
+   step is marked by a rule down its left edge — same information, no new container. */
 .dw-ship-step[data-active="true"] {
-  border-color: color-mix(in srgb, var(--amber, #d29922) 34%, var(--border));
-  background: color-mix(in srgb, var(--amber, #d29922) 7%, transparent);
+  border-color: transparent;
+  border-left: 2px solid color-mix(in srgb, var(--amber, #d29922) 62%, transparent);
+  border-radius: 0 10px 10px 0;
+  background: transparent;
 }
 .dw-ship-step[data-blocked="true"] { opacity: .62; }
 .dw-ship-n {

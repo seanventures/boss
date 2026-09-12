@@ -2402,10 +2402,14 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
                              decision: step.decision_id })}>
         Review and decide →
       </a>
-      <span className="detail">
-        {role ? `${role} signs this off.`
-              : "Opens the approval with its recommendation, cost and risk."}
-      </span>
+      {/* NOT THE ROLE AGAIN. The step header says "needs release_manager"; repeating it here
+          is the fourth time that name appears on one screen. When there is no role to name,
+          the sentence still earns its place by saying what the link opens. */}
+      {role ? null : (
+        <span className="detail">
+          Opens the approval with its recommendation, cost and risk.
+        </span>
+      )}
     </div>
   );
 }
@@ -2569,8 +2573,17 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   busy: string | null;
 }) {
   const phase = phaseOf(step);
-  // Has this operator shipped before? If not, the deploy step explains itself in full.
-  const [learnedDeploy, markDeployLearned] = useLearned("deploy_step");
+  // HAS ANYONE SHIPPED FROM THIS PROJECT? — not "has this browser".
+  //
+  // Keying only on localStorage was wrong in the one case that matters: an operator who has
+  // bound targets and shipped for weeks has no flag, so they got the full first-run lecture and
+  // not even the `?` to close it. They looked at the new build and correctly saw no change.
+  //
+  // An existing deployment target is proof somebody has done this. The browser flag still
+  // counts — it is set the moment a target is bound, which covers the operator whose first act
+  // is the one being explained.
+  const [flaggedDeploy, markDeployLearned] = useLearned("deploy_step");
+  const learnedDeploy = flaggedDeploy || targets.length > 0;
   const [helpOpen, setHelpOpen] = useState(false);
   const showHelp = helpOpen || !learnedDeploy;
   // The sentence this step is actually showing the operator — its failure, or the note the
@@ -2669,6 +2682,9 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   // is not — which is why the old busy flag cleared a second after the click.
   const starting = !!previewStarting && previewStarting === buildRunId && !previewHref;
   const approval = step.approval as { mode?: string; approver_role?: string };
+  // A manual gate that has not been answered. The one condition under which "waiting" and
+  // "gate · <role>" are the same sentence twice.
+  const gateWaiting = approval?.mode === "manual" && step.status === "waiting";
   const produced = Object.entries(step.output || {})
     .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
     // A LOOPBACK URL IS NOT AN ADDRESS ANYBODY CAN USE. `preview_url` is where the app listens
@@ -2681,23 +2697,34 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   return (
     <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
       <header className="dw-detail-head">
-        <span className="dw-badge"
-              data-tone={phase === "skipped" ? "muted"
-                : phase === "failed_on" ? "bad" : tone(step.status)}
-              data-testid={phase === "failed_on" ? "dw-step-failed-on"
-                : phase === "skipped" ? "dw-step-na" : undefined}>
-          {phase === "failed_on" ? "failed — went on"
-            // Same wording as the chain node, for the same reason: this step chose to stand
-            // aside and said why. The sentence renders directly below as the note.
-            : phase === "skipped" ? "skipped" : step.status}
-        </span>
+        {/* ONE CHIP, NOT TWO THAT EACH SAY HALF.
+            A gated step showed `waiting` AND `gate · release_manager`, while the run header
+            above said "waiting on release_manager" and the button below said "release_manager
+            signs this off" — the same fact four times on one screen. A gate that is waiting IS
+            "needs <role>", so it is said once, here. */}
+        {gateWaiting ? null : (
+          <span className="dw-badge"
+                data-tone={phase === "skipped" ? "muted"
+                  : phase === "failed_on" ? "bad" : tone(step.status)}
+                data-testid={phase === "failed_on" ? "dw-step-failed-on"
+                  : phase === "skipped" ? "dw-step-na" : undefined}>
+            {phase === "failed_on" ? "failed — went on"
+              // Same wording as the chain node, for the same reason: this step chose to stand
+              // aside and said why. The sentence renders directly below as the note.
+              : phase === "skipped" ? "skipped" : step.status}
+          </span>
+        )}
         <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
         {stepDuration(step) ? (
           <span className="dw-step-took" data-testid="dw-step-took">{stepDuration(step)}</span>
         ) : null}
         {approval?.mode === "manual" ? (
-          <span className="dw-gate" title="Requires a person">
-            gate{approval.approver_role ? ` · ${approval.approver_role}` : ""}
+          <span className="dw-gate" data-tone={gateWaiting ? "waiting" : undefined}
+                data-testid="dw-step-gate"
+                title="Requires a person">
+            {gateWaiting
+              ? `needs ${approval.approver_role || "a person"}`
+              : `gate${approval.approver_role ? ` · ${approval.approver_role}` : ""}`}
           </span>
         ) : null}
         {step.due_at ? (
