@@ -82,8 +82,11 @@ describe("a step that cannot run takes one line", () => {
 });
 
 describe("a button that says what it does needs no sentence", () => {
-  it("Ask BOSS explains itself in a tooltip", () => {
-    expect(UI).toContain('title="Opens the side dock with this step\'s state and message already filled in"');
+  it("the ask explains itself in a tooltip", () => {
+    // The label now names the step's captain, so the tooltip does too — and says the dock
+    // arrives addressed to them rather than to BOSS in general.
+    expect(UI).toContain("Opens the side dock addressed to the ${roleLabel(capability.captain)},");
+    expect(UI).toContain("with this step's state already filled in");
   });
 
   it("and the sentence is gone from the body", () => {

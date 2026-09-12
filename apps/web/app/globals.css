@@ -9297,3 +9297,48 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 .dw-step-out-wrap > summary:hover { color: var(--muted, #B4C4E0); }
 .dw-step-out-wrap[open] > summary { margin-bottom: 8px; }
+
+/* A STEP THAT IS WORKING SHOULD LOOK LIKE IT IS WORKING.
+   The rail already animates the CONNECTOR into the running step, which says work is flowing
+   towards it — but the node itself sat as still as the seven finished ones behind it, on runs
+   that take eighteen minutes. Two signals, both cheap: the dot breathes, and a ring travels
+   around the node. Neither moves layout, so nothing reflows while a run is live. */
+@keyframes dw-dot-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live, #58a6ff) 55%, transparent); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--live, #58a6ff) 0%, transparent); }
+}
+.dw-node[data-phase="now"] .dw-dot {
+  background: var(--live, #58a6ff); color: #04121f;
+  animation: dw-dot-breathe 1.9s ease-out infinite;
+}
+@keyframes dw-node-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+.dw-node[data-phase="now"] .dw-node-btn {
+  border-color: var(--live, #58a6ff);
+  background:
+    linear-gradient(100deg,
+      transparent 35%,
+      color-mix(in srgb, var(--live, #58a6ff) 13%, transparent) 50%,
+      transparent 65%) var(--panel, #0d1117);
+  background-size: 250% 100%;
+  animation: dw-node-sweep 2.6s linear infinite;
+}
+/* The detail card's own badge, for the step you are looking at. */
+.dw-detail-n[data-tone="now"] { animation: dw-dot-breathe 1.9s ease-out infinite; }
+
+/* The glyph beside the step name on its card — the same shape the rail node wears. */
+.dw-detail-glyph { display: inline-flex; align-items: center; color: var(--muted, #B4C4E0); }
+.dw-node .dw-dot > svg { display: block; }
+
+/* MOTION OFF MEANS OFF, and a busy signal that vanishes with it tells the reader nothing is
+   happening. The sweep stops; the running node keeps its live border and a solid dot. */
+@media (prefers-reduced-motion: reduce) {
+  .dw-node[data-phase="now"] .dw-dot,
+  .dw-detail-n[data-tone="now"] { animation: none; }
+  .dw-node[data-phase="now"] .dw-node-btn {
+    animation: none;
+    background: color-mix(in srgb, var(--live, #58a6ff) 9%, var(--panel, #0d1117));
+  }
+}

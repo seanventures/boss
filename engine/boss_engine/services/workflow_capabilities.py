@@ -65,6 +65,17 @@ class Capability:
     #: Long-running work whose completion arrives later. The runner starts it and the step
     #: stays `waiting` until the thing it started reports back.
     is_async: bool = False
+    #: WHO ANSWERS FOR THIS STEP — a registered role, not a description.
+    #:
+    #: Every step offered "Ask BOSS about this step", which reaches BOSS-in-general: no lens, no
+    #: remit, and no memory of anything this kind of work has produced before. The role-addressed
+    #: path already exists and is strictly better — it reads the role's own definition and the
+    #: positions that role has actually taken on this project — it simply had nothing telling it
+    #: WHICH role a deploy or a security review belongs to.
+    #:
+    #: One captain may hold several steps; that is normal and says something true about the
+    #: shape of the workforce. What is not acceptable is a step with no owner.
+    captain: str = ""
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -78,6 +89,8 @@ CAPABILITIES: dict[str, Capability] = {
     for c in (
         _cap(
             key="research",
+            # is this worth building, and for whom
+            captain="product_manager",
             label="Research",
             summary="Web research into a cited dossier, gated on real evidence.",
             tool="create_discovery",
@@ -90,6 +103,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="meeting",
+            # owns the PRD the panel produces
+            captain="product_manager",
             label="Convene a panel",
             summary="Agent panel debates the directive and produces a PRD.",
             tool="request_meeting",
@@ -105,6 +120,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="spec_review",
+            # is this specified well enough to build
+            captain="chief_architect",
             label="Approve the spec",
             summary="A person reads the PRD and decides whether it gets built.",
             tool=None,
@@ -116,6 +133,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="build",
+            # owns the inner pipeline end to end
+            captain="engineering_captain",
             label="Build, review and test",
             summary="The whole inner pipeline: implement, adversarial review, security check, "
                     "run the tests, open a gated pull request. Succeeds when a PR exists.",
@@ -132,6 +151,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="review",
+            # argues the code is wrong until it is not
+            captain="adversarial_reviewer",
             label="Adversarial review",
             summary="Reports what the build's own reviewers found. The verdict belongs to the "
                     "build step — this only surfaces it.",
@@ -144,6 +165,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="test",
+            # owns whether the tests prove anything
+            captain="qa",
             label="Verify",
             summary="Reports the build's own test outcome. The verdict belongs to the build "
                     "step — this only surfaces it.",
@@ -156,6 +179,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="preview",
+            # a person has to be able to use it
+            captain="qa",
             label="Preview",
             summary="Start a live preview of the app so a person can use it.",
             tool="start_preview",
@@ -168,6 +193,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="ux_review",
+            # how it looks and feels is the whole step
+            captain="ux_engineer",
             label="UX sign-off",
             summary="A person uses the preview and signs off on how it looks and behaves.",
             tool=None,
@@ -178,6 +205,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="security_review",
+            # the lens the step exists for
+            captain="security_reviewer",
             label="Security sign-off",
             summary="A person accepts the security posture of the change.",
             tool=None,
@@ -188,6 +217,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="plrr",
+            # readiness to go to production
+            captain="release_manager",
             label="Production launch readiness",
             summary="Review the built app against the operability the spec promised, and "
                     "close the gaps before it ships.",
@@ -201,6 +232,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="deploy",
+            # gets it onto a machine and keeps it there
+            captain="deployment_manager",
             label="Deploy",
             summary="Ship the built app to a bound target.",
             tool="deploy_app",
@@ -214,6 +247,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="monitor",
+            # owns whether anyone would notice it break
+            captain="infra_steward",
             label="Set up monitoring",
             summary="Register health checks so the app is watched after it ships.",
             tool=None,
@@ -224,6 +259,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="notify",
+            # who needs telling, and what they are told
+            captain="program_manager",
             label="Notify",
             summary="Post the outcome where the team will see it.",
             tool=None,
@@ -236,6 +273,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="smoke_test",
+            # does the shipped thing actually answer
+            captain="integration_validator",
             label="Smoke test",
             summary="Prove the deployed thing actually answers before anyone celebrates.",
             tool="http_probe",
@@ -247,6 +286,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="redeploy",
+            # same hands as the first deploy
+            captain="deployment_manager",
             label="Ship it again",
             summary="Re-ship the SAME build after a failed deploy. No rebuild, no model spend.",
             tool="redeploy",
@@ -260,6 +301,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="retry_build",
+            # same hands as the build
+            captain="engineering_captain",
             label="Retry the build",
             summary="Run the coding task again when it failed for a reason that has passed.",
             tool="retry_code_task",
@@ -271,6 +314,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="teardown_preview",
+            # reclaims what the preview was holding
+            captain="infra_steward",
             label="Stop the preview",
             summary="Release the sandbox once nobody needs to look at it.",
             tool="stop_preview",
@@ -281,6 +326,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="cost_check",
+            # what it costs is its only question
+            captain="finops_sentinel",
             label="Check the spend",
             summary="What this work has cost so far, before deciding whether to continue.",
             tool="get_costs",
@@ -291,6 +338,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="document",
+            # owns the written record of the run
+            captain="program_manager",
             label="Document",
             summary="Write the change record from what this run produced.",
             tool=None,
@@ -335,6 +384,9 @@ def palette() -> list[dict[str, Any]]:
             "typical_minutes": c.typical_minutes,
             "is_gate": c.is_gate,
             "is_async": c.is_async,
+            # Who answers for this step. Travels with the capability so the console does not
+            # keep a second copy of the mapping to drift from this one.
+            "captain": c.captain,
             # What the builder must show as fixed rather than as a choice.
             "approval_forced_manual": c.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR,
         }

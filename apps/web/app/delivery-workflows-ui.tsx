@@ -9,6 +9,7 @@ import { AgentChip } from "./agent-chip";
 import { AgentsOnThis } from "./agents-on-this";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
+import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
@@ -41,6 +42,9 @@ type Capability = {
   typical_minutes: number;
   is_gate: boolean;
   approval_forced_manual: boolean;
+  /** The registered role that answers for this step. Sent by the engine so the console does
+   *  not keep a second copy of the mapping to drift from it. */
+  captain?: string;
 };
 
 /** A step this customer defined, bound to one of their own skills or MCP tools. The risk
@@ -2039,11 +2043,19 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
               <button type="button" className="dw-node-btn"
                       aria-current={phase === "now" ? "step" : undefined}
                       onClick={() => setPicked(step.step_id)}>
-                <span className="dw-dot" aria-hidden>
-                  {phase === "done" ? "✓" : phase === "failed" ? "!"
+                {/* THE KIND, AS A SHAPE — with the outcome still readable.
+                    Ten nodes that differ only by a number and a tick make "find the deploy" a
+                    reading task. A glyph is learned once. The states that are NOT plain progress
+                    keep their mark, because "this one failed" must never be something you have
+                    to infer from an icon. */}
+                <span className="dw-dot" data-phase={phase} aria-hidden>
+                  {phase === "failed" ? "!"
                     : phase === "failed_on" ? "✕"
                     : phase === "findings" ? "▲"
-                    : phase === "skipped" ? "–" : index + 1}
+                    : phase === "skipped" ? "–"
+                    : hasStepIcon(step.capability ?? undefined)
+                      ? <StepIcon capability={step.capability ?? undefined} />
+                      : phase === "done" ? "✓" : index + 1}
                 </span>
                 <span className="dw-node-name">{capability?.label ?? step.capability ?? step.step_id}</span>
                 <span className="dw-node-meta">
@@ -2416,11 +2428,21 @@ function ShipNow({ projectId, buildRunId, target, appName, alreadyLive, onDone }
  *  `agent` carries the RUN, so the conversation resolves what it is about server-side rather
  *  than the console shipping a context blob.
  */
-function askBossAbout(runRef: string, question: string): void {
+/** A registered role key, as an operator would say it. */
+function roleLabel(roleKey: string): string {
+  return roleKey.replace(/_/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+function askBossAbout(runRef: string, question: string, captain?: string): void {
   try {
     const url = new URL(window.location.href);
     url.searchParams.set("agent", runRef || "general");
     url.searchParams.set("dock_ask", question);
+    // ADDRESSED, NOT BROADCAST. `dock_role` is the parameter the dock already reads to answer
+    // as a named member of the workforce, reading that role's own record rather than replying
+    // as BOSS-in-general with a name in the banner.
+    if (captain) url.searchParams.set("dock_role", roleLabel(captain));
+    else url.searchParams.delete("dock_role");
     window.history.replaceState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
@@ -2837,6 +2859,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {stepIndex + 1}
           </span>
         ) : null}
+        {/* The same glyph the rail node wears, so the card and the node are obviously the same
+            step without reading either label. */}
+        {hasStepIcon(step.capability ?? undefined) ? (
+          <span className="dw-detail-glyph" data-testid="dw-detail-glyph">
+            <StepIcon capability={step.capability ?? undefined} size={15} />
+          </span>
+        ) : null}
         <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
         {/* WHAT THIS STEP IS, ON A DOT. This was a permanent line under every step header —
             "The whole inner pipeline: implement, adversarial review, security check, run the
@@ -3113,19 +3142,32 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           it alone. The dock can read the run, the code, the host and the logs — so the
           question it opens with is this step's own words, not a blank box. */}
       <div className="dw-step-ask">
-        {/* WHAT IT DOES, ON THE THING THAT DOES IT. This was a sentence of the same weight as
-            the button beside it — and a button labelled "Ask BOSS about this step" does not need
-            a line telling you it opens a chat about this step. */}
+        {/* ASK THE PERSON WHOSE STEP THIS IS.
+            "Ask BOSS about this step" reached BOSS-in-general: no lens, no remit, no memory of
+            anything this kind of work has produced before. The role-addressed path already
+            existed and is strictly better — it reads the role's own definition and the positions
+            that role has actually taken on this project — it simply had nothing telling it that
+            a deploy belongs to the Deployment Manager and a security review to the Security
+            Reviewer. The engine says so now, per capability. */}
+        {capability?.captain ? (
+          <AgentChip roleKey={capability.captain} note="answers for this step" />
+        ) : null}
         <button type="button" className="cap-btn" data-testid="dw-ask-boss"
-                title="Opens the side dock with this step's state and message already filled in"
+                title={capability?.captain
+                  ? `Opens the side dock addressed to the ${roleLabel(capability.captain)},`
+                    + " with this step's state already filled in"
+                  : "Opens the side dock with this step's state and message already filled in"}
                 onClick={() => askBossAbout(
                   buildRunId || "",
                   `On the ${capability?.label ?? step.step_id} step`
                   + ` (status ${step.status})`
                   + (askNote ? `, BOSS says: "${askNote}"` : "")
                   + ". Why is it in this state, and what is the fix? Check the app's code and"
-                  + " the host before answering.")}>
-          Ask BOSS about this step
+                  + " the host before answering.",
+                  capability?.captain)}>
+          {capability?.captain
+            ? `Ask the ${roleLabel(capability.captain)}`
+            : "Ask BOSS about this step"}
         </button>
       </div>
 
