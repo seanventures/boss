@@ -54,18 +54,24 @@ describe("recognising the deploy step", () => {
 });
 
 describe("the picker is not gated on anything else", () => {
-  it("renders from isDeployStep alone", () => {
-    expect(UI).toContain("{isDeployStep(step, capability) ? (");
-  });
-
-  it("is not restricted by step status", () => {
-    const at = UI.indexOf("{isDeployStep(step, capability) ? (");
-    const block = UI.slice(at, at + 400);
+  it("renders on a deploy step whatever its status", () => {
+    // Two layouts now — a numbered plan while no target is bound, one action once it is — and
+    // NEITHER is gated on the step's status. That was the bug this file was written for: each
+    // version of the condition excluded the state the operator's run happened to be in.
+    expect(UI).toContain("{isDeployStep(step, capability) && shippedTo ? (");
+    expect(UI).toContain(") : isDeployStep(step, capability) ? (");
+    const at = UI.indexOf("{isDeployStep(step, capability) && shippedTo ? (");
+    const block = UI.slice(at, at + 300);
     expect(block).not.toContain('"succeeded"');
-    expect(block).not.toContain("needsYou");
   });
 
   it("appears exactly once, so the gate does not show two pickers", () => {
+    // The guard that caught the layout change honestly: the control is CREATED once and placed
+    // by whichever layout is active. Two call sites would be one edit away from rendering both,
+    // which is the reported "he may click set target multiple times" waiting to happen again —
+    // and is precisely what one of the reference designs did on purpose.
     expect(UI.split("<DeployWhere").length - 1).toBe(1);
+    expect(UI).toContain("const targetControl = (");
+    expect(UI.split("{targetControl}").length - 1).toBe(2);
   });
 });

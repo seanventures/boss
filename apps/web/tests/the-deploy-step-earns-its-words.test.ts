@@ -189,3 +189,25 @@ describe("the card wears the rail's number", () => {
     expect(UI).toContain("stepIndex={run.steps.findIndex((s) => s.step_id === current.step_id)}");
   });
 });
+
+describe("scaffolding comes down once the building is up", () => {
+  it("no numbers once a target is bound — there is one thing to do", () => {
+    expect(UI).toContain('data-testid="dw-ship-single"');
+    const at = UI.indexOf('data-testid="dw-ship-single"');
+    const block = UI.slice(at, at + 700);
+    expect(block).not.toContain('className="dw-ship-n"');
+  });
+
+  it("but the numbered plan stays until it has done its job", () => {
+    // The reported bug was pressing Review and decide without setting a target. While no target
+    // exists, the order IS the point.
+    expect(UI).toContain('data-testid="dw-step-target"');
+    expect(UI).toContain('<span className="dw-ship-n">1</span>');
+    expect(UI).toContain('<span className="dw-ship-n">2</span>');
+  });
+
+  it("and the footer group says what it is, so its buttons need less", () => {
+    expect(UI).toContain("Workflow management");
+    expect(CSS).toContain(".dw-run-actions-label");
+  });
+});

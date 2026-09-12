@@ -9237,3 +9237,15 @@ a.agent-chip-name:hover { text-decoration: underline; }
 /* Each footer action and its dot travel together, so wrapping cannot orphan an explanation
    next to the wrong button. */
 .dw-run-action { display: inline-flex; align-items: center; gap: 7px; }
+
+/* One action, once the order is satisfied. No numbers, no sub-step containers — the bound
+   target states itself and the single press sits under it. */
+.dw-ship-single { display: grid; gap: 10px; margin: 10px 0 4px; }
+.dw-ship-single-act { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Two words that do the work three paragraphs were doing: these are not part of the step. */
+.dw-run-actions-label {
+  flex-basis: 100%;
+  font-size: .68rem; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--faint, #8092B3);
+}

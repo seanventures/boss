@@ -2085,6 +2085,11 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
           beside its own button. The buttons become a row, which is what a set of alternatives
           looks like. */}
       <div className="dw-run-actions" data-testid="dw-run-actions">
+        {/* NAMING THE GROUP. Also from the Gemini sketch, and correct: three buttons under a
+            bare rule read as three loose ends, while "Workflow management" tells you in two
+            words that none of them is part of the step above — which is most of what their
+            paragraphs were doing. */}
+        <span className="dw-run-actions-label">Workflow management</span>
         {/* ONE BUTTON, FOR THE WHOLE RUN.
             The screen re-tests the recorded blockers by itself on arrival; this is the worst
             case — the operator has just changed something outside BOSS and does not want to
@@ -2685,6 +2690,16 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
     if (!host) return "";
     return `${host.name}${host.address ? ` · ${host.address}` : ""}`;
   })();
+  // THE TARGET CONTROL, MADE ONCE AND PLACED WHEREVER THE LAYOUT PUTS IT. It renders the bound
+  // target as a fact with Change, or the form to set one — and `onBound` is also what records
+  // that this operator has now done it, which is what quietens the step's teaching copy.
+  const targetControl = (
+    <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
+                 buildRunId={buildRunId ?? ""} busy={busy}
+                 bound={shippedTo} hostName={boundHostName}
+                 onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
+                 onBound={() => { markDeployLearned(); onBound(); }} />
+  );
   // WHETHER SOMETHING IS ACTUALLY SHIPPED THERE — asked of the deployments, not of the step.
   //
   // This first used the step's own status, and the step is exactly what cannot be trusted
@@ -2916,7 +2931,33 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           setting the target, or he may click set target multiple times". Both are the layout's
           fault. Numbering them, marking the one that is done, and saying what the second one
           releases is the whole fix. */}
-      {isDeployStep(step, capability) ? (
+      {/* ONE PICKER, PLACED TWICE — never two pickers. `DeployWhere` already renders either the
+          bound target as a fact with Change, or the form; what changes between the two layouts
+          below is the scaffolding around it, so the control itself is created once. Two call
+          sites would be one edit away from rendering both, which is the reported bug
+          ("he may click set target multiple times") waiting to happen again. */}
+      {/* NUMBERS TEACH ORDER, AND ONCE THE ORDER IS SATISFIED THEY HOLD UP NOTHING.
+          Taken from the Gemini sketch, which is right about this: with a target already bound
+          there is exactly ONE thing an operator can do here, and a two-item numbered plan around
+          one button is scaffolding left standing after the building is up. Before that, the
+          numbers are the whole point — the reported bug was pressing Review and decide without
+          setting a target — so they stay until they have done their job. */}
+      {isDeployStep(step, capability) && shippedTo ? (
+        <div className="dw-ship-single" data-testid="dw-ship-single">
+          {targetControl}
+          {needsYou(step) ? (
+            <div className="dw-ship-single-act">
+              <ReviewAndDecide step={step} />
+              <Explain label="What approving does">
+                The press that ships it: BOSS builds a container from this app and runs it on{" "}
+                {boundHostName || "the bound host"} at{" "}
+                {(shippedTo.domains ?? []).find((d: string) => !!d) || "its address"}. Nothing
+                is sent until it is approved.
+              </Explain>
+            </div>
+          ) : null}
+        </div>
+      ) : isDeployStep(step, capability) ? (
         <ol className="dw-ship-plan" data-testid="dw-step-target">
           {/* ACTIVE IS THE ONE THAT CAN BE ACTED ON, AND IT WAS THE OTHER ONE.
               `data-blocked` went on step 2 exactly when step 1 was unfinished — and the CSS
@@ -2943,13 +2984,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   </Explain>
                 ) : null}
               </div>
-              <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
-                           buildRunId={buildRunId ?? ""} busy={busy}
-                           bound={shippedTo} hostName={boundHostName}
-                           onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
-                           // DONE IT ONCE. From here the step is quiet by default and `?`
-                           // brings the whole explanation back.
-                           onBound={() => { markDeployLearned(); onBound(); }} />
+              {targetControl}
               {!shippedTo && showHelp ? (
                 <p className="detail dw-ship-hint" data-testid="dw-help-where">
                   Pick the machine, confirm the name the container gets, and press Set target.
@@ -2989,14 +3024,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   note about who signs it off — taking the same footprint as the step that
                   actually wanted doing. "after step 1" beside the title already says it; the
                   rest is available under `?` for whoever wants it. */}
-              {shippedTo ? (
+              {shippedTo && showHelp ? (
                 <p className="detail dw-ship-hint">
                   This is the press that ships it: BOSS builds a container from this app and
                   runs it on {boundHostName || "the bound host"} at{" "}
                   {(shippedTo.domains ?? []).find((d: string) => !!d) || "its address"}.
                   Nothing is sent until it is approved.
                 </p>
-              ) : showHelp ? (
+              ) : !shippedTo && showHelp ? (
                 <p className="detail dw-ship-hint" data-testid="dw-help-approve">
                   Approving now would fail at the deploy — there is nowhere to put the container
                   until step 1 is done.
