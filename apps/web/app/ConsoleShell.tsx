@@ -511,19 +511,29 @@ export default function ConsoleShell({
     setPaletteOpen(false);
     setQuery("");
     window.localStorage.setItem("boss.area", id);
-    // Reflect the selected tab in the URL as a new history entry (so Back
-    // returns to the previous tab) WITHOUT a server round-trip / data refetch.
+    // A NEW HISTORY ENTRY *AND* A SERVER RENDER FOR THE AREA BEING OPENED.
+    //
+    // This deliberately avoided the round trip, and that decision is what forced page.tsx to
+    // render all forty areas on every load: whichever area the server happened to render for
+    // decided what data existed for the whole session, so nothing could be left out. The cost
+    // was 8.3 MB and ~9s per load.
+    //
+    // `router.push` is a SOFT navigation: the server re-renders this tree for the new area and
+    // streams it, the document is not reloaded, and only the requested area's feeds are
+    // fetched. Back still returns to the previous tab because it is still a history entry.
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("area", id);
       if (url.toString() !== window.location.href) {
-        window.history.pushState(null, "", url.toString());
+        router.push(`${url.pathname}${url.search}`);
+        // Panels restore their own selection by reading the URL on this signal.
+        window.dispatchEvent(new PopStateEvent("popstate"));
       }
     } catch {
       /* non-browser / unsupported — ignore */
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
+  }, [router]);
 
   // Quick-action links (AreaLink in the Overview command center) switch areas
   // client-side via this event — instant, no full-page navigation/refetch.
@@ -538,16 +548,23 @@ export default function ConsoleShell({
 
   // IN-CONSOLE LINKS MUST NOT RELOAD THE CONSOLE.
   //
-  // The sidebar switches areas client-side, which is why every area is rendered at once: the
-  // trade buys instant tabs. But links inside the page -- "open PRD", "from a panel", "change
-  // this app" -- were plain <a href="?area=...">, so each one did a FULL navigation and paid
-  // to server-render and re-hydrate all fifty areas: ~6.5MB, ~700 buttons, about ten seconds
-  // to open a PRD whose data the browser already had.
+  // THE TRADE THIS BOUGHT WAS NOT WORTH ITS PRICE.
   //
-  // Nothing about that round trip was needed. The panels already restore their selection from
-  // the URL on popstate (see MeetingRooms), so pushing the URL and announcing it does the same
-  // work instantly. Anything genuinely external -- previews, PRs, new tabs, modified clicks --
-  // is left alone and navigates normally.
+  // "The sidebar switches areas client-side, which is why every area is rendered at once: the
+  // trade buys instant tabs." Measured on the live box, that trade cost 8.3 MB of HTML and ~9s
+  // of server render on EVERY load — 78% of it an RSC payload carrying forty areas the operator
+  // cannot see, all of it parsed and hydrated by their machine. Discovery alone was 949 KB.
+  // An operator reported their laptop heating up during a video call; this was why.
+  //
+  // A full browser navigation was indeed the wrong answer. A Next SOFT navigation is the right
+  // one: the server re-renders the tree for the requested area and streams it, the document is
+  // never reloaded, and — with page.tsx rendering only the active area — each switch now costs
+  // one area instead of forty. Tabs stay fast because the payload got forty times smaller, not
+  // because it was all shipped up front.
+  //
+  // The popstate announcement stays. Panels restore their selection by reading
+  // window.location.search (see MeetingRooms), which router.push has already updated by the
+  // time this fires, so they behave exactly as they did on Back/Forward.
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0) return;
@@ -581,17 +598,18 @@ export default function ConsoleShell({
       }
 
       event.preventDefault();
-      window.history.pushState({}, "", url.toString());
+      // Optimistic first, so the rail highlights before the server answers.
+      setActive(area as AreaId);
+      router.push(`${url.pathname}${url.search}`);
       // Tell every panel that reads the URL -- the same signal Back/Forward sends.
       window.dispatchEvent(new PopStateEvent("popstate"));
-      setActive(area as AreaId);
     };
     // CAPTURE phase, deliberately. The spine nodes and card pills call stopPropagation() so a
     // click on them does not also open the card behind them -- which would stop a bubble-phase
     // listener from ever seeing exactly the links this exists to speed up.
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
-  }, []);
+  }, [router]);
 
   // THE AGENT DOCK.
   //

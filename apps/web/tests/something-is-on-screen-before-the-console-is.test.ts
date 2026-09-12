@@ -168,14 +168,25 @@ describe("the skeleton respects a reader who turned motion off", () => {
 });
 
 describe("the console's own areas are unaffected", () => {
-  it("switching area is still client-side, so it gets no skeleton", () => {
-    // Areas swap via history.pushState with no server round-trip. If that ever became a real
-    // navigation, every tab click would flash this skeleton for seven seconds.
+  it("switching area is a soft navigation, and the render it waits for is small", () => {
+    // This used to assert pushState with NO server round-trip, because "every tab click would
+    // flash this skeleton for seven seconds". That was true of a page which rendered all forty
+    // areas at once: 8.3 MB and ~9s, measured on the live box.
+    //
+    // The reason it is no longer true is measured too. With page.tsx rendering only the
+    // requested area, a switch renders 25–235 KB in 30–40 ms (overview, the heaviest, 139 KB
+    // in 2.3s). There is nothing left to flash for. The concern this test encodes — a tab click
+    // must not cost a full-page load — is what the change is FOR, so it is asserted at the
+    // cause instead: the page must not render every area.
     const shell = readFileSync(join(APP, "ConsoleShell.tsx"), "utf8");
     const go = shell.slice(shell.indexOf("const go = useCallback"),
                            shell.indexOf("Quick-action links"));
-    expect(go).toContain("window.history.pushState");
-    expect(go).not.toContain("router.push");
+    expect(go).toContain("router.push");
+    // Still a history entry, so Back returns to the previous tab.
+    expect(go).toContain('url.searchParams.set("area", id)');
+
+    const page = readFileSync(join(APP, "page.tsx"), "utf8");
+    expect(page).toContain("const shows = (area: string) => area === shownArea;");
   });
 
   it("there is exactly one route loading boundary", () => {

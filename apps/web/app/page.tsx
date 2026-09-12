@@ -514,6 +514,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const requestedArea = getParam(resolvedSearchParams?.area);
+  // RENDER THE AREA THE OPERATOR ASKED FOR, AND NOT THE OTHER THIRTY-NINE.
+  //
+  // Measured on the live box: 8.3 MB of HTML and ~9s of server render per load, 78% of it an
+  // RSC payload carrying every area at once — Discovery 949 KB, Task Shepherd 431 KB,
+  // Decisions 326 KB — all of it parsed and hydrated by the operator's machine, all but one
+  // hidden by a CSS rule. The data was never the problem: every feed answers in 83–235 ms.
+  //
+  // This was only possible once the sidebar started navigating (see ConsoleShell.go): while it
+  // switched areas with pushState and no server round-trip, whichever area the server happened
+  // to render for decided what data existed for the session, so nothing could be left out.
+  //
+  // The default is `overview`, matching the rail's own default, so a URL with no `?area=` still
+  // lands somewhere real.
+  const shownArea = requestedArea && requestedArea.trim() ? requestedArea.trim() : "overview";
+  const shows = (area: string) => area === shownArea;
   const requestedDecisionFilter = parseDecisionInboxFilter(
     getParam(resolvedSearchParams?.decision_filter),
   );
@@ -956,11 +971,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             gone (its `metatron_sessions` table does not exist in this database, so it was a
             shell); and the Shepherd's taxonomy survives as the diagnosis on each row, offered
             as a button rather than run unattended. */}
+        {shows("agent") ? (
         <section className="panel-stack" data-area="agent" aria-label="BOSS agent">
           <BossAgentHome projectId={activeProjectId} actor={activeActorId}
                          initialTaskId={requestedWorkTask || undefined}
                          roleName={requestedRole || undefined} />
         </section>
+        ) : null}
+        {shows("dashboard") ? (
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
             <div>
@@ -970,11 +988,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <DashboardPanel feed={dashboardSnapshot} />
         </section>
+        ) : null}
 
+        {shows("assurance") ? (
         <section className="panel-stack" data-area="assurance" aria-label="Assurance Center">
           <AssuranceCenter feed={assuranceFeed} />
         </section>
+        ) : null}
 
+        {shows("assurance") ? (
         <section className="panel-stack" data-area="assurance" aria-label="Security scanning">
           <div className="section-head">
             <div>
@@ -992,15 +1014,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             scanners={securityScanners}
           />
         </section>
+        ) : null}
 
-        <RepoActivityPanel repos={repoActivity} />
+        {/* THESE RENDER THEIR OWN `<section data-area>`, so the gate has to go on the mount.
+            Missed on the first pass and caught by measuring: a Discovery render still carried a
+            GitHub panel and a Govern panel, because the marker the CSS keys on lives inside the
+            component rather than in this file. */}
+        {shows("github") ? <RepoActivityPanel repos={repoActivity} /> : null}
 
-        <GitHubOperations
-          feed={githubOperations}
-          actor={activeActorId}
-          canManage={canManageGitHub}
-        />
+        {shows("github") ? (
+          <GitHubOperations
+            feed={githubOperations}
+            actor={activeActorId}
+            canManage={canManageGitHub}
+          />
+        ) : null}
 
+        {shows("org") ? (
         <section className="panel-stack mission-roster-section" data-area="org" aria-label="Agent roster">
           <div className="section-head">
             <div>
@@ -1016,7 +1046,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
         </section>
+        ) : null}
 
+        {shows("studio") ? (
         <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
           <FocusedAgents
             projectId={activeProjectId}
@@ -1028,14 +1060,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             skills={skills.items}
           />
         </section>
+        ) : null}
 
+        {shows("portfolio") ? (
         <section className="panel-stack" data-area="portfolio" aria-label="Work allocation">
           <WorkOrchestration
             feed={workOrchestrationFeed}
             actor={activeActorId}
           />
         </section>
+        ) : null}
 
+        {shows("portfolio") ? (
         <section className="panel-stack" data-area="portfolio" aria-label="Release planning">
           <div className="section-head">
             <div>
@@ -1052,13 +1088,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             plans={releasePlans}
           />
         </section>
+        ) : null}
 
         {/* FIRST, NOT BURIED. The old entry point was a Metatron "Status Query" form far
             below the fold that could only answer. This is the agent, and it can act. */}
+        {shows("overview") ? (
         <section data-area="overview" aria-label="Ask BOSS">
           <AskBossHero projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
+        ) : null}
 
+        {shows("overview") ? (
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           {/* The "Assign an outcome to your team…" bar stood here, directly under Ask BOSS —
               two prompts on the same screen, with nothing to say which took what. They are one
@@ -1237,11 +1277,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
         </section>
+        ) : null}
 
+        {shows("overview") ? (
         <section className="panel-stack" data-area="overview" aria-label="What you can do here">
           <OnboardingHelpCard />
         </section>
+        ) : null}
 
+        {shows("overview") ? (
         <section className="stack-grid" data-area="overview">
           <article className="stack-card">
             <div className="section-head">
@@ -1312,6 +1356,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
           </article>
         </section>
+        ) : null}
         {/* THE DIAGNOSTIC GRID IS GONE, DELIBERATELY.
             Eleven tiles: Project, Database "Connected", Auth Session "Ceo", Budget State,
             Pending Decisions, Active Jobs, Open Tasks, Blocking State "Clear", Artifacts,
@@ -1328,6 +1373,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             whether it matters now. A count with no context is an anxiety generator, not a
             signal; failures belong next to the work they came from, which is Monitoring. */}
 
+        {shows("overview") ? (
         <section className="bx-overview" data-area="overview" aria-label="Overview summary">
           <div className="bx-overview-split">
             <article
@@ -1392,7 +1438,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 place and leaving it in another was half a decision. */}
           </div>
         </section>
+        ) : null}
 
+        {shows("org") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1508,7 +1556,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("org") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1651,13 +1701,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
         {/* THE FIRST TEN MINUTES. Before any of the areas below mean anything, an install
             needs somewhere to write code and something to think with. */}
+        {shows("setup") ? (
         <section className="panel-stack" data-area="setup" aria-label="Setup">
           <SetupHome projectId={activeProjectId} actor={activeActorId} />
         </section>
+        ) : null}
 
+        {shows("budget") ? (
         <section className="panel-stack" data-area="budget" aria-label="Govern">
           <div className="panel">
             <span className="eyebrow" data-area="budget">Govern</span>
@@ -1670,6 +1724,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <SettingsKnobs projectId={activeProjectId} actor={activeActorId} />
           </div>
         </section>
+        ) : null}
+        {shows("budget") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1761,7 +1817,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
           </article>
         </section>
+        ) : null}
 
+        {shows("budget") ? (
         <section className="panel-stack" data-area="budget" aria-label="Cost governance">
           <div className="section-head">
             <div>
@@ -1778,14 +1836,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <BudgetThresholdsCard status={budgetStatus} />
           </div>
         </section>
+        ) : null}
 
-        <TokenEfficiencyPanel
-          scorecard={tokenScorecard}
-          consumption={tokenConsumption}
-          policies={tokenPolicies}
-          recommendations={tokenRecommendations}
-        />
+        {shows("budget") ? (
+          <TokenEfficiencyPanel
+            scorecard={tokenScorecard}
+            consumption={tokenConsumption}
+            policies={tokenPolicies}
+            recommendations={tokenRecommendations}
+          />
+        ) : null}
 
+        {shows("budget") ? (
         <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
           <div className="section-head">
             <div>
@@ -1804,7 +1866,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             />
           </div>
         </section>
+        ) : null}
 
+        {shows("budget") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1859,7 +1923,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
           </article>
         </section>
+        ) : null}
 
+        {shows("infra") ? (
         <section className="panel-stack" data-area="infra" aria-label="MCP servers">
           <div className="section-head">
             <div>
@@ -1895,7 +1961,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           )}
         </section>
+        ) : null}
 
+        {shows("infra") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -2924,7 +2992,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </>
           ) : null}
         </section>
+        ) : null}
 
+        {shows("infra") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -2983,7 +3053,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
           </article>
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack" data-area="ops" aria-label="Workflow health">
           <div className="section-head">
             <div>
@@ -3004,7 +3076,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             pendingDecisions={status.pendingDecisions}
           />
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack" data-area="ops" aria-label="Reusable workflow registry">
           <div className="section-head">
             <div>
@@ -3024,7 +3098,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             selectedRun={workflowFeed.selectedRun}
           />
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3172,7 +3248,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack" data-area="ops" aria-label="Safety & policy">
           <div className="section-head">
             <div>
@@ -3189,7 +3267,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <RunTraceViewer trace={runTrace} initialRunId={traceRunId} />
           </div>
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack" data-area="ops" aria-label="Autonomy, router & skills">
           <div className="section-head">
             <div>
@@ -3210,7 +3290,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <SkillInvokeCard projectId={activeProjectId} invocations={skillInvocations} />
           </div>
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack" data-area="ops" aria-label="Resilience">
           <div className="section-head">
             <div>
@@ -3225,7 +3307,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <ChaosCard projectId={activeProjectId} runs={chaosRuns} />
           </div>
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3380,7 +3464,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("ops") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3725,7 +3811,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           )}
         </section>
+        ) : null}
 
+        {shows("comms") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3976,7 +4064,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("org") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -4119,7 +4209,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("enterprise") ? (
         <section
           className="panel-stack"
           data-area="enterprise"
@@ -4143,7 +4235,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             projectId={activeProjectId}
           />
         </section>
+        ) : null}
 
+        {shows("enterprise") ? (
         <section className="panel-stack" data-area="enterprise" aria-label="SOC2 evidence">
           <div className="section-head">
             <div>
@@ -4159,7 +4253,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <Soc2Card projectId={activeProjectId} />
           </div>
         </section>
+        ) : null}
 
+        {shows("enterprise") ? (
         <section className="panel-stack" data-area="enterprise" aria-label="Editions Community Cloud Enterprise">
           <div className="section-head">
             <div>
@@ -6020,7 +6116,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("org") ? (
         <section className="panel-stack" data-area="org" aria-label="Agent marketplace">
           <div className="section-head">
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -6300,7 +6398,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
           </article>
         </section>
+        ) : null}
 
+        {shows("infra") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -6753,7 +6853,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("reports") ? (
         <section className="panel-stack" data-area="reports" aria-label="Reports">
           <div className="section-head">
             <div>
@@ -6913,7 +7015,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <QaScorecardIsland feed={qaScorecard} />
           <ReportsView report={report} />
         </section>
+        ) : null}
 
+        {shows("capabilities") ? (
         <section className="panel-stack" data-area="capabilities" aria-label="Capabilities">
           <div className="section-head">
             <div>
@@ -6931,7 +7035,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             engineModel={capabilities.engineModel}
           />
         </section>
+        ) : null}
 
+        {shows("meetings") ? (
         <section className="panel-stack" data-area="meetings" aria-label="Meeting room">
           <div className="section-head">
             <div>
@@ -6956,7 +7062,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             />
           </div>
         </section>
+        ) : null}
 
+        {shows("workforce") ? (
         <section className="panel-stack" data-area="workforce" aria-label="Workforce">
           <div className="section-head">
             <div>
@@ -6966,7 +7074,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <WorkforceArea workforce={workforceData} />
         </section>
+        ) : null}
 
+        {shows("org_chart") ? (
         <section className="panel-stack" data-area="org_chart" aria-label="Org Chart">
           <div className="section-head">
             <div>
@@ -6976,12 +7086,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <OrgChartArea projectId={activeProjectId} actor={activeActorId} chart={orgChartData} />
         </section>
+        ) : null}
 
+        {shows("processes") ? (
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">
           <AgentProcesses projectId={activeProjectId} actor={activeActorId} />
           <ProcessManager projectId={activeProjectId} actor={activeActorId} />
         </section>
+        ) : null}
 
+        {shows("delivery") ? (
         <section className="panel-stack" data-area="delivery" aria-label="Deployment Manager">
           <div className="section-head">
             <div>
@@ -6991,7 +7105,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <DeploymentManagerPanel projectId={activeProjectId} />
         </section>
+        ) : null}
 
+        {shows("delivery") ? (
         <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
           <div className="section-head">
             <div>
@@ -7006,7 +7122,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
                             deployments={recentDeployments} />
         </section>
+        ) : null}
 
+        {shows("delivery") ? (
         <section className="panel-stack" data-area="delivery" aria-label="Pipeline generators">
           <div className="section-head">
             <div>
@@ -7024,10 +7142,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialRuns={cicdStatus.recent_runs ?? []}
           />
         </section>
+        ) : null}
 
         {/* Monitoring is its own area: "did it ship" and "is it working" are different
             questions asked at different times, and one page answering both buries whichever
             you did not come for. */}
+        {shows("monitoring") ? (
         <section className="panel-stack" data-area="monitoring" aria-label="Observability">
           <div className="section-head">
             <div>
@@ -7042,7 +7162,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <MonitoringArea health={deploymentHealth} observability={observability}
                           hostTargetId={obsHost} />
         </section>
+        ) : null}
 
+        {shows("monitoring") ? (
         <section className="panel-stack" data-area="monitoring" aria-label="Observability suite">
           <div className="section-head">
             <div>
@@ -7055,7 +7177,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <ObservabilitySuitePanel feed={observabilitySuiteFeed} />
         </section>
+        ) : null}
 
+        {shows("shepherd") ? (
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
           <div className="section-head">
             <div>
@@ -7065,12 +7189,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <ShepherdConsole initial={shepherdOverview} />
         </section>
+        ) : null}
 
         {/* Apps — the object the console never had.
             A run is a job; an app is the thing a person has in mind. Its spec is under
             Meetings, its runs under Code Tasks, its preview under CI/CD and its health under
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
             hand. This groups the runs into apps and puts each one's life on a single row. */}
+        {shows("code_tasks") ? (
         <section className="panel-stack" data-area="code_tasks" aria-label="Projects">
           <div className="section-head">
             <div>
@@ -7097,15 +7223,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             githubFullName={wipStatus?.githubFullName}
           />
         </section>
+        ) : null}
 
+        {shows("foundations") ? (
         <section data-area="foundations" aria-label="Design foundations">
           <FoundationsScreen />
         </section>
+        ) : null}
 
+        {shows("components") ? (
         <section data-area="components" aria-label="Component library">
           <ComponentsScreen />
         </section>
+        ) : null}
 
+        {shows("reliability") ? (
         <section className="panel-stack" data-area="reliability" aria-label="On-call SRE">
           <div className="section-head">
             <div>
@@ -7118,7 +7250,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <OncallSreHome status={oncallSreStatus} />
         </section>
+        ) : null}
 
+        {shows("reliability") ? (
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
           <div className="section-head">
             <div>
@@ -7128,7 +7262,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <ReliabilityHome feed={reliabilityFeed} />
         </section>
+        ) : null}
 
+        {shows("ai-sre") ? (
         <section className="panel-stack" data-area="ai-sre" aria-label="AI SRE">
           <div className="section-head">
             <div>
@@ -7141,7 +7277,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <AiSreHome feed={aiSreFeed} />
         </section>
+        ) : null}
 
+        {shows("reliability") ? (
         <section className="panel-stack" data-area="reliability" aria-label="Knowledge graph">
           <div className="section-head">
             <div>
@@ -7154,7 +7292,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
         </section>
+        ) : null}
 
+        {shows("discovery") ? (
         <section className="panel-stack" data-area="discovery" aria-label="Discovery">
           <div className="section-head">
             <div>
@@ -7170,7 +7310,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialDiscoveryId={requestedDiscovery}
           />
         </section>
+        ) : null}
 
+        {shows("pipeline") ? (
         <section className="panel-stack" data-area="pipeline" aria-label="Coding pipeline">
           <div className="section-head">
             <div>
@@ -7183,7 +7325,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <FactoryScaleCard wip={wipStatus} />
           </div>
         </section>
+        ) : null}
 
+        {shows("sandboxes") ? (
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">
           <div className="section-head">
             <div>
@@ -7198,7 +7342,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             host={sandboxFeed.host}
           />
         </section>
+        ) : null}
 
+        {shows("delivery_workflows") ? (
         <section className="panel-stack" data-area="delivery_workflows"
                  aria-label="Delivery workflows">
           <div className="section-head">
@@ -7209,7 +7355,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <DeliveryWorkflows projectId={activeProjectId} actor={activeActorId} />
         </section>
+        ) : null}
 
+        {shows("activity") ? (
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
           <FactoryFlowBoard projectId={activeProjectId} actor={activeActorId} />
           {/* The viewer reads `?run=` itself. It cannot be passed from here: this is a server
@@ -7227,7 +7375,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             ]))}
           />
         </section>
+        ) : null}
 
+        {shows("work") ? (
         <section className="panel-stack" data-area="work" aria-label="Task runs">
           <div className="section-head">
             <div>
@@ -7253,7 +7403,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialTaskId={requestedWorkTask}
           />
         </section>
+        ) : null}
 
+        {shows("work") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -7442,7 +7594,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("work") ? (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -7655,7 +7809,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
         </section>
+        ) : null}
 
+        {shows("decisions") ? (
         <section data-area="decisions" aria-label="Decision inbox">
           <DecisionInbox
             feed={decisions}
@@ -7667,7 +7823,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialFilter={requestedDecisionFilter}
           />
         </section>
+        ) : null}
 
+        {shows("decisions") ? (
         <section className="panel-stack approval-rules-section" aria-label="Approval rules">
           <div className="section-head">
             <div>
@@ -7677,6 +7835,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
         </section>
+        ) : null}
       </div>
     </ConsoleShell>
   );
