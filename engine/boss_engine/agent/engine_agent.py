@@ -436,6 +436,9 @@ class EngineAgent:
         "waive_gates",
         # Arbitrary mutation. `query_db` reads every table; this one can empty them.
         "write_db",
+        # Removes a workflow a person authored. Drafting one is conversational; deleting one is
+        # a press, for the same reason cancel_job is.
+        "delete_workflow",
     })
 
     def _run_tool(

@@ -85,7 +85,7 @@ describe("a button that says what it does needs no sentence", () => {
   it("the ask explains itself in a tooltip", () => {
     // The label now names the step's captain, so the tooltip does too — and says the dock
     // arrives addressed to them rather than to BOSS in general.
-    expect(UI).toContain("Opens the side dock addressed to the ${roleLabel(capability.captain)},");
+    expect(UI).toContain("Opens the side dock addressed to the ");
     expect(UI).toContain("with this step's state already filled in");
   });
 

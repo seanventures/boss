@@ -698,6 +698,215 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         return {"status": "running", "run_id": run_id, "project_id": pid}
 
     @reg.tool(
+        "draft_workflow",
+        "Create a new delivery workflow from a described sequence of steps, or REPLACE the "
+        "steps of one that exists. Pass steps as a list of {id, capability} in order — use "
+        "list_capabilities for the available kinds and what each produces, and name a custom "
+        "step's skill with skill=<skill_key>. The draft is validated against the same rules "
+        "the visual builder obeys and published as version 1 (or the next version), so a "
+        "workflow authored here and one drawn by hand are the same object. Nothing runs: this "
+        "authors a workflow, it does not start one.",
+        _obj(
+            {
+                "workflow_key": {"type": "string",
+                                 "description": "lower_snake_case identifier, stable"},
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "work_class": {"type": "string",
+                               "description": "the class of work this path is for, e.g. "
+                                              "project.new; omit to leave it unmapped"},
+                "steps": {
+                    "type": "array",
+                    "description": "in order: [{id, capability, skill?, captain?, approval?}]. "
+                                   "`approval` is 'manual' or 'auto' — a capability at or above "
+                                   "the risk floor is forced manual whatever you ask for.",
+                    "items": {"type": "object"},
+                },
+                "project_id": {"type": "string"},
+            },
+            ["workflow_key", "name", "steps"],
+        ),
+        kind="write",
+        reversibility="safe",
+    )
+    def draft_workflow(ctx, *, project_id, actor, args):
+        wf = services_module("workflows")
+        caps = services_module("workflow_capabilities")
+        pid = args.get("project_id") or project_id
+        key = re.sub(r"[^a-z0-9_]+", "_", str(args.get("workflow_key") or "").strip().lower())
+        if not re.fullmatch(r"[a-z][a-z0-9_]{2,60}", key or ""):
+            return {"ok": False, "error": "workflow_key must be lower_snake_case, 3-61 chars"}
+        spec = _spec_from_steps(args.get("steps") or [], args)
+        if isinstance(spec, dict) and spec.get("ok") is False:
+            return spec
+        with ctx.begin() as c:
+            # VALIDATE BEFORE CREATING ANYTHING. A definition row for a spec that cannot publish
+            # leaves a workflow in the catalogue that does not work, and the operator has to go
+            # and delete it.
+            try:
+                caps_by_key = {x["key"]: x for x in caps.palette()}
+                problems = _draft_problems(c, pid, spec, caps_by_key, caps)
+                if problems:
+                    return {"ok": False, "error": "; ".join(problems[:4])}
+                existing = c.execute(
+                    _text("SELECT id FROM workflow_definitions "
+                          "WHERE project_id=:p AND workflow_key=:k LIMIT 1"),
+                    {"p": pid, "k": key},
+                ).scalar()
+                if existing:
+                    definition_id = str(existing)
+                else:
+                    definition_id = wf.create_definition(
+                        c, project_id=pid, workflow_key=key,
+                        name=str(args.get("name") or key), actor=actor,
+                        description=str(args.get("description") or "") or None,
+                        namespace="product",
+                    )["id"]
+                published = wf.publish_version(
+                    c, project_id=pid, definition_id=definition_id, spec=spec, actor=actor)
+            except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
+                return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+            work_class = str(args.get("work_class") or "").strip()
+            mapped = None
+            if work_class:
+                try:
+                    mapped = wf.create_mapping(
+                        c, project_id=pid, workflow_version_id=published["id"],
+                        selector_kind="work_class", selector_value=work_class,
+                        # Project scope, not org: a workflow the agent drafted for THIS project
+                        # must not silently become the path every project follows.
+                        scope_type="project", scope_id=pid, priority=100, actor=actor)
+                except Exception as error:  # noqa: BLE001
+                    mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
+        return {"status": "published", "workflow_key": key, "definition_id": definition_id,
+                "version": published.get("version"), "steps": len(spec["steps"]),
+                **({"mapping": mapped} if mapped else {})}
+
+    @reg.tool(
+        "delete_workflow",
+        "Retire a delivery workflow this project authored. Refuses while runs are still using "
+        "it, and refuses a catalogue workflow — those are BOSS's own and are forked, not "
+        "deleted.",
+        _obj({"workflow_key": {"type": "string"}, "project_id": {"type": "string"}},
+             ["workflow_key"]),
+        kind="write",
+        reversibility="destroys_work",
+    )
+    def delete_workflow(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        key = str(args.get("workflow_key") or "").strip().lower()
+        with ctx.begin() as c:
+            row = c.execute(
+                _text("SELECT id, is_catalogue, name FROM workflow_definitions "
+                      "WHERE project_id=:p AND workflow_key=:k LIMIT 1"),
+                {"p": pid, "k": key},
+            ).mappings().first()
+            if not row:
+                return {"ok": False, "error": f"no workflow {key!r} in this project"}
+            if row["is_catalogue"]:
+                return {"ok": False,
+                        "error": f"{key} is one of BOSS's catalogue workflows. Fork it and edit "
+                                 "the fork; deleting it would remove it for every project."}
+            live = c.execute(
+                _text("SELECT count(*) FROM workflow_runs r "
+                      "JOIN workflow_versions v ON v.id = r.workflow_version_id "
+                      "WHERE v.workflow_definition_id = :d AND r.status IN "
+                      "('running','waiting','validating')"),
+                {"d": row["id"]},
+            ).scalar() or 0
+            if live:
+                return {"ok": False,
+                        "error": f"{live} run(s) are still on {key}. Let them finish or cancel "
+                                 "them first — deleting the path underneath a live run leaves "
+                                 "it unable to report what it was following."}
+            c.execute(_text("DELETE FROM workflow_definitions WHERE id = :d"), {"d": row["id"]})
+        return {"status": "deleted", "workflow_key": key, "name": row["name"]}
+
+    @reg.tool(
+        "draft_custom_step",
+        "Define a reusable workflow step backed by a skill this project has authored. Use it "
+        "when no standard capability covers the work — publishing to a third-party account, "
+        "running a media or document tool. The skill must exist first (list_skills); this step "
+        "is what makes it placeable in a workflow.",
+        _obj(
+            {
+                "step_key": {"type": "string", "description": "lower_snake_case, stable"},
+                "label": {"type": "string"},
+                "summary": {"type": "string"},
+                "skill": {"type": "string", "description": "the skill_key this step runs"},
+                "knowledge": {"type": "string",
+                              "description": "the standard this step holds to — house style, "
+                                             "the format your team uses. Carried into every "
+                                             "execution."},
+                "inputs": {"type": "array", "items": {"type": "object"}},
+                "produces": {"type": "array", "items": {"type": "object"}},
+                "project_id": {"type": "string"},
+            },
+            ["step_key", "label", "skill"],
+        ),
+        kind="write",
+        reversibility="safe",
+    )
+    def draft_custom_step(ctx, *, project_id, actor, args):
+        steps = services_module("workflow_custom_steps")
+        skills = services_module("skill_definitions")
+        pid = args.get("project_id") or project_id
+        skill_key = str(args.get("skill") or "").strip().lower()
+        with ctx.begin() as c:
+            if skills.get_skill(c, pid, skill_key) is None:
+                # NAMING WHAT EXISTS beats "not found": the model picked a skill and the useful
+                # correction is the list it should have picked from.
+                available = [s["skill_key"] for s in skills.list_skills(c, pid)]
+                return {"ok": False, "error": f"no skill {skill_key!r} in this project",
+                        "available": available}
+            try:
+                created = steps.create(
+                    c, project_id=pid, actor=actor,
+                    step_key=str(args.get("step_key") or "").strip().lower(),
+                    label=str(args.get("label") or ""),
+                    summary=str(args.get("summary") or ""),
+                    binding_kind="skill", skill_id=skill_key,
+                    inputs=args.get("inputs") or [], produces=args.get("produces") or [],
+                    knowledge=str(args.get("knowledge") or ""))
+            except Exception as error:  # noqa: BLE001
+                return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+        return {"status": "defined", "step_key": created.get("step_key"), "skill": skill_key}
+
+    @reg.tool(
+        "list_capabilities",
+        "The kinds of step a workflow can be made of: what each one does, what it needs, what "
+        "it produces, which agent answers for it, and whether it always requires a person. Read "
+        "this before drafting a workflow — a step that asks for an input nothing produces is "
+        "the most common way a draft fails to publish.",
+        _obj({}),
+    )
+    def list_capabilities(ctx, *, project_id, actor, args):
+        caps = services_module("workflow_capabilities")
+        return {"capabilities": [
+            {k: v for k, v in entry.items()
+             if k in ("key", "label", "summary", "required_inputs", "produces", "risk_tier",
+                      "is_gate", "captain", "approval_forced_manual")}
+            for entry in caps.palette()
+        ]}
+
+    @reg.tool(
+        "list_skills",
+        "Skills this project has authored, with what each needs and produces and whether it "
+        "forces an approval. A skill is what a custom workflow step runs.",
+        _obj({"project_id": {"type": "string"}}),
+    )
+    def list_skills(ctx, *, project_id, actor, args):
+        skills = services_module("skill_definitions")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            return {"skills": [
+                {k: v for k, v in s.items()
+                 if k in ("skill_key", "label", "summary", "behaviour_kind", "inputs",
+                          "produces", "risk_tier", "trusted", "enabled", "requires_approval")}
+                for s in skills.list_skills(c, pid)
+            ]}
+
+    @reg.tool(
         "start_workflow",
         "THE way to start new work. Runs a whole delivery workflow — research, the PRD panel, "
         "the approval gates and the written record are STEPS of it — so the operator watches "
@@ -2208,6 +2417,98 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 ).mappings().first()
         return {"meeting": _json_safe(dict(row)),
                 "decision": _json_safe(dict(dec)) if dec else None}
+
+
+def _spec_from_steps(steps: Any, args: dict) -> Any:
+    """A workflow spec from the plain list a model can actually produce.
+
+    The runtime's spec format carries `next`, `on_failure`, binding snapshots and per-step
+    approval blocks. Asking a model to emit that by hand is asking it to get a graph right in
+    JSON, and the failures are silent — a mistyped `next` makes a workflow that stops after
+    step one. So the model describes a SEQUENCE and this builds the graph, which is the part
+    that can be got right once.
+    """
+    if not isinstance(steps, list) or not steps:
+        return {"ok": False, "error": "steps must be a non-empty list"}
+    if len(steps) > 24:
+        return {"ok": False, "error": "24 steps is the most a workflow may have"}
+    built: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(steps):
+        if isinstance(raw, str):
+            raw = {"capability": raw}
+        if not isinstance(raw, dict):
+            return {"ok": False, "error": f"step {index + 1} is not an object"}
+        capability = str(raw.get("capability") or raw.get("kind") or "").strip().lower()
+        if not capability:
+            return {"ok": False, "error": f"step {index + 1} has no capability"}
+        step_id = re.sub(r"[^a-z0-9_]+", "_",
+                         str(raw.get("id") or capability).strip().lower()) or f"step_{index}"
+        # A repeated id silently overwrites a step in the graph, so it is renamed rather than
+        # refused: the operator asked for two previews and should get two.
+        base = step_id
+        suffix = 2
+        while step_id in seen:
+            step_id = f"{base}_{suffix}"
+            suffix += 1
+        seen.add(step_id)
+        # THE RUNTIME'S OWN SHAPE, not a plausible-looking one. Every step is
+        # kind="capability" with what it runs inside `binding` — a custom step names the step
+        # key it defined, a standard one names the capability. Writing `kind: "preview"` would
+        # have been refused by `validate_workflow_spec`, which is the good outcome; writing a
+        # shape it ACCEPTS but the runtime reads differently is the bad one.
+        entry: dict[str, Any] = {"id": step_id, "kind": "capability", "next": []}
+        if raw.get("skill") or capability == "custom":
+            entry["binding"] = {"custom_step": str(raw.get("skill") or "").strip().lower(),
+                                "inputs": raw.get("input") or {}}
+        else:
+            entry["binding"] = {"capability": capability, "inputs": raw.get("input") or {}}
+        if raw.get("captain"):
+            entry["captain"] = str(raw["captain"]).strip().lower()
+        mode = str(raw.get("approval") or "").strip().lower()
+        if mode in ("manual", "auto"):
+            entry["approval"] = {"mode": mode}
+        built.append(entry)
+    # THE CHAIN, BUILT NOT ASKED FOR. `next` is a LIST in the runtime's format; a bare string
+    # is accepted by the validator and normalised, but emitting the real shape means the spec
+    # the agent wrote and the spec the builder draws are byte-comparable.
+    for index, entry in enumerate(built[:-1]):
+        entry["next"] = [built[index + 1]["id"]]
+    return {"entry_step": built[0]["id"], "steps": built}
+
+
+def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
+                    caps_module: Any) -> list[str]:
+    """Everything wrong with a drafted spec, in sentences, before anything is written.
+
+    `publish_version` validates too — this is not a second opinion but an EARLIER one, so the
+    agent can say "that step needs an input nothing produces" instead of creating a definition
+    and then failing to publish into it.
+    """
+    problems: list[str] = []
+    skills = services_module("skill_definitions")
+    for entry in spec.get("steps", []):
+        binding = entry.get("binding") or {}
+        if binding.get("custom_step"):
+            skill_key = str(binding.get("custom_step") or "")
+            skill = skills.get_skill(connection, project_id, skill_key)
+            problems.extend(caps_module.validate_custom_step(
+                {**entry, "binding": {"skill_id": skill_key}}, skill))
+            continue
+        kind = str(binding.get("capability") or "")
+        if kind not in caps_by_key:
+            near = ", ".join(sorted(caps_by_key)[:8])
+            problems.append(
+                f"step '{entry.get('id')}' asks for '{kind}', which is not a capability. "
+                f"Available kinds include: {near}.")
+            continue
+        capability = caps_by_key[kind]
+        if (capability.get("approval_forced_manual")
+                and str((entry.get("approval") or {}).get("mode", "")).lower() == "auto"):
+            problems.append(
+                f"step '{entry.get('id')}' is {kind}, which always requires a person — it "
+                "cannot be set to auto.")
+    return problems
 
 
 def _text(sql: str):
@@ -4504,6 +4805,17 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "mandate_standard",
     # Writing the fix. A customer's bug is repaired with code.
     "create_code_task",
+    # AUTHORING THE PATH, as opposed to starting work on it.
+    #
+    # These three change what workflows EXIST; none of them starts a run or spends a model
+    # budget. `draft_workflow` and `draft_custom_step` therefore execute directly, because a
+    # conversation that has to be confirmed after every sentence is not a conversation — and a
+    # workflow that exists but is not mapped to a class of work changes no behaviour until
+    # somebody chooses it. `delete_workflow` is in DESTRUCTIVE: it removes something a person
+    # authored, and no sentence should be able to make the model press that itself.
+    "draft_workflow",
+    "draft_custom_step",
+    "delete_workflow",
     # STARTING WORK MEANS STARTING A WORKFLOW.
     #
     # `create_discovery` and `request_meeting` are deliberately NOT here. Research and the PRD

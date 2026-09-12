@@ -103,6 +103,9 @@ export type RunStep = {
   status: string;
   capability: string | null;
   output: Record<string, unknown>;
+  /** The captain this WORKFLOW named for this step, overriding the capability's default.
+   *  Absent on every step nobody overrode, which is almost all of them. */
+  captain?: string | null;
   evidence: Record<string, unknown>[];
   error: string | null;
   approval: Record<string, unknown>;
@@ -2428,6 +2431,18 @@ function ShipNow({ projectId, buildRunId, target, appName, alreadyLive, onDone }
  *  `agent` carries the RUN, so the conversation resolves what it is about server-side rather
  *  than the console shipping a context blob.
  */
+/** WHO ANSWERS FOR THIS STEP: the workflow's choice, else the capability's default.
+ *
+ *  Two steps can run the same capability against different accounts — "publish to our channel"
+ *  and "publish to a client's" are one step kind and two agents — so the workflow has to be
+ *  able to say. One function, because a resolver used in two places with two orders is a bug
+ *  waiting for the second caller.
+ */
+function stepCaptain(step: RunStep, capability?: Capability): string {
+  const named = String(step.captain ?? "").trim();
+  return named || String(capability?.captain ?? "").trim();
+}
+
 /** A registered role key, as an operator would say it. */
 function roleLabel(roleKey: string): string {
   return roleKey.replace(/_/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
@@ -3149,12 +3164,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             that role has actually taken on this project — it simply had nothing telling it that
             a deploy belongs to the Deployment Manager and a security review to the Security
             Reviewer. The engine says so now, per capability. */}
-        {capability?.captain ? (
-          <AgentChip roleKey={capability.captain} note="answers for this step" />
+        {stepCaptain(step, capability) ? (
+          <AgentChip roleKey={stepCaptain(step, capability)}
+                     note={step.captain ? "named by this workflow" : "answers for this step"} />
         ) : null}
         <button type="button" className="cap-btn" data-testid="dw-ask-boss"
-                title={capability?.captain
-                  ? `Opens the side dock addressed to the ${roleLabel(capability.captain)},`
+                title={stepCaptain(step, capability)
+                  ? `Opens the side dock addressed to the `
+                    + `${roleLabel(stepCaptain(step, capability))},`
                     + " with this step's state already filled in"
                   : "Opens the side dock with this step's state and message already filled in"}
                 onClick={() => askBossAbout(
@@ -3164,9 +3181,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   + (askNote ? `, BOSS says: "${askNote}"` : "")
                   + ". Why is it in this state, and what is the fix? Check the app's code and"
                   + " the host before answering.",
-                  capability?.captain)}>
-          {capability?.captain
-            ? `Ask the ${roleLabel(capability.captain)}`
+                  stepCaptain(step, capability))}>
+          {stepCaptain(step, capability)
+            ? `Ask the ${roleLabel(stepCaptain(step, capability))}`
             : "Ask BOSS about this step"}
         </button>
       </div>

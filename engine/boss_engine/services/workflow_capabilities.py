@@ -414,13 +414,40 @@ def approval_mode_for(capability_key: str, requested: Optional[str]) -> str:
     return mode
 
 
+#: Every role this workforce registers. A step that names anything else would address the dock
+#: to a role with no definition and no record — worse than asking BOSS in general, because it
+#: looks like it worked. Kept here beside the defaults so adding a captain and validating one
+#: are the same file.
+REGISTERED_ROLES = frozenset({
+    "adversarial_reviewer", "cao", "chief_architect", "coo", "cto", "deployment_manager",
+    "design_critic", "engineering_captain", "finops_sentinel", "infra_steward",
+    "integration_validator", "metatron", "model_spend_analyst", "pm", "product_manager",
+    "program_manager", "providerops_manager", "qa", "release_manager", "resource_janitor",
+    "secrets_steward", "security_reviewer", "software_engineer", "ux_engineer", "vp_agents",
+    "vp_product",
+})
+
+
+def validate_captain(step: Mapping[str, Any]) -> list[str]:
+    """Whether a step's named captain is somebody this workforce has."""
+    named = str(step.get("captain") or "").strip().lower()
+    if not named:
+        return []
+    if named in REGISTERED_ROLES:
+        return []
+    return [
+        f"step '{step.get('id', '?')}' names captain '{named}', which is not a role this "
+        f"workforce has. One of: {', '.join(sorted(REGISTERED_ROLES)[:6])}, ..."
+    ]
+
+
 def validate_step(step: Mapping[str, Any]) -> list[str]:
     """Everything wrong with one capability step, as sentences an operator can act on.
 
     Returns a list rather than raising on the first problem: a builder showing one error at a
     time makes a customer fix a workflow five times to publish it once.
     """
-    problems: list[str] = []
+    problems: list[str] = validate_captain(step)
     binding = step.get("binding") or {}
     key = str(binding.get("capability") or "").strip()
     step_id = step.get("id", "?")

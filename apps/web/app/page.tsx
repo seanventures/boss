@@ -186,6 +186,7 @@ import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { SetupHome } from "./setup-ui";
+import { SkillsHome } from "./skills-ui";
 import { DeploymentManagerPanel } from "./deployment-manager-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
 import { PipelineView } from "./pipeline-ui";
@@ -1700,6 +1701,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
+        </section>
+        ) : null}
+
+        {shows("skills") ? (
+        <section className="panel-stack" data-area="skills" aria-label="Skills">
+          <SkillsHome projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 

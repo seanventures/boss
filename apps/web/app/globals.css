@@ -1938,6 +1938,7 @@ tr[data-expanded] { background: var(--surface-2); }
 .bx-content[data-active="foundations"] .frame > section:is([data-area="foundations"], :has([data-area="foundations"])),
 .bx-content[data-active="components"] .frame > section:is([data-area="components"], :has([data-area="components"])),
 .bx-content[data-active="discovery"] .frame > section:is([data-area="discovery"], :has([data-area="discovery"])),
+.bx-content[data-active="skills"] .frame > section:is([data-area="skills"], :has([data-area="skills"])),
 .bx-content[data-active="setup"] .frame > section:is([data-area="setup"], :has([data-area="setup"])),
 .bx-content[data-active="budget"] .frame > section:is([data-area="budget"], :has([data-area="budget"])),
 .bx-content[data-active="pipeline"] .frame > section:is([data-area="pipeline"], :has([data-area="pipeline"])),
@@ -9342,3 +9343,15 @@ a.agent-chip-name:hover { text-decoration: underline; }
     background: color-mix(in srgb, var(--live, #58a6ff) 9%, var(--panel, #0d1117));
   }
 }
+
+/* Authored skills. A list of facts, not cards: what it is, how it runs, and what it costs you
+   in approvals. */
+.skill-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 12px; }
+.skill-row {
+  display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2, #0F1830);
+}
+.skill-row[data-enabled="false"] { opacity: .55; }
+.skill-row-main { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.skill-row-main code { font-size: .78rem; }
+.skill-row .linklike { justify-self: start; font-size: .78rem; }

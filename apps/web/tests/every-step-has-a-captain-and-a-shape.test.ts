@@ -29,13 +29,24 @@ describe("every step has somebody who answers for it", () => {
   });
 
   it("the button says who it reaches", () => {
-    expect(UI).toContain("`Ask the ${roleLabel(capability.captain)}`");
-    // And still works for a step with no captain.
+    expect(UI).toContain("`Ask the ${roleLabel(stepCaptain(step, capability))}`");
+    // And still works for a step with no captain at all.
     expect(UI).toContain('"Ask BOSS about this step"');
   });
 
   it("and the captain is shown, not only implied by a button label", () => {
-    expect(UI).toContain('<AgentChip roleKey={capability.captain} note="answers for this step" />');
+    expect(UI).toContain("<AgentChip roleKey={stepCaptain(step, capability)}");
+  });
+
+  it("one resolver decides who it is, so the override cannot be half-honoured", () => {
+    // A workflow may name a captain for a step, because two steps can run the same capability
+    // against different accounts — "publish to our channel" and "publish to a client's" are one
+    // step kind and two agents. Resolved in one function: workflow's choice, else the
+    // capability's default.
+    expect(UI).toContain("function stepCaptain(step: RunStep, capability?: Capability): string {");
+    expect(UI).toContain("return named || String(capability?.captain ?? \"\").trim();");
+    // And the chip says WHICH of the two it is, so an override is visible as an override.
+    expect(UI).toContain('note={step.captain ? "named by this workflow" : "answers for this step"}');
   });
 });
 

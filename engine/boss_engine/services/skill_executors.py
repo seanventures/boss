@@ -497,3 +497,119 @@ def execute_deployment_health_check(
         "health_status": result["deployment_run"]["status"],
         "decision_id": result.get("decision_id"),
     }
+
+
+# --------------------------------------------------------------------------- #
+# AN OPERATOR-AUTHORED COMMAND, IN A SANDBOX OR NOWHERE.
+# --------------------------------------------------------------------------- #
+class SandboxIsolationUnavailable(SkillExecutorConfigurationError):
+    """There is nowhere safe to run this, so it does not run."""
+
+
+def _quoted(value: Any) -> str:
+    """One input, safe to put in a shell command.
+
+    The whole risk of this executor is in this function. Inputs come from a workflow's run
+    input, which comes from an operator or from an earlier step — and a template built by
+    concatenation turns `; rm -rf /` into a second command. `shlex.quote` is the only thing
+    standing there, so nothing else in this file is allowed to build the command string.
+    """
+    import shlex
+
+    return shlex.quote(str(value if value is not None else ""))
+
+
+def build_sandbox_command(template: str, inputs: dict[str, Any], workdir: str = "/work") -> str:
+    """The command to run, with every placeholder shell-quoted.
+
+    Separated from execution so it can be tested without a sandbox, because the interesting
+    failure is a quoting failure and it must be provable on a laptop.
+    """
+    import re as _re
+
+    def swap(match: "_re.Match[str]") -> str:
+        name = match.group(1)
+        if name == "workdir":
+            return _quoted(workdir)
+        return _quoted(inputs.get(name))
+
+    return _re.sub(r"\{([a-z][a-z0-9_]*)\}", swap, template)
+
+
+def _isolation_available(settings: Settings) -> tuple[bool, str]:
+    """Whether this deployment has somewhere to run a customer's command.
+
+    The local provider is a temp directory and an allowlisted subprocess ON THE CONTROL PLANE'S
+    OWN HOST. Running an operator-authored ffmpeg line there is remote code execution against
+    the box that holds every project's credentials, so this refuses rather than degrades. A
+    refusal an operator can read beats a capability that quietly runs in the wrong place.
+    """
+    provider = str(getattr(settings, "governed_sandbox_provider", "") or "").strip().lower()
+    if provider in ("microvm", "firecracker", "kata", "sandbox_host"):
+        url = str(getattr(settings, "sandbox_agent_url", "") or "").strip()
+        if url:
+            return True, provider
+        return False, "the sandbox provider is set but BOSS_SANDBOX_AGENT_URL is empty"
+    return False, (
+        f"this deployment's sandbox provider is {provider or 'local'}, which runs on the "
+        "control plane's own host. A command authored in a skill only runs where there is real "
+        "isolation — set BOSS_GOVERNED_SANDBOX_PROVIDER to a microVM substrate."
+    )
+
+
+@register_executor("skill.sandboxed_command")
+def execute_sandboxed_command(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Run one skill's declared command in an isolated sandbox.
+
+    Everything about WHAT runs was fixed when the skill was authored — the image is pinned by
+    digest, the placeholders were checked against declared inputs, the timeout is bounded and
+    the network is off unless asked for. This function's only jobs are to refuse when there is
+    no isolation, to quote every input, and to hand back the declared outputs.
+    """
+    from .skill_definitions import get_skill
+
+    skill_key = _required_text(inputs, "_skill_key")
+    skill = get_skill(context.connection, context.project_id, skill_key)
+    if skill is None:
+        raise SkillExecutorConfigurationError(f"no skill {skill_key!r} in this project.")
+    if not skill["enabled"]:
+        # Fail closed: a disabled skill that no-ops would let a workflow appear to run and do
+        # nothing, which is the failure mode `validate_custom_step` already refuses to allow.
+        raise SkillExecutorConfigurationError(f"skill {skill_key!r} is disabled.")
+
+    config = skill["config"]
+    ready, why = _isolation_available(context.settings)
+    if not ready:
+        raise SandboxIsolationUnavailable(
+            f"{skill_key} runs a command and cannot be executed here: {why}")
+
+    missing = [entry["name"] for entry in skill["inputs"]
+               if entry.get("required") and not str(inputs.get(entry["name"], "")).strip()]
+    if missing:
+        raise SkillExecutorConfigurationError(
+            f"{skill_key} needs {', '.join(missing)}.")
+
+    command = build_sandbox_command(str(config.get("command") or ""), inputs)
+    from .sandbox_provider import make_sandbox_provider
+
+    sandbox = make_sandbox_provider(context.settings).acquire(
+        task_id=f"skill-{skill_key}-{make_id('sbx')[-8:]}")
+    try:
+        result = sandbox.run(command, timeout=int(config.get("timeout_seconds") or 300))
+        produced = {entry["name"]: entry.get("path") or entry["name"]
+                    for entry in (config.get("outputs") or [])}
+        return {
+            "skill_key": skill_key,
+            "image": config.get("image"),
+            "exit_code": getattr(result, "exit_code", None) or (
+                result.get("exit_code") if isinstance(result, dict) else None),
+            "produced": produced,
+            # The tail only. A command's whole stdout can be a video's worth of progress lines.
+            "log_tail": str(getattr(result, "stdout", "") or (
+                result.get("stdout", "") if isinstance(result, dict) else ""))[-4000:],
+        }
+    finally:
+        sandbox.teardown()

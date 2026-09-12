@@ -89,6 +89,11 @@ ops:
   to: infra
   what: audit export and operational counts
 
+skills:
+  to: infra
+  what: author a skill once and attach it to an agent or a workflow step
+  risk: an operator-authored command running somewhere without real isolation
+
 setup:
   to: infra
   what: connect a repository and a model — the first ten minutes of a self-hosted install

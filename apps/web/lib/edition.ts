@@ -153,6 +153,9 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // hides its own setup behind documentation is a console that gets abandoned during
   // evaluation, which is precisely the audience this edition is for.
   "setup",
+  // Skills are how a self-hosted operator adds a capability BOSS does not ship. Hiding that
+  // from the edition aimed at self-hosting would hide the point.
+  "skills",
   "decisions",
   "code_tasks",
   "budget",

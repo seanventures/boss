@@ -3125,6 +3125,52 @@ CREATE TABLE IF NOT EXISTS workflow_custom_steps (
 CREATE INDEX IF NOT EXISTS idx_workflow_custom_steps_project
   ON workflow_custom_steps(project_id, enabled, label);
 
+-- A SKILL AS A THING YOU CAN AUTHOR, not only an id you can enable.
+--
+-- `project_skills` says a project MAY use skill X; it never said what X does. Behaviour lived
+-- in a registered Python executor, so every new capability a customer wanted was a pull request
+-- against BOSS. That is the wrong boundary for the thing most worth customising: the operator
+-- knows their house rules, their tools and their accounts, and BOSS does not.
+--
+-- Three behaviours, deliberately. `builtin` keeps every executor that already exists working
+-- unchanged. `mcp_tool` covers anything reachable over a protocol BOSS already speaks.
+-- `sandboxed_command` is the one that makes ffmpeg, pandoc, ImageMagick and a hundred others
+-- authorable without writing Python — and the one that needs real isolation, which is why it
+-- refuses to run without it rather than falling back to the API host.
+CREATE TABLE IF NOT EXISTS skill_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  behaviour_kind TEXT NOT NULL
+    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command')),
+  -- WHAT THIS SKILL KNOWS. The markdown body an operator writes: the house style, the format
+  -- their team uses, the clauses that matter. Carried into every execution as context, so the
+  -- skill behaves the same on its hundredth run as on the one somebody watched.
+  knowledge TEXT NOT NULL DEFAULT '',
+  -- [{name, required, description}] — what the skill asks for.
+  inputs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- Names a later step can read out of it.
+  produces JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- Per-behaviour settings: {image, command, timeout_seconds, network, outputs} for a
+  -- sandboxed command; {mcp_server_id, tool_name} for an MCP tool; {executor_id} for a builtin.
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- 0 reads, 1 spends or writes something recoverable, 2+ changes the world irreversibly. Feeds
+  -- the SAME forced-approval floor every capability obeys, so a publish cannot be set to auto.
+  risk_tier INTEGER NOT NULL DEFAULT 1,
+  -- Reviewed by a person who could judge it. `validate_custom_step` already refuses an
+  -- untrusted skill at or above the approval floor, and this is the flag it reads.
+  trusted BOOLEAN NOT NULL DEFAULT false,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, skill_key)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_definitions_project
+  ON skill_definitions(project_id, enabled, skill_key);
+
 CREATE TABLE IF NOT EXISTS project_skills (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

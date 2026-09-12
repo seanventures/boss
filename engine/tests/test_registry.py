@@ -113,6 +113,12 @@ _EXPECTED_TOOLS: set[str] = {
     "send_feedback",
     "set_job_priority",
     "start_preview",
+    # Authoring the PATH, as opposed to starting work on it.
+    "draft_workflow",
+    "draft_custom_step",
+    "delete_workflow",
+    "list_capabilities",
+    "list_skills",
     "start_workflow",
     "steer_code_task",
     "stop_preview",
@@ -134,11 +140,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 79, (
+    assert len(reg.names()) == 84, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 50
-    assert len(write) == 29
+    assert len(read) == 52
+    assert len(write) == 32
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -337,6 +343,13 @@ def test_every_write_declares_what_pressing_it_costs():
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
     "close_orphaned_runs",
+    # AUTHORING A PATH IS NOT WALKING IT. Both write a definition and neither starts a run or
+    # spends a model budget: a workflow that exists but is not mapped to a class of work changes
+    # no behaviour until somebody chooses it, and a custom step is inert until a workflow places
+    # it. Publishing a new VERSION is also additive — the previous one is still there. The
+    # destructive sibling, delete_workflow, declares destroys_work and is press-only.
+    "draft_custom_step",
+    "draft_workflow",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's
     # click gets a writable shell on a host.
@@ -360,6 +373,7 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "cancel_code_task",   # throws away a build in flight
         "cancel_job",         # the one that caused this
         "decide",             # approves a gate; an agent that approves its own gates is ungated
+        "delete_workflow",    # removes a path a person authored
         "run_on_host",        # arbitrary command on a live machine
         "waive_gates",        # removes a check somebody put there
         "write_db",           # arbitrary mutation of any table

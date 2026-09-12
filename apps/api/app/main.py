@@ -14406,6 +14406,68 @@ def release_model_gateway_lease(
 
 
 # --------------------------------------------------------------------------- #
+# SKILLS AS AUTHORABLE OBJECTS. See services/skill_definitions for the reasoning.
+# --------------------------------------------------------------------------- #
+@app.get("/v1/skills")
+def list_skill_definitions(project_id: str) -> dict:
+    """Every skill this project has authored, with whether it forces an approval."""
+    from .services.skill_definitions import list_skills
+
+    with begin(engine) as connection:
+        return {"project_id": project_id, "skills": list_skills(connection, project_id)}
+
+
+@app.post("/v1/skills", status_code=201)
+def save_skill_definition(payload: dict) -> dict:
+    """Author or replace one skill. Idempotent on (project, skill_key).
+
+    Validation is deliberately here and not in the console: a skill is attachable from the
+    canvas, from an agent and from the workflow agent, and three callers checking the same
+    rules is three chances for them to disagree.
+    """
+    from .services.skill_definitions import SkillDefinitionError, save_skill
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip() or "executive_console"
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return {"skill": save_skill(
+                connection, project_id=project_id, actor=actor,
+                skill_key=str(payload.get("skill_key") or ""),
+                label=str(payload.get("label") or ""),
+                behaviour_kind=str(payload.get("behaviour_kind") or ""),
+                summary=str(payload.get("summary") or ""),
+                knowledge=str(payload.get("knowledge") or ""),
+                inputs=payload.get("inputs") or [],
+                produces=payload.get("produces") or [],
+                config=payload.get("config") or {},
+                risk_tier=int(payload.get("risk_tier") or 1),
+                trusted=bool(payload.get("trusted", False)),
+                enabled=bool(payload.get("enabled", True)),
+            )}
+        except SkillDefinitionError as error:
+            # 422, not 500: everything this raises is something the operator can fix, and the
+            # message is already written for them.
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.delete("/v1/skills/{skill_key}")
+def delete_skill_definition(skill_key: str, project_id: str, actor: str = "executive_console") -> dict:
+    from .services.skill_definitions import SkillDefinitionError, delete_skill
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return delete_skill(connection, project_id=project_id, actor=actor,
+                                skill_key=skill_key)
+        except SkillDefinitionError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+# --------------------------------------------------------------------------- #
 # FIRST-RUN SETUP. See services/setup_service for why this is its own surface.
 # --------------------------------------------------------------------------- #
 @app.get("/v1/setup/status")
@@ -20905,6 +20967,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     # The spec is the authority — `steps[].binding.capability` — and the run records the exact
     # version it started on. Output stays a fallback and never overrides the spec.
     spec_capability: dict[str, dict[str, str]] = {}
+    spec_captain: dict[str, dict[str, str]] = {}
     for run in runs:
         spec = run["spec"] if isinstance(run["spec"], dict) else {}
         spec_order[run["id"]] = {
@@ -20912,12 +20975,24 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             for index, step in enumerate(spec.get("steps") or [])
         }
         capabilities: dict[str, str] = {}
+        captains: dict[str, str] = {}
         for step in spec.get("steps") or []:
             binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
             name = binding.get("capability") or step.get("capability") or step.get("uses")
             if isinstance(name, str) and name:
                 capabilities[str(step.get("id"))] = name
+            # WHO ANSWERS FOR THIS PARTICULAR STEP, when the workflow named somebody.
+            #
+            # The capability carries a default captain — a deploy is the Deployment Manager's.
+            # A workflow may override it, which is the whole point when two steps run the same
+            # capability against different accounts: "publish to the Kaappu channel" and
+            # "publish to a client's" are the same step kind and different agents. The spec is
+            # the authority here exactly as it is for the capability above.
+            named = step.get("captain")
+            if isinstance(named, str) and named.strip():
+                captains[str(step.get("id"))] = named.strip().lower()
         spec_capability[run["id"]] = capabilities
+        spec_captain[run["id"]] = captains
 
     by_run: dict[str, list] = {r: [] for r in ids}
     for step in steps:
@@ -20931,6 +21006,9 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
                 or (snapshot.get("binding") or {}).get("capability")
                 or (step["output"] or {}).get("capability")
             ),
+            # None when the workflow did not name one; the console then falls back to the
+            # capability's default, which is where it has always come from.
+            "captain": spec_captain.get(step["workflow_run_id"], {}).get(step["step_id"]),
             "output": step["output"] or {},
             "evidence": step["evidence"] or [],
             "error": step["last_error"],
