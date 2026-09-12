@@ -14408,7 +14408,16 @@ def release_model_gateway_lease(
 # --------------------------------------------------------------------------- #
 # SKILLS AS AUTHORABLE OBJECTS. See services/skill_definitions for the reasoning.
 # --------------------------------------------------------------------------- #
-@app.get("/v1/skills")
+# NOT "/v1/skills" — THAT PATH WAS ALREADY TAKEN.
+#
+# A GET on /v1/skills has served the runtime skill catalogue (enablement records, provider
+# skills, load order) since long before this. Registering a second GET on the same path does not
+# error: FastAPI matches the first route and the new one is simply never reached, which is how
+# an endpoint ships, returns 200, and answers a different question than the one asked. Caught by
+# calling it against the deployment rather than by reading the code.
+#
+# These endpoints are about the DEFINITION — the authored object — so they say so.
+@app.get("/v1/skill-definitions")
 def list_skill_definitions(project_id: str) -> dict:
     """Every skill this project has authored, with whether it forces an approval."""
     from .services.skill_definitions import list_skills
@@ -14417,7 +14426,7 @@ def list_skill_definitions(project_id: str) -> dict:
         return {"project_id": project_id, "skills": list_skills(connection, project_id)}
 
 
-@app.post("/v1/skills", status_code=201)
+@app.post("/v1/skill-definitions", status_code=201)
 def save_skill_definition(payload: dict) -> dict:
     """Author or replace one skill. Idempotent on (project, skill_key).
 
@@ -14454,7 +14463,7 @@ def save_skill_definition(payload: dict) -> dict:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.delete("/v1/skills/{skill_key}")
+@app.delete("/v1/skill-definitions/{skill_key}")
 def delete_skill_definition(skill_key: str, project_id: str, actor: str = "executive_console") -> dict:
     from .services.skill_definitions import SkillDefinitionError, delete_skill
 

@@ -85,6 +85,9 @@ describe("the list says what a skill costs you, not what tier it is", () => {
 describe("the route cannot be used to reach any endpoint", () => {
   it("delete arrives as a named action, not a path taken from the client", () => {
     expect(ROUTE).toContain('const remove = body.action === "delete"');
-    expect(ROUTE).toContain("/v1/skills");
+    // And it reaches the DEFINITION endpoints, not the runtime skill catalogue that has owned
+    // /v1/skills all along — a second GET on that path is never matched, so it would have
+    // answered a different question than the one asked.
+    expect(ROUTE).toContain("/v1/skill-definitions");
   });
 });

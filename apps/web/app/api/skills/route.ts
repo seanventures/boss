@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const projectId = (new URL(req.url).searchParams.get("project_id") ?? "").trim();
   try {
-    const r = await fetch(`${API_URL}/v1/skills?project_id=${encodeURIComponent(projectId)}`, {
+    const r = await fetch(`${API_URL}/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`, {
       headers: authHeaders({ "Content-Type": "application/json" }),
       cache: "no-store",
     });
@@ -45,9 +45,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "skill_key and project_id are required" }, { status: 400 });
   }
   const path = remove
-    ? `/v1/skills/${encodeURIComponent(key)}?project_id=${encodeURIComponent(projectId)}`
+    ? `/v1/skill-definitions/${encodeURIComponent(key)}`
+      + `?project_id=${encodeURIComponent(projectId)}`
       + `&actor=${encodeURIComponent(String(body.actor ?? "executive_console"))}`
-    : "/v1/skills";
+    : "/v1/skill-definitions";
   try {
     const r = await fetch(`${API_URL}${path}`, {
       method: remove ? "DELETE" : "POST",

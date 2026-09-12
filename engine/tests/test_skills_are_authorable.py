@@ -122,3 +122,24 @@ def test_the_approval_floor_is_imported_not_restated():
 
     source = inspect.getsource(sd)
     assert "from .workflow_capabilities import MANUAL_APPROVAL_RISK_FLOOR" in source
+
+
+def test_the_definition_endpoints_do_not_shadow_the_catalogue():
+    """A GET on /v1/skills has served the runtime skill catalogue since long before this.
+
+    Registering a second GET on the same path does not error — FastAPI matches the first route
+    and the new one is never reached, so an endpoint ships, returns 200, and answers a different
+    question than the one asked. That is what happened, and it was caught by calling the
+    deployment rather than by reading the code.
+    """
+    from pathlib import Path
+
+    api = (Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py") \
+        .read_text(encoding="utf-8")
+    assert '@app.get("/v1/skill-definitions")' in api
+    assert '@app.post("/v1/skill-definitions", status_code=201)' in api
+    assert '@app.delete("/v1/skill-definitions/{skill_key}")' in api
+    # The catalogue keeps its path, and there is exactly one GET on it — matched on the path
+    # rather than the whole decorator line, which carries a response_model.
+    assert api.count('@app.get("/v1/skills"') == 1
+    assert '@app.post("/v1/skills"' not in api
