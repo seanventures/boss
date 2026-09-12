@@ -9277,3 +9277,23 @@ a.agent-chip-name:hover { text-decoration: underline; }
   font-size: .68rem; letter-spacing: .09em; text-transform: uppercase;
   color: var(--faint, #8092B3);
 }
+
+/* Six words, toned. A warning earns prominence by being short, not by being long. */
+.dw-preview-warn {
+  display: inline-flex; align-items: center;
+  padding: 2px 9px; border-radius: 999px;
+  font-size: .74rem; font-weight: 600;
+  color: var(--amber, #d29922);
+  border: 1px solid color-mix(in srgb, var(--amber, #d29922) 45%, var(--border));
+  background: color-mix(in srgb, var(--amber, #d29922) 10%, transparent);
+}
+
+/* What the step recorded: evidence, kept and filed rather than printed. */
+.dw-step-out-wrap { margin-top: 10px; }
+.dw-step-out-wrap > summary {
+  cursor: pointer; width: fit-content;
+  font-size: .72rem; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--faint, #8092B3);
+}
+.dw-step-out-wrap > summary:hover { color: var(--muted, #B4C4E0); }
+.dw-step-out-wrap[open] > summary { margin-bottom: 8px; }

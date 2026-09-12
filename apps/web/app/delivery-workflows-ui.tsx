@@ -959,8 +959,10 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
     out.push({ label: "open the project", href: link({ area: "code_tasks", run: codeTask }) });
     // Debugging a step means reading what it actually did, filtered to this work.
     out.push({ label: "activity log", href: link({ area: "activity", run: codeTask }) });
-    out.push({ label: "Ask BOSS",
-               href: link({ area: "code_tasks", run: codeTask, agent: codeTask }) });
+    // NOT "Ask BOSS" AGAIN. Every step already carries an "Ask BOSS about this step" button,
+    // which opens the dock with the step's own state prefilled — strictly more than this link
+    // did. Two controls with the same name, one worse, is a choice nobody should be asked to
+    // make.
   }
   // THE PANEL, not the list of panels. This linked to `?area=meetings` — the landing page —
   // so "open the panel" meant "go and find it", on a screen listing every meeting the project
@@ -2759,6 +2761,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const runAppTitle = typeof runInput.title === "string" ? runInput.title : "";
   const links = stepLinks(merged, runAppTitle);
   const previewHref = links.find((l) => l.label === "open the preview")?.href ?? null;
+  // ONE WAY IN. The preview block renders "Open preview" as a button; leaving the link of the
+  // same name in the row below it puts the identical href on screen twice, four words apart.
+  const visibleLinks = links.filter((l) => l.label !== "open the preview");
   // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
   // is not — which is why the old busy flag cleared a second after the click.
   const starting = !!previewStarting && previewStarting === buildRunId && !previewHref;
@@ -2766,14 +2771,26 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // A manual gate that has not been answered. The one condition under which "waiting" and
   // "gate · <role>" are the same sentence twice.
   const gateWaiting = approval?.mode === "manual" && step.status === "waiting";
+  // WHAT THE STEP RECORDED — de-duplicated, and not on the page by default.
+  //
+  // Rendered flat, this was the heaviest thing on a succeeded step: six labelled fields of
+  // which AWAIT and RUN ID held the SAME id, BINDING ID was "—", and PROJECT ID and REPOSITORY
+  // are facts about the whole run rather than this step. None of it is an action and none of it
+  // is read twice. It is evidence, so it is kept and filed.
   const produced = Object.entries(step.output || {})
     .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
+    // An empty field is a row that says nothing at all.
+    .filter(([, v]) => !(v === null || v === undefined || v === ""))
     // A LOOPBACK URL IS NOT AN ADDRESS ANYBODY CAN USE. `preview_url` is where the app listens
     // ON THE HOST — 127.0.0.1:42543 — and printing it under a heading reading PREVIEW URL
     // invites somebody to copy it, paste it, and get nothing. The link above is the openable
     // one; this grid is for facts, and that is not one.
     .filter(([, v]) => !(typeof v === "string" && isLoopbackPreviewUrl(v)))
-    .slice(0, 6);
+    .slice(0, 6)
+    // THE SAME ID UNDER TWO HEADINGS IS ONE FACT AND TWO ROWS. `await` and `run_id` are
+    // routinely identical on a build step; the first one wins.
+    .filter(([, v], i, all) =>
+      typeof v !== "string" || all.findIndex(([, w]) => w === v) === i);
 
   return (
     <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
@@ -2804,6 +2821,15 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           </span>
         ) : null}
         <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
+        {/* WHAT THIS STEP IS, ON A DOT. This was a permanent line under every step header —
+            "The whole inner pipeline: implement, adversarial review, security check, run the
+            tests, open a gated pull request. Succeeds when a PR exists." Correct, and read
+            once. It is the same class of sentence as everything else that moved. */}
+        {capability?.summary ? (
+          <Explain label={`What the ${capability.label ?? "step"} step does`}>
+            {capability.summary}
+          </Explain>
+        ) : null}
         {stepDuration(step) ? (
           <span className="dw-step-took" data-testid="dw-step-took">{stepDuration(step)}</span>
         ) : null}
@@ -2832,7 +2858,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         ) : null}
       </header>
 
-      {capability?.summary ? <p className="dw-detail-what">{capability.summary}</p> : null}
+
       {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.
           `note` is written by whichever attempt last wrote one, and a step that was refused
           and then went on to succeed keeps the refusal. So a Deploy marked SUCCEEDED, whose
@@ -2858,12 +2884,23 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           </p>
         </>
       ) : null}
+      {/* HISTORY GOES ON THE DOT; A LIVE REASON STAYS ON THE PAGE.
+          "Earlier: this app is already previewable — adopted the running preview" is how a
+          succeeded step explains why it took no time. Worth keeping and not worth a line. On a
+          step that did NOT succeed the same field is the reason it is sitting there, so it
+          stays where it cannot be missed. */}
       {step.output?.note ? (
-        <p className="dw-step-note"
-           data-tone={phase === "failed_on" && step.status !== "succeeded" ? "bad" : undefined}
-           data-testid="dw-step-note">
-          {step.status === "succeeded" ? "Earlier: " : ""}{String(step.output.note)}
-        </p>
+        step.status === "succeeded" ? (
+          <Explain label="Why this step recorded no work">
+            {String(step.output.note)}
+          </Explain>
+        ) : (
+          <p className="dw-step-note"
+             data-tone={phase === "failed_on" ? "bad" : undefined}
+             data-testid="dw-step-note">
+            {String(step.output.note)}
+          </p>
+        )
       ) : null}
 
       {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the
@@ -3170,10 +3207,20 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
               Starting a preview — this takes up to a minute. It will appear here on its own.
             </span>
           ) : previewHref && step.live_preview?.same_build === false ? (
-            <span className="detail" data-tone="warn" data-testid="dw-preview-hint">
-              This build has no preview running — the link opens the same app from a LATER
-              build. Start a fresh one to preview this build.
-            </span>
+            <>
+              {/* A WARNING SHOULD BE SHORT AND LOUD, WHICH IS NOT WHAT I SHIPPED.
+                  I argued this had to stay visible — correct — and then left it as two lines of
+                  prose, which is the thing being complained about. Six words carry it; the
+                  explanation goes where every other explanation went. */}
+              <span className="dw-preview-warn" data-testid="dw-preview-hint">
+                Preview is from a later build
+              </span>
+              <Explain label="What that means">
+                This build has no preview running. The link opens the same app built from a
+                later commit, so what you see may not match this step. Start a fresh one to
+                preview this build.
+              </Explain>
+            </>
           ) : (
             <Explain label="What this preview is">
               {previewHref
@@ -3185,9 +3232,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       ) : null}
 
       {/* WHERE THE WORK IT PRODUCED LIVES. Debugging a step means reading what it actually did. */}
-      {links.length ? (
+      {visibleLinks.length ? (
         <div className="dw-step-links" data-testid="dw-step-links">
-          {links.map((l) => (
+          {visibleLinks.map((l) => (
             l.external ? (
               <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
                  className="dw-step-link">{l.label} ↗</a>
@@ -3206,14 +3253,17 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       ) : null}
 
       {produced.length ? (
-        <dl className="dw-step-out" data-testid="dw-step-out">
-          {produced.map(([k, v]) => (
-            <div key={k}>
-              <dt>{k.replace(/_/g, " ")}</dt>
-              <dd>{summarise(v)}</dd>
-            </div>
-          ))}
-        </dl>
+        <details className="dw-step-out-wrap" data-testid="dw-step-out-wrap">
+          <summary>What this step recorded · {produced.length}</summary>
+          <dl className="dw-step-out" data-testid="dw-step-out">
+            {produced.map(([k, v]) => (
+              <div key={k}>
+                <dt>{k.replace(/_/g, " ")}</dt>
+                <dd>{summarise(v)}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
       ) : null}
     </section>
   );

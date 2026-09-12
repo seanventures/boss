@@ -167,7 +167,14 @@ describe("a succeeded deploy shows the app, not an old failure", () => {
     // running for this app right now … Start a fresh preview, then deploy" in red — an
     // instruction to redo work that was already done.
     expect(SOURCE).toContain('step.error && step.status !== "succeeded"');
-    expect(SOURCE).toContain('step.status === "succeeded" ? "Earlier: " : ""');
+    // The "Earlier:" prefix is gone because the note itself is gone from the page on a
+    // succeeded step — it is history, so it lives on the explain dot. The RULE this test
+    // protects is unchanged and now stronger: a succeeded step shows no note as prose at all,
+    // and a step that did NOT succeed still shows its reason where it cannot be missed.
+    expect(SOURCE).toContain('step.status === "succeeded" ? (');
+    expect(SOURCE).toContain('label="Why this step recorded no work"');
+    const at = SOURCE.indexOf('data-testid="dw-step-note"');
+    expect(SOURCE.slice(at - 260, at)).toContain('phase === "failed_on" ? "bad"');
   });
 
   it("links to the app once it has actually shipped", () => {

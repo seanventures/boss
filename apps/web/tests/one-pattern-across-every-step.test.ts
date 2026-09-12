@@ -56,9 +56,13 @@ describe("progress and warnings are not explanations", () => {
   });
 
   it("a preview of the WRONG build is a warning and stays visible", () => {
-    expect(UI).toContain("the link opens the same app from a LATER");
-    const at = UI.indexOf("the link opens the same app from a LATER");
-    expect(UI.slice(at - 300, at)).toContain('data-tone="warn"');
+    // Visible AND SHORT. I argued it had to stay on the page — right — then left it as two
+    // lines of prose, which is the thing being complained about. Six words carry it.
+    expect(UI).toContain("Preview is from a later build");
+    const at = UI.indexOf("Preview is from a later build");
+    expect(UI.slice(at - 200, at)).toContain('className="dw-preview-warn"');
+    // The explanation goes where every other explanation went.
+    expect(UI.slice(at, at + 400)).toContain('label="What that means"');
   });
 
   it("but what a preview IS goes on the dot", () => {
@@ -92,5 +96,49 @@ describe("an open run is a different object, not a thicker stripe", () => {
 
   it("and there is real air between cards", () => {
     expect(CSS).toContain(".dw-runs { display: grid; gap: 16px; }");
+  });
+});
+
+describe("the step chrome stops being prose", () => {
+  it("what a step IS lives on a dot, not a permanent line", () => {
+    // "The whole inner pipeline: implement, adversarial review, security check, run the tests,
+    // open a gated pull request. Succeeds when a PR exists." — under every step header, always.
+    expect(UI).not.toContain('<p className="dw-detail-what">');
+    expect(UI).toContain("{capability.summary}");
+    const at = UI.indexOf("{capability.summary}");
+    expect(UI.slice(at - 300, at)).toContain("<Explain");
+  });
+
+  it("and a succeeded step's history does too", () => {
+    expect(UI).toContain('label="Why this step recorded no work"');
+  });
+});
+
+describe("machine fields are evidence, not content", () => {
+  it("they are filed behind a disclosure", () => {
+    expect(UI).toContain('data-testid="dw-step-out-wrap"');
+    expect(UI).toContain("What this step recorded ·");
+  });
+
+  it("the same id is not printed under two headings", () => {
+    // AWAIT and RUN ID held the identical crun_ on every build step.
+    expect(UI).toContain("all.findIndex(([, w]) => w === v) === i");
+  });
+
+  it("and an empty field is not a row", () => {
+    // BINDING ID rendered as "—".
+    expect(UI).toContain('!(v === null || v === undefined || v === "")');
+  });
+});
+
+describe("one action has one control", () => {
+  it("Ask BOSS is a button, not also a link of the same name", () => {
+    expect(UI).not.toContain('label: "Ask BOSS",');
+    expect(UI).toContain('data-testid="dw-ask-boss"');
+  });
+
+  it("and the preview link is not both a button and a link", () => {
+    expect(UI).toContain('const visibleLinks = links.filter((l) => l.label !== "open the preview")');
+    expect(UI).toContain('data-testid="dw-preview-open"');
   });
 });
