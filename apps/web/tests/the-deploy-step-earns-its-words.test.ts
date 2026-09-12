@@ -132,3 +132,60 @@ describe("the sub-step is not a third nested box", () => {
     expect(block).toContain("border-color: transparent");
   });
 });
+
+describe("an explanation sits on the thing it explains", () => {
+  it("there is a reusable dot, click-driven so touch and keyboard reach it", () => {
+    // Hover has no touch or keyboard equivalent, and these are the sentences a new operator
+    // most needs.
+    expect(UI).toContain("function Explain(");
+    expect(UI).toContain('data-testid="dw-explain"');
+    expect(UI).toContain("onClick={() => setOpen((o) => !o)}");
+  });
+
+  it("it closes on Escape and on click-away", () => {
+    const at = UI.indexOf("function Explain(");
+    const block = UI.slice(at, at + 1200);
+    expect(block).toContain('e.key === "Escape"');
+    expect(block).toContain("wrap.current?.contains");
+  });
+
+  it("and it is labelled, so it is not a bare 'i' to a screen reader", () => {
+    expect(UI).toContain('label="How setting a target works"');
+    expect(UI).toContain('label="Why this is unavailable"');
+  });
+});
+
+describe("the footer is a row of actions, not a column of essays", () => {
+  it("each button carries its own explanation", () => {
+    expect(UI).toContain('data-testid="dw-run-actions"');
+    expect(UI.split('className="dw-run-action"').length - 1).toBe(4);
+  });
+
+  it("and none of them is followed by a permanent paragraph", () => {
+    const at = UI.indexOf('data-testid="dw-run-actions"');
+    const block = UI.slice(at, UI.indexOf("</div>", UI.indexOf("dw-build-on-this")));
+    expect(block).not.toContain('<span className="detail">');
+  });
+
+  it("a dead button still says why it is dead", () => {
+    // A disabled control with no reason is the one an operator clicks three times.
+    expect(UI).toContain("This run is still {run.status}");
+    const at = UI.indexOf('data-testid="dw-rerun-blocked"');
+    expect(UI.slice(at, at + 600)).toContain("<Explain");
+  });
+
+  it("the action and its dot cannot be orphaned by wrapping", () => {
+    expect(CSS).toContain(".dw-run-action { display: inline-flex;");
+  });
+});
+
+describe("the card wears the rail's number", () => {
+  it("so the two do not have to be matched by name", () => {
+    expect(UI).toContain('data-testid="dw-detail-n"');
+    expect(UI).toContain("stepIndex + 1");
+  });
+
+  it("and the index comes from the run, not a guess", () => {
+    expect(UI).toContain("stepIndex={run.steps.findIndex((s) => s.step_id === current.step_id)}");
+  });
+});

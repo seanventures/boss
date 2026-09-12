@@ -2050,6 +2050,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
       {current && !showAgents ? (
         <StepDetail
           step={current}
+          // Its position in the run, so the card can wear the same number as the rail node.
+          stepIndex={run.steps.findIndex((s) => s.step_id === current.step_id)}
           capability={current.capability ? byKey.get(current.capability) : undefined}
           targets={targets}
           hosts={hosts}
@@ -2076,44 +2078,54 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
           and the other from the cleaned name, so they did not even look like the same thing.
           Re-running is for a run that has STOPPED; a step that needs another go has "Try …
           again", which reruns that step and keeps everything before it. */}
-      <div className="dw-run-actions">
+      {/* A ROW OF ACTIONS, NOT A COLUMN OF ESSAYS.
+          Three buttons, each followed by two or three lines of grey prose of the same visual
+          weight — six lines of explanation under a card that already had eight. Every sentence
+          is worth keeping and none is worth a permanent line, so each one moves onto the dot
+          beside its own button. The buttons become a row, which is what a set of alternatives
+          looks like. */}
+      <div className="dw-run-actions" data-testid="dw-run-actions">
         {/* ONE BUTTON, FOR THE WHOLE RUN.
             The screen re-tests the recorded blockers by itself on arrival; this is the worst
             case — the operator has just changed something outside BOSS and does not want to
             wait for the next visit. Deliberately not per-step: somebody arriving at a stalled
             workflow is asking "is any of this still true?" of the whole thing, and does not
             know which step to point at. */}
-        <button type="button" className="cap-btn" onClick={onRecheck} disabled={!!busy}
-                data-testid="dw-recheck">
-          {busy === "Re-check" ? "Re-checking…" : "Re-check this workflow"}
-        </button>
-        <span className="detail">
-          Re-tests what stopped each step against how things are now, and puts back the ones
-          whose reason has been dealt with. Nothing runs again unless its blocker is genuinely
-          gone.
+        <span className="dw-run-action">
+          <button type="button" className="cap-btn" onClick={onRecheck} disabled={!!busy}
+                  data-testid="dw-recheck">
+            {busy === "Re-check" ? "Re-checking…" : "Re-check this workflow"}
+          </button>
+          <Explain label="What re-checking does">
+            Re-tests what stopped each step against how things are now, and puts back the ones
+            whose reason has been dealt with. Nothing runs again unless its blocker is genuinely
+            gone.
+          </Explain>
         </span>
         {ACTIVE_RUN_STATES.has(run.status) ? (
-          <>
+          <span className="dw-run-action">
             <button type="button" className="cap-btn" disabled data-testid="dw-rerun-blocked">
               Run this workflow again
             </button>
-            <span className="detail">
-              This run is still {run.status}. Starting it again would make a second workflow
-              for the same project, not retry this one — use “Try … again” on the step that
-              needs another go, or cancel this run first.
-            </span>
-          </>
+            {/* WHY IT IS DEAD, on the dead control. A disabled button with no reason is the
+                thing an operator clicks three times before giving up. */}
+            <Explain label="Why this is unavailable">
+              This run is still {run.status}. Starting it again would make a second workflow for
+              the same project, not retry this one — use &ldquo;Try … again&rdquo; on the step
+              that needs another go, or cancel this run first.
+            </Explain>
+          </span>
         ) : (
-          <>
+          <span className="dw-run-action">
             <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
                     data-testid="dw-rerun">
               {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
             </button>
-            <span className="detail">
-              Starts {run.workflow_name} again on the same directive — its own research, its
-              own panel, its own build. The existing run is left as it is.
-            </span>
-          </>
+            <Explain label="What running it again does">
+              Starts {run.workflow_name} again on the same directive — its own research, its own
+              panel, its own build. The existing run is left as it is.
+            </Explain>
+          </span>
         )}
         {/* THE ANSWER TO "I DON'T WANT TO PAY FOR THAT RESEARCH TWICE".
             Offered only where it means something: a finished run that actually produced a
@@ -2121,18 +2133,18 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
             Research-Led Discovery panel answered a go/no-go — its objective says in as many
             words that its PRD is not an implementation plan. */}
         {!ACTIVE_RUN_STATES.has(run.status) && researched ? (
-          <>
+          <span className="dw-run-action">
             <button type="button" className="cap-btn primary" onClick={onBuildOnThis}
                     disabled={!!busy} data-testid="dw-build-on-this">
               {busy === "Build on this research" ? "Starting…" : "Build on this research →"}
             </button>
-            <span className="detail">
-              Starts Standard Product Delivery on the same directive and hands it this run&rsquo;s
-              dossier. The research step adopts what is already there — it does not run again,
-              and it does not cost anything a second time. The panel that follows argues from
-              those findings.
-            </span>
-          </>
+            <Explain label="What building on this research does">
+              Starts Standard Product Delivery on the same directive and hands it this
+              run&rsquo;s dossier. The research step adopts what is already there — it does not
+              run again, and it does not cost anything a second time. The panel that follows
+              argues from those findings.
+            </Explain>
+          </span>
         ) : null}
       </div>
     </div>
@@ -2528,6 +2540,50 @@ export function isDeployStep(step: RunStep, capability?: Capability): boolean {
 
 
 /**
+ * An explanation attached to the thing it explains.
+ *
+ * "Instead of a full paragraph we can go with a tooltip." Right, and better than what I had:
+ * a per-STEP `?` reveals every sentence at once, which means the operator still has to work out
+ * which sentence is about the control they are looking at. A dot beside each control answers one
+ * question, where the question is asked.
+ *
+ * Click, not hover: hover has no touch or keyboard equivalent, and these sentences are the ones
+ * a new operator most needs. Escape and click-away close it, because a popover that only closes
+ * by pressing the dot again traps the pointer.
+ */
+function Explain({ children, label = "What this does" }: {
+  children: React.ReactNode; label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <span className="dw-explain" ref={wrap}>
+      <button type="button" className="dw-explain-dot" data-testid="dw-explain"
+              aria-expanded={open} aria-label={label}
+              onClick={() => setOpen((o) => !o)}>i</button>
+      {open ? (
+        <span className="dw-explain-pop" role="note" data-testid="dw-explain-pop">
+          {children}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
  * Teaching copy, shown until it has taught.
  *
  * Every sentence on the deploy step was added to fix a real confusion — "the user might click
@@ -2555,10 +2611,12 @@ function useLearned(topic: string): [boolean, () => void] {
   return [learned, mark];
 }
 
-function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
-                     onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
+function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry,
+                     onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      previewStarting, busy }: {
   projectId: string;
+  /** Where this step sits in the run, so the card can carry the rail's number. */
+  stepIndex?: number;
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
   onRetry: () => void; onSetTarget: (targetId: string) => void;
@@ -2714,6 +2772,14 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
               : phase === "skipped" ? "skipped" : step.status}
           </span>
         )}
+        {/* THE NUMBER, TYING THE CARD TO THE RAIL ABOVE IT. Taken from the reference design:
+            the rail says step 8 is Deploy and the card said only "Deploy", so the two had to be
+            matched by name. */}
+        {typeof stepIndex === "number" ? (
+          <span className="dw-detail-n" data-tone={phase} data-testid="dw-detail-n">
+            {stepIndex + 1}
+          </span>
+        ) : null}
         <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
         {stepDuration(step) ? (
           <span className="dw-step-took" data-testid="dw-step-took">{stepDuration(step)}</span>
@@ -2869,6 +2935,13 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
                 <span className="dw-ship-state">
                   {shippedTo ? "set" : "needs you first"}
                 </span>
+                {!shippedTo && !showHelp ? (
+                  <Explain label="How setting a target works">
+                    Pick the machine, confirm the name the container gets, and press Set target.
+                    Leave the port blank and BOSS picks a free one. This creates the destination;
+                    it does not ship anything.
+                  </Explain>
+                ) : null}
               </div>
               <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
                            buildRunId={buildRunId ?? ""} busy={busy}
@@ -2893,6 +2966,16 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
             <div className="dw-ship-body">
               <div className="dw-ship-title">
                 Approve the release
+                {!showHelp ? (
+                  <Explain label="What approving does">
+                    {shippedTo
+                      ? <>The press that ships it: BOSS builds a container from this app and runs
+                          it on {boundHostName || "the bound host"}. Nothing is sent until it is
+                          approved.</>
+                      : <>Approving now would fail at the deploy — there is nowhere to put the
+                          container until step 1 is done.</>}
+                  </Explain>
+                ) : null}
                 <span className="dw-ship-state">
                   {/* "WAITING ON YOU" WAS THE OTHER HALF OF THE SAME LIE. It is waiting on
                       step 1 — and saying it wants the operator, in amber, beside a button that

@@ -14,7 +14,11 @@ const UI = codeOnly("app/delivery-workflows-ui.tsx");
 describe("a finished run can be built on", () => {
   it("offers it, and says what it will and will not cost", () => {
     expect(UI).toContain('data-testid="dw-build-on-this"');
-    expect(UI).toContain("it does not run again");
+    // The sentence moved onto the dot beside the button rather than a permanent line under it;
+    // what matters is that the operator can still read it before pressing, not where it sits.
+    expect(UI).toContain("run again, and it does not cost anything a second time");
+    const at = UI.indexOf('data-testid="dw-build-on-this"');
+    expect(UI.slice(at, at + 900)).toContain("<Explain");
   });
 
   it("only on a run that actually produced a dossier", () => {

@@ -9194,3 +9194,46 @@ a.agent-chip-name:hover { text-decoration: underline; }
 .dw-help-toggle:hover, .dw-help-toggle[aria-expanded="true"] {
   color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
+
+/* An explanation attached to its control. One dot, one sentence, no line of the layout spent.
+   The popover is absolutely positioned INSIDE the step card, which has no backdrop-filter — the
+   trap that made the composer menu render behind the page. */
+.dw-explain { position: relative; display: inline-flex; vertical-align: baseline; }
+.dw-explain-dot {
+  width: 15px; height: 15px; flex-shrink: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--faint, #8092B3);
+  font-family: inherit; font-size: .62rem; font-style: italic; font-weight: 700;
+  line-height: 1; padding: 0;
+}
+.dw-explain-dot:hover, .dw-explain-dot[aria-expanded="true"] {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.dw-explain-pop {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 40;
+  width: max-content; max-width: min(420px, 70vw);
+  padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--surface-3, #16213C);
+  box-shadow: 0 14px 30px -12px rgba(0, 0, 0, .65);
+  font-size: .8rem; font-weight: 400; line-height: 1.5; color: var(--ink-soft, #D4E0F4);
+  white-space: normal; text-transform: none; letter-spacing: normal;
+}
+
+/* The step's number on its own card, matching the rail node above it. */
+.dw-detail-n {
+  display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0;
+  border-radius: 50%; font-size: .78rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.dw-detail-n[data-tone="now"] {
+  background: var(--amber, #d29922); border-color: var(--amber, #d29922); color: #0b1220;
+}
+.dw-detail-n[data-tone="done"] {
+  border-color: color-mix(in srgb, var(--green, #3fb950) 55%, transparent);
+  color: var(--green, #3fb950);
+}
+
+/* Each footer action and its dot travel together, so wrapping cannot orphan an explanation
+   next to the wrong button. */
+.dw-run-action { display: inline-flex; align-items: center; gap: 7px; }
