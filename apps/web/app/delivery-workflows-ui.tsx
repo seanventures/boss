@@ -1744,7 +1744,15 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
       {shown.map((run) => {
         const open = openRun === run.id;
         return (
-          <article key={run.id} className="dw-run" data-status={run.status} data-testid="dw-run">
+          // OPEN IS A STATE THE CARD SHOULD LOOK LIKE.
+          //
+          // "It's hard to differentiate between different workflows — I don't see a good
+          // boundary, the left side border is just not enough." Correct: every card had the same
+          // 1px border and the same background, so an OPEN card's content ran into the next
+          // card's header with nothing but 10px of gap between them. A 3px status stripe down
+          // the left cannot separate two hundred lines of step detail from the row beneath it.
+          <article key={run.id} className="dw-run" data-status={run.status}
+                   data-open={open ? "true" : undefined} data-testid="dw-run">
             <button type="button" className="dw-run-head" aria-expanded={open}
                     onClick={() => setOpenRun(open ? null : run.id)}>
               <span className="dw-badge" data-tone={tone(run.status)}>{run.status}</span>
@@ -3076,7 +3084,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   data-testid="dw-step-retry">
             {busy === "Retry" ? "Queueing…" : `Try ${capability?.label ?? step.step_id} again`}
           </button>
-          <span className="detail">Runs this step only; everything before it stays done.</span>
+          <Explain label="What retrying this step does">
+            Runs this step only; everything before it stays done.
+          </Explain>
         </div>
       ) : null}
 
@@ -3095,18 +3105,18 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           {decidedButNotMoved(step) === "approved" ? (
             <>
               <strong>Approved — starting.</strong>{" "}
-              <span className="detail">
+              <Explain label="What happens next">
                 The gate is signed off; the step moves as soon as a worker picks it up, usually
                 within a minute. This view refreshes on its own.
-              </span>
+              </Explain>
             </>
           ) : decidedButNotMoved(step) === "expired" ? (
             <>
               <strong>The gate expired before anyone answered it.</strong>{" "}
-              <span className="detail">
+              <Explain label="What an expired gate means">
                 Nothing was applied — the default was to hold — so this step is waiting on a
                 question that can still be answered. Opening it reopens the decision.
-              </span>{" "}
+              </Explain>{" "}
               <a className="cap-btn dw-decide-btn" data-testid="dw-step-reopen"
                  href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                                    { area: "decisions", decision: step.decision_id })}>
@@ -3116,9 +3126,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           ) : (
             <>
               <strong>Decided: {decidedButNotMoved(step)}.</strong>{" "}
-              <span className="detail">
+              <Explain label="Why the step has not moved">
                 This step is still marked waiting; it will not proceed on its own.
-              </span>{" "}
+              </Explain>{" "}
               <a className="cap-btn dw-decide-btn"
                  href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                                    { area: "decisions", decision: step.decision_id })}>
@@ -3149,19 +3159,28 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                 : previewHref ? "Start a fresh one" : "Run preview"}
             </button>
           ) : null}
-          <span className="detail" data-testid="dw-preview-hint">
-            {starting
-              // Said for the WHOLE wait, not for the second the POST takes. A preview boots a
-              // container and waits for it to serve; a minute of silence after a click reads
-              // as a click that did nothing.
-              ? "Starting a preview — this takes up to a minute. It will appear here on its own."
-              : previewHref
-                ? (step.live_preview && step.live_preview.same_build === false
-                    ? "This build has no preview running. The link opens a live preview of the "
-                      + "same app from a later build — start a fresh one to preview THIS build."
-                    : "A live preview of this build, on a URL you can open.")
+          {/* WHAT STAYS VISIBLE AND WHAT MOVES TO THE DOT.
+              Not everything grey is an explanation. Progress — "starting a preview, this takes
+              up to a minute" — is the whole reason a minute of silence does not read as a click
+              that did nothing, and a build MISMATCH is a warning: the link opens a different
+              build than the one on screen. Both stay. The two sentences that merely describe
+              what a preview is go on the dot. */}
+          {starting ? (
+            <span className="detail" data-testid="dw-preview-hint">
+              Starting a preview — this takes up to a minute. It will appear here on its own.
+            </span>
+          ) : previewHref && step.live_preview?.same_build === false ? (
+            <span className="detail" data-tone="warn" data-testid="dw-preview-hint">
+              This build has no preview running — the link opens the same app from a LATER
+              build. Start a fresh one to preview this build.
+            </span>
+          ) : (
+            <Explain label="What this preview is">
+              {previewHref
+                ? "A live preview of this build, on a URL you can open."
                 : "Nothing is serving this build right now. Starting one takes a few seconds."}
-          </span>
+            </Explain>
+          )}
         </div>
       ) : null}
 
