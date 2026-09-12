@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -14,6 +15,9 @@ from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
 from .secret_backends import SecretUnavailable, backend_for, resolve_secret_ref
 from .secret_refs import SecretRefService
+
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubConnectionNotFoundError(RuntimeError):
@@ -774,6 +778,69 @@ class GitHubConnectionService:
             secret_kind=secret_kind,
         )
         return credential_ref
+
+    def token_for_repository(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        owner: str,
+        repo: str,
+    ) -> Optional[str]:
+        """The token this PROJECT registered for owner/repo, or None.
+
+        WHY THIS EXISTS. The setup wizard writes a connection and a repository binding, and
+        `create_code_task` already resolves the repo NAME through that registry — but every path
+        that actually pushes took `settings.github_token`, an environment variable. So a
+        wizard-connected install reported "Connected — owner/name is the build target" and its
+        first build died at push with "BOSS_GITHUB_TOKEN is not set". The registry recorded
+        intent the runtime ignored.
+
+        Exact binding first, then the project's primary: a project with one repo should not have
+        to spell it out, and a project with several must not hand over the wrong account's token.
+        Returns None rather than raising — the caller has an environment fallback, and a missing
+        registry is not an error.
+        """
+        wanted = f"{owner}/{repo}".strip().lower()
+        try:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT b.full_name, b.role, c.id AS connection_id
+                    FROM github_repository_bindings b
+                    JOIN github_connections c ON c.id = b.connection_id
+                    WHERE b.project_id = :p AND b.status = 'active'
+                      AND c.status = 'enabled'
+                    ORDER BY (LOWER(b.full_name) = :want) DESC,
+                             (b.role = 'primary') DESC, b.updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"p": project_id, "want": wanted},
+            ).mappings().first()
+        except Exception as error:  # noqa: BLE001 — an older schema must not break the build
+            logger.debug("github: registry lookup failed for %s: %s", wanted, error)
+            return None
+        if not rows:
+            return None
+        try:
+            ref = self._credential_ref(connection, project_id, str(rows["connection_id"]))
+            record = self.secret_refs.get_by_credential_ref(connection, project_id, ref) \
+                if hasattr(self.secret_refs, "get_by_credential_ref") else None
+            if record is None:
+                kind, _, key = str(ref).partition(":")
+                record = {"ref_kind": kind, "ref_key": key}
+                for item in self.secret_refs.list_secret_refs(
+                        connection, project_id, status="active", limit=200):
+                    if item.get("ref_kind") == kind and item.get("ref_key") == key:
+                        record = item
+                        break
+            return self._resolve_secret(record, connection)
+        except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
+            # A bound connection whose secret cannot be read here is not a reason to fail the
+            # build: the environment may still have a usable token.
+            logger.debug("github: could not resolve the registered credential: %s", error)
+            return None
 
     def store_token_credential(
         self,

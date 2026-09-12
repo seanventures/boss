@@ -1874,6 +1874,23 @@ export function runToOpen(runs: Run[]): string | null {
 /** Gate states that can still be answered. Anything else has been decided or has lapsed. */
 const OPEN_GATE = new Set(["pending", "delegated"]);
 
+/** What a rail node says under its name — or nothing, when nothing is worth saying.
+ *
+ *  Ten nodes wrapped to two rows, and half their second lines read "0s" or "succeeded". A step
+ *  that took no measurable time has no duration worth printing, and "succeeded" is the tick
+ *  beside it said twice. Dropping both halves the rail's height and loses nothing: the
+ *  durations that matter — 4m 20s of research, 18m 22s of build — are exactly the ones kept.
+ *
+ *  Deliberately NOT the anonymous-dots version some redesigns reach for. The rail is the only
+ *  place a run's timing is visible, and that is most of what it is for.
+ */
+export function railMeta(step: RunStep): string {
+  const took = stepDuration(step);
+  if (took && took !== "0s") return took;
+  // A terminal state the tick already shows is not information; anything else is.
+  return ["succeeded", "completed"].includes(step.status) ? "" : step.status;
+}
+
 export function needsYou(step: RunStep): boolean {
   // THE GATE'S STATE, NOT ONLY THE STEP'S.
   //
@@ -2045,7 +2062,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
                           title={skipReason(step) || "this step did not apply to this run"}>
                       skipped{skipReason(step) ? " ⓘ" : ""}
                     </span>
-                  ) : stepDuration(step) || step.status}
+                  ) : railMeta(step)}
                 </span>
               </button>
             </li>

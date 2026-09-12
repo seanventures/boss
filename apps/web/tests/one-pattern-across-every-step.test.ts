@@ -142,3 +142,28 @@ describe("one action has one control", () => {
     expect(UI).toContain('data-testid="dw-preview-open"');
   });
 });
+
+describe("the rail keeps the timing and drops the noise", () => {
+  it("a duration that is not 0s is what the node says", () => {
+    expect(UI).toContain("export function railMeta(step: RunStep): string {");
+    const at = UI.indexOf("export function railMeta");
+    const fn = UI.slice(at, at + 500);
+    expect(fn).toContain('if (took && took !== "0s") return took;');
+  });
+
+  it("and a terminal state the tick already shows says nothing", () => {
+    const at = UI.indexOf("export function railMeta");
+    expect(UI.slice(at, at + 500))
+      .toContain('["succeeded", "completed"].includes(step.status) ? ""');
+  });
+
+  it("but a state that is NOT terminal still shows", () => {
+    // "blocked", "waiting", "running" are the ones worth reading on a ten-node rail.
+    const at = UI.indexOf("export function railMeta");
+    expect(UI.slice(at, at + 500)).toContain(": step.status;");
+  });
+
+  it("the node uses it", () => {
+    expect(UI).toContain(") : railMeta(step)}");
+  });
+});

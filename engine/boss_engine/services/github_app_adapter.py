@@ -33,7 +33,8 @@ from ..config import Settings
 logger = logging.getLogger("boss.github_app")
 
 
-def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=None) -> str:
+def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=None,
+               connection=None, project_id: str = "") -> str:
     """A usable GitHub token for THIS repo: installation token if the App covers it, else PAT.
 
     One decision, shared by every caller, because three of them made it independently and all
@@ -76,11 +77,37 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
                 "github: %s/%s is outside the App installation; using the configured token",
                 owner, repo)
     token = getattr(settings, "github_token", "")
-    if not token:
-        raise GitHubAppConfigurationError(
-            "No GitHub credentials for %s/%s: the App has no installation for it and "
-            "BOSS_GITHUB_TOKEN is not set." % (owner, repo))
-    return token
+    if token:
+        return token
+    # A THIRD SOURCE: THE TOKEN THIS PROJECT REGISTERED.
+    #
+    # The setup wizard writes a connection and a repository binding, and `create_code_task`
+    # already resolves the repo NAME through that registry — but every path that pushes read
+    # this environment variable. So a wizard-connected install said "Connected — owner/name is
+    # the build target" and its first build died right here, on a message telling the operator
+    # to set an environment variable the wizard exists to replace.
+    #
+    # Deliberately AFTER the environment, not before it. Every install configured the old way —
+    # which is every deployment that predates the wizard — must keep behaving exactly as it did;
+    # a stale connection row must not be able to take a working build's credential away. The
+    # registry is the fallback, which is the position the PAT itself occupies relative to the
+    # App, and for the same reason.
+    if connection is not None and project_id:
+        try:
+            from .github_connections import GitHubConnectionService
+
+            registered = GitHubConnectionService(settings).token_for_repository(
+                connection, project_id=project_id, owner=owner, repo=repo)
+        except Exception as error:  # noqa: BLE001 — never a new way for a build to die
+            logging.getLogger(__name__).debug(
+                "github: registered-credential lookup failed for %s/%s: %s", owner, repo, error)
+            registered = None
+        if registered:
+            return registered
+    raise GitHubAppConfigurationError(
+        "No GitHub credentials for %s/%s: the App has no installation for it, "
+        "BOSS_GITHUB_TOKEN is not set, and this project has no repository connected in Setup."
+        % (owner, repo))
 
 
 class GitHubAppConfigurationError(RuntimeError):

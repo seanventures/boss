@@ -1667,7 +1667,12 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
         # is outside its installation, even with a working PAT configured.
         from .github_app_adapter import repo_token
 
-        token = repo_token(settings, owner, repo)
+        # THE PROJECT'S OWN REGISTERED CREDENTIAL, as a third source after the App and the
+        # environment. This is the build that used to die on "BOSS_GITHUB_TOKEN is not set"
+        # against a repository the operator had just connected in Setup.
+        with _transaction(engine) as c:
+            token = repo_token(settings, owner, repo,
+                               connection=c, project_id=project_id)
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed

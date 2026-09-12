@@ -1484,7 +1484,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001
             token = None
     if not token:
-        token = repo_token(settings, owner, repo)
+        # Same third source as the ungoverned path: the credential this project registered in
+        # Setup, after the App and the environment.
+        with _transaction(engine) as c:
+            token = repo_token(settings, owner, repo,
+                               connection=c, project_id=project_id)
 
     provider = LocalSubprocessProvider(settings)
     # Lane defaults: builder engine for design/tests/implement, adversary engine for
