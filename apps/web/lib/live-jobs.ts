@@ -24,8 +24,11 @@ export function emptyLiveJobsFeed(
 export async function fetchLiveJobsFeed(
   projectId = PROJECT_ID,
   limit = 12,
+  active = true,
 ): Promise<LiveJobsFeed> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyLiveJobsFeed("not requested", pid);
   try {
     const payload = await client.listJobs(pid, {
       include_terminal: false,

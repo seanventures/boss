@@ -8,7 +8,9 @@ export type PlanItem = {
   phaseCount: number;
 };
 
-export async function fetchPlans(projectId = PROJECT_ID): Promise<PlanItem[]> {
+export async function fetchPlans(projectId = PROJECT_ID, active = true): Promise<PlanItem[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     const r = await fetch(
       `${API_URL}/v1/plans?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=20`,

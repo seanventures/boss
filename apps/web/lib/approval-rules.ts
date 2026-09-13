@@ -14,7 +14,9 @@ export type ApprovalRulesFeed = {
   rules?: ApprovalRulesResponse;
 };
 
-export async function fetchApprovalRules(projectId = PROJECT_ID): Promise<ApprovalRulesFeed> {
+export async function fetchApprovalRules(projectId = PROJECT_ID, active = true): Promise<ApprovalRulesFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { apiReachable: false, blockedReason: "not requested" };
   try {
     const rules = await client.getApprovalRules(resolveProjectId(projectId));
     return { apiReachable: true, rules };

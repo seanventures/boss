@@ -11,7 +11,9 @@ export type ChaosRun = {
   createdAt: string;
 };
 
-export async function fetchChaosRuns(projectId = PROJECT_ID, limit = 15): Promise<ChaosRun[]> {
+export async function fetchChaosRuns(projectId = PROJECT_ID, limit = 15, active = true): Promise<ChaosRun[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     const r = await fetch(
       `${API_URL}/v1/chaos?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=${limit}`,

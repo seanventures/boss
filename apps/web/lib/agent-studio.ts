@@ -152,7 +152,10 @@ export type AgentStudioFeed = {
 
 export async function fetchAgentStudioFeed(
   projectId?: string,
+  active = true,
 ): Promise<AgentStudioFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyFeed(resolveProjectId(projectId), "not requested");
   const resolved = resolveProjectId(projectId);
   try {
     const response = await fetch(

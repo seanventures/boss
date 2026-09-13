@@ -52,7 +52,10 @@ export function emptyHealthSnapshotFeed(
 
 export async function fetchHealthSnapshotFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<HealthSnapshotFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyHealthSnapshotFeed("not requested", projectId);
   try {
     const payload = await client.listHealthSnapshots(resolveProjectId(projectId));
     return {

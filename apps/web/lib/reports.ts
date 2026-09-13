@@ -10,7 +10,10 @@ export type ReportFeed = {
 
 export async function fetchReportSummary(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<ReportFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { apiReachable: false, blockedReason: "not requested" };
   try {
     const data = await client.getReportSummary(resolveProjectId(projectId));
     return { apiReachable: true, data };

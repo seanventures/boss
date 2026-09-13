@@ -60,7 +60,9 @@ export function effectiveTier(profile: PipelineProfile, baseTier = 2): number {
   return Math.max(profile.tier_floor, Math.min(profile.tier_cap, baseTier));
 }
 
-export async function fetchPipelineData(projectId = PROJECT_ID): Promise<PipelineData> {
+export async function fetchPipelineData(projectId = PROJECT_ID, active = true): Promise<PipelineData> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyPipelineData(resolveProjectId(projectId));
   const resolved = resolveProjectId(projectId);
   try {
     const pr = await fetch(

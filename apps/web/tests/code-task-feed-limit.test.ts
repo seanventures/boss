@@ -58,6 +58,12 @@ describe("page wiring", () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
     const src = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
-    expect(src).toContain("fetchCodeTasksFeed(activeProjectId, requestedArea)");
+    // The property, not the formatting: the area must reach the fetcher, because that is what
+    // picks the limit above. The call also carries an `active` gate now, so pinning the exact
+    // one-line form broke on a reflow that changed nothing about this guarantee.
+    const call = /fetchCodeTasksFeed\(([^)]*)\)/s.exec(src)?.[1];
+    expect(call).toBeTruthy();
+    expect(call).toContain("activeProjectId");
+    expect(call).toContain("requestedArea");
   });
 });

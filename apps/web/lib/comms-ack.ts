@@ -19,7 +19,10 @@ export async function fetchAckState(
   projectId = PROJECT_ID,
   limit = 25,
   pendingOnly = false,
+  active = true,
 ): Promise<AckState[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     const r = await fetch(
       `${API_URL}/v1/comms/inbox/ack-state?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=${limit}&pending_only=${pendingOnly}`,

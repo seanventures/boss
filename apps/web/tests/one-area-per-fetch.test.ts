@@ -1,0 +1,186 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { codeOnly } from "./_helpers/source";
+
+/**
+ * The companion to one-area-per-render: the console should not *fetch* the thirty-nine areas
+ * it is not rendering either.
+ *
+ * Rendering one area fixed the payload (8.3 MB -> 25-235 KB) but not the wait, because the
+ * server still opened every feed on every click. Measured against the live API, each of these
+ * endpoints answers in 0.2-0.8s on its own — but the page fired roughly eighty-five of them at
+ * once into a single API worker pool, and they queued behind each other. Time to first byte
+ * came back 0.6-6.7s and varied run to run regardless of which area was asked for, which is the
+ * signature of contention rather than of any one slow feed.
+ *
+ * So the gate that decides what renders now also decides what is requested. Each fetcher takes a
+ * trailing `active` flag and, when it is false, returns the same empty value its unreachable
+ * path already returned — so call-site positions are untouched. That matters: the wave below is
+ * destructured positionally, and reordering it would silently swap two feeds.
+ */
+const PAGE = codeOnly("app/page.tsx");
+const PAGE_RAW = readFileSync(join(process.cwd(), "app", "page.tsx"), "utf8");
+
+/**
+ * Every feed in the platform-ops wave, and the one area whose JSX reads it. Derived by finding
+ * each destructured name's uses and the `shows(...)` block enclosing them; each of these had
+ * zero uses outside such a block, which is what makes gating it safe.
+ */
+const PLATFORM_OPS_FEEDS: ReadonlyArray<readonly [string, string]> = [
+  ["fetchIdentityProvidersFeed", "enterprise"],
+  ["fetchOncallSreStatus", "reliability"],
+  ["fetchReleaseStatus", "portfolio"],
+  ["fetchReleaseBoard", "portfolio"],
+  ["fetchReleases", "portfolio"],
+  ["fetchWorkerAutoscalingStatus", "infra"],
+  ["fetchWorkerAutoscalingHistory", "infra"],
+  ["fetchTokenScorecard", "budget"],
+  ["fetchTokenConsumption", "budget"],
+  ["fetchTokenPolicies", "budget"],
+  ["fetchTokenRecommendations", "budget"],
+  ["fetchObservabilitySuiteFeed", "monitoring"],
+  ["fetchKnowledgeGraphFeed", "reliability"],
+  ["fetchCICDCatalog", "delivery"],
+  ["fetchCICDStatus", "delivery"],
+  ["fetchLiveJobsFeed", "work"],
+  ["fetchQaScorecardFeed", "reports"],
+];
+
+function waveSource(): string {
+  const start = PAGE.indexOf("const platformOpsWaveP = Promise.all([");
+  expect(start).toBeGreaterThan(-1);
+  const end = PAGE.indexOf("]);", start);
+  expect(end).toBeGreaterThan(start);
+  return PAGE.slice(start, end);
+}
+
+describe("only the requested area is fetched", () => {
+  it("the fetch gate exists and is not a wildcard on overview", () => {
+    expect(PAGE).toContain("const needs = (...areas: string[]) => areas.includes(shownArea);");
+    // `isAreaActive` treats overview as "load everything" so a client-side tab switch has data.
+    // `needs` must not: overview renders overview's sections and nothing else, so a wildcard
+    // there would leave the landing page paying for all forty areas — the exact complaint.
+    expect(PAGE).not.toContain('shownArea === "overview" || areas.includes');
+  });
+
+  it("every feed in the platform-ops wave is gated on the area that reads it", () => {
+    const wave = waveSource();
+    for (const [fn, area] of PLATFORM_OPS_FEEDS) {
+      const call = new RegExp(`${fn}\\([^)]*\\)`).exec(wave)?.[0];
+      expect(call, `${fn} is not called in the platform-ops wave`).toBeTruthy();
+      expect(call, `${fn} fetches unconditionally`).toContain(`needs("${area}")`);
+    }
+  });
+
+  it("the wave is still destructured positionally, so nothing may be reordered", () => {
+    // The gate must not have become an excuse to drop or resequence a feed: the destructuring
+    // above pairs names to positions, and a swap here is a silent wrong-data bug, not a crash.
+    const wave = waveSource();
+    const calledOrder = [...wave.matchAll(/(fetch[A-Za-z]+)\(/g)].map((m) => m[1]);
+    expect(calledOrder).toEqual(PLATFORM_OPS_FEEDS.map(([fn]) => fn));
+    // Two entries in the wave are already-resolved values from the assurance pack, not fetches.
+    expect(wave).toContain("Promise.resolve(assuranceArea.securityScanners)");
+    expect(wave).toContain("Promise.resolve(assuranceArea.latestSecurityScan)");
+    const entries = PAGE_RAW.slice(
+      PAGE_RAW.indexOf("const platformOpsWaveP = Promise.all(["),
+    )
+      .split("\n")
+      .slice(1)
+      .findIndex((l) => l.trim().startsWith("]"));
+    expect(entries).toBe(19);
+  });
+
+  it("the main wave gates the feeds that only one area reads", () => {
+    const start = PAGE.indexOf("await Promise.all([\n      fetchStatus(activeProjectId)");
+    expect(start).toBeGreaterThan(-1);
+    const wave = PAGE.slice(start, PAGE.indexOf("\n    ]);", start));
+    // The expensive ones, named individually so a regression says which feed came unstuck.
+    // fetchGitHubOperationsFeed alone fans out to twelve API calls and is read only by the
+    // GitHub area; fetchAuditSummary serialises the whole audit trail and was measured at 13s.
+    const mustGate: ReadonlyArray<readonly [string, string]> = [
+      ["fetchGitHubOperationsFeed", "github"],
+      ["fetchRepoActivity", "github"],
+      ["fetchInfraFabricFeed", "infra"],
+      ["fetchRoutingLogFeed", "infra"],
+      ["fetchHealthSnapshotFeed", "ops"],
+      ["fetchDiscoveriesFeed", "discovery"],
+      ["fetchSandboxFeed", "sandboxes"],
+      ["fetchAgentStudioFeed", "studio"],
+      ["fetchWorkOrchestrationFeed", "portfolio"],
+    ];
+    for (const [fn, area] of mustGate) {
+      const call = new RegExp(`${fn}\\((?:[^()]|\\([^()]*\\))*\\)`, "s").exec(wave)?.[0];
+      expect(call, `${fn} is not called in the main wave`).toBeTruthy();
+      expect(call, `${fn} fetches on every area`).toContain(`needs("${area}")`);
+    }
+    expect(wave).toContain('needs("ops")\n        ? fetchAuditSummary(activeProjectId)');
+  });
+
+  it("the feeds still fetched everywhere are the ones read everywhere", () => {
+    const start = PAGE.indexOf("await Promise.all([\n      fetchStatus(activeProjectId)");
+    const wave = PAGE.slice(start, PAGE.indexOf("\n    ]);", start));
+    const calls = [...wave.matchAll(/(fetch[A-Za-z]+)\((?:[^()]|\([^()]*\))*\)/gs)];
+    const ungated = calls
+      .filter((m) => !m[0].includes("needs("))
+      .map((m) => m[1])
+      // Gated by a ternary outside its own parens rather than by an `active` argument,
+      // so the per-call check above cannot see it. The assertion for it is in the test above.
+      .filter((fn) => fn !== "fetchAuditSummary");
+    // These are read outside any `shows(...)` block — header counts, the nav rail, the "what
+    // needs you" badge — so they are genuinely needed no matter which area renders. Adding to
+    // this list is a real cost paid by all forty areas; do it deliberately.
+    expect(new Set(ungated)).toEqual(
+      new Set([
+        "fetchStatus",
+        "fetchDecisionFeed",
+        "fetchTaskFeed",
+        "fetchMeetingFeed",
+        "fetchArtifactFeed",
+        "fetchActivityFeed",
+        "fetchDeadletterFeed",
+        "fetchPackFeed",
+        "fetchRoleFeed",
+        "fetchCommercialFeed",
+        "fetchEnterpriseFeed",
+        "fetchEntitlementFeed",
+        "fetchSkillFeed",
+        "fetchReceiptFeed",
+        "fetchSelfImprovementFeed",
+        "fetchInboxFeed",
+        "fetchMemberFeed",
+        "fetchMetatronQuery",
+        "fetchAuthSession",
+        "fetchCapabilities",
+        // Self-gating: returns null unless the URL names a run to trace.
+        "fetchRunTrace",
+      ]),
+    );
+  });
+
+  it("a skipped feed returns the shape its unreachable path returns", () => {
+    // The reason positions can stay put. If a fetcher ever returns null/undefined when
+    // inactive instead of its own empty, the area that *does* read it still type-checks but
+    // renders a crash — so the contract is stated here, at the seam.
+    for (const file of [
+      "lib/identity-providers.ts",
+      "lib/oncall-sre.ts",
+      "lib/release-planning.ts",
+      "lib/worker-autoscaling.ts",
+      "lib/token-efficiency.ts",
+      "lib/observability-suite.ts",
+      "lib/knowledge-graph.ts",
+      "lib/cicd-pipelines.ts",
+      "lib/live-jobs.ts",
+      "lib/qa-scorecard.ts",
+    ]) {
+      const src = codeOnly(file);
+      expect(src, `${file} has no inactive branch`).toMatch(/if \(!active\)/);
+      expect(src, `${file} returns nothing when inactive`).not.toMatch(
+        /if \(!active\) return (null|undefined);/,
+      );
+    }
+  });
+});

@@ -136,8 +136,11 @@ export function emptyWorkerAutoscalingStatusFeed(
 
 export async function fetchWorkerAutoscalingStatus(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<WorkerAutoscalingStatusFeed> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyWorkerAutoscalingStatusFeed("not requested", pid);
   const base = apiBase();
   if (!base) {
     return emptyWorkerAutoscalingStatusFeed(
@@ -200,8 +203,11 @@ export async function fetchWorkerAutoscalingPolicies(
 export async function fetchWorkerAutoscalingHistory(
   projectId = PROJECT_ID,
   limit = 20,
+  active = true,
 ): Promise<WorkerAutoscalingHistoryItem[]> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   const base = apiBase();
   if (!base) return [];
   try {

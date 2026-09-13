@@ -61,7 +61,10 @@ export function emptyBreakGlassGrantFeed(
 
 export async function fetchBreakGlassGrantFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<BreakGlassGrantFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyBreakGlassGrantFeed("not requested", projectId);
   try {
     const payload = await client.listBreakGlassGrants(
       resolveProjectId(projectId),

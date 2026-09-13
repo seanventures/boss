@@ -14,7 +14,10 @@ export type PolicyEval = {
 export async function fetchPolicyEvals(
   projectId = PROJECT_ID,
   limit = 25,
+  active = true,
 ): Promise<PolicyEval[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     const r = await fetch(
       `${API_URL}/v1/policy-evals?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=${limit}`,

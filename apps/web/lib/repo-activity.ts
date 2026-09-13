@@ -38,7 +38,10 @@ export type RepoActivity = {
 export async function fetchRepoActivity(
   projectId?: string,
   days = 30,
+  active = true,
 ): Promise<RepoActivity[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   const project = resolveProjectId(projectId);
   try {
     const response = await fetch(

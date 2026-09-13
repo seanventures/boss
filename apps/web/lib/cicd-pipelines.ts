@@ -99,7 +99,9 @@ export function emptyStatus(projectId = PROJECT_ID): CICDStatus {
   };
 }
 
-export async function fetchCICDCatalog(): Promise<CICDCatalog> {
+export async function fetchCICDCatalog(active = true): Promise<CICDCatalog> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyCatalog();
   if (!API_URL) return emptyCatalog();
   try {
     const res = await fetch(`${API_URL}/v1/cicd/catalog`, {
@@ -120,8 +122,13 @@ export async function fetchCICDCatalog(): Promise<CICDCatalog> {
   }
 }
 
-export async function fetchCICDStatus(projectId = PROJECT_ID): Promise<CICDStatus> {
+export async function fetchCICDStatus(
+  projectId = PROJECT_ID,
+  active = true,
+): Promise<CICDStatus> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyStatus(resolved);
   if (!API_URL) return emptyStatus(resolved);
   try {
     const res = await fetch(

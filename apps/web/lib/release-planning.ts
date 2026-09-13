@@ -149,8 +149,11 @@ export function emptyBoard(
 
 export async function fetchReleaseStatus(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<ReleaseStatusSnapshot> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyStatus("not requested", pid);
   try {
     const r = await fetch(
       `${API_URL}/v1/release-planning/status?project_id=${encodeURIComponent(pid)}`,
@@ -197,8 +200,11 @@ export async function fetchReleaseStatus(
 
 export async function fetchReleaseBoard(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<ReleaseBoard> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyBoard("not requested", pid);
   try {
     const r = await fetch(
       `${API_URL}/v1/release-planning/board?project_id=${encodeURIComponent(pid)}`,
@@ -243,8 +249,11 @@ export async function fetchReleaseBoard(
 
 export async function fetchReleases(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<ReleasePlan[]> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     const r = await fetch(
       `${API_URL}/v1/release-planning/releases?project_id=${encodeURIComponent(pid)}`,

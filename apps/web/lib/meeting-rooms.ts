@@ -11,7 +11,9 @@ export type MeetingRoomsFeed = {
   roles: MeetingRole[];
 };
 
-export async function fetchMeetingRooms(projectId = PROJECT_ID): Promise<MeetingRoomsFeed> {
+export async function fetchMeetingRooms(projectId = PROJECT_ID, active = true): Promise<MeetingRoomsFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { apiReachable: false, blockedReason: "not requested", items: [], roles: [] };
   try {
     const [data, rolesData] = await Promise.all([
       client.getMeetings(resolveProjectId(projectId)),

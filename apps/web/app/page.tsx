@@ -530,6 +530,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // lands somewhere real.
   const shownArea = requestedArea && requestedArea.trim() ? requestedArea.trim() : "overview";
   const shows = (area: string) => area === shownArea;
+  // The fetch-side twin of `shows()`: a feed is worth fetching only if an area that renders
+  // it is the one being rendered. Unlike `isAreaActive`, "overview" is not a wildcard —
+  // overview renders overview's sections and nothing else, so it should not pay for the rest.
+  const needs = (...areas: string[]) => areas.includes(shownArea);
   const requestedDecisionFilter = parseDecisionInboxFilter(
     getParam(resolvedSearchParams?.decision_filter),
   );
@@ -672,26 +676,32 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const assuranceFeed = assuranceArea.assuranceFeed;
   // The platform-ops feeds. They need the project id and `assuranceArea`, both of which exist
   // here — so waiting until after the 66-feed wave cost a third round trip for nothing.
+  // Each of these 17 feeds is read by exactly one area's JSX (verified: every one has zero
+  // uses outside a `shows(...)` block). `shows()` renders one area per request, so fetching
+  // the other 16 is pure latency — and firing ~85 requests at once is what made a click cost
+  // seconds: individually these endpoints answer in 0.2-0.8s, but they queue behind each
+  // other in the API's worker pool. Each fetcher returns the same empty its unreachable path
+  // already produced, so the positions below are unchanged and nothing is reordered.
   const platformOpsWaveP = Promise.all([
-    fetchIdentityProvidersFeed(activeProjectId),
-    fetchOncallSreStatus(activeProjectId),
+    fetchIdentityProvidersFeed(activeProjectId, needs("enterprise")),
+    fetchOncallSreStatus(activeProjectId, needs("reliability")),
     Promise.resolve(assuranceArea.securityScanners),
     Promise.resolve(assuranceArea.latestSecurityScan),
-    fetchReleaseStatus(activeProjectId),
-    fetchReleaseBoard(activeProjectId),
-    fetchReleases(activeProjectId),
-    fetchWorkerAutoscalingStatus(activeProjectId),
-    fetchWorkerAutoscalingHistory(activeProjectId),
-    fetchTokenScorecard(activeProjectId),
-    fetchTokenConsumption(activeProjectId),
-    fetchTokenPolicies(activeProjectId),
-    fetchTokenRecommendations(activeProjectId),
-    fetchObservabilitySuiteFeed(activeProjectId, obsHost),
-    fetchKnowledgeGraphFeed(activeProjectId),
-    fetchCICDCatalog(),
-    fetchCICDStatus(activeProjectId),
-    fetchLiveJobsFeed(activeProjectId),
-    fetchQaScorecardFeed(activeProjectId),
+    fetchReleaseStatus(activeProjectId, needs("portfolio")),
+    fetchReleaseBoard(activeProjectId, needs("portfolio")),
+    fetchReleases(activeProjectId, needs("portfolio")),
+    fetchWorkerAutoscalingStatus(activeProjectId, needs("infra")),
+    fetchWorkerAutoscalingHistory(activeProjectId, 20, needs("infra")),
+    fetchTokenScorecard(activeProjectId, undefined, needs("budget")),
+    fetchTokenConsumption(activeProjectId, 24, needs("budget")),
+    fetchTokenPolicies(activeProjectId, needs("budget")),
+    fetchTokenRecommendations(activeProjectId, undefined, needs("budget")),
+    fetchObservabilitySuiteFeed(activeProjectId, obsHost, needs("monitoring")),
+    fetchKnowledgeGraphFeed(activeProjectId, needs("reliability")),
+    fetchCICDCatalog(needs("delivery")),
+    fetchCICDStatus(activeProjectId, needs("delivery")),
+    fetchLiveJobsFeed(activeProjectId, 12, needs("work")),
+    fetchQaScorecardFeed(activeProjectId, needs("reports")),
   ]);
   const projects = await projectsP;
   const activeProject = projects.items.find(
@@ -770,12 +780,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchMeetingFeed(activeProjectId),
       fetchArtifactFeed(activeProjectId),
       fetchActivityFeed(activeProjectId, 40),
-      fetchHealthSnapshotFeed(activeProjectId),
-      fetchOpsQueueFeed(activeProjectId),
+      fetchHealthSnapshotFeed(activeProjectId, needs("ops")),
+      fetchOpsQueueFeed(activeProjectId, 8, needs("ops", "work")),
       fetchDeadletterFeed(activeProjectId),
       fetchPackFeed(activeProjectId),
       fetchRoleFeed(activeProjectId),
-      fetchAgentModuleFeed(activeProjectId),
+      fetchAgentModuleFeed(activeProjectId, needs("org")),
       fetchCommercialFeed(activeProjectId),
       fetchEnterpriseFeed(activeProjectId),
       fetchEntitlementFeed(activeProjectId),
@@ -785,18 +795,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         data_boundary: routingBoundaryFilter,
         selected_only: routingOutcomeFilter === "selected" ? true : undefined,
         denied_only: routingOutcomeFilter === "denied" ? true : undefined,
-      }),
+      }, needs("infra")),
       fetchSkillFeed(),
       Promise.resolve(infraArea.providerOps),
-      fetchInfraFabricFeed(activeProjectId),
-      fetchGitHubOperationsFeed(activeProjectId),
-      fetchRepoActivity(activeProjectId, 30),
+      fetchInfraFabricFeed(activeProjectId, needs("infra")),
+      // Twelve and thirty sub-requests respectively, both read only by data-area="github".
+      fetchGitHubOperationsFeed(activeProjectId, needs("github")),
+      fetchRepoActivity(activeProjectId, 30, needs("github")),
       fetchReceiptFeed(activeProjectId, 100),
       Promise.resolve(infraArea.infrastructureResources),
       Promise.resolve(budgetArea.budgetStatus),
       Promise.resolve(budgetArea.budgetIntensity),
-      fetchLatestCanary(activeProjectId),
-      fetchPlans(activeProjectId),
+      fetchLatestCanary(activeProjectId, needs("ops")),
+      fetchPlans(activeProjectId, needs("work")),
       Promise.resolve(budgetArea.budgetAllocations),
       // THE SINGLE BIGGEST COST ON THIS PAGE, FOR EIGHT NUMBERS.
       //
@@ -810,20 +821,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       //
       // Skipped elsewhere, and the panel already handles an unreachable summary by saying so,
       // which is the same shape as "not loaded for this area".
-      requestedArea === "ops"
+      needs("ops")
         ? fetchAuditSummary(activeProjectId)
         : Promise.resolve(emptyAuditSummary(
             "Audit counts load on the Ops area — they are too expensive to fetch on every page.",
             activeProjectId)),
-      fetchChangeJournalFeed(activeProjectId),
+      fetchChangeJournalFeed(activeProjectId, 8, needs("ops")),
       fetchSelfImprovementFeed(activeProjectId),
-      fetchOutboxFeed(activeProjectId),
+      fetchOutboxFeed(activeProjectId, 8, needs("comms")),
       fetchInboxFeed(activeProjectId),
       fetchMemberFeed(activeProjectId),
       fetchOrgMemberFeed(
         activeOrgId,
         activeProjectId,
         requestedActorId ?? "ceo",
+        needs("org"),
       ),
       fetchMetatronQuery(
         metatronQuestion,
@@ -832,33 +844,38 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         activeProjectId,
       ),
       fetchAuthSession(),
-      fetchBreakGlassGrantFeed(activeProjectId),
-      fetchReportSummary(activeProjectId),
-      fetchAgentRuns(activeProjectId),
+      fetchBreakGlassGrantFeed(activeProjectId, needs("org")),
+      fetchReportSummary(activeProjectId, needs("infra", "ops", "reports")),
+      fetchAgentRuns(activeProjectId, needs("work")),
       Promise.resolve(infraArea.mcpServers),
-      fetchTaskOutputs(activeProjectId),
+      fetchTaskOutputs(activeProjectId, needs("work")),
       fetchCapabilities(activeProjectId),
-      fetchMeetingRooms(activeProjectId),
-      fetchApprovalRules(activeProjectId),
-      fetchCodeTasksFeed(activeProjectId, requestedArea),
-      fetchDiscoveriesFeed(activeProjectId),
-      fetchPreviews(activeProjectId),
-      fetchQaBenchmarkApps(activeProjectId),
-      fetchSandboxFeed(),
-      fetchPipelineData(activeProjectId),
-      fetchDashboard(activeProjectId),
-      fetchPolicyEvals(activeProjectId),
+      fetchMeetingRooms(activeProjectId, needs("code_tasks", "meetings")),
+      fetchApprovalRules(activeProjectId, needs("decisions")),
+      fetchCodeTasksFeed(
+        activeProjectId,
+        requestedArea,
+        needs("activity", "code_tasks", "reports"),
+      ),
+      fetchDiscoveriesFeed(activeProjectId, needs("discovery")),
+      fetchPreviews(activeProjectId, needs("code_tasks")),
+      fetchQaBenchmarkApps(activeProjectId, needs("code_tasks")),
+      fetchSandboxFeed(needs("sandboxes")),
+      fetchPipelineData(activeProjectId, needs("pipeline")),
+      fetchDashboard(activeProjectId, needs("dashboard", "ops")),
+      fetchPolicyEvals(activeProjectId, 25, needs("ops")),
+      // Already self-gating: returns null unless the URL carries a run to trace.
       fetchRunTrace(traceRunId),
-      fetchLatestEval(activeProjectId),
-      fetchSkillInvocations(activeProjectId),
-      fetchAckState(activeProjectId),
-      fetchWipStatus(activeProjectId),
-      fetchChaosRuns(activeProjectId),
+      fetchLatestEval(activeProjectId, needs("ops")),
+      fetchSkillInvocations(activeProjectId, 15, needs("ops")),
+      fetchAckState(activeProjectId, 25, false, needs("comms")),
+      fetchWipStatus(activeProjectId, 5, needs("code_tasks", "pipeline")),
+      fetchChaosRuns(activeProjectId, 15, needs("ops")),
       Promise.resolve(budgetArea.commitmentRecons),
       Promise.resolve(budgetArea.finopsSummary),
-      fetchWorkflowFeed(activeProjectId),
-      fetchAgentStudioFeed(activeProjectId),
-      fetchWorkOrchestrationFeed(activeProjectId),
+      fetchWorkflowFeed(activeProjectId, needs("ops")),
+      fetchAgentStudioFeed(activeProjectId, needs("studio")),
+      fetchWorkOrchestrationFeed(activeProjectId, needs("portfolio")),
     ]);
   // These were two sequential awaits in the middle of an otherwise parallel render, so the
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing

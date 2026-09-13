@@ -185,8 +185,11 @@ export type IdentityProvidersFeed = {
 
 export async function fetchIdentityProvidersFeed(
   projectId: string = PROJECT_ID,
+  active = true,
 ): Promise<IdentityProvidersFeed> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return unfetchedIdentityProvidersFeed(resolved);
   try {
     const [catalog, status] = await Promise.all([
       listIdentityProviderCatalog(),
@@ -201,15 +204,24 @@ export async function fetchIdentityProvidersFeed(
       configuredCount: status.configured_count,
     };
   } catch (error) {
-    return {
-      projectId: resolved,
-      apiReachable: false,
-      blockedReason:
-        error instanceof Error ? error.message : "IdP API unavailable",
-      catalog: [],
-      standards: [],
-      projectStatus: [],
-      configuredCount: 0,
-    };
+    return unfetchedIdentityProvidersFeed(
+      resolved,
+      error instanceof Error ? error.message : "IdP API unavailable",
+    );
   }
+}
+
+function unfetchedIdentityProvidersFeed(
+  projectId: string,
+  blockedReason?: string,
+): IdentityProvidersFeed {
+  return {
+    projectId,
+    apiReachable: false,
+    blockedReason,
+    catalog: [],
+    standards: [],
+    projectStatus: [],
+    configuredCount: 0,
+  };
 }

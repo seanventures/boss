@@ -146,8 +146,11 @@ function mapStage(s: Record<string, unknown>): StageScore {
 export async function fetchTokenScorecard(
   projectId = PROJECT_ID,
   windowHours?: number,
+  active = true,
 ): Promise<TokenScorecard> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyScorecard(resolved);
   try {
     const qs = new URLSearchParams({ project_id: resolved });
     if (windowHours != null) qs.set("window_hours", String(windowHours));
@@ -187,8 +190,11 @@ export async function fetchTokenScorecard(
 
 export async function fetchTokenPolicies(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<TokenPoliciesFeed> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { projectId: resolved, policies: [], apiReachable: false };
   try {
     const r = await fetch(
       `${API_URL}/v1/token-efficiency/policies?project_id=${encodeURIComponent(resolved)}`,
@@ -230,8 +236,11 @@ export async function fetchTokenPolicies(
 export async function fetchTokenConsumption(
   projectId = PROJECT_ID,
   windowHours = 24,
+  active = true,
 ): Promise<TokenConsumption> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return unfetchedTokenConsumption(resolved, windowHours);
   try {
     const qs = new URLSearchParams({
       project_id: resolved,
@@ -242,18 +251,7 @@ export async function fetchTokenConsumption(
       headers: authHeaders(),
     });
     if (!r.ok) {
-      return {
-        projectId: resolved,
-        windowHours,
-        calls: 0,
-        totalTokens: 0,
-        costUsdMicros: 0,
-        cacheRatio: null,
-        tokenUtilization: null,
-        costUtilization: null,
-        alerts: [],
-        apiReachable: false,
-      };
+      return unfetchedTokenConsumption(resolved, windowHours);
     }
     const d = await r.json();
     const pol = d.policy ?? {};
@@ -277,26 +275,36 @@ export async function fetchTokenConsumption(
       apiReachable: true,
     };
   } catch {
-    return {
-      projectId: resolved,
-      windowHours,
-      calls: 0,
-      totalTokens: 0,
-      costUsdMicros: 0,
-      cacheRatio: null,
-      tokenUtilization: null,
-      costUtilization: null,
-      alerts: [],
-      apiReachable: false,
-    };
+    return unfetchedTokenConsumption(resolved, windowHours);
   }
+}
+
+function unfetchedTokenConsumption(
+  projectId: string,
+  windowHours: number,
+): TokenConsumption {
+  return {
+    projectId,
+    windowHours,
+    calls: 0,
+    totalTokens: 0,
+    costUsdMicros: 0,
+    cacheRatio: null,
+    tokenUtilization: null,
+    costUtilization: null,
+    alerts: [],
+    apiReachable: false,
+  };
 }
 
 export async function fetchTokenRecommendations(
   projectId = PROJECT_ID,
   profileName?: string,
+  active = true,
 ): Promise<TokenRecommendationsFeed> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return unfetchedTokenRecommendations(resolved, profileName);
   try {
     const r = await fetch(`${API_URL}/v1/token-efficiency/recommendations`, {
       method: "POST",
@@ -336,15 +344,22 @@ export async function fetchTokenRecommendations(
       apiReachable: true,
     };
   } catch {
-    return {
-      projectId: resolved,
-      totalSpendUsdMicros: 0,
-      profile: profileName ?? "balanced",
-      recommendations: [],
-      scorecardGrades: {},
-      apiReachable: false,
-    };
+    return unfetchedTokenRecommendations(resolved, profileName);
   }
+}
+
+function unfetchedTokenRecommendations(
+  projectId: string,
+  profileName?: string,
+): TokenRecommendationsFeed {
+  return {
+    projectId,
+    totalSpendUsdMicros: 0,
+    profile: profileName ?? "balanced",
+    recommendations: [],
+    scorecardGrades: {},
+    apiReachable: false,
+  };
 }
 
 export async function estimatePromptTokens(

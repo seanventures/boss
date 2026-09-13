@@ -106,27 +106,32 @@ async function getJson<T>(path: string): Promise<T | null> {
 
 export async function fetchOncallSreStatus(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<OncallSreStatus> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return unfetchedOncallSreStatus(resolved);
   const q = `project_id=${encodeURIComponent(resolved)}`;
   const status = await getJson<Omit<OncallSreStatus, "apiReachable">>(
     `/v1/oncall-sre/status?${q}`,
   );
-  if (!status) {
-    return {
-      project_id: resolved,
-      open_pages: 0,
-      acked_pages: 0,
-      pages_open: [],
-      pages_acked: [],
-      schedules: [],
-      policies: [],
-      current_oncall: [],
-      adapters: [],
-      apiReachable: false,
-    };
-  }
+  if (!status) return unfetchedOncallSreStatus(resolved);
   return { ...status, apiReachable: true };
+}
+
+function unfetchedOncallSreStatus(projectId: string): OncallSreStatus {
+  return {
+    project_id: projectId,
+    open_pages: 0,
+    acked_pages: 0,
+    pages_open: [],
+    pages_acked: [],
+    schedules: [],
+    policies: [],
+    current_oncall: [],
+    adapters: [],
+    apiReachable: false,
+  };
 }
 
 export async function fetchOncallPages(

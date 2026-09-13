@@ -110,7 +110,10 @@ export function emptyInboxFeed(reason?: string, projectId = PROJECT_ID): InboxFe
 export async function fetchOutboxFeed(
   projectId = PROJECT_ID,
   limit = 8,
+  active = true,
 ): Promise<OutboxFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyOutboxFeed("not requested", projectId);
   const resolvedProjectId = resolveProjectId(projectId);
   try {
     const [payload, policies] = await Promise.all([

@@ -162,8 +162,13 @@ export async function seedGraphFromInfra(
 
 export async function fetchKnowledgeGraphFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<KnowledgeGraphFeed> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) {
+    return { projectId: resolved, apiReachable: false, health: null, nodes: [] };
+  }
   const [health, nodes] = await Promise.all([
     fetchGraphHealth(resolved),
     fetchGraphNodes(resolved, { limit: 30 }),

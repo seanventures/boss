@@ -60,8 +60,11 @@ export function emptyQaScorecardFeed(
 
 export async function fetchQaScorecardFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<QaScorecardFeed> {
   const pid = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyQaScorecardFeed("not requested", pid);
   try {
     const catalog = await client.getQaBenchmarkApps(pid);
     const rows = catalog.benchmark_apps ?? [];

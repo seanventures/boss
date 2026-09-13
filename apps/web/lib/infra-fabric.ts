@@ -499,8 +499,22 @@ export async function fetchProviderUsageSummary(
  */
 export async function fetchInfraFabricFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<InfraFabricFeed> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Four sub-fetches skipped, each replaced by the same
+  // not-configured feed its own unreachable path returns.
+  if (!active) {
+    return {
+      projectId: resolved,
+      multiCloud: emptyMultiCloudCatalog("not requested"),
+      elastic: emptyElasticStatus("not requested", resolved),
+      goldeneye: emptyGoldeneyeStatus("not requested", resolved),
+      providerUsage: emptyProviderUsageSummary("not requested", resolved),
+      partialFailures: [],
+      refreshedAt: "",
+    };
+  }
   const [multiCloud, elastic, goldeneye, providerUsage] = await Promise.all([
     fetchMultiCloudCatalog(),
     fetchElasticStatus(resolved),

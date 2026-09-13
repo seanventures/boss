@@ -12,7 +12,10 @@ export type AgentRunsFeed = {
 
 export async function fetchAgentRuns(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<AgentRunsFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { apiReachable: false, blockedReason: "not requested", items: [] };
   try {
     const data = await client.getAgentRuns(resolveProjectId(projectId));
     return { apiReachable: true, items: data.items };

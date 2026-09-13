@@ -13,7 +13,9 @@ export type EvalRun = {
   createdAt: string;
 } | null;
 
-export async function fetchLatestEval(projectId = PROJECT_ID): Promise<EvalRun> {
+export async function fetchLatestEval(projectId = PROJECT_ID, active = true): Promise<EvalRun> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return null;
   try {
     const r = await fetch(
       `${API_URL}/v1/evals?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=1`,

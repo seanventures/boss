@@ -190,7 +190,10 @@ export function emptyAgentModuleFeed(
 
 export async function fetchAgentModuleFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<AgentModuleFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyAgentModuleFeed("not requested", resolveProjectId(projectId));
   const resolvedProjectId = resolveProjectId(projectId);
   try {
     // The marketplace routes are hosted/paid; on Community they 404. A bare Promise.all threw

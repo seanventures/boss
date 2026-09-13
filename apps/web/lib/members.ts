@@ -125,7 +125,10 @@ export async function fetchOrgMemberFeed(
   orgId: string,
   projectId = PROJECT_ID,
   actor = "ceo",
+  active = true,
 ): Promise<OrgMemberFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyOrgMemberFeed("not requested", orgId);
   try {
     const payload = await client.listOrgMembers(
       orgId,

@@ -176,7 +176,10 @@ export type WorkOrchestrationFeed = {
 
 export async function fetchWorkOrchestrationFeed(
   projectId?: string,
+  active = true,
 ): Promise<WorkOrchestrationFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyFeed(resolveProjectId(projectId), "not requested");
   const resolved = resolveProjectId(projectId);
   try {
     const response = await fetch(

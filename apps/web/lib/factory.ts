@@ -120,7 +120,9 @@ function mapLivePrSuccess(raw: unknown): LivePrSuccess {
   };
 }
 
-export async function fetchWipStatus(projectId = PROJECT_ID, wipLimit = 5): Promise<WipStatus> {
+export async function fetchWipStatus(projectId = PROJECT_ID, wipLimit = 5, active = true): Promise<WipStatus> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyWipStatus("not requested", wipLimit);
   try {
     const r = await fetch(
       `${API_URL}/v1/factory/wip?project_id=${encodeURIComponent(resolveProjectId(projectId))}&wip_limit=${wipLimit}`,

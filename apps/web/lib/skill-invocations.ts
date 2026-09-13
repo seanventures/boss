@@ -17,7 +17,10 @@ export type SkillInvocation = {
 export async function fetchSkillInvocations(
   projectId = PROJECT_ID,
   limit = 15,
+  active = true,
 ): Promise<SkillInvocation[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     const r = await fetch(
       `${API_URL}/v1/skills/invocations?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=${limit}`,

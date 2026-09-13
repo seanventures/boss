@@ -145,7 +145,10 @@ export function emptyGitHubOperationsFeed(
 
 export async function fetchGitHubOperationsFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<GitHubOperationsFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyGitHubOperationsFeed("not requested", resolveProjectId(projectId));
   const resolvedProjectId = resolveProjectId(projectId);
   const results = await Promise.allSettled([
     client.listGitHubConnections(resolvedProjectId),

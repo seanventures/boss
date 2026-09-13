@@ -11,7 +11,9 @@ export type SandboxFeed = {
   host?: SandboxHost;
 };
 
-export async function fetchSandboxFeed(): Promise<SandboxFeed> {
+export async function fetchSandboxFeed(active = true): Promise<SandboxFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { apiReachable: false, items: [] };
   try {
     const res = await client.getSandboxes();
     return { apiReachable: true, items: res.sandboxes ?? [], unavailable: res.unavailable, host: res.host };

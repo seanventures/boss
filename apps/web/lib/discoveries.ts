@@ -18,7 +18,9 @@ export function emptyDiscoveryFeed(reason?: string, projectId = PROJECT_ID): Dis
   };
 }
 
-export async function fetchDiscoveriesFeed(projectId = PROJECT_ID): Promise<DiscoveryFeed> {
+export async function fetchDiscoveriesFeed(projectId = PROJECT_ID, active = true): Promise<DiscoveryFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyDiscoveryFeed("not requested", resolveProjectId(projectId));
   const resolved = resolveProjectId(projectId);
   try {
     const res = await client.getDiscoveries(resolved);

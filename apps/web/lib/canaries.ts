@@ -12,7 +12,9 @@ export type CanaryRun = {
 } | null;
 
 // New endpoints aren't in the typed client yet — read directly.
-export async function fetchLatestCanary(projectId = PROJECT_ID): Promise<CanaryRun> {
+export async function fetchLatestCanary(projectId = PROJECT_ID, active = true): Promise<CanaryRun> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return null;
   try {
     const r = await fetch(
       `${API_URL}/v1/canaries?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=1`,

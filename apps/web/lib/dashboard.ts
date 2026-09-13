@@ -26,7 +26,9 @@ export function emptyDashboardFeed(reason: string): DashboardFeed {
   return { snapshot: null, apiReachable: false, blockedReason: reason };
 }
 
-export async function fetchDashboard(projectId = PROJECT_ID): Promise<DashboardFeed> {
+export async function fetchDashboard(projectId = PROJECT_ID, active = true): Promise<DashboardFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyDashboardFeed("not requested");
   try {
     const r = await fetch(
       `${API_URL}/v1/dashboard?project_id=${encodeURIComponent(resolveProjectId(projectId))}`,

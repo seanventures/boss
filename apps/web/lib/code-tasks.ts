@@ -56,7 +56,9 @@ export function operatorPreviewOpenHref(
   return null;
 }
 
-export async function fetchPreviews(projectId = PROJECT_ID): Promise<PreviewFeed> {
+export async function fetchPreviews(projectId = PROJECT_ID, active = true): Promise<PreviewFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyPreviewFeed("not requested", resolveProjectId(projectId));
   const resolved = resolveProjectId(projectId);
   try {
     const res = await client.getPreviews(resolved);
@@ -144,7 +146,10 @@ export function codeTaskLimitFor(area?: string): number {
 export async function fetchCodeTasksFeed(
   projectId = PROJECT_ID,
   area?: string,
+  active = true,
 ): Promise<CodeTaskFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyCodeTaskFeed("not requested", resolveProjectId(projectId));
   const resolved = resolveProjectId(projectId);
   try {
     // 50 was the default, and BOSS's own housekeeping runs filled it: 46 of the most recent
@@ -175,7 +180,9 @@ export async function fetchCodeTasksFeed(
   }
 }
 
-export async function fetchQaBenchmarkApps(projectId?: string): Promise<QaBenchmarkApp[]> {
+export async function fetchQaBenchmarkApps(projectId?: string, active = true): Promise<QaBenchmarkApp[]> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return [];
   try {
     // Passing the project is what lets each card know whether it has already been built here.
     return (await client.getQaBenchmarkApps(projectId)).benchmark_apps ?? [];

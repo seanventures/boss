@@ -64,7 +64,10 @@ export function emptyOpsQueueFeed(
 export async function fetchOpsQueueFeed(
   projectId = PROJECT_ID,
   limit = 8,
+  active = true,
 ): Promise<OpsQueueFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyOpsQueueFeed("not requested", projectId);
   try {
     return mapOpsQueue(
       await client.inspectOpsQueue(resolveProjectId(projectId), 100, true),

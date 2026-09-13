@@ -88,7 +88,10 @@ export async function fetchRoutingLogFeed(
   projectId = PROJECT_ID,
   limit = 8,
   filters: RoutingLogFeedFilters = {},
+  active = true,
 ): Promise<RoutingLogFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyRoutingLogFeed("not requested", projectId);
   try {
     const payload = await client.listModelRouteDecisions(resolveProjectId(projectId), {
       ...filters,

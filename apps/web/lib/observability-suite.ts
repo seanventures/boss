@@ -146,8 +146,18 @@ export async function fetchObservabilitySuiteStatus(
 export async function fetchObservabilitySuiteFeed(
   projectId = PROJECT_ID,
   hostTargetId?: string,
+  active = true,
 ): Promise<ObservabilitySuiteFeed> {
   const resolved = resolveProjectId(projectId);
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) {
+    return {
+      projectId: resolved,
+      apiReachable: false,
+      catalog: null,
+      status: null,
+    };
+  }
   const [catalog, status] = await Promise.all([
     fetchObservabilitySuiteCatalog(),
     fetchObservabilitySuiteStatus(resolved, hostTargetId),

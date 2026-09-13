@@ -54,7 +54,10 @@ export function emptyChangeJournalFeed(
 export async function fetchChangeJournalFeed(
   projectId = PROJECT_ID,
   limit = 8,
+  active = true,
 ): Promise<ChangeJournalFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyChangeJournalFeed("not requested", projectId);
   try {
     const payload = await client.listChangeJournal(resolveProjectId(projectId), limit);
     return {

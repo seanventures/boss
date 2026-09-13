@@ -12,7 +12,10 @@ export type TaskOutputsFeed = {
 
 export async function fetchTaskOutputs(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<TaskOutputsFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return { apiReachable: false, blockedReason: "not requested", items: [] };
   try {
     const data = await client.getTaskOutputs(resolveProjectId(projectId));
     return { apiReachable: true, items: data.items };

@@ -34,7 +34,10 @@ export function emptyWorkflowFeed(
 
 export async function fetchWorkflowFeed(
   projectId = PROJECT_ID,
+  active = true,
 ): Promise<WorkflowFeed> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyWorkflowFeed("not requested", resolveProjectId(projectId));
   const resolved = resolveProjectId(projectId);
   try {
     const [definitions, mappings, runs] = await Promise.all([
