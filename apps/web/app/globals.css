@@ -9478,3 +9478,17 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   color: inherit;
   border: 1px solid var(--border, #30363d);
 }
+
+/* A skill whose callers are all internal machinery. Shown, because knowing it exists stops
+ * somebody authoring one that already ships; not offered, because there is no agent to give
+ * it to. */
+.skill-internal {
+  display: block;
+  margin-top: 6px;
+  opacity: 0.75;
+}
+
+.skill-internal code {
+  font-size: 0.92em;
+  opacity: 0.9;
+}

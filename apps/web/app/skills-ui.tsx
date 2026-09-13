@@ -46,7 +46,24 @@ const BLANK = {
 /** One of the skills BOSS ships. A different shape from an authored one: it has an executor
  *  behind it and a project enables it rather than writing it. */
 type BuiltIn = { id: string; kind?: string; source?: string; risk_tier?: number;
-                 enabled?: boolean; description?: string };
+                 enabled?: boolean; description?: string;
+                 permissions?: { allowed_callers?: string[] } };
+
+/** WHO THE SPEC SAYS MAY CALL THIS, LIMITED TO AGENTS THAT ACTUALLY EXIST HERE.
+ *
+ *  Skills declare `allowed_callers`, and several of them name only internal subsystems —
+ *  `worker`, `software_factory`, `router`, `control_plane`, `resource_plane_kernel`. Those are
+ *  machinery, not members of the workforce, and handing such a skill to an agent buys nothing:
+ *  the thing that calls it is not an agent and already has permission.
+ *
+ *  Seven of the seventeen shipped skills are in that position. Offering them for assignment
+ *  invites a pairing that is pointless at best, so the page shows them and does not offer them.
+ */
+function declaredAgentCallers(s: BuiltIn, roles: string[]): string[] {
+  const callers = s.permissions?.allowed_callers ?? [];
+  if (callers.includes("*")) return roles;
+  return callers.filter((c) => roles.includes(c));
+}
 
 export function SkillsHome({ projectId, actor }: { projectId: string; actor: string }) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
@@ -273,6 +290,7 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
                 <AssignRow
                   skillId={s.skill_key}
                   roles={roles}
+                  declared={[]}
                   holders={holdersOf(s.skill_key)}
                   busy={busy}
                   onAssign={(r) => void setAssigned(s.skill_key, r, true)}
@@ -323,15 +341,27 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
                   ) : null}
                 </span>
                 {s.description ? <span className="detail">{s.description}</span> : null}
-                <AssignRow
-                  skillId={s.id}
-                  roles={roles}
-                  holders={holdersOf(s.id)}
-                  busy={busy}
-                  onAssign={(r) => void setAssigned(s.id, r, true)}
-                  onUnassign={(r) => void setAssigned(s.id, r, false)}
-                  canPlaceInWorkflow={false}
-                />
+                {roles.length > 0 && declaredAgentCallers(s, roles).length === 0
+                 && holdersOf(s.id).length === 0 ? (
+                  <span className="detail skill-internal" data-testid={`skill-internal-${s.id}`}>
+                    Used inside BOSS by{" "}
+                    <code>{(s.permissions?.allowed_callers ?? []).join(", ") || "the platform"}</code>
+                    {" "}— machinery rather than an agent, so there is nobody to give it to.
+                  </span>
+                ) : (
+                  <AssignRow
+                    skillId={s.id}
+                    roles={roles}
+                    // The agents the spec already names go first: they are the ones that can
+                    // call it without the assignment having to widen anything.
+                    declared={declaredAgentCallers(s, roles)}
+                    holders={holdersOf(s.id)}
+                    busy={busy}
+                    onAssign={(r) => void setAssigned(s.id, r, true)}
+                    onUnassign={(r) => void setAssigned(s.id, r, false)}
+                    canPlaceInWorkflow={false}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -526,10 +556,13 @@ function askBossAboutSkills(projectId: string): void {
  *  deciding where in a path it sits and what feeds it — a conversation, not a dropdown.
  */
 function AssignRow({
-  skillId, roles, holders, onAssign, onUnassign, busy, canPlaceInWorkflow,
+  skillId, roles, declared, holders, onAssign, onUnassign, busy, canPlaceInWorkflow,
 }: {
   skillId: string;
   roles: string[];
+  /** Agents the skill's own spec already names as callers. Offered first — they are the ones
+   *  that can invoke it without the assignment having to widen anything. */
+  declared: string[];
   holders: string[];
   onAssign: (roleKey: string) => void;
   onUnassign: (roleKey: string) => void;
@@ -539,12 +572,20 @@ function AssignRow({
   const [open, setOpen] = useState(false);
   const [pick, setPick] = useState("");
   const free = roles.filter((r) => !holders.includes(r));
+  const suggested = free.filter((r) => declared.includes(r));
+  const rest = free.filter((r) => !declared.includes(r));
   return (
     <div className="skill-assign" data-testid={`skill-assign-${skillId}`}>
       {holders.length > 0 ? (
         <span className="skill-holders">
           {holders.map((r) => (
-            <span key={r} className="cap-badge tone-muted" data-testid={`skill-holder-${r}`}>
+            <span key={r}
+                  className={`cap-badge ${declared.includes(r) ? "tone-muted" : "tone-amber"}`}
+                  title={declared.includes(r)
+                    ? `${skillId} already names ${roleLabel(r)} as a caller.`
+                    : `${roleLabel(r)} is not in this skill's declared callers — the assignment `
+                      + "is what permits it. Approvals and budget still apply."}
+                  data-testid={`skill-holder-${r}`}>
               {roleLabel(r)}
               <button type="button" className="linklike skill-holder-drop" disabled={busy}
                       title={`Take ${skillId} off ${roleLabel(r)}`}
@@ -560,7 +601,19 @@ function AssignRow({
           <select value={pick} data-testid={`skill-assign-select-${skillId}`}
                   onChange={(e) => setPick(e.target.value)}>
             <option value="">Choose an agent…</option>
-            {free.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+            {/* GROUPED, because the two groups mean different things. An agent the spec
+                already names can call this today; any other works because the assignment
+                itself grants it, which is a decision worth making on purpose. */}
+            {suggested.length > 0 ? (
+              <optgroup label="Already named by this skill">
+                {suggested.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+              </optgroup>
+            ) : null}
+            {rest.length > 0 ? (
+              <optgroup label={suggested.length > 0 ? "Any other agent" : "Agents"}>
+                {rest.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+              </optgroup>
+            ) : null}
           </select>
           <button type="button" className="cap-btn" disabled={busy || !pick}
                   data-testid={`skill-assign-confirm-${skillId}`}

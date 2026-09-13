@@ -180,3 +180,49 @@ describe("a skill can be given to an agent", () => {
     expect(loader.slice(0, 400)).toContain("view=assignments");
   });
 });
+
+
+/**
+ * A skill whose callers are all machinery is not offered to an agent.
+ *
+ * Seven of the seventeen shipped skills name only internal subsystems in their
+ * `allowed_callers` — `worker`, `software_factory`, `router`, `control_plane`,
+ * `resource_plane_kernel`. Those are not members of the workforce, and handing such a skill to
+ * an agent buys nothing: the thing that calls it is not an agent and already has permission.
+ *
+ * Offering them anyway invites a pairing that is pointless at best, on a page whose whole job
+ * is to make the useful pairings obvious.
+ */
+describe("the page does not invite a pointless assignment", () => {
+  it("a skill with no agent among its callers says so instead of offering a picker", () => {
+    expect(UI).toContain("function declaredAgentCallers");
+    expect(UI).toContain("skill-internal-");
+    // The condition is "no declared agent caller AND nobody holds it" — an operator who has
+    // already assigned one deliberately keeps seeing the control that lets them undo it.
+    expect(UI).toContain("declaredAgentCallers(s, roles).length === 0");
+    expect(UI).toContain("holdersOf(s.id).length === 0");
+  });
+
+  it("a wildcard caller means every agent, not none", () => {
+    // `allowed_callers: ["*"]` is the most permissive spec there is. Reading it as "no declared
+    // callers" would hide the picker on precisely the skills anyone may call.
+    const fn = UI.slice(UI.indexOf("function declaredAgentCallers"));
+    expect(fn.slice(0, fn.indexOf("\n}"))).toContain('callers.includes("*")');
+  });
+
+  it("the picker puts the skill's own callers first", () => {
+    // Two groups because they mean different things: an agent the spec names can call it
+    // today, any other works because the assignment grants it — a decision worth making
+    // deliberately rather than by picking the top of an alphabetical list.
+    expect(UI).toContain("<optgroup label=\"Already named by this skill\">");
+    expect(UI).toContain("const suggested = free.filter((r) => declared.includes(r));");
+    expect(UI).toContain("const rest = free.filter((r) => !declared.includes(r));");
+  });
+
+  it("a chip says whether the assignment was the skill's idea or the operator's", () => {
+    // An assignment that widened permission should not look identical to one the spec already
+    // allowed — the second is a decision somebody made, and its tooltip says what it means.
+    expect(UI).toContain("declared.includes(r) ? \"tone-muted\" : \"tone-amber\"");
+    expect(UI).toContain("Approvals and budget still apply");
+  });
+});

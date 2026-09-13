@@ -109,3 +109,72 @@ def test_the_two_ends_are_independent(client):
     ).json().get("steps", [])
     # Nothing was created on the workflow side by assigning to an agent.
     assert all(s.get("skill_id") != skill for s in steps)
+
+
+# ---------------------------------------------------------------------------
+# Assignment is the grant
+# ---------------------------------------------------------------------------
+#
+# Skills declare the callers that existed when they were written. Without this, an operator who
+# assigns one to an agent outside that list gets a saved assignment that is denied the first
+# time it runs — a feature that looks like it works and does not.
+#
+# Same argument `workflow_custom_steps` already makes for the workflow runner, and the grant has
+# the same four properties: explicit, scoped, recorded, revocable. What widens is WHO may call.
+
+
+def _invoke(client_engine, skill_id, caller, project_id=PROJECT):
+    """Run the runtime's permission gate for real, as the agent loop would."""
+    from apps.api.app.services.skill_runtime import SkillRuntimeService
+
+    with client_engine.begin() as connection:
+        return SkillRuntimeService(api_main.settings).invoke(
+            connection, project_id, skill_id, caller, {}, mock=True,
+        )
+
+
+def test_an_agent_outside_the_declared_callers_is_denied_without_an_assignment(client, engine):
+    # security_reviewer is a real agent and is NOT among github.merge_pr_real's allowed callers.
+    result = _invoke(engine, "github.merge_pr_real", "security_reviewer")
+    assert result["status"] == "denied"
+    assert "not in allowed_callers" in result["reason"]
+
+
+def test_assigning_the_skill_is_what_permits_it(client, engine):
+    _assign(client, "security_reviewer", "github.merge_pr_real")
+    result = _invoke(engine, "github.merge_pr_real", "security_reviewer")
+    assert result["status"] != "denied", result.get("reason")
+
+
+def test_unassigning_takes_the_permission_back(client, engine):
+    _assign(client, "security_reviewer", "github.merge_pr_real")
+    assert _invoke(engine, "github.merge_pr_real", "security_reviewer")["status"] != "denied"
+
+    client.delete(
+        "/v1/role-skills",
+        params={"project_id": PROJECT, "role_key": "security_reviewer",
+                "skill_id": "github.merge_pr_real", "actor": "ceo"},
+    )
+    # Read at the moment of the call, not cached: revoking must bite on the NEXT run, not on
+    # the run after a process restart.
+    after = _invoke(engine, "github.merge_pr_real", "security_reviewer")
+    assert after["status"] == "denied"
+
+
+def test_the_grant_does_not_widen_anything_except_who_may_call(client, engine):
+    """A tier-3 merge still needs its approvals no matter which agent holds it."""
+    _assign(client, "security_reviewer", "github.merge_pr_real")
+    spec = client.get("/v1/skills", params={"project_id": PROJECT}).json()["items"]
+    merge = next(s for s in spec if s["id"] == "github.merge_pr_real")
+    # The SPEC is untouched by assignment — the risk tier and the approval requirement are
+    # still exactly what the skill declares.
+    assert merge["risk_tier"] == 3
+    assert merge["policy"]["requires_approval"] == ["ceo", "cto"]
+    assert "security_reviewer" not in (merge["permissions"]["allowed_callers"])
+
+
+def test_an_agent_that_was_never_assigned_anything_is_still_denied(client, engine):
+    """The gate must not open for every agent once the table has any row in it at all."""
+    _assign(client, "security_reviewer", "github.merge_pr_real")
+    result = _invoke(engine, "github.merge_pr_real", "design_critic")
+    assert result["status"] == "denied"

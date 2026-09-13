@@ -93,7 +93,26 @@ class SkillRuntimeService:
         mode = "mock" if mock else "real"
 
         # 1) Permission gate — caller must be allowed to invoke this skill.
+        #
+        # GIVING A SKILL TO AN AGENT IS THE GRANT, and this is where it is cashed in. Skills
+        # declare the callers that existed when they were written, so an operator who assigns
+        # one to an agent outside that list would otherwise get a saved assignment that is
+        # denied the first time it runs — a feature that looks like it works and does not.
+        #
+        # The same argument `workflow_custom_steps` makes for the runner applies here, and the
+        # grant has the same four properties: EXPLICIT (somebody chose this agent for this
+        # skill, by name, in this project), SCOPED (only to skills a `role_skills` row exists
+        # for), RECORDED (`skill.assigned_to_agent` names who granted it), and REVOCABLE
+        # (unassign and the grant goes with it).
+        #
+        # What is widened is WHO may call. Everything else is untouched: the risk floor, the
+        # approval gate, the budget reservation and the effect receipt all still apply, which
+        # is why a tier-3 merge still needs its CEO and CTO approvals no matter who holds it.
+        granted_by_assignment = False
         if not self._caller_allowed(caller, allowed_callers):
+            granted_by_assignment = self._assigned_to_agent(
+                connection, project_id, caller, skill_id)
+        if not self._caller_allowed(caller, allowed_callers) and not granted_by_assignment:
             reason = f"caller '{caller}' not in allowed_callers {allowed_callers}"
             record_policy_eval(
                 connection, project_id, "skill.invoke", "deny",
@@ -104,6 +123,17 @@ class SkillRuntimeService:
                 max_attempts=max_attempts, estimate=estimate, reservation_id=None,
                 actual_cost=None, cost_receipt_id=None,
                 created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
+
+        if granted_by_assignment:
+            # SAY WHY IT WAS ALLOWED. Without this the trail shows a caller the spec does not
+            # list, invoking successfully, with nothing to explain it — which reads as the
+            # permission gate having failed rather than as a grant somebody made deliberately.
+            record_policy_eval(
+                connection, project_id, "skill.invoke", "allow",
+                action=skill_id,
+                reason=(f"caller '{caller}' is not in allowed_callers {allowed_callers}, but "
+                        f"this project has assigned {skill_id} to it"),
+                detail={"caller": caller, "mode": mode, "grant": "role_assignment"})
 
         if not mock and executor is None:
             executor = resolve_executor(skill_id, context=executor_context)
@@ -255,6 +285,29 @@ class SkillRuntimeService:
         if "*" in allowed_callers:
             return True
         return caller in allowed_callers
+
+    def _assigned_to_agent(
+        self, connection: Connection, project_id: str, caller: str, skill_id: str
+    ) -> bool:
+        """Does this project hold an explicit assignment of this skill to this agent?
+
+        Read at the moment of the call, not cached: an operator who takes a skill back off an
+        agent expects the next run to be denied, not the run after the process restarts.
+        """
+        if not caller:
+            return False
+        try:
+            return connection.execute(
+                text(
+                    "SELECT 1 FROM role_skills WHERE project_id = :p AND role_key = :r "
+                    "AND skill_id = :s LIMIT 1"
+                ),
+                {"p": project_id, "r": caller, "s": skill_id},
+            ).first() is not None
+        except Exception:  # noqa: BLE001
+            # The table not existing yet must DENY, not allow. A permission gate that opens
+            # when its own lookup fails is not a gate.
+            return False
 
     def _invocation_for_job(
         self,
