@@ -529,11 +529,29 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // The default is `overview`, matching the rail's own default, so a URL with no `?area=` still
   // lands somewhere real.
   const shownArea = requestedArea && requestedArea.trim() ? requestedArea.trim() : "overview";
-  const shows = (area: string) => area === shownArea;
-  // The fetch-side twin of `shows()`: a feed is worth fetching only if an area that renders
-  // it is the one being rendered. Unlike `isAreaActive`, "overview" is not a wildcard —
-  // overview renders overview's sections and nothing else, so it should not pay for the rest.
-  const needs = (...areas: string[]) => areas.includes(shownArea);
+
+  // A CLICK ON THE RAIL DOES NO WORK. THAT IS THE REQUIREMENT, AND IT OUTRANKS PAYLOAD SIZE.
+  //
+  // Rendering one area per request cut this page from 8.3 MB to 25-235 KB, and it made every
+  // menu click cost a server round trip AND a full React teardown — ~50 components unmounted
+  // and ~50 mounted, every time. Reported over and over, in escalating terms, ending at "it is
+  // taking really really horrible time to load". Three separate attempts to buy the latency
+  // back (keeping the outgoing area painted, hover prefetch, a client router cache) each fixed
+  // part of it and none fixed the cost that matters, because the cost that matters is React
+  // rebuilding the screen — and no amount of caching the payload avoids that.
+  //
+  // Before the split, all forty areas were in the DOM and `main[data-active=X]` revealed one
+  // with CSS. A click did no fetching, no unmounting and no mounting. It was instant, and the
+  // operator says plainly that it was fine.
+  //
+  // So it goes back. `shows`/`needs` stay as the single seam this decision lives behind: this
+  // is two lines to flip, not a rewrite to undo, if the trade is ever worth revisiting.
+  //
+  // What it costs, stated honestly rather than discovered later: the first load is ~8 MB again
+  // and takes several seconds, and every area's feeds are fetched whether or not you open it.
+  // That is one slow load per session instead of a slow response to every click.
+  const shows = (_area: string) => true;
+  const needs = (..._areas: string[]) => true;
   const requestedDecisionFilter = parseDecisionInboxFilter(
     getParam(resolvedSearchParams?.decision_filter),
   );

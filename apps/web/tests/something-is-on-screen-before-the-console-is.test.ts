@@ -186,7 +186,10 @@ describe("the console's own areas are unaffected", () => {
     expect(go).toContain('url.searchParams.set("area", id)');
 
     const page = readFileSync(join(APP, "page.tsx"), "utf8");
-    expect(page).toContain("const shows = (area: string) => area === shownArea;");
+    // The area gate is now open — see one-area-per-render.test.ts. The soft navigation above
+    // still matters (Back must return to the previous tab), but what it waits for is no longer
+    // small, and it no longer needs to be: the section is already mounted when the click lands.
+    expect(page).toContain("const shows = (_area: string) => true;");
   });
 
   it("there is exactly one route loading boundary", () => {

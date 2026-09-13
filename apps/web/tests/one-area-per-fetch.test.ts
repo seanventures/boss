@@ -58,12 +58,13 @@ function waveSource(): string {
 }
 
 describe("only the requested area is fetched", () => {
-  it("the fetch gate exists and is not a wildcard on overview", () => {
-    expect(PAGE).toContain("const needs = (...areas: string[]) => areas.includes(shownArea);");
-    // `isAreaActive` treats overview as "load everything" so a client-side tab switch has data.
-    // `needs` must not: overview renders overview's sections and nothing else, so a wildcard
-    // there would leave the landing page paying for all forty areas — the exact complaint.
-    expect(PAGE).not.toContain('shownArea === "overview" || areas.includes');
+  it("the fetch gate is one seam, matching the render gate", () => {
+    // Reversed along with `shows` — see one-area-per-render.test.ts for why. Every area is in
+    // the DOM again, so every area's feeds must be fetched again or the sections render empty.
+    // `needs` remains the single place that decides, so the two gates cannot drift apart: a
+    // page that renders an area it did not fetch is worse than either trade.
+    expect(PAGE).toContain("const needs = (..._areas: string[]) => true;");
+    expect(PAGE).toContain("const shows = (_area: string) => true;");
   });
 
   it("every feed in the platform-ops wave is gated on the area that reads it", () => {

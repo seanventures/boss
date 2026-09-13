@@ -22,8 +22,20 @@ const PAGE = codeOnly("app/page.tsx");
 const SHELL = codeOnly("app/ConsoleShell.tsx");
 
 describe("only the requested area is rendered", () => {
-  it("there is one gate, derived from the URL", () => {
-    expect(PAGE).toContain("const shows = (area: string) => area === shownArea;");
+  it("the gate is one seam, so the trade can be flipped in two lines", () => {
+    // THIS DECISION WAS REVERSED, AND THE TEST SAYS SO RATHER THAN BEING DELETED.
+    //
+    // Rendering one area per request achieved what this file describes — 8.3 MB down to
+    // 25-235 KB — and cost something the measurements here never captured: every menu click
+    // became a server round trip AND a full React teardown, ~50 components unmounted and ~50
+    // mounted. The operator reported that repeatedly, in escalating terms, and was right. A
+    // click used to do no work at all, because every area was already in the DOM and
+    // `main[data-active=X]` revealed one with CSS.
+    //
+    // So `shows` returns true and the sections below all render again. What is still worth
+    // protecting is that this stayed ONE seam: the gate every section passes through, so the
+    // trade is two lines to flip rather than a rewrite to undo.
+    expect(PAGE).toContain("const shows = (_area: string) => true;");
     expect(PAGE).toContain('requestedArea.trim() : "overview"');
   });
 
