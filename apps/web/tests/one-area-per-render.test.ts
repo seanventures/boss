@@ -63,17 +63,53 @@ describe("which is only safe because switching now reaches the server", () => {
     expect(SHELL.slice(at, at + 400)).toContain("router.push");
   });
 
-  it("panels are still told the URL changed", () => {
-    // They restore their own selection by reading window.location.search on this signal, which
-    // router.push has already updated. Same behaviour as Back/Forward.
-    const go = SHELL.slice(SHELL.indexOf("const go = useCallback"),
-                           SHELL.indexOf("Quick-action links"));
-    expect(go).toContain('new PopStateEvent("popstate")');
+  it("panels are still told the URL changed — once it is actually true", () => {
+    // This used to assert the announcement came from `go`, on the line after router.push, and
+    // that is precisely what cost ~30 seconds a click: the url had not changed yet, so eleven
+    // listeners re-read a stale one and refetched. The PROPERTY — panels get told — is
+    // unchanged; where it is announced from is the fix.
+    const at = SHELL.indexOf("const go = useCallback");
+    const go = SHELL.slice(at, SHELL.indexOf("}, [router]);", at));
+    expect(go).not.toContain("PopStateEvent");
+    expect(SHELL).toContain("const announcedSearch = useRef<string | null>(null);");
+    const effect = SHELL.slice(SHELL.indexOf("const announcedSearch"),
+                               SHELL.indexOf("const announcedSearch") + 700);
+    expect(effect).toContain('new PopStateEvent("popstate")');
   });
 
   it("and Back still returns to the previous tab", () => {
-    const go = SHELL.slice(SHELL.indexOf("const go = useCallback"),
-                           SHELL.indexOf("Quick-action links"));
+    const at = SHELL.indexOf("const go = useCallback");
+    const go = SHELL.slice(at, SHELL.indexOf("}, [router]);", at));
     expect(go).toContain('url.searchParams.set("area", id)');
+  });
+});
+
+describe("the announcement waits for the url to be true", () => {
+  it("nothing announces popstate on the same line as router.push", () => {
+    // This cost ~30 seconds per click. `router.push` is asynchronous, so announcing on the next
+    // line tells ELEVEN listeners the url changed while window.location still holds the old
+    // area: they all re-read a stale url and refetch, the navigation then commits, the area
+    // remounts, and they all fetch again — a double herd per click, on the main thread.
+    // Sliced to the callback's own end, not to a comment — `codeOnly` strips comments, so a
+    // comment landmark returns -1 and the slice silently becomes most of the file.
+    const at = SHELL.indexOf("const go = useCallback");
+    const go = SHELL.slice(at, SHELL.indexOf("}, [router]);", at));
+    expect(go).toContain("router.push");
+    expect(go).not.toContain("PopStateEvent");
+  });
+
+  it("it is announced from the committed search params instead", () => {
+    expect(SHELL).toContain("const announcedSearch = useRef<string | null>(null);");
+    const at = SHELL.indexOf("const announcedSearch");
+    const block = SHELL.slice(at, at + 700);
+    expect(block).toContain('new PopStateEvent("popstate")');
+    expect(block).toContain("}, [searchParams]);");
+  });
+
+  it("and the first render is not announced as a navigation", () => {
+    // Announcing it would make every panel refetch on arrival — the thing the server render
+    // just did for them.
+    const at = SHELL.indexOf("const announcedSearch");
+    expect(SHELL.slice(at, at + 700)).toContain("announcedSearch.current === null");
   });
 });

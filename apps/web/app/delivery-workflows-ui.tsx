@@ -697,6 +697,23 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               : "Build your own"}
           </button>
         ))}
+        {/* THE AGENT THAT MANAGES THESE, WHERE THEY ARE MANAGED.
+            The tools to create, edit and delete a workflow in conversation shipped with no way
+            in from this page — so the feature existed and nobody could find it, which is the
+            same as not having built it. It opens the dock addressed to the Program Manager,
+            whose remit is process, with an opener that names what it can do. */}
+        <button type="button" className="cap-btn dw-tab-agent" data-testid="dw-workflow-agent"
+                title="Describe a path and BOSS drafts it — creating, editing and deleting
+                       workflows, and the custom steps they are made of"
+                onClick={() => askBossAbout(
+                  "general",
+                  "I want to work on this project's workflows. You can draft a new one from a"
+                  + " described sequence of steps, change an existing one, define a custom step"
+                  + " backed by a skill, or retire one. Start by telling me which workflows this"
+                  + " project has and what each is for.",
+                  "program_manager")}>
+          Design one with BOSS
+        </button>
       </div>
 
       {/* WHAT IS HAPPENING RIGHT NOW. Per-button labels are easy to forget on the next

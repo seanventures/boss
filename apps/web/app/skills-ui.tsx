@@ -43,8 +43,14 @@ const BLANK = {
   risk_tier: "1", trusted: false,
 };
 
+/** One of the skills BOSS ships. A different shape from an authored one: it has an executor
+ *  behind it and a project enables it rather than writing it. */
+type BuiltIn = { id: string; kind?: string; source?: string; risk_tier?: number;
+                 enabled?: boolean; description?: string };
+
 export function SkillsHome({ projectId, actor }: { projectId: string; actor: string }) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [builtIn, setBuiltIn] = useState<BuiltIn[] | null>(null);
   const [draft, setDraft] = useState({ ...BLANK });
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -59,6 +65,23 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
   }, [projectId]);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  // WHAT THIS INSTALL ALREADY HAS. Shown beside what the operator wrote, because "you have no
+  // skills" is false on a fresh project — BOSS ships seventeen, and several of them are the
+  // ones somebody would otherwise try to author from scratch.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/skills?view=builtin&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (r.ok) {
+          const body = await r.json();
+          setBuiltIn(((body.items ?? body.skills ?? []) as BuiltIn[]));
+        } else setBuiltIn([]);
+      } catch { setBuiltIn([]); }
+    })();
+  }, [projectId]);
 
   const save = useCallback(async () => {
     if (busy) return;
@@ -163,6 +186,48 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
                 <button type="button" className="linklike" disabled={busy}
                         data-testid={`skill-delete-${s.skill_key}`}
                         onClick={() => void remove(s.skill_key)}>Delete</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </article>
+
+      {/* SHIPPED, NOT AUTHORED. Read-only here on purpose: these have executors behind them,
+          and the thing an operator does with one is enable it and give it to an agent — not
+          rewrite it. Listing them stops somebody authoring a GitHub PR skill that already
+          exists three rows up. */}
+      <article className="stack-card" data-testid="skills-builtin">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Already in BOSS</span>
+            <h2>{builtIn === null ? "Built-in skills"
+                 : `${builtIn.length} skills ship with BOSS`}</h2>
+            <p className="detail">
+              These have code behind them and are ready to attach to an agent. Author a new one
+              below only when nothing here covers the work.
+            </p>
+          </div>
+        </div>
+        {builtIn === null ? <p className="detail">Loading…</p>
+         : builtIn.length === 0 ? (
+           <p className="detail" data-testid="builtin-empty">
+             None registered on this project yet.
+           </p>
+         ) : (
+          <ul className="skill-list" data-testid="builtin-list">
+            {builtIn.map((s) => (
+              <li key={s.id} className="skill-row" data-enabled={s.enabled !== false}>
+                <span className="skill-row-main">
+                  <code><b>{s.id}</b></code>
+                  {s.kind ? <span className="cap-badge tone-muted">{s.kind}</span> : null}
+                  {(s.risk_tier ?? 0) >= 2 ? (
+                    <span className="cap-badge tone-amber">needs a person</span>
+                  ) : null}
+                  {s.enabled === false ? (
+                    <span className="cap-badge tone-muted">off</span>
+                  ) : null}
+                </span>
+                {s.description ? <span className="detail">{s.description}</span> : null}
               </li>
             ))}
           </ul>

@@ -91,3 +91,26 @@ describe("the route cannot be used to reach any endpoint", () => {
     expect(ROUTE).toContain("/v1/skill-definitions");
   });
 });
+
+describe("what BOSS already ships is shown beside what you wrote", () => {
+  it("the built-in catalogue is fetched and listed", () => {
+    // "You have no skills" is false on a fresh project: BOSS ships seventeen, and several are
+    // the ones somebody would otherwise author from scratch.
+    expect(UI).toContain('data-testid="skills-builtin"');
+    expect(UI).toContain('data-testid="builtin-list"');
+    expect(UI).toContain("view=builtin");
+  });
+
+  it("they are read-only, because they have code behind them", () => {
+    const at = UI.indexOf('data-testid="builtin-list"');
+    const block = UI.slice(at, at + 900);
+    expect(block).not.toContain("skill-delete");
+    expect(UI).toContain("Author a new one");
+  });
+
+  it("and the route serves both catalogues without confusing them", () => {
+    expect(ROUTE).toContain('url.searchParams.get("view") === "builtin"');
+    expect(ROUTE).toContain("/v1/skills?project_id=");
+    expect(ROUTE).toContain("/v1/skill-definitions?project_id=");
+  });
+});

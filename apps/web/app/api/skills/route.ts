@@ -12,9 +12,17 @@ import { API_URL, authHeaders } from "../../../lib/client";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const projectId = (new URL(req.url).searchParams.get("project_id") ?? "").trim();
+  const url = new URL(req.url);
+  const projectId = (url.searchParams.get("project_id") ?? "").trim();
+  // TWO CATALOGUES, AND A PROJECT HAS BOTH. `/v1/skills` is what BOSS SHIPS — GitHub PRs,
+  // Mattermost posts, model calls, provider cost sync. `/v1/skill-definitions` is what this
+  // project authored. A page that showed only the second told a new operator they had nothing,
+  // while seventeen skills sat one endpoint away.
+  const path = url.searchParams.get("view") === "builtin"
+    ? `/v1/skills?project_id=${encodeURIComponent(projectId)}`
+    : `/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`;
   try {
-    const r = await fetch(`${API_URL}/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`, {
+    const r = await fetch(`${API_URL}${path}`, {
       headers: authHeaders({ "Content-Type": "application/json" }),
       cache: "no-store",
     });

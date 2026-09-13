@@ -9355,3 +9355,7 @@ a.agent-chip-name:hover { text-decoration: underline; }
 .skill-row-main { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .skill-row-main code { font-size: .78rem; }
 .skill-row .linklike { justify-self: start; font-size: .78rem; }
+
+/* The workflow agent sits on the tab row but is not a tab: it opens a conversation rather than
+   switching what you are looking at. Pushed to the end so it never reads as a fourth view. */
+.dw-tab-agent { margin-left: auto; }

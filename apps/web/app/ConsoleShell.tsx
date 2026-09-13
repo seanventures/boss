@@ -528,8 +528,8 @@ export default function ConsoleShell({
       url.searchParams.set("area", id);
       if (url.toString() !== window.location.href) {
         router.push(`${url.pathname}${url.search}`);
-        // Panels restore their own selection by reading the URL on this signal.
-        window.dispatchEvent(new PopStateEvent("popstate"));
+        // NO popstate HERE. See the effect below: `router.push` is asynchronous, so announcing
+        // the change now announces the OLD url.
       }
     } catch {
       /* non-browser / unsupported — ignore */
@@ -603,8 +603,6 @@ export default function ConsoleShell({
       // Optimistic first, so the rail highlights before the server answers.
       setActive(area as AreaId);
       router.push(`${url.pathname}${url.search}`);
-      // Tell every panel that reads the URL -- the same signal Back/Forward sends.
-      window.dispatchEvent(new PopStateEvent("popstate"));
     };
     // CAPTURE phase, deliberately. The spine nodes and card pills call stopPropagation() so a
     // click on them does not also open the card behind them -- which would stop a bubble-phase
@@ -728,6 +726,31 @@ export default function ConsoleShell({
     window.history.pushState({}, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, []);
+
+  // ANNOUNCE THE URL ONCE IT IS TRUE, NOT WHEN IT WAS ASKED FOR.
+  //
+  // This cost ~30 seconds per click and it was mine. `router.push` is asynchronous: dispatching
+  // popstate on the next line tells ELEVEN components that the url changed while
+  // `window.location.search` still holds the old area. Every one of them re-read a stale url and
+  // refetched, the navigation then committed, the area remounted, and they all fetched again —
+  // a double herd per click, on the main thread, which is what froze the renderer.
+  //
+  // `useSearchParams` updates when the navigation COMMITS. Announcing from here means the signal
+  // fires once, with the url already correct, which is exactly what Back/Forward does — and what
+  // every listener was written against.
+  const announcedSearch = useRef<string | null>(null);
+  useEffect(() => {
+    const current = searchParams?.toString() ?? "";
+    if (announcedSearch.current === null) {
+      // The first render is not a navigation; announcing it would make every panel refetch on
+      // arrival, which is the thing the server render just did for them.
+      announcedSearch.current = current;
+      return;
+    }
+    if (announcedSearch.current === current) return;
+    announcedSearch.current = current;
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, [searchParams]);
 
   // Back/forward: restore the active area from the URL (without pushing again).
   useEffect(() => {
