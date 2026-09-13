@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
@@ -105,5 +108,36 @@ describe("switching areas keeps the screen populated", () => {
     const opacity = /opacity:\s*([\d.]+)/.exec(block)?.[1];
     expect(opacity).toBeTruthy();
     expect(Number(opacity)).toBeGreaterThan(0.5);
+  });
+});
+
+/**
+ * Going back to an area you just looked at must not cost a server round trip.
+ *
+ * Next 15 defaults the client router cache for dynamic pages to ZERO seconds. The console is
+ * one dynamic page and the area is a search param, so every nav — including returning to the
+ * area you were on ten seconds ago — threw away the payload it already had and fetched it
+ * again. That is why EVERY menu click cost a round trip and not just the first, and why the
+ * console felt slower than when all forty areas shipped at once and switching was a CSS
+ * toggle over content already in the browser.
+ *
+ * Reported, repeatedly: "when I click on the side menu option it is taking really really
+ * horrible time to load."
+ */
+describe("a visited area is not fetched again", () => {
+  const CONFIG = readFileSync(join(process.cwd(), "next.config.ts"), "utf8");
+
+  it("the client router cache is configured at all", () => {
+    expect(CONFIG).toContain("staleTimes");
+    expect(CONFIG).toMatch(/dynamic:\s*\d+/);
+  });
+
+  it("the dynamic stale time is long enough to make revisits instant", () => {
+    // Zero is the Next default and the bug. Anything under a few seconds leaves a normal
+    // back-and-forth between two areas refetching both every time.
+    const dynamic = Number(/dynamic:\s*(\d+)/.exec(CONFIG)?.[1]);
+    expect(dynamic).toBeGreaterThanOrEqual(30);
+    // And not so long that an operator watching a run reads a stale screen as a live one.
+    expect(dynamic).toBeLessThanOrEqual(300);
   });
 });
