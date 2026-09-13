@@ -149,10 +149,20 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
 
   return (
     <section className="panel-stack" aria-label="Channels">
-      <article className="stack-card" data-testid="channel-connections">
+      {/* OPEN ONLY WHEN THERE IS SOMETHING TO DO.
+          Connecting a channel is setup an operator does once, so once it is done this is a
+          line of status rather than a panel — and a page whose every section is expanded
+          forever is a page nobody can find anything on. */}
+      <details className="stack-card" data-testid="channel-connections"
+               open={channels !== null && connected.length === 0}>
+        <summary className="skill-form-summary">
+          {channels === null ? "Channels"
+           : connected.length === 0 ? "Channels — none connected yet"
+           : `Channels — ${connected.map((c) => c.channel?.title || c.connection_key)
+                .join(", ")}`}
+        </summary>
         <div className="section-head">
           <div>
-            <span className="eyebrow">Channels</span>
             <h2>Where BOSS can publish.</h2>
             <p className="detail">
               A channel is connected once and held as a credential BOSS uses but no agent can
@@ -196,7 +206,7 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
             {connected.length > 0 ? "Connect another channel" : "Connect YouTube"}
           </button>
         </div>
-      </article>
+      </details>
 
       <details className="stack-card" data-testid="channel-client" open={!status?.configured}>
         <summary className="skill-form-summary">

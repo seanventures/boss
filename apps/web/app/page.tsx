@@ -1731,12 +1731,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("skills") ? (
         <section className="panel-stack" data-area="skills" aria-label="Skills">
-          {/* WHERE PUBLISHING IS ONBOARDED. Beside Skills rather than in its own nav row: a
-              channel is a credential a skill uses, and an operator arrives here because they
-              want an agent to be able to do something, not because they want to think about
-              OAuth. */}
-          <ChannelsHome projectId={activeProjectId} actor={activeActorId} />
-          <SkillsHome projectId={activeProjectId} actor={activeActorId} />
+          {/* ORDER IS THE RECOMMENDATION. Authoring is what an operator came for, so it is
+              first; Channels is setup done once, so it sits below it; the catalogues are
+              reference and are shut. Channels is passed AS A CHILD rather than rendered
+              beside, so the whole order lives in one file instead of being split between
+              this mount and the component's own layout. */}
+          <SkillsHome projectId={activeProjectId} actor={activeActorId}>
+            <ChannelsHome projectId={activeProjectId} actor={activeActorId} />
+          </SkillsHome>
         </section>
         ) : null}
 

@@ -52,3 +52,55 @@ describe("skills are authored by conversation", () => {
     expect(body).toContain("already has");
   });
 });
+
+
+/**
+ * The page stopped fitting on a screen.
+ *
+ * Four expanded sections — channels, authoring, custom skills, seventeen built-ins — and the
+ * thing an operator came to do was somewhere in the middle of all of it. Reported as "all of
+ * these are growing the page long".
+ *
+ * So: authoring is first and open, because it is what you came for. Everything else is shut,
+ * and each shut section says what is inside it, because "Custom skills" tells a reader nothing
+ * about whether opening it is worth the click.
+ */
+describe("the skills page fits on a screen", () => {
+  const CHANNELS = codeOnly("app/channels-ui.tsx");
+  const PAGE = codeOnly("app/page.tsx");
+
+  it("authoring is first, then channels, then the catalogues", () => {
+    // Channels is passed as a CHILD rather than rendered beside, so the order lives in one
+    // file instead of being split between the mount and the component's own layout.
+    expect(PAGE).toContain("<SkillsHome projectId={activeProjectId} actor={activeActorId}>");
+    expect(PAGE).toContain("<ChannelsHome projectId={activeProjectId} actor={activeActorId} />");
+    const agent = SKILLS.indexOf('data-testid="skill-agent"');
+    const slot = SKILLS.indexOf("{children}");
+    const custom = SKILLS.indexOf('data-testid="skills-custom"');
+    const builtin = SKILLS.indexOf('data-testid="skills-builtin"');
+    expect(agent).toBeLessThan(slot);
+    expect(slot).toBeLessThan(custom);
+    expect(custom).toBeLessThan(builtin);
+  });
+
+  it("the catalogues are shut, and say what is in them", () => {
+    for (const id of ["skills-custom", "skills-builtin"]) {
+      expect(SKILLS).toContain(`<details className="stack-card" data-testid="${id}">`);
+    }
+    // A COUNT, not just a label. "Custom skills" tells a reader nothing about whether opening
+    // it is worth the click; "Custom skills (3)" does. Asserted on both summaries.
+    const custom = SKILLS.slice(SKILLS.indexOf('data-testid="skills-custom"'));
+    expect(custom.slice(0, 400)).toContain("skills.length");
+    const builtin = SKILLS.slice(SKILLS.indexOf('data-testid="skills-builtin"'));
+    expect(builtin.slice(0, 400)).toContain("builtIn.length");
+  });
+
+  it("channels opens only when there is something to do", () => {
+    // Once a channel is connected this is a line of status, not a panel. But an operator with
+    // none must not have to hunt for the thing that sets one up.
+    expect(CHANNELS).toContain('<details className="stack-card" data-testid="channel-connections"');
+    expect(CHANNELS).toContain("open={channels !== null && connected.length === 0}");
+    // And the shut summary names the connected channel rather than saying "Channels".
+    expect(CHANNELS).toContain("connected.map((c) => c.channel?.title || c.connection_key)");
+  });
+});

@@ -65,7 +65,10 @@ function declaredAgentCallers(s: BuiltIn, roles: string[]): string[] {
   return callers.filter((c) => roles.includes(c));
 }
 
-export function SkillsHome({ projectId, actor }: { projectId: string; actor: string }) {
+export function SkillsHome(
+  { projectId, actor, children }:
+  { projectId: string; actor: string; children?: React.ReactNode },
+) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [builtIn, setBuiltIn] = useState<BuiltIn[] | null>(null);
   const [draft, setDraft] = useState({ ...BLANK });
@@ -250,10 +253,19 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
         </button>
       </article>
 
-      <article className="stack-card" data-testid="skills-custom">
+      {/* THE SLOT. Channels sits here — after the way IN to authoring, before the
+          catalogues — because connecting an account is setup you do once and the thing you
+          came to do is above it. */}
+      {children}
+
+      <details className="stack-card" data-testid="skills-custom">
+        <summary className="skill-form-summary">
+          {/* A COLLAPSED SECTION MUST STILL SAY WHAT IS IN IT. "Custom skills" tells a reader
+              nothing about whether opening it is worth the click; the count does. */}
+          Custom skills{skills === null ? "" : ` (${skills.length})`}
+        </summary>
         <div className="section-head">
           <div>
-            <span className="eyebrow">Custom skills</span>
             <h2>The ones you wrote for this project.</h2>
             <p className="detail">
               A skill is one reusable unit of work. Attach it to an agent, or place it in a
@@ -307,12 +319,14 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
             ))}
           </ul>
         )}
-      </article>
+      </details>
 
-      <article className="stack-card" data-testid="skills-builtin">
+      <details className="stack-card" data-testid="skills-builtin">
+        <summary className="skill-form-summary">
+          Already in BOSS{builtIn === null ? "" : ` (${builtIn.length})`}
+        </summary>
         <div className="section-head">
           <div>
-            <span className="eyebrow">Already in BOSS</span>
             <h2>{builtIn === null ? "Built-in skills"
                  : `${builtIn.length} skills ship with BOSS`}</h2>
             <p className="detail">
@@ -366,8 +380,7 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
             ))}
           </ul>
         )}
-      </article>
-
+      </details>
 
       <details className="stack-card" data-testid="skill-form">
         <summary className="skill-form-summary">
