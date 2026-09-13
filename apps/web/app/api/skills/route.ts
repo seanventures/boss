@@ -18,9 +18,15 @@ export async function GET(req: Request) {
   // Mattermost posts, model calls, provider cost sync. `/v1/skill-definitions` is what this
   // project authored. A page that showed only the second told a new operator they had nothing,
   // while seventeen skills sat one endpoint away.
-  const path = url.searchParams.get("view") === "builtin"
+  // THREE VIEWS. `builtin` is what BOSS ships; `assignments` is which agent holds which skill;
+  // the default is what this project authored. All three render one page, so they share a
+  // route rather than growing three that each need the same auth and error handling.
+  const view = url.searchParams.get("view");
+  const path = view === "builtin"
     ? `/v1/skills?project_id=${encodeURIComponent(projectId)}`
-    : `/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`;
+    : view === "assignments"
+      ? `/v1/role-skills?project_id=${encodeURIComponent(projectId)}`
+      : `/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`;
   try {
     const r = await fetch(`${API_URL}${path}`, {
       headers: authHeaders({ "Content-Type": "application/json" }),
@@ -46,16 +52,59 @@ export async function POST(req: Request) {
   }
   // DELETE ARRIVES AS A POST, deliberately: one route, one allowlist, and the action named in
   // the body rather than taken from a path this handler would then have to sanitise.
-  const remove = body.action === "delete";
+  const action = String(body.action ?? "");
+  const remove = action === "delete";
   const key = String(body.skill_key ?? "").trim();
   const projectId = String(body.project_id ?? "").trim();
+  const actor = String(body.actor ?? "executive_console");
   if (remove && (!key || !projectId)) {
     return NextResponse.json({ error: "skill_key and project_id are required" }, { status: 400 });
   }
+
+  // GIVING A SKILL TO AN AGENT, AND TAKING IT BACK.
+  //
+  // Separate from the workflow-step end, which lives in /api/delivery-workflows. The same
+  // skill can be held by an agent, placed in a step, both, or neither — so neither route may
+  // assume the other happened.
+  const assigning = action === "assign" || action === "unassign";
+  if (assigning) {
+    const roleKey = String(body.role_key ?? "").trim();
+    const skillId = String(body.skill_id ?? "").trim();
+    if (!projectId || !roleKey || !skillId) {
+      return NextResponse.json(
+        { error: "project_id, role_key and skill_id are required" }, { status: 400 });
+    }
+    const q = `?project_id=${encodeURIComponent(projectId)}`
+      + `&role_key=${encodeURIComponent(roleKey)}`
+      + `&skill_id=${encodeURIComponent(skillId)}`
+      + `&actor=${encodeURIComponent(actor)}`;
+    try {
+      const r = await fetch(
+        `${API_URL}/v1/role-skills${action === "unassign" ? q : ""}`,
+        {
+          method: action === "assign" ? "POST" : "DELETE",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          ...(action === "assign"
+            ? { body: JSON.stringify({ project_id: projectId, role_key: roleKey,
+                                       skill_id: skillId, actor }) }
+            : {}),
+          cache: "no-store",
+        });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
+                                 { status: r.status });
+      }
+      return NextResponse.json(data);
+    } catch (e) {
+      return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+    }
+  }
+
   const path = remove
     ? `/v1/skill-definitions/${encodeURIComponent(key)}`
       + `?project_id=${encodeURIComponent(projectId)}`
-      + `&actor=${encodeURIComponent(String(body.actor ?? "executive_console"))}`
+      + `&actor=${encodeURIComponent(actor)}`
     : "/v1/skill-definitions";
   try {
     const r = await fetch(`${API_URL}${path}`, {

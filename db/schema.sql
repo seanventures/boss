@@ -3189,6 +3189,35 @@ CREATE TABLE IF NOT EXISTS project_skills (
 CREATE INDEX IF NOT EXISTS idx_project_skills_project
   ON project_skills(project_id, enabled, on_demand);
 
+-- WHICH AGENT HOLDS WHICH SKILL.
+--
+-- A skill is one reusable unit of doing, and it attaches at two ends: a workflow step runs it
+-- (workflow_custom_steps.skill_id) and an agent holds it. The step end already existed; this is
+-- the agent end, and the two are independent — the same skill can be given to an agent, placed
+-- in a step, both, or neither. An agent that holds a skill can use it in its own work without a
+-- workflow being involved, which is the whole point of an admin-style agent that owns, say, a
+-- YouTube account.
+--
+-- `skill_id` deliberately carries no foreign key: it names EITHER a project-authored skill
+-- (skill_definitions.skill_key) OR one of the skills that ship with BOSS (project_skills.
+-- skill_id, e.g. 'github.create_pr_real'), and those live in different tables. `source` records
+-- which, so a reader does not have to guess from the shape of the key.
+CREATE TABLE IF NOT EXISTS role_skills (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'authored',
+  assigned_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, role_key, skill_id),
+  CHECK (source IN ('authored', 'builtin'))
+);
+CREATE INDEX IF NOT EXISTS idx_role_skills_role
+  ON role_skills(project_id, role_key);
+CREATE INDEX IF NOT EXISTS idx_role_skills_skill
+  ON role_skills(project_id, skill_id);
+
 -- Model-agnostic agent toolchain intake. Third-party prompts, hooks, MCP
 -- configuration, commands, and scripts are untrusted supply-chain inputs.
 -- BOSS records immutable provenance and scan evidence but never stores or

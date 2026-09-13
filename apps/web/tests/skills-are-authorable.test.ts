@@ -84,7 +84,12 @@ describe("the list says what a skill costs you, not what tier it is", () => {
 
 describe("the route cannot be used to reach any endpoint", () => {
   it("delete arrives as a named action, not a path taken from the client", () => {
-    expect(ROUTE).toContain('const remove = body.action === "delete"');
+    // The ACTION is named in the body and matched against a fixed set; the path is never
+    // taken from the client. Four actions now (save, delete, assign, unassign) and the check
+    // is that each is a literal comparison, not a value interpolated into a URL.
+    expect(ROUTE).toContain('const action = String(body.action ?? "")');
+    expect(ROUTE).toContain('const remove = action === "delete"');
+    expect(ROUTE).toContain('action === "assign" || action === "unassign"');
     // And it reaches the DEFINITION endpoints, not the runtime skill catalogue that has owned
     // /v1/skills all along — a second GET on that path is never matched, so it would have
     // answered a different question than the one asked.
@@ -105,12 +110,73 @@ describe("what BOSS already ships is shown beside what you wrote", () => {
     const at = UI.indexOf('data-testid="builtin-list"');
     const block = UI.slice(at, at + 900);
     expect(block).not.toContain("skill-delete");
-    expect(UI).toContain("Author a new one");
+    expect(UI).toContain("Author a new skill above only when nothing here covers the job.");
   });
 
   it("and the route serves both catalogues without confusing them", () => {
-    expect(ROUTE).toContain('url.searchParams.get("view") === "builtin"');
+    expect(ROUTE).toContain('const view = url.searchParams.get("view")');
+    expect(ROUTE).toContain('view === "builtin"');
+    expect(ROUTE).toContain('view === "assignments"');
     expect(ROUTE).toContain("/v1/skills?project_id=");
     expect(ROUTE).toContain("/v1/skill-definitions?project_id=");
+  });
+});
+
+
+/**
+ * A skill goes to an agent, to a workflow step, or to both.
+ *
+ * The step end already existed — `workflow_custom_steps.skill_id`. The agent end did not, so
+ * the seventeen skills that ship with BOSS could be listed and admired and never given to
+ * anybody. Reported as: "I think we need to assign those 17 skills to the Agents out there."
+ *
+ * The two ends are INDEPENDENT on purpose. A workflow step is "this happens at this point in
+ * the path"; an agent holding a skill is "this member of the workforce can do this when its
+ * own work calls for it" — which is what an admin-style agent owning a YouTube account needs.
+ * Forcing a choice between them would make one of those impossible.
+ */
+describe("a skill can be given to an agent", () => {
+  it("both catalogues offer it, authored and built-in alike", () => {
+    // The built-in list existed to be read. Seventeen skills with executors behind them and no
+    // way to hand one to an agent is a catalogue, not a capability.
+    const custom = UI.slice(UI.indexOf('data-testid="skills-custom"'),
+                            UI.indexOf('data-testid="skills-builtin"'));
+    const builtin = UI.slice(UI.indexOf('data-testid="skills-builtin"'),
+                             UI.indexOf('data-testid="skill-form"'));
+    expect(custom).toContain("<AssignRow");
+    expect(builtin).toContain("<AssignRow");
+  });
+
+  it("only authored skills offer the workflow end", () => {
+    // A built-in has an executor and a standard capability already covers it in a workflow;
+    // offering "use in a workflow" there would route an operator to build a custom step that
+    // duplicates one.
+    const custom = UI.slice(UI.indexOf('data-testid="skills-custom"'),
+                            UI.indexOf('data-testid="skills-builtin"'));
+    const builtin = UI.slice(UI.indexOf('data-testid="skills-builtin"'),
+                             UI.indexOf('data-testid="skill-form"'));
+    expect(custom).toContain("canPlaceInWorkflow\n");
+    expect(builtin).toContain("canPlaceInWorkflow={false}");
+  });
+
+  it("placing a step is handed to the workflow agent, not half-built here", () => {
+    // Placing a step means deciding where in a path it sits and what feeds it. That is a
+    // conversation, and there is already an agent whose remit it is.
+    expect(UI).toContain("function askBossToPlaceSkill");
+    const fn = UI.slice(UI.indexOf("function askBossToPlaceSkill"));
+    expect(fn.slice(0, fn.indexOf("\n}"))).toContain('"dock_role", "Program Manager"');
+  });
+
+  it("assignment is its own action on the route, gated like authoring", () => {
+    expect(ROUTE).toContain("/v1/role-skills");
+    expect(ROUTE).toContain('body.role_key');
+    expect(ROUTE).toContain('body.skill_id');
+  });
+
+  it("the page reads every assignment once, not once per row", () => {
+    // This page lists twenty-odd skills. A request per row is how a list becomes a stampede.
+    expect(UI).toContain('view=assignments');
+    const loader = UI.slice(UI.indexOf("const reloadAssignments"));
+    expect(loader.slice(0, 400)).toContain("view=assignments");
   });
 });

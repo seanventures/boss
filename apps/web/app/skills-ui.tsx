@@ -54,6 +54,10 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
   const [draft, setDraft] = useState({ ...BLANK });
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // WHO HOLDS WHAT. One read for the whole page: the alternative is a request per row, and
+  // this page lists twenty skills.
+  const [roles, setRoles] = useState<string[]>([]);
+  const [assignments, setAssignments] = useState<Array<{ role_key: string; skill_id: string }>>([]);
 
   const reload = useCallback(async () => {
     try {
@@ -64,7 +68,63 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
     } catch { setSkills([]); }
   }, [projectId]);
 
-  useEffect(() => { void reload(); }, [reload]);
+  const reloadAssignments = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/skills?view=assignments&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (r.ok) setAssignments(((await r.json()).assignments ?? []));
+    } catch { /* leave what we had; a failed refresh must not blank the chips */ }
+  }, [projectId]);
+
+  useEffect(() => { void reload(); void reloadAssignments(); }, [reload, reloadAssignments]);
+
+  // The agents a skill can be given to. Same list the workflow page addresses captains from.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`/api/agent?view=roles&project_id=${encodeURIComponent(projectId)}`,
+                              { cache: "no-store" });
+        if (!r.ok) return;
+        const body = await r.json();
+        const items = (body.roles ?? body.items ?? []) as Array<Record<string, unknown>>;
+        setRoles(items
+          .map((x) => String(x.key ?? x.role_key ?? x.id ?? ""))
+          .filter(Boolean)
+          .sort());
+      } catch { /* the rest of the page still works without the picker */ }
+    })();
+  }, [projectId]);
+
+  const holdersOf = useCallback(
+    (skillId: string) => assignments.filter((a) => a.skill_id === skillId).map((a) => a.role_key),
+    [assignments]);
+
+  const setAssigned = useCallback(async (
+    skillId: string, roleKey: string, assign: boolean,
+  ) => {
+    if (busy) return;
+    setBusy(true); setNote(null);
+    try {
+      const r = await fetch("/api/skills", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: assign ? "assign" : "unassign",
+          project_id: projectId, actor, role_key: roleKey, skill_id: skillId,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      setBusy(false);
+      if (!r.ok) { setNote({ ok: false, text: String(data?.error ?? `HTTP ${r.status}`) }); return; }
+      setNote({ ok: true, text: assign
+        ? `${roleLabel(roleKey)} now holds ${skillId}.`
+        : `${roleLabel(roleKey)} no longer holds ${skillId}.` });
+      void reloadAssignments();
+    } catch (e) {
+      setBusy(false);
+      setNote({ ok: false, text: String((e as Error)?.message ?? e) });
+    }
+  }, [busy, projectId, actor, reloadAssignments]);
 
   // WHAT THIS INSTALL ALREADY HAS. Shown beside what the operator wrote, because "you have no
   // skills" is false on a fresh project — BOSS ships seventeen, and several of them are the
@@ -146,11 +206,38 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
 
   return (
     <section className="panel-stack" aria-label="Skills">
-      <article className="stack-card">
+
+      {/* DESCRIBE IT; DO NOT SPECIFY IT.
+          The form below asks an operator to already know what a behaviour kind is, which
+          fields a sandboxed command needs, and that its image has to be digest-pinned. That is
+          the shape of the DATA, not the shape of anything a person wants to say. What they
+          want to say is "trim a video between two timecodes and stamp our watermark on it" —
+          so that is the way in, and BOSS turns the answers into the skill and offers it back
+          as one press. The form stays for correcting a field afterwards; it is no longer the
+          thing you meet first. */}
+      <article className="stack-card" data-testid="skill-agent">
         <div className="section-head">
           <div>
-            <span className="eyebrow">Skills</span>
-            <h2>What your agents and steps can actually do.</h2>
+            <span className="eyebrow">Author a skill</span>
+            <h2>Tell BOSS what it should be able to do.</h2>
+          </div>
+        </div>
+        <p className="detail">
+          Describe the job in your own words. BOSS asks for whatever it still needs — what it
+          takes in, what it hands back, how it runs — and then offers the finished skill to
+          create in one press.
+        </p>
+        <button type="button" className="cap-btn primary" data-testid="skill-agent-open"
+                onClick={() => askBossAboutSkills(projectId)}>
+          Design a skill with BOSS
+        </button>
+      </article>
+
+      <article className="stack-card" data-testid="skills-custom">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Custom skills</span>
+            <h2>The ones you wrote for this project.</h2>
             <p className="detail">
               A skill is one reusable unit of work. Attach it to an agent, or place it in a
               workflow as a step — the same object either way.
@@ -183,6 +270,18 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
                   ) : null}
                 </span>
                 {s.summary ? <span className="detail">{s.summary}</span> : null}
+                <AssignRow
+                  skillId={s.skill_key}
+                  roles={roles}
+                  holders={holdersOf(s.skill_key)}
+                  busy={busy}
+                  onAssign={(r) => void setAssigned(s.skill_key, r, true)}
+                  onUnassign={(r) => void setAssigned(s.skill_key, r, false)}
+                  // Authored skills are what a custom workflow step runs, so both ends are
+                  // open to them. A built-in has an executor and a standard capability
+                  // already covers it in a workflow, so it offers the agent end only.
+                  canPlaceInWorkflow
+                />
                 <button type="button" className="linklike" disabled={busy}
                         data-testid={`skill-delete-${s.skill_key}`}
                         onClick={() => void remove(s.skill_key)}>Delete</button>
@@ -192,10 +291,6 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
         )}
       </article>
 
-      {/* SHIPPED, NOT AUTHORED. Read-only here on purpose: these have executors behind them,
-          and the thing an operator does with one is enable it and give it to an agent — not
-          rewrite it. Listing them stops somebody authoring a GitHub PR skill that already
-          exists three rows up. */}
       <article className="stack-card" data-testid="skills-builtin">
         <div className="section-head">
           <div>
@@ -203,8 +298,8 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
             <h2>{builtIn === null ? "Built-in skills"
                  : `${builtIn.length} skills ship with BOSS`}</h2>
             <p className="detail">
-              These have code behind them and are ready to attach to an agent. Author a new one
-              below only when nothing here covers the work.
+              These have code behind them. Give one to an agent and it can use it in its own
+              work. Author a new skill above only when nothing here covers the job.
             </p>
           </div>
         </div>
@@ -228,37 +323,21 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
                   ) : null}
                 </span>
                 {s.description ? <span className="detail">{s.description}</span> : null}
+                <AssignRow
+                  skillId={s.id}
+                  roles={roles}
+                  holders={holdersOf(s.id)}
+                  busy={busy}
+                  onAssign={(r) => void setAssigned(s.id, r, true)}
+                  onUnassign={(r) => void setAssigned(s.id, r, false)}
+                  canPlaceInWorkflow={false}
+                />
               </li>
             ))}
           </ul>
         )}
       </article>
 
-      {/* DESCRIBE IT; DO NOT SPECIFY IT.
-          The form below asks an operator to already know what a behaviour kind is, which
-          fields a sandboxed command needs, and that its image has to be digest-pinned. That is
-          the shape of the DATA, not the shape of anything a person wants to say. What they
-          want to say is "trim a video between two timecodes and stamp our watermark on it" —
-          so that is the way in, and BOSS turns the answers into the skill and offers it back
-          as one press. The form stays for correcting a field afterwards; it is no longer the
-          thing you meet first. */}
-      <article className="stack-card" data-testid="skill-agent">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Author a skill</span>
-            <h2>Tell BOSS what it should be able to do.</h2>
-          </div>
-        </div>
-        <p className="detail">
-          Describe the job in your own words. BOSS asks for whatever it still needs — what it
-          takes in, what it hands back, how it runs — and then offers the finished skill to
-          create in one press.
-        </p>
-        <button type="button" className="cap-btn primary" data-testid="skill-agent-open"
-                onClick={() => askBossAboutSkills(projectId)}>
-          Design a skill with BOSS
-        </button>
-      </article>
 
       <details className="stack-card" data-testid="skill-form">
         <summary className="skill-form-summary">
@@ -434,6 +513,101 @@ function askBossAboutSkills(projectId: string): void {
       + " that exists.",
     );
     window.history.replaceState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
+/** WHERE A SKILL CAN GO, ON THE ROW THAT OWNS IT.
+ *
+ *  A skill attaches at two independent ends: an AGENT holds it, and a WORKFLOW STEP runs it.
+ *  Both, either or neither is a legitimate answer, so this offers them separately rather than
+ *  making the operator pick one. The agent end is assigned right here because it is a single
+ *  row in one table; the workflow end opens the workflow agent, because placing a step means
+ *  deciding where in a path it sits and what feeds it — a conversation, not a dropdown.
+ */
+function AssignRow({
+  skillId, roles, holders, onAssign, onUnassign, busy, canPlaceInWorkflow,
+}: {
+  skillId: string;
+  roles: string[];
+  holders: string[];
+  onAssign: (roleKey: string) => void;
+  onUnassign: (roleKey: string) => void;
+  busy: boolean;
+  canPlaceInWorkflow: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState("");
+  const free = roles.filter((r) => !holders.includes(r));
+  return (
+    <div className="skill-assign" data-testid={`skill-assign-${skillId}`}>
+      {holders.length > 0 ? (
+        <span className="skill-holders">
+          {holders.map((r) => (
+            <span key={r} className="cap-badge tone-muted" data-testid={`skill-holder-${r}`}>
+              {roleLabel(r)}
+              <button type="button" className="linklike skill-holder-drop" disabled={busy}
+                      title={`Take ${skillId} off ${roleLabel(r)}`}
+                      onClick={() => onUnassign(r)}>×</button>
+            </span>
+          ))}
+        </span>
+      ) : (
+        <span className="detail">Held by nobody yet.</span>
+      )}
+      {open ? (
+        <span className="skill-assign-pick">
+          <select value={pick} data-testid={`skill-assign-select-${skillId}`}
+                  onChange={(e) => setPick(e.target.value)}>
+            <option value="">Choose an agent…</option>
+            {free.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+          </select>
+          <button type="button" className="cap-btn" disabled={busy || !pick}
+                  data-testid={`skill-assign-confirm-${skillId}`}
+                  onClick={() => { onAssign(pick); setPick(""); setOpen(false); }}>
+            Assign
+          </button>
+          <button type="button" className="linklike" onClick={() => setOpen(false)}>Cancel</button>
+        </span>
+      ) : (
+        <span className="skill-assign-actions">
+          {free.length > 0 ? (
+            <button type="button" className="linklike" data-testid={`skill-assign-open-${skillId}`}
+                    onClick={() => setOpen(true)}>
+              Assign to an agent
+            </button>
+          ) : null}
+          {canPlaceInWorkflow ? (
+            <button type="button" className="linklike"
+                    data-testid={`skill-to-workflow-${skillId}`}
+                    onClick={() => askBossToPlaceSkill(skillId)}>
+              Use in a workflow
+            </button>
+          ) : null}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function roleLabel(roleKey: string): string {
+  return roleKey.replace(/_/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/** Placing a step means deciding where in a path it sits and what feeds it. That is the
+ *  workflow agent's job, so this hands the skill to it by name rather than inventing a second
+ *  half-built step editor here. */
+function askBossToPlaceSkill(skillId: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", "general");
+    url.searchParams.set("dock_role", "Program Manager");
+    url.searchParams.set(
+      "dock_ask",
+      `I want to use the skill \`${skillId}\` as a step in a workflow. Define the custom step`
+      + " that runs it, then show me which workflows could place it and where.",
+    );
+    window.history.pushState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
 }

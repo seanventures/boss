@@ -9433,3 +9433,48 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) {
   .skill-form-summary::before { transition: none; }
 }
+
+/* A skill row says where it can go, and where it already went.
+ *
+ * Quiet by default: chips for the agents that hold it, and the two doors as plain links. The
+ * picker only appears when asked for, because twenty rows each showing a permanently-open
+ * dropdown is the clutter this page was already criticised for. */
+.skill-assign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 0.86rem;
+}
+
+.skill-holders {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-holder-drop {
+  margin-left: 6px;
+  opacity: 0.6;
+  font-size: 0.95em;
+  line-height: 1;
+}
+
+.skill-holder-drop:hover { opacity: 1; }
+
+.skill-assign-actions,
+.skill-assign-pick {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-assign-pick select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface-2, #161b22);
+  color: inherit;
+  border: 1px solid var(--border, #30363d);
+}

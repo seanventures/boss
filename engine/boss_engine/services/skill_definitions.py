@@ -290,3 +290,150 @@ def delete_skill(connection: Connection, *, project_id: str, actor: str, skill_k
     emit_event(connection, project_id, "skill.deleted", actor, "skill_definition",
                str(removed[0]), {"skill_key": skill_key})
     return {"deleted": skill_key}
+
+
+# ---------------------------------------------------------------------------
+# Assigning a skill to an agent
+# ---------------------------------------------------------------------------
+#
+# A skill attaches at two independent ends: a workflow step RUNS it, and an agent HOLDS it.
+# The step end already existed (`workflow_custom_steps.skill_id`). This is the agent end.
+#
+# Independent on purpose. The same skill can be given to an agent, placed in a step, both, or
+# neither — because those answer different questions. A step in a workflow is "this happens at
+# this point in the path"; an agent holding a skill is "this member of the workforce can do
+# this when its own work calls for it", which is what an admin-style agent owning a YouTube
+# account actually needs. Forcing a choice between them would make one of those impossible.
+
+#: Both kinds of skill an agent can be given. `authored` lives in skill_definitions and was
+#: written in this project; `builtin` ships with BOSS and lives in project_skills.
+ASSIGNABLE_SOURCES = ("authored", "builtin")
+
+
+def _skill_exists(connection: Connection, project_id: str, skill_id: str) -> Optional[str]:
+    """Return the source a skill exists under, or None. Authored wins if somehow both.
+
+    The built-in half deliberately asks the ENTITLEMENTS CATALOGUE rather than reading
+    `project_skills`. That table records a per-project override — enabled, on-demand, config —
+    and a skill BOSS ships needs no row there to exist or to work. Checking the table instead
+    rejected every one of the seventeen shipped skills as "no skill in this project", which is
+    exactly the population this feature was built to let an operator assign.
+    """
+    authored = connection.execute(
+        text("SELECT 1 FROM skill_definitions WHERE project_id = :p AND skill_key = :k"),
+        {"p": project_id, "k": skill_id},
+    ).first()
+    if authored:
+        return "authored"
+    # Imported here, not at module scope: entitlements reaches back into this package, and the
+    # cycle only bites at import time.
+    from ..config import get_settings
+    from .entitlements import EntitlementBrokerService
+
+    catalogue = EntitlementBrokerService(get_settings()).list_skills(
+        project_id, connection=connection)
+    return "builtin" if any(s.get("id") == skill_id for s in catalogue) else None
+
+
+def assign_skill_to_role(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    role_key: str,
+    skill_id: str,
+) -> dict[str, Any]:
+    """Give one skill to one agent. Idempotent: assigning twice is not an error."""
+    role = str(role_key or "").strip().lower()
+    skill = str(skill_id or "").strip()
+    if not role:
+        raise SkillDefinitionError("role_key is required.")
+    if not skill:
+        raise SkillDefinitionError("skill_id is required.")
+
+    known = connection.execute(
+        text("SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": role},
+    ).first()
+    if not known:
+        # NAME WHAT EXISTS. "Unknown role" sends the reader hunting for a typo; the list tells
+        # them whether they are even in the right project.
+        available = connection.execute(
+            text("SELECT role_key FROM roles WHERE project_id = :p ORDER BY role_key LIMIT 40"),
+            {"p": project_id},
+        ).scalars().all()
+        raise SkillDefinitionError(
+            f"no agent {role!r} on this project. Available: {', '.join(available) or 'none'}.")
+
+    source = _skill_exists(connection, project_id, skill)
+    if source is None:
+        raise SkillDefinitionError(
+            f"no skill {skill!r} in this project — author one, or enable a built-in first.")
+
+    row = connection.execute(
+        text(
+            "INSERT INTO role_skills (id, project_id, role_key, skill_id, source, assigned_by) "
+            "VALUES (:id, :p, :r, :k, :src, :by) "
+            "ON CONFLICT (project_id, role_key, skill_id) DO UPDATE SET source = EXCLUDED.source "
+            "RETURNING id, created_at"
+        ),
+        {"id": make_id("rsk"), "p": project_id, "r": role, "k": skill,
+         "src": source, "by": actor},
+    ).mappings().first()
+    emit_event(connection, project_id, "skill.assigned_to_agent", actor, "role_skill",
+               str(row["id"]), {"role_key": role, "skill_id": skill, "source": source})
+    return {"role_key": role, "skill_id": skill, "source": source, "assigned": True}
+
+
+def unassign_skill_from_role(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    role_key: str,
+    skill_id: str,
+) -> dict[str, Any]:
+    """Take one skill back off one agent. Does not touch the skill or any workflow step."""
+    role = str(role_key or "").strip().lower()
+    removed = connection.execute(
+        text("DELETE FROM role_skills WHERE project_id = :p AND role_key = :r "
+             "AND skill_id = :k RETURNING id"),
+        {"p": project_id, "r": role, "k": skill_id},
+    ).first()
+    if not removed:
+        raise SkillDefinitionError(f"{role} does not hold {skill_id!r}.")
+    emit_event(connection, project_id, "skill.unassigned_from_agent", actor, "role_skill",
+               str(removed[0]), {"role_key": role, "skill_id": skill_id})
+    return {"role_key": role, "skill_id": skill_id, "assigned": False}
+
+
+def list_role_skills(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every assignment in the project, so one read can render the whole page."""
+    rows = connection.execute(
+        text(
+            "SELECT role_key, skill_id, source, assigned_by, created_at FROM role_skills "
+            "WHERE project_id = :p ORDER BY role_key, skill_id"
+        ),
+        {"p": project_id},
+    ).mappings().all()
+    return [
+        {
+            "role_key": r["role_key"],
+            "skill_id": r["skill_id"],
+            "source": r["source"],
+            "assigned_by": r["assigned_by"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+
+
+def skills_for_role(connection: Connection, project_id: str, role_key: str) -> list[str]:
+    """The skill ids one agent holds. What the agent's own prompt assembly reads."""
+    return list(
+        connection.execute(
+            text("SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r "
+                 "ORDER BY skill_id"),
+            {"p": project_id, "r": str(role_key or "").strip().lower()},
+        ).scalars().all()
+    )

@@ -14464,6 +14464,66 @@ def save_skill_definition(payload: dict) -> dict:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@app.get("/v1/role-skills")
+def list_role_skill_assignments(project_id: str) -> dict:
+    """Every agent-holds-skill assignment in the project.
+
+    One read renders the whole Skills page: the console needs to show, next to each skill,
+    which agents already hold it, and per-skill queries would be one request per row.
+    """
+    from .services.skill_definitions import list_role_skills
+
+    with begin(engine) as connection:
+        return {"project_id": project_id, "assignments": list_role_skills(connection, project_id)}
+
+
+@app.post("/v1/role-skills", status_code=201)
+def assign_role_skill(payload: dict) -> dict:
+    """Give one skill to one agent.
+
+    Independent of any workflow step that also runs it: the same skill can be held by an agent,
+    placed in a step, both, or neither. `workflow_manage` is the gate, the same permission that
+    authors the skill in the first place — deciding who can do what with it is the same act.
+    """
+    from .services.skill_definitions import SkillDefinitionError, assign_skill_to_role
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip() or "executive_console"
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return assign_skill_to_role(
+                connection, project_id=project_id, actor=actor,
+                role_key=str(payload.get("role_key") or ""),
+                skill_id=str(payload.get("skill_id") or ""),
+            )
+        except SkillDefinitionError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.delete("/v1/role-skills")
+def unassign_role_skill(
+    project_id: str,
+    role_key: str,
+    skill_id: str,
+    actor: str = "executive_console",
+) -> dict:
+    """Take one skill back off one agent. Leaves the skill and any workflow step untouched."""
+    from .services.skill_definitions import SkillDefinitionError, unassign_skill_from_role
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return unassign_skill_from_role(
+                connection, project_id=project_id, actor=actor,
+                role_key=role_key, skill_id=skill_id,
+            )
+        except SkillDefinitionError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.delete("/v1/skill-definitions/{skill_key}")
 def delete_skill_definition(skill_key: str, project_id: str, actor: str = "executive_console") -> dict:
     from .services.skill_definitions import SkillDefinitionError, delete_skill
