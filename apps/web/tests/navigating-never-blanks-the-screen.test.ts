@@ -26,90 +26,59 @@ const SHELL = codeOnly("app/ConsoleShell.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("switching areas keeps the screen populated", () => {
-  it("the painted area commits with the navigation, not with the click", () => {
+  it("the area commits on the press, because it is already on the page", () => {
+    // THE TRANSITION IS GONE, AND THAT IS THE FIX, NOT A REGRESSION.
+    //
+    // Deferring `active` into a transition kept the outgoing area painted while the incoming
+    // one was fetched. It was the right answer to a blank screen caused by rendering one area
+    // per request — the section being opened did not exist yet, so there was genuinely
+    // something to wait for.
+    //
+    // Every area is in the DOM again. There is nothing to fetch and nothing to wait for, so
+    // `active` commits on the press and the reveal is a CSS toggle. A transition here would
+    // add latency to a navigation that has none.
     const go = SHELL.slice(
       SHELL.indexOf("const go = useCallback("),
-      SHELL.indexOf("}, [router, startNav]);"),
+      SHELL.indexOf("}, []);", SHELL.indexOf("const go = useCallback(")),
     );
     expect(go.length).toBeGreaterThan(0);
-    // The press must not flip the thing the CSS keys off.
-    const firstStatement = go.slice(0, go.indexOf("startNav("));
-    expect(firstStatement).not.toContain("setActive(");
-    // It must flip inside the transition, alongside the push.
-    const transition = go.slice(go.indexOf("startNav("));
-    expect(transition).toContain("router.push(");
-    expect(transition).toContain("setActive(id)");
+    expect(go).toContain("setActive(id)");
+    expect(go).not.toContain("startNav(");
+    expect(go).not.toContain("router.push");
   });
 
-  it("but the rail still answers the press immediately", () => {
-    // Deferring `active` must not defer the highlight too, or the click feels ignored.
+  it("and the screen cannot blank, because nothing is unmounted", () => {
+    // The blank had one cause: `main[data-active=X]` hid the outgoing section while the
+    // incoming one did not exist. Both exist now, so the class of bug is gone rather than
+    // worked around — which is why the pending hairline and the dim went with it.
+    expect(SHELL).not.toContain("bx-nav-progress");
+    expect(SHELL).not.toContain("data-nav-pending");
+  });
+
+  it("the rail still answers the press immediately", () => {
     expect(SHELL).toContain("const selected = navTarget ?? active;");
     expect(SHELL).toContain("setNavTarget(id);");
-    // Every rail highlight reads `selected`, not `active`. Scoped to the rail: `activeDef`
-    // labels the <main> element and must keep describing the area actually painted there.
     const rail = SHELL.slice(SHELL.indexOf("bx-nav-item"));
-    expect(rail).not.toMatch(/\ba\.id === active\b/);
-    expect(rail).not.toMatch(/\bchild\.id === active\b/);
     expect(rail).toMatch(/\ba\.id === selected\b/);
     expect(rail).toMatch(/\bchild\.id === selected\b/);
     expect(SHELL).toContain("areasForEdition.find((a) => a.id === active)");
   });
 
-  it("a navigation that will never come back still commits", () => {
-    // Re-clicking the current area produces no URL change and therefore no navigation. If the
-    // transition were the only path that sets `active`, the rail would sit pending forever.
-    const go = SHELL.slice(
-      SHELL.indexOf("const go = useCallback("),
-      SHELL.indexOf("}, [router, startNav]);"),
-    );
-    const afterTransition = go.slice(go.indexOf("} else {"));
-    expect(afterTransition).toContain("setActive(id)");
-    // And the non-browser path, where the URL could not even be read.
-    expect(go.slice(go.indexOf("} catch {"))).toContain("setActive(id)");
-  });
-
-  it("the trip is visible while it happens", () => {
-    expect(SHELL).toContain("const [navPending, startNav] = useTransition();");
-    expect(SHELL).toContain("bx-nav-progress");
-    expect(SHELL).toContain('data-nav-pending={navPending ? "true" : undefined}');
-    expect(CSS).toContain(".bx-nav-progress");
-    expect(CSS).toContain('.bx-content[data-nav-pending="true"]');
-  });
-
   it("hovering the rail does not fetch anything", () => {
     // PREFETCHING THE RAIL MAKES ONE CLICK INTO EIGHT RENDERS.
     //
-    // Warming the area under the pointer looks free and is not: the pointer must travel ACROSS
-    // every item above its target to get there, and each one it passes fires a full server-side
-    // area render. Reaching "Infra and Models" crosses seven items, so the click the operator
-    // actually meant arrives at a server already rendering seven areas nobody asked for.
+    // The pointer must travel ACROSS every item above its target to reach it, and each one it
+    // passes fired a full server-side area render. Reaching "Infra and Models" crosses seven
+    // items. Measured live: infra alone 0.46s, infra during one pointer traverse 2.84s.
     //
-    // Measured on the live deployment: infra alone 0.46s, infra during one pointer traverse
-    // 2.84s. Reported as "when I click on Infra and Models it is taking more than 10s to load".
-    //
-    // There is no debounce that fixes this. A delay makes the stampede smaller, not absent, and
-    // the thing it buys back — a round trip that already costs ~0.3s — is not worth a single
-    // wasted render. The screen no longer blanks during the trip, which was the actual
-    // complaint; the trip itself is fast enough.
+    // Moot now that a click fetches nothing at all — and kept for exactly that reason, so the
+    // idea cannot come back the next time navigation is made to reach the server again.
     expect(SHELL).not.toContain("router.prefetch");
     expect(SHELL).not.toMatch(/onMouseEnter=\{\(\) => warm\(/);
-    expect(SHELL).not.toMatch(/onMouseOver=[^}]*prefetch/);
-    // And no <Link prefetch> smuggling it back in through the other door.
     expect(SHELL).not.toMatch(/prefetch=\{true\}/);
   });
-
-  it("the outgoing area is dimmed, not hidden", () => {
-    // Hiding it is the bug. Anything that removes it from view — display:none, visibility,
-    // opacity 0 — puts the operator back in front of an empty page.
-    const pending = CSS.slice(CSS.indexOf('.bx-content[data-nav-pending="true"]'));
-    const block = pending.slice(0, pending.indexOf("}"));
-    expect(block).not.toContain("display: none");
-    expect(block).not.toContain("visibility: hidden");
-    const opacity = /opacity:\s*([\d.]+)/.exec(block)?.[1];
-    expect(opacity).toBeTruthy();
-    expect(Number(opacity)).toBeGreaterThan(0.5);
-  });
 });
+
 
 /**
  * Going back to an area you just looked at must not cost a server round trip.

@@ -57,57 +57,73 @@ describe("only the requested area is rendered", () => {
   });
 });
 
-describe("which is only safe because switching now reaches the server", () => {
-  it("the sidebar navigates rather than rewriting the URL", () => {
-    // While it switched with pushState and no round-trip, whichever area the server happened to
-    // render for decided what data existed for the whole session — so nothing could be left
-    // out. That constraint is what produced the 8.3 MB page.
+describe("switching areas does not reach the server at all", () => {
+  it("the sidebar rewrites the URL rather than navigating", () => {
+    // REVERSED, AND THIS IS THE WHOLE REASON THE PAGE RENDERS EVERY AREA AGAIN.
+    //
+    // `router.push` is a soft navigation: the server re-renders this tree and streams it back.
+    // That was correct while the page rendered one area per request, because the section being
+    // opened genuinely did not exist in the browser yet. With every area in the DOM it is pure
+    // cost — a 6.3 MB, 6-9 second round trip to fetch a screen already on screen. That is the
+    // "several seconds per menu click" this whole file was supposed to have fixed.
+    //
+    // pushState keeps the URL honest and Back working and asks the server for nothing.
     const go = SHELL.slice(SHELL.indexOf("const go = useCallback"),
                            SHELL.indexOf("Quick-action links"));
-    expect(go).toContain("router.push");
-    // The COMMENT above it still names pushState, explaining what changed and why — that is
-    // deliberate, so `codeOnly` strips comments and the assertion sees only the code.
-    expect(go).not.toContain("window.history.pushState(null");
+    expect(go).toContain("window.history.pushState(null");
+    expect(go).not.toContain("router.push");
   });
 
   it("and so do in-console links", () => {
+    // Same reveal, same reason. A quick-action link that pushed would make the Command Center
+    // the slowest route into every area it advertises.
     const at = SHELL.indexOf("event.preventDefault();");
-    expect(SHELL.slice(at, at + 400)).toContain("router.push");
+    const handler = SHELL.slice(at, at + 500);
+    expect(handler).toContain("window.history.pushState(null");
+    expect(handler).not.toContain("router.push");
   });
 
-  it("panels are still told the URL changed — once it is actually true", () => {
-    // This used to assert the announcement came from `go`, on the line after router.push, and
-    // that is precisely what cost ~30 seconds a click: the url had not changed yet, so eleven
-    // listeners re-read a stale one and refetched. The PROPERTY — panels get told — is
-    // unchanged; where it is announced from is the fix.
+  it("panels are told the URL changed, by whoever changed it", () => {
+    // pushState fires no popstate of its own, so the code that calls it announces. This is safe
+    // here in a way it was not with router.push: pushState is SYNCHRONOUS, so by the time the
+    // event is dispatched `window.location.search` already holds the new area. The ~30s-a-click
+    // bug was announcing before an asynchronous navigation had committed.
     const at = SHELL.indexOf("const go = useCallback");
-    const go = SHELL.slice(at, SHELL.indexOf("}, [router]);", at));
-    expect(go).not.toContain("PopStateEvent");
+    const go = SHELL.slice(at, SHELL.indexOf("}, []);", at));
+    expect(go).toContain('new PopStateEvent("popstate")');
+    const pushAt = go.indexOf("window.history.pushState(null");
+    expect(pushAt).toBeGreaterThan(-1);
+    expect(go.indexOf('new PopStateEvent("popstate")')).toBeGreaterThan(pushAt);
+    // Back/Forward still needs the effect, because nothing announces those.
     expect(SHELL).toContain("const announcedSearch = useRef<string | null>(null);");
-    const effect = SHELL.slice(SHELL.indexOf("const announcedSearch"),
-                               SHELL.indexOf("const announcedSearch") + 700);
-    expect(effect).toContain('new PopStateEvent("popstate")');
   });
 
   it("and Back still returns to the previous tab", () => {
     const at = SHELL.indexOf("const go = useCallback");
-    const go = SHELL.slice(at, SHELL.indexOf("}, [router]);", at));
+    const go = SHELL.slice(at, SHELL.indexOf("}, []);", at));
     expect(go).toContain('url.searchParams.set("area", id)');
   });
 });
 
+
 describe("the announcement waits for the url to be true", () => {
-  it("nothing announces popstate on the same line as router.push", () => {
-    // This cost ~30 seconds per click. `router.push` is asynchronous, so announcing on the next
-    // line tells ELEVEN listeners the url changed while window.location still holds the old
-    // area: they all re-read a stale url and refetch, the navigation then commits, the area
-    // remounts, and they all fetch again — a double herd per click, on the main thread.
+  it("nothing announces popstate before the url is actually true", () => {
+    // This cost ~30 seconds per click when the rail used `router.push`: that is ASYNCHRONOUS,
+    // so announcing on the next line told ELEVEN listeners the url had changed while
+    // window.location still held the old area — they re-read a stale url and refetched, the
+    // navigation committed, the area remounted, and they all fetched again.
+    //
+    // pushState is synchronous, so announcing immediately after it is correct: the url is
+    // already new. What must never come back is an announcement racing an async navigation.
     // Sliced to the callback's own end, not to a comment — `codeOnly` strips comments, so a
     // comment landmark returns -1 and the slice silently becomes most of the file.
     const at = SHELL.indexOf("const go = useCallback");
-    const go = SHELL.slice(at, SHELL.indexOf("}, [router]);", at));
-    expect(go).toContain("router.push");
-    expect(go).not.toContain("PopStateEvent");
+    const go = SHELL.slice(at, SHELL.indexOf("}, []);", at));
+    expect(go).not.toContain("router.push");
+    const push = go.indexOf("window.history.pushState(null");
+    const announce = go.indexOf('new PopStateEvent("popstate")');
+    expect(push).toBeGreaterThan(-1);
+    expect(announce).toBeGreaterThan(push);
   });
 
   it("it is announced from the committed search params instead", () => {

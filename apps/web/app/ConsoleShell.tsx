@@ -323,12 +323,13 @@ export default function ConsoleShell({
   };
   const deepLinkArea = (AREAS.some((a) => a.id === initialArea) ? initialArea : undefined) as AreaId | undefined;
   const [active, setActive] = useState<AreaId>(deepLinkArea ?? "overview");
-  // `active` is the area currently PAINTED; `navTarget` is the one the operator last pressed.
-  // They differ only while a navigation is in flight. The rail highlights `navTarget` so the
-  // press is acknowledged instantly; the content keeps showing `active` so the screen is never
-  // blank. `navPending` drives the progress hairline.
+  // `active` is the area currently painted. `navTarget` mirrors the last press; with
+  // client-side navigation the two are set together and never diverge, but the rail reads
+  // `selected` so that a future change which does defer `active` cannot silently stop the
+  // highlight from answering the click.
   const [navTarget, setNavTarget] = useState<AreaId | null>(null);
-  const [navPending, startNav] = useTransition();
+  // No transition: there is nothing to wait for. A rail click reveals a section already in
+  // the DOM, so `active` commits on the press and the screen never blanks or lags.
   const selected = navTarget ?? active;
   useEffect(() => {
     // The transition committed (or the URL changed underneath us). Stop showing a target that
@@ -520,56 +521,39 @@ export default function ConsoleShell({
   }, [queryString]);
 
   const go = useCallback((id: AreaId) => {
-    // THE AREA FLIPS WHEN THE NEW AREA ARRIVES, NOT WHEN THE CLICK HAPPENS.
+    // A RAIL CLICK TOUCHES THE SERVER ZERO TIMES.
     //
-    // `main.bx-content[data-active=X]` reveals `section[data-area=X]` and hides every other
-    // section. Setting `active` on the click therefore hid the area being left BEFORE the area
-    // being opened existed in the DOM — and since page.tsx now renders one area per request,
-    // that section only arrives after a server round trip. The gap between the two rendered as
-    // an empty page for the whole trip: "every option I choose on the left pane takes several
-    // seconds to render, until then it shows blank."
+    // Every area is in the DOM and `main.bx-content[data-active=X]` reveals one with CSS, so
+    // the section being opened is ALREADY THERE. There is nothing to fetch, nothing to mount
+    // and nothing to wait for: flipping `active` is the whole navigation.
     //
-    // Inside a transition, React keeps the current tree mounted and painted until the new one
-    // is ready, and commits `setActive` together with it. The nav highlight follows the click
-    // immediately via `navTarget` so the press still feels answered.
+    // This used `router.push`, which is a SOFT NAVIGATION — the server re-renders the tree and
+    // streams it back. That was right while the page rendered one area per request, because the
+    // incoming section genuinely did not exist yet. It is pure cost now: a 6.3 MB, 6-9 second
+    // round trip to fetch a screen the browser is already holding. Reported, finally, as "WHEN
+    // I CLICK ON THE LEFT PANE NAVIGATION BUTTON IT IS TAKING SEVERAL SECONDS TO LOAD".
+    //
+    // `history.pushState` keeps the URL honest and Back working without asking the server for
+    // anything. The popstate that follows is what tells the panels listening on the URL that
+    // the area changed — dispatched here because pushState does not fire one on its own.
+    setActive(id);
     setNavTarget(id);
     setNavOpen(false);
     setPaletteOpen(false);
     setQuery("");
     window.localStorage.setItem("boss.area", id);
-    // A NEW HISTORY ENTRY *AND* A SERVER RENDER FOR THE AREA BEING OPENED.
-    //
-    // This deliberately avoided the round trip, and that decision is what forced page.tsx to
-    // render all forty areas on every load: whichever area the server happened to render for
-    // decided what data existed for the whole session, so nothing could be left out. The cost
-    // was 8.3 MB and ~9s per load.
-    //
-    // `router.push` is a SOFT navigation: the server re-renders this tree for the new area and
-    // streams it, the document is not reloaded, and only the requested area's feeds are
-    // fetched. Back still returns to the previous tab because it is still a history entry.
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("area", id);
       if (url.toString() !== window.location.href) {
-        startNav(() => {
-          router.push(`${url.pathname}${url.search}`);
-          setActive(id);
-          // NO popstate HERE. See the effect below: `router.push` is asynchronous, so
-          // announcing the change now announces the OLD url.
-        });
-      } else {
-        // Already on this area (a re-click, or a deep link that matches). Nothing will come
-        // back from the server to commit the transition, so commit it here or the nav
-        // highlight would stay pending forever.
-        setActive(id);
+        window.history.pushState(null, "", `${url.pathname}${url.search}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
       }
     } catch {
-      // Non-browser / unsupported. The URL could not be read, so no navigation will arrive to
-      // commit the area — set it directly rather than leaving the console on the old one.
-      setActive(id);
+      /* non-browser / unsupported — the area is already set above, so the console still moves */
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [router, startNav]);
+  }, []);
 
   // Quick-action links (AreaLink in the Overview command center) switch areas
   // client-side via this event — instant, no full-page navigation/refetch.
@@ -634,16 +618,20 @@ export default function ConsoleShell({
       }
 
       event.preventDefault();
-      // Optimistic first, so the rail highlights before the server answers.
+      // Same navigation the rail does, for the same reason: the area being opened is already
+      // in the DOM, so this is a reveal, not a fetch. `router.push` here asked the server to
+      // re-render all forty areas to show one the browser already had.
       setActive(area as AreaId);
-      router.push(`${url.pathname}${url.search}`);
+      setNavTarget(area as AreaId);
+      window.history.pushState(null, "", `${url.pathname}${url.search}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
     };
     // CAPTURE phase, deliberately. The spine nodes and card pills call stopPropagation() so a
     // click on them does not also open the card behind them -- which would stop a bubble-phase
     // listener from ever seeing exactly the links this exists to speed up.
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
-  }, [router]);
+  }, []);
 
   // THE AGENT DOCK.
   //
@@ -763,15 +751,14 @@ export default function ConsoleShell({
 
   // ANNOUNCE THE URL ONCE IT IS TRUE, NOT WHEN IT WAS ASKED FOR.
   //
-  // This cost ~30 seconds per click and it was mine. `router.push` is asynchronous: dispatching
-  // popstate on the next line tells ELEVEN components that the url changed while
-  // `window.location.search` still holds the old area. Every one of them re-read a stale url and
-  // refetched, the navigation then committed, the area remounted, and they all fetched again —
-  // a double herd per click, on the main thread, which is what froze the renderer.
+  // This cost ~30 seconds per click when the rail used `router.push`: announcing the url on the
+  // next line told ELEVEN components it had changed while `window.location.search` still held
+  // the old area, so every one re-read a stale url and refetched, the navigation committed, the
+  // area remounted, and they all fetched again.
   //
-  // `useSearchParams` updates when the navigation COMMITS. Announcing from here means the signal
-  // fires once, with the url already correct, which is exactly what Back/Forward does — and what
-  // every listener was written against.
+  // The rail no longer pushes — it uses pushState and announces once, itself, with the url
+  // already correct. This effect still covers Back/Forward, where `useSearchParams` updates
+  // without anyone announcing it, which is the case every listener was written against.
   const announcedSearch = useRef<string | null>(null);
   useEffect(() => {
     const current = searchParams?.toString() ?? "";
@@ -1170,13 +1157,7 @@ export default function ConsoleShell({
         {/* The area being left stays on screen while the next one is fetched, so without this
             a slow area looks like a dead click on the old screen. A hairline across the top is
             the smallest honest signal that the press was taken and work is in flight. */}
-        {navPending ? (
-          <div className="bx-nav-progress" role="status" aria-live="polite">
-            <span className="sr-only">Opening {navTarget ?? active}</span>
-          </div>
-        ) : null}
         <main className="bx-content" data-active={active} aria-label={activeDef.label}
-              data-nav-pending={navPending ? "true" : undefined}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
           {children}
