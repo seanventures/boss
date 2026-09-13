@@ -61,14 +61,31 @@ REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
 YOUTUBE_SCOPES = (
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
+    # THE MEDIA HAS TO COME FROM SOMEWHERE, AND GO SOMEWHERE.
+    #
+    # BOSS runs on a server; the operator's video is on their laptop. Drive is the handover,
+    # and putting it on the SAME consent means one authorisation instead of two credentials
+    # with two expiries.
+    #
+    # `drive.readonly` is a RESTRICTED scope and the honest cost of this design: it reads the
+    # whole Drive, because `drive.file` cannot see a file the app did not create — and the
+    # source video is one the operator uploaded themselves. Fine for a test-user install;
+    # a product ships a Google Picker instead, where choosing a file grants access to that
+    # ONE file under drive.file and no restricted scope is needed at all.
+    "https://www.googleapis.com/auth/drive.readonly",
+    # Writing the edited video back. `drive.file` covers it because BOSS created that file.
+    "https://www.googleapis.com/auth/drive.file",
 )
 
-INTEGRATION_KEY = "youtube"
+#: One Google connection, several capabilities. Keyed on the PROVIDER rather than on YouTube:
+#: the same token reaches Drive, and an integration named for one of its two uses would make
+#: the other look like it arrived from somewhere else.
+INTEGRATION_KEY = "google"
 
 #: What a connection to this integration is allowed to authorise. Named capabilities rather
 #: than raw scopes, because a connection grants BOSS capabilities and the scopes are how Google
 #: happens to express them.
-YOUTUBE_CAPABILITIES = ("video.publish", "channel.read")
+YOUTUBE_CAPABILITIES = ("video.publish", "channel.read", "drive.read", "drive.write")
 
 
 #: THE EDITABLE HALF OF THE RULES.
@@ -349,7 +366,7 @@ def ensure_definition(connection: Connection, project_id: str, actor: str) -> st
         connection,
         project_id=project_id,
         integration_key=INTEGRATION_KEY,
-        name="YouTube",
+        name="Google (YouTube + Drive)",
         category="media_channel",
         skill_contracts={
             "video.publish": {
@@ -364,8 +381,24 @@ def ensure_definition(connection: Connection, project_id: str, actor: str) -> st
                 "risk_tier": 0,
                 "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
             },
+            "drive.read": {
+                "description": "Read a source video from the operator's Drive.",
+                "risk_tier": 1,
+                "scopes": ["https://www.googleapis.com/auth/drive.readonly"],
+            },
+            "drive.write": {
+                # Tier 1, not 3: it creates a NEW file and can only touch files BOSS created,
+                # so nothing of the operator's can be overwritten or lost by it.
+                "description": "Write an edited video back to Drive.",
+                "risk_tier": 1,
+                "scopes": ["https://www.googleapis.com/auth/drive.file"],
+            },
         },
-        executor_bindings=[{"skill_id": "publish_youtube", "capability": "video.publish"}],
+        executor_bindings=[
+            {"skill_id": "publish_youtube", "capability": "video.publish"},
+            {"skill_id": "drive_read_file", "capability": "drive.read"},
+            {"skill_id": "drive_write_file", "capability": "drive.write"},
+        ],
         provenance={"source": "builtin", "provider": "google", "api": "youtube_data_v3"},
         actor=actor,
     )

@@ -11,6 +11,10 @@ WORKDIR /app
 # node/npm (the web verification target: npm run build / typecheck / lint). Node 20 via NodeSource.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl ca-certificates \
+    `# VIDEO EDITING IS A BOSS CAPABILITY, so its tool ships with the worker rather than` \
+    `# being something an operator has to install. ~80 MB, and without it every video step` \
+    `# refuses with "ffmpeg is not installed in this worker image" — see video_edit.py.` \
+    ffmpeg \
          openssh-client \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
