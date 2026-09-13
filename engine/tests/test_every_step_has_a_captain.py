@@ -149,3 +149,58 @@ def test_every_role_spec_in_the_pack_actually_parses_as_intended():
         "these list entries are not strings — usually an unquoted colon making YAML read a "
         f"sentence as a mapping: {offenders}"
     )
+
+
+def test_every_skill_file_is_reachable_from_some_edition():
+    """A skill nobody can see is a skill that does not exist.
+
+    `list_skills` filters by BUNDLE — the skill file's stem — against the set an edition's pack
+    reaches through its `requires` chain. A skill file that no pack lists loads fine, validates
+    fine, registers its executor fine, and is then absent from every catalogue, so assigning it
+    to an agent fails with "no skill in this project".
+
+    That cost a real debugging pass: `publish_youtube` appeared to assign successfully, but
+    only because a project-authored skill of the same name shadowed it. The built-in was
+    invisible the whole time.
+    """
+    import pathlib
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "packages" / "specpack"
+
+    def bundles_of(pack_id: str, seen: set[str] | None = None) -> set[str]:
+        seen = seen or set()
+        if pack_id in seen:
+            return set()
+        seen.add(pack_id)
+        path = root / "packs" / f"{pack_id}.yaml"
+        if not path.exists():
+            return set()
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        out = {str(s) for s in ((doc.get("installs") or {}).get("skills") or [])}
+        for req in (doc.get("requires") or []):
+            out |= bundles_of(str(req), seen)
+        return out
+
+    reachable: set[str] = set()
+    for pack in (root / "packs").glob("*.yaml"):
+        reachable |= bundles_of(pack.stem)
+
+    #: KNOWN AND PRE-EXISTING. Four skill bundles ship in the repo and are in no pack, so no
+    #: edition can see them. Listed rather than deleted from the assertion, because the
+    #: assertion found them and that is what it is for — and because each is a decision
+    #: somebody should make deliberately (ship it, or remove the file) rather than a bug to
+    #: paper over. Fixing one means deleting it from here.
+    KNOWN_ORPHANS = {"agent_toolchain", "email", "infra_do", "slack"}
+
+    on_disk = {p.stem for p in (root / "skills").glob("*.yaml")}
+    orphans = sorted(on_disk - reachable - KNOWN_ORPHANS)
+    assert not orphans, (
+        f"these skill files are in no pack, so no edition's catalogue includes them: {orphans}. "
+        "Add the bundle to a pack's installs.skills — community_edition if every edition "
+        "should have it, since enterprise and cloud both require it."
+    )
+    # And the exemption list must not go stale: an orphan that gets adopted should be removed
+    # from it, not left as cover for the next one.
+    adopted = sorted(KNOWN_ORPHANS & reachable)
+    assert not adopted, f"these are now in a pack and can leave KNOWN_ORPHANS: {adopted}"

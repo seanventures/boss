@@ -40,5 +40,9 @@ installs:
   roles: [metatron, coo, cto, pm, qa, release_manager]
   workflows: [ceo_command_to_pr, decision_inbox, budget_gated_job, model_entitlement_routing]
   policies: [default_safety, budget_governor_policy, model_entitlement_policy, commercial_packaging_policy, work_orchestration_policy]
-  skills: [model_gateway, github, software_factory, model_providers, work_tracker, mattermost]
+  # `youtube` and `video` are the media pipeline. In COMMUNITY deliberately: enterprise
+  # and cloud both require this pack, so listing them here is what makes publishing
+  # available in every edition rather than only the paid ones.
+  skills: [model_gateway, github, software_factory, model_providers, work_tracker,
+           mattermost, youtube, video]
 status: active  # Independent product; Cloud is opt-in via Easy Connect
