@@ -519,30 +519,6 @@ export default function ConsoleShell({
     }
   }, [queryString]);
 
-  // WARM THE AREA UNDER THE POINTER, SO THE CLICK HAS NOTHING LEFT TO WAIT FOR.
-  //
-  // The console renders one area per request. That keeps the payload small, but it turns a tab
-  // switch — which used to be a CSS toggle over content already in the browser — into a server
-  // round trip the operator waits through. Prefetching on hover buys back the old feel: the
-  // pointer reaches a nav item a few hundred milliseconds before the button goes down, and
-  // that is enough for the payload to be sitting in the router cache when it does.
-  //
-  // On hover ONLY, never on mount. Warming all forty areas up front would put back exactly the
-  // fan-out that made every page load pay for every area.
-  const prefetched = useRef<Set<string>>(new Set());
-  const warm = useCallback((id: AreaId) => {
-    if (prefetched.current.has(id)) return;
-    prefetched.current.add(id);
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set("area", id);
-      router.prefetch(`${url.pathname}${url.search}`);
-    } catch {
-      // Non-browser or prefetch unsupported. The click still works; it is just not warmed.
-      prefetched.current.delete(id);
-    }
-  }, [router]);
-
   const go = useCallback((id: AreaId) => {
     // THE AREA FLIPS WHEN THE NEW AREA ARRIVES, NOT WHEN THE CLICK HAPPENS.
     //
@@ -954,8 +930,6 @@ export default function ConsoleShell({
                                 className={`bx-nav-item bx-nav-child${child.id === selected ? " active" : ""}`}
                                 aria-current={child.id === selected ? "page" : undefined}
                                 data-area-nav={child.id}
-                                onMouseEnter={() => warm(child.id)}
-                                onFocus={() => warm(child.id)}
                                 onClick={() => go(child.id)}
                               >
                                 <ChildIcon size={15}
@@ -986,8 +960,6 @@ export default function ConsoleShell({
                     data-area-nav={a.id}
                     data-paid-badge={paidBadge ? "true" : undefined}
                     data-sso-visible={a.id === "enterprise" ? "true" : undefined}
-                    onMouseEnter={() => warm(a.id)}
-                    onFocus={() => warm(a.id)}
                     onClick={() => go(a.id)}
                   >
                     <Icon size={17} weight={a.id === selected ? "fill" : "regular"} aria-hidden />

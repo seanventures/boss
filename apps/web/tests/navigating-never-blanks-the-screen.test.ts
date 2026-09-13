@@ -73,28 +73,26 @@ describe("switching areas keeps the screen populated", () => {
     expect(CSS).toContain('.bx-content[data-nav-pending="true"]');
   });
 
-  it("the area under the pointer is warmed before the click", () => {
-    // One area per request means a tab switch is a server round trip, where it used to be a
-    // CSS toggle over content already in the browser. Hovering happens a few hundred
-    // milliseconds before the button goes down, which is enough to have the payload cached.
-    expect(SHELL).toContain("router.prefetch(");
-    expect(SHELL).toContain("onMouseEnter={() => warm(a.id)}");
-    expect(SHELL).toContain("onFocus={() => warm(a.id)}");
-    expect(SHELL).toContain("onMouseEnter={() => warm(child.id)}");
-    // Keyboard users get it too — focus, not just hover.
-    expect(SHELL).toContain("onFocus={() => warm(child.id)}");
-  });
-
-  it("warming is on hover only, and happens once per area", () => {
-    // Warming every area on mount would put back the fan-out that made every page load pay
-    // for every area — the thing one-area-per-render exists to avoid.
-    const warm = SHELL.slice(SHELL.indexOf("const warm = useCallback("));
-    const body = warm.slice(0, warm.indexOf("}, [router]);"));
-    expect(body).toContain("if (prefetched.current.has(id)) return;");
-    expect(body).toContain("prefetched.current.add(id);");
-    // No effect prefetches the whole AREAS list.
-    expect(SHELL).not.toMatch(/AREAS\.forEach\([^)]*prefetch/);
-    expect(SHELL).not.toMatch(/areasForEdition\.(forEach|map)\([^)]*prefetch/);
+  it("hovering the rail does not fetch anything", () => {
+    // PREFETCHING THE RAIL MAKES ONE CLICK INTO EIGHT RENDERS.
+    //
+    // Warming the area under the pointer looks free and is not: the pointer must travel ACROSS
+    // every item above its target to get there, and each one it passes fires a full server-side
+    // area render. Reaching "Infra and Models" crosses seven items, so the click the operator
+    // actually meant arrives at a server already rendering seven areas nobody asked for.
+    //
+    // Measured on the live deployment: infra alone 0.46s, infra during one pointer traverse
+    // 2.84s. Reported as "when I click on Infra and Models it is taking more than 10s to load".
+    //
+    // There is no debounce that fixes this. A delay makes the stampede smaller, not absent, and
+    // the thing it buys back — a round trip that already costs ~0.3s — is not worth a single
+    // wasted render. The screen no longer blanks during the trip, which was the actual
+    // complaint; the trip itself is fast enough.
+    expect(SHELL).not.toContain("router.prefetch");
+    expect(SHELL).not.toMatch(/onMouseEnter=\{\(\) => warm\(/);
+    expect(SHELL).not.toMatch(/onMouseOver=[^}]*prefetch/);
+    // And no <Link prefetch> smuggling it back in through the other door.
+    expect(SHELL).not.toMatch(/prefetch=\{true\}/);
   });
 
   it("the outgoing area is dimmed, not hidden", () => {

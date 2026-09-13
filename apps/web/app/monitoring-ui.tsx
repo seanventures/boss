@@ -45,6 +45,11 @@ function askInDock(question: string): void {
     const url = new URL(window.location.href);
     url.searchParams.set("agent", "general");
     url.searchParams.set("dock_ask", question);
+    // ADDRESS IT, DO NOT INHERIT IT. `dock_role` is a URL parameter and SURVIVES until
+    // something overwrites it, so a door that sets only the question opens whichever role was
+    // last addressed. This one asks BOSS in general (`agent=general`), so it clears the role
+    // rather than leaving the previous agent's name on the banner above an unrelated answer.
+    url.searchParams.delete("dock_role");
     window.history.replaceState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
