@@ -73,6 +73,30 @@ describe("switching areas keeps the screen populated", () => {
     expect(CSS).toContain('.bx-content[data-nav-pending="true"]');
   });
 
+  it("the area under the pointer is warmed before the click", () => {
+    // One area per request means a tab switch is a server round trip, where it used to be a
+    // CSS toggle over content already in the browser. Hovering happens a few hundred
+    // milliseconds before the button goes down, which is enough to have the payload cached.
+    expect(SHELL).toContain("router.prefetch(");
+    expect(SHELL).toContain("onMouseEnter={() => warm(a.id)}");
+    expect(SHELL).toContain("onFocus={() => warm(a.id)}");
+    expect(SHELL).toContain("onMouseEnter={() => warm(child.id)}");
+    // Keyboard users get it too — focus, not just hover.
+    expect(SHELL).toContain("onFocus={() => warm(child.id)}");
+  });
+
+  it("warming is on hover only, and happens once per area", () => {
+    // Warming every area on mount would put back the fan-out that made every page load pay
+    // for every area — the thing one-area-per-render exists to avoid.
+    const warm = SHELL.slice(SHELL.indexOf("const warm = useCallback("));
+    const body = warm.slice(0, warm.indexOf("}, [router]);"));
+    expect(body).toContain("if (prefetched.current.has(id)) return;");
+    expect(body).toContain("prefetched.current.add(id);");
+    // No effect prefetches the whole AREAS list.
+    expect(SHELL).not.toMatch(/AREAS\.forEach\([^)]*prefetch/);
+    expect(SHELL).not.toMatch(/areasForEdition\.(forEach|map)\([^)]*prefetch/);
+  });
+
   it("the outgoing area is dimmed, not hidden", () => {
     // Hiding it is the bug. Anything that removes it from view — display:none, visibility,
     // opacity 0 — puts the operator back in front of an empty page.
