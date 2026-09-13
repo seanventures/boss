@@ -149,25 +149,23 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
 
   return (
     <section className="panel-stack" aria-label="Channels">
-      {/* OPEN ONLY WHEN THERE IS SOMETHING TO DO.
-          Connecting a channel is setup an operator does once, so once it is done this is a
-          line of status rather than a panel — and a page whose every section is expanded
-          forever is a page nobody can find anything on. */}
-      <details className="stack-card" data-testid="channel-connections"
-               open={channels !== null && connected.length === 0}>
-        <summary className="skill-form-summary">
-          {channels === null ? "Channels"
-           : connected.length === 0 ? "Channels — none connected yet"
-           : `Channels — ${connected.map((c) => c.channel?.title || c.connection_key)
-                .join(", ")}`}
-        </summary>
+      {/* NOT COLLAPSIBLE, BECAUSE IT IS ALREADY SHORT.
+          Collapsing this was wrong twice over: a connected channel is ONE LINE, so it was
+          never what made the page long — the client form and the twenty-two built-in skills
+          were — and a summary reading "Channels — Makkal Sinthanai" names one channel, which
+          makes "expand it to connect a different one" incoherent. What varies is how much
+          EXPLANATION is needed: a lot on the first visit, none once a channel is connected. */}
+      <article className="stack-card" data-testid="channel-connections">
         <div className="section-head">
           <div>
+            <span className="eyebrow">Channels</span>
             <h2>Where BOSS can publish.</h2>
-            <p className="detail">
-              A channel is connected once and held as a credential BOSS uses but no agent can
-              read. Publishing still needs your approval every time.
-            </p>
+            {connected.length === 0 ? (
+              <p className="detail">
+                A channel is connected once and held as a credential BOSS uses but no agent can
+                read. Publishing still needs your approval every time.
+              </p>
+            ) : null}
           </div>
         </div>
         {channels === null ? <p className="detail">Loading…</p>
@@ -198,7 +196,11 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
           </ul>
         )}
         <div className="dm-starters">
-          <button type="button" className="cap-btn primary" data-testid="channel-connect"
+          {/* PRIMARY only when there is nothing connected. Once there is, connecting another
+              is a rare action and should not be the loudest thing on the card. */}
+          <button type="button"
+                  className={connected.length === 0 ? "cap-btn primary" : "linklike"}
+                  data-testid="channel-connect"
                   disabled={busy || !status?.configured}
                   title={status?.configured ? undefined
                          : "Add your Google OAuth client below first"}
@@ -206,7 +208,7 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
             {connected.length > 0 ? "Connect another channel" : "Connect YouTube"}
           </button>
         </div>
-      </details>
+      </article>
 
       <details className="stack-card" data-testid="channel-client" open={!status?.configured}>
         <summary className="skill-form-summary">

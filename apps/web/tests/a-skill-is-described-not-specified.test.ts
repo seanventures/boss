@@ -95,12 +95,23 @@ describe("the skills page fits on a screen", () => {
     expect(builtin.slice(0, 400)).toContain("builtIn.length");
   });
 
-  it("channels opens only when there is something to do", () => {
-    // Once a channel is connected this is a line of status, not a panel. But an operator with
-    // none must not have to hunt for the thing that sets one up.
-    expect(CHANNELS).toContain('<details className="stack-card" data-testid="channel-connections"');
-    expect(CHANNELS).toContain("open={channels !== null && connected.length === 0}");
-    // And the shut summary names the connected channel rather than saying "Channels".
-    expect(CHANNELS).toContain("connected.map((c) => c.channel?.title || c.connection_key)");
+  it("the channel list is not collapsible, because it is already short", () => {
+    // COLLAPSING THIS WAS WRONG TWICE OVER.
+    //
+    // A connected channel is one line, so it was never what made the page long — the client
+    // form and the twenty-two built-in skills were. And a summary reading "Channels — Makkal
+    // Sinthanai" names ONE channel, which makes "expand it to connect a different one"
+    // incoherent, which is exactly how it was reported.
+    expect(CHANNELS).toContain('<article className="stack-card" data-testid="channel-connections">');
+    expect(CHANNELS).not.toContain('<details className="stack-card" data-testid="channel-connections"');
+  });
+
+  it("what varies is the explanation, not the visibility", () => {
+    // A lot of explanation on the first visit; none once a channel is connected. That is the
+    // thing that should shrink, rather than hiding the status itself.
+    expect(CHANNELS).toContain("{connected.length === 0 ? (");
+    // And connecting another stops being the loudest control once one exists.
+    expect(CHANNELS).toContain(
+      'className={connected.length === 0 ? "cap-btn primary" : "linklike"}');
   });
 });
