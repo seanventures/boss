@@ -263,7 +263,21 @@ type WorkflowSpec = {
                  spec: { steps: Record<string, unknown>[] } } | null;
 };
 
-const TABS = ["running", "catalogue", "builder"] as const;
+//: THE FOUR THINGS AN OPERATOR DOES HERE, IN THE ORDER THEY DO THEM.
+//:
+//: "Build your Own, Design one with BOSS all should come in one page and it's hard to find.
+//:  Workflow step should be separate page."
+//:
+//: `design` holds BOTH ways to author a workflow, because they are the same intent arrived at
+//: differently — describe it and have BOSS draft it, or draw it yourself. They were split
+//: across a tab and a button that sat IN the tab bar without being one, which is why the agent
+//: was hard to find: it looked like a tab, behaved like an action, and was neither.
+//:
+//: `steps` is management of the customer's own steps — defining and retiring them. It was
+//: buried in the builder's palette, below however many steps already existed, so the way to
+//: make one was the thing you had to scroll to find. The palette still LISTS them, because
+//: that is where you place one; it no longer tries to be where you author one too.
+const TABS = ["running", "catalogue", "design", "steps"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -694,26 +708,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   onClick={() => setTab(t)} data-testid={`dw-tab-${t}`}>
             {t === "running" ? `Running (${runs.length})`
               : t === "catalogue" ? `Catalogue (${catalogue.length})`
-              : "Build your own"}
+              : t === "design" ? "Design a workflow"
+              : `Your steps (${customSteps.length})`}
           </button>
         ))}
-        {/* THE AGENT THAT MANAGES THESE, WHERE THEY ARE MANAGED.
-            The tools to create, edit and delete a workflow in conversation shipped with no way
-            in from this page — so the feature existed and nobody could find it, which is the
-            same as not having built it. It opens the dock addressed to the Program Manager,
-            whose remit is process, with an opener that names what it can do. */}
-        <button type="button" className="cap-btn dw-tab-agent" data-testid="dw-workflow-agent"
-                title="Describe a path and BOSS drafts it — creating, editing and deleting
-                       workflows, and the custom steps they are made of"
-                onClick={() => askBossAbout(
-                  "general",
-                  "I want to work on this project's workflows. You can draft a new one from a"
-                  + " described sequence of steps, change an existing one, define a custom step"
-                  + " backed by a skill, or retire one. Start by telling me which workflows this"
-                  + " project has and what each is for.",
-                  "program_manager")}>
-          Design one with BOSS
-        </button>
       </div>
 
       {/* WHAT IS HAPPENING RIGHT NOW. Per-button labels are easy to forget on the next
@@ -853,16 +851,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             if (result.ok) {
               const created = (result.data as { definition?: { id: string } })?.definition;
               if (created?.id) setBuilderTarget(created.id);
-              setTab("builder");
+              setTab("design");
             }
           }}
         />
-      ) : (
-        <BuilderView
-          capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
-          installed={installed} projectId={projectId}
-          customSteps={customSteps} bindable={bindable}
-          justMade={justMade} onDismissJustMade={() => setJustMade(null)}
+      ) : tab === "steps" ? (
+        <StepsView
+          customSteps={customSteps} bindable={bindable} riskFloor={riskFloor}
+          projectId={projectId} busy={busy}
           onDefineStep={async (fields) => {
             const result = await act(`Define ${fields.label}`, "define_step", fields);
             if (result.ok) await load();
@@ -885,6 +881,47 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               setBusy(null);
             }
           }}
+        />
+      ) : (
+        <>
+        {/* TWO WAYS TO AUTHOR THE SAME THING, SIDE BY SIDE.
+            Describing it is the faster path for most people and the one that reads as least
+            intimidating, so it is first — but it is offered AS A CHOICE rather than as the
+            answer, because an operator who knows the shape they want should not have to
+            negotiate it in prose. */}
+        <div className="dw-design-ways" data-testid="dw-design-ways">
+          <article className="dw-design-way">
+            <h3>Describe it</h3>
+            <p className="detail">
+              Tell BOSS the path you want in your own words. It drafts the workflow, names the
+              steps, and offers it back to create in one press — and it can edit or retire an
+              existing one the same way.
+            </p>
+            <button type="button" className="cap-btn primary" data-testid="dw-workflow-agent"
+                    onClick={() => askBossAbout(
+                      "general",
+                      "I want to work on this project's workflows. You can draft a new one from"
+                      + " a described sequence of steps, change an existing one, define a custom"
+                      + " step backed by a skill, or retire one. Start by telling me which"
+                      + " workflows this project has and what each is for.",
+                      "program_manager")}>
+              Design one with BOSS
+            </button>
+          </article>
+          <article className="dw-design-way">
+            <h3>Draw it</h3>
+            <p className="detail">
+              Place steps on the canvas below yourself. Start from nothing, or fork one of the
+              catalogue workflows and change what you need.
+            </p>
+          </article>
+        </div>
+        <BuilderView
+          capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
+          installed={installed} projectId={projectId}
+          customSteps={customSteps} bindable={bindable}
+          justMade={justMade} onDismissJustMade={() => setJustMade(null)}
+          onManageSteps={() => setTab("steps")}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
           onCreate={async (name, spec, fromKey) => {
@@ -917,6 +954,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             });
           }}
         />
+        </>
       )}
     </div>
   );
@@ -3725,8 +3763,117 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
 }
 
 
+/* ── Your steps ───────────────────────────────────────────────────────────────── */
+
+/**
+ * The customer's OWN steps, managed somewhere they fit.
+ *
+ * This lived in the builder's palette — the define button beneath however many steps already
+ * existed, so with eleven of them the way to make a new one was the one thing you had to
+ * scroll to find, on a panel whose job is placing steps rather than authoring them.
+ *
+ * Splitting it is not just tidying. A step is a durable object of its own: it names a skill,
+ * carries a risk tier, and can be placed in several workflows or none. Managing it inside the
+ * editor for ONE workflow made it look like a property of that workflow.
+ *
+ * The palette still lists these, because that is where you place one. It no longer tries to be
+ * where you author one too.
+ */
+function StepsView({
+  customSteps, bindable, riskFloor, projectId, busy, onDefineStep, onRemoveStep,
+}: {
+  customSteps: CustomStep[];
+  bindable: Bindable;
+  riskFloor: number;
+  projectId: string;
+  busy: string | null;
+  onDefineStep: (fields: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
+  onRemoveStep: (stepKey: string) => void;
+}) {
+  const [defining, setDefining] = useState(false);
+  const unusable = customSteps.filter((c) => !c.usable);
+
+  return (
+    <section className="dw-steps" data-testid="dw-steps">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">Your steps</span>
+          <h2>Things this project can do that BOSS does not ship.</h2>
+          <p className="detail">
+            A step of your own runs one of your skills or an MCP tool — filing a ticket, telling
+            a compliance system, publishing a video. Define it once here and place it in any
+            workflow.
+          </p>
+        </div>
+        {!defining ? (
+          <button type="button" className="cap-btn primary" disabled={!!busy}
+                  onClick={() => setDefining(true)} data-testid="dw-define-step">
+            + Define a step
+          </button>
+        ) : null}
+      </div>
+
+      {defining ? (
+        <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
+                        projectId={projectId}
+                        onCancel={() => setDefining(false)}
+                        onDefine={async (fields) => {
+                          const result = await onDefineStep(fields);
+                          if (result.ok) setDefining(false);
+                          return result;
+                        }} />
+      ) : null}
+
+      {/* BROKEN ONES FIRST, AND SAID PLAINLY. A step bound to a skill that no longer exists
+          sits in the palette looking placeable and fails the run that places it. Buried in a
+          list it is invisible; at the top with its reason it is a thing to fix. */}
+      {unusable.length > 0 ? (
+        <p className="dw-notice" data-testid="dw-steps-unusable">
+          {unusable.length === 1
+            ? `1 step cannot run: ${unusable[0].unusable_reason}`
+            : `${unusable.length} steps cannot run — each says why below.`}
+        </p>
+      ) : null}
+
+      {customSteps.length === 0 && !defining ? (
+        <p className="detail" data-testid="dw-steps-empty">
+          None yet. Define one above, or describe what you want to the Program Manager on the
+          Design tab and let BOSS write it.
+        </p>
+      ) : (
+        <ul className="skill-list" data-testid="dw-steps-list">
+          {customSteps.map((c) => (
+            <li key={c.step_key} className="skill-row" data-enabled={c.usable}>
+              <span className="skill-row-main">
+                <b>{c.label}</b>
+                <code className="detail">{c.step_key}</code>
+                <span className="cap-badge tone-muted">{c.binding_kind}</span>
+                {c.approval_forced_manual ? (
+                  <span className="cap-badge tone-amber">always approved</span>
+                ) : null}
+                {!c.usable ? <span className="cap-badge tone-pink">cannot run</span> : null}
+              </span>
+              <span className="detail">
+                {/* WHAT IT RUNS, not what it was named. A step called "Cleanup" bound to a
+                    tier-3 tool should not read as harmless. */}
+                {c.usable ? `runs ${c.risk_source}` : c.unusable_reason}
+              </span>
+              {c.summary ? <span className="detail">{c.summary}</span> : null}
+              <button type="button" className="linklike" disabled={!!busy}
+                      data-testid={`dw-step-remove-${c.step_key}`}
+                      onClick={() => onRemoveStep(c.step_key)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
-                      customSteps, bindable, onDefineStep, onRemoveStep,
+                      customSteps, bindable, onManageSteps,
                       justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate }: {
   capabilities: Capability[];
@@ -3736,9 +3883,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   projectId: string;
   customSteps: CustomStep[];
   bindable: Bindable;
-  onDefineStep: (fields: Record<string, unknown>) =>
-    Promise<{ ok: boolean; error?: string }>;
-  onRemoveStep: (stepKey: string) => void;
+  /** Take the operator to where steps are authored. The palette places them; it does not
+   *  make them. */
+  onManageSteps: () => void;
   /** The workflow created a moment ago, so the builder can confirm it rather than looking
    *  identical to the state before the click. */
   justMade: { id: string; name: string; from?: string } | null;
@@ -4034,12 +4181,13 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
             no obvious way to add a step. The one below stays — this is the discoverable one. */}
         <div className="dw-palette-heading-row">
           <h4 className="dw-palette-heading">Steps</h4>
-          {!defining ? (
-            <button type="button" className="cap-btn primary dw-define" disabled={!!busy}
-                    onClick={() => setDefining(true)} data-testid="dw-define-step-top">
-              + New step
-            </button>
-          ) : null}
+          {/* STILL THE DISCOVERABLE CONTROL, now a door rather than a form. Authoring a step
+              on the panel that places them meant a long form unfolding inside a narrow column
+              while the canvas sat behind it. It goes where steps are managed instead. */}
+          <button type="button" className="cap-btn dw-define" disabled={!!busy}
+                  onClick={onManageSteps} data-testid="dw-define-step-top">
+            + New step
+          </button>
         </div>
         <p className="detail dw-palette-summary">
           Click a step to add it, or make one of your own that runs your skill or an MCP tool.
@@ -4068,29 +4216,18 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         {/* THE CONTROL WITH ITS HEADING, not below whatever happens to be listed. With eleven
             of the customer's own steps the button sat off the bottom of the panel, so the way
             to make one was the one thing you had to scroll to find. */}
+        {/* THE PALETTE LISTS THESE; IT NO LONGER AUTHORS THEM.
+            Defining a step lived here, beneath however many already existed, so with eleven of
+            them the way to make one was the thing you had to scroll to find — on a panel whose
+            job is placing steps. Authoring moved to the Your steps tab, which is also where a
+            step that cannot run says why. */}
         <div className="dw-palette-heading-row">
           <h4 className="dw-palette-heading">Your steps</h4>
-          {!defining ? (
-            <button type="button" className="cap-btn dw-define" disabled={!!busy}
-                    onClick={() => setDefining(true)} data-testid="dw-define-step">
-              + Define a step
-            </button>
-          ) : null}
         </div>
-        {defining ? (
-          <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
-                          projectId={projectId}
-                          onCancel={() => setDefining(false)}
-                          onDefine={async (fields) => {
-                            const result = await onDefineStep(fields);
-                            if (result.ok) setDefining(false);
-                            return result;
-                          }} />
-        ) : null}
-        {customSteps.length === 0 && !defining ? (
+        {customSteps.length === 0 ? (
           <p className="detail dw-palette-summary">
-            None yet. A step of your own runs one of your skills or an MCP tool — filing a
-            ticket, telling a compliance system, running your own scanner.
+            None yet — define one on the <b>Your steps</b> tab, or describe what you want to
+            the Program Manager on <b>Design a workflow</b>.
           </p>
         ) : null}
         {customSteps.map((c) => (
@@ -4109,14 +4246,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   tier-3 tool should not read as harmless in the palette. */}
               {c.usable ? `runs ${c.risk_source}` : c.unusable_reason}
             </span>
-            <span className="dw-palette-remove" role="button" tabIndex={0}
-                  aria-label={`Remove ${c.label}`}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault(); e.stopPropagation(); onRemoveStep(c.step_key);
-                    }
-                  }}
-                  onClick={(e) => { e.stopPropagation(); onRemoveStep(c.step_key); }}>×</span>
+            {/* NO × HERE ANY MORE. On a palette item it read as "take this off the
+                canvas" and actually deleted the step from the PROJECT — a destructive act in
+                the shape of a dismissal. Removing one is on the Your steps tab, where the row
+                is about the step itself rather than about placing it. */}
           </button>
         ))}
 

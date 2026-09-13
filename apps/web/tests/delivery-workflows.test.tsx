@@ -205,7 +205,9 @@ describe("an action's outcome reaches the person who caused it", () => {
     // On success the only visible change was one line of text at the top of a page the
     // operator had scrolled away from; the new workflow appeared in a dropdown on a tab they
     // were not looking at.
-    expect(UI).toContain('setTab("builder")');
+    // The tab is called `design` now — it holds BOTH ways to author a workflow, because
+    // describing it to BOSS and drawing it are the same intent arrived at differently.
+    expect(UI).toContain('setTab("design")');
     expect(UI).toContain("setBuilderTarget(created.id)");
   });
 
@@ -341,12 +343,35 @@ describe("build your own actually lets you build one", () => {
       .toBeLessThan(UI.indexOf('data-testid="dw-tab-edit"'));
   });
 
-  it("puts Define a step with its heading, not below the list", () => {
-    // With eleven of the customer's own steps the button sat off the bottom of the panel, so
-    // the way to make one was the one thing you had to scroll to find.
+  it("authors steps on their own page, and only PLACES them in the palette", () => {
+    // The define control lived in the palette, beneath however many steps already existed —
+    // so with eleven of them the way to make one was the thing you had to scroll to find, on
+    // a panel whose job is placing steps rather than authoring them.
+    //
+    // A step is also a durable object of its own: it names a skill, carries a risk tier, and
+    // can be placed in several workflows or none. Managing it inside the editor for ONE
+    // workflow made it look like a property of that workflow.
+    expect(UI).toContain("function StepsView");
+    expect(UI).toContain('data-testid="dw-steps"');
+    // The palette keeps listing them, because that is where you place one...
     expect(UI).toContain("dw-palette-heading-row");
-    expect(UI.indexOf('data-testid="dw-define-step"'))
-      .toBeLessThan(UI.indexOf("None yet. A step of your own"));
+    // ...and sends you to the page that authors them.
+    expect(UI).toContain("onClick={onManageSteps}");
+  });
+
+  it("the palette cannot delete a step from the project", () => {
+    // The × on a palette item read as "take this off the canvas" and actually deleted the
+    // step from the PROJECT — a destructive act in the shape of a dismissal. Removing one is
+    // on the steps page, where the row is about the step rather than about placing it.
+    expect(UI).not.toContain("dw-palette-remove");
+    expect(UI).toContain('data-testid={`dw-step-remove-${c.step_key}`}');
+  });
+
+  it("a step that cannot run says so where it is managed", () => {
+    // Bound to a skill that no longer exists, it sits in the palette looking placeable and
+    // fails the run that places it. Buried in a list it is invisible.
+    expect(UI).toContain('data-testid="dw-steps-unusable"');
+    expect(UI).toContain("customSteps.filter((c) => !c.usable)");
   });
 
   it("makes authoring a mode you are IN, not a button among buttons", () => {
@@ -732,5 +757,47 @@ describe("the panel's buttons wrap as a group", () => {
 
   it("does not let a label break mid-button", () => {
     expect(CSS).toContain(".dw-canvas-head .cap-btn, .dw-new .cap-btn { white-space: nowrap; }");
+  });
+});
+
+/**
+ * The workflow area, reorganised around what an operator is trying to do.
+ *
+ * "I dont like the workflow management page — it's not coming in flow, Build your Own, Design
+ * one with BOSS all should come in one page and it's hard to find. Workflow step should be
+ * separate page."
+ *
+ * The agent was hard to find for a structural reason: it sat IN the tab bar without being a
+ * tab, so it looked like one, behaved like an action, and was neither. And the two ways to
+ * author a workflow were split across a tab and that button, when they are the same intent
+ * arrived at differently.
+ */
+describe("the workflow area is organised around intent", () => {
+  it("has a tab per thing an operator does", () => {
+    expect(UI).toContain('const TABS = ["running", "catalogue", "design", "steps"] as const;');
+  });
+
+  it("both ways to author a workflow are on the same page", () => {
+    // Describing it is offered first because it is the easier path for most people — but AS A
+    // CHOICE, because an operator who knows the shape they want should not have to negotiate
+    // it in prose.
+    expect(UI).toContain('data-testid="dw-design-ways"');
+    const ways = UI.slice(UI.indexOf('data-testid="dw-design-ways"'));
+    expect(ways.slice(0, 2000)).toContain("Describe it");
+    expect(ways.slice(0, 2000)).toContain("Draw it");
+    expect(ways.slice(0, 2000)).toContain('data-testid="dw-workflow-agent"');
+  });
+
+  it("and the agent is no longer a button pretending to be a tab", () => {
+    const tablist = UI.slice(UI.indexOf('role="tablist"'));
+    const bar = tablist.slice(0, tablist.indexOf("</div>"));
+    expect(bar).not.toContain("dw-workflow-agent");
+  });
+
+  it("every tab label says what is behind it", () => {
+    // A count is the difference between a tab you might open and one you know to skip.
+    expect(UI).toContain("`Running (${runs.length})`");
+    expect(UI).toContain("`Catalogue (${catalogue.length})`");
+    expect(UI).toContain("`Your steps (${customSteps.length})`");
   });
 });
