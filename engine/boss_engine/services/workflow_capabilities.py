@@ -246,6 +246,36 @@ CAPABILITIES: dict[str, Capability] = {
             is_async=True,
         ),
         _cap(
+            key="social_publish",
+            # OWNS THE ACCOUNT AND ANSWERS FOR WHAT GOES OUT ON IT.
+            #
+            # One capability, one platform per STEP. A single step that published everywhere
+            # would produce one receipt for several effects, and a partial failure — YouTube
+            # accepted, Instagram rate-limited — leaves a run in a state the approval gate
+            # cannot describe. One effect, one receipt, one dedupe key is the whole governance
+            # model; fanning out two steps in parallel costs nothing and stays retryable
+            # independently.
+            #
+            # WHICH platform is decided by the skill the step is bound to
+            # (`publish_youtube`, `publish_instagram`), not by this shape. That is what lets a
+            # second platform be a new agent and a new binding rather than a new capability.
+            captain="media_publisher",
+            label="Publish to a channel",
+            summary="Publish finished media to a social channel the assigned agent owns.",
+            # No built-in tool: there is no generic "post to the internet". A step of this kind
+            # is always bound to a skill that holds one account's credential, which is exactly
+            # what a custom step binding is for.
+            tool=None,
+            # IRREVERSIBLE AND PUBLIC. You cannot un-publish something people have already
+            # seen, so this sits at the tier that forces a person to agree first.
+            risk_tier=3,
+            required_inputs=("media", "title"),
+            optional_inputs=("description", "tags", "visibility", "thumbnail", "schedule_at"),
+            produces=("post_url", "post_id"),
+            typical_minutes=5,
+            is_async=True,
+        ),
+        _cap(
             key="monitor",
             # owns whether anyone would notice it break
             captain="infra_steward",
@@ -425,6 +455,10 @@ REGISTERED_ROLES = frozenset({
     "program_manager", "providerops_manager", "qa", "release_manager", "resource_janitor",
     "secrets_steward", "security_reviewer", "software_engineer", "ux_engineer", "vp_agents",
     "vp_product",
+    # OWNS THE CHANNELS AND WHAT GOES OUT ON THEM. The captain for `social_publish`, and the
+    # role a per-platform publishing agent reports to: a channel credential belongs to somebody
+    # whose remit is the audience, not to whichever step happened to need it.
+    "media_publisher",
 })
 
 
