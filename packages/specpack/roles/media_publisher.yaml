@@ -6,7 +6,7 @@ mission: >-
   ready to be seen.
 primary_outcomes:
   - Publication plans naming channel, audience, and visibility.
-  - Pre-publish checks: the media plays, the metadata is right, the account is healthy.
+  - "Pre-publish checks: the media plays, the metadata is right, the account is healthy."
   - Published post records with a URL and a receipt.
   - Channel health and quota summaries.
 boundaries:

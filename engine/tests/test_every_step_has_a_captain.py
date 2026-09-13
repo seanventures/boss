@@ -118,3 +118,34 @@ def test_publishing_belongs_to_the_media_publisher_and_forces_an_approval():
     # rather than a new capability.
     assert "media" in publish.required_inputs and "title" in publish.required_inputs
     assert "post_url" in publish.produces
+
+
+def test_every_role_spec_in_the_pack_actually_parses_as_intended():
+    """An unquoted colon turns a YAML list entry into a dict.
+
+    `- Pre-publish checks: the media plays, ...` parses as {"Pre-publish checks": "the media
+    plays, ..."} — not as the sentence it obviously reads as. The installer rejects it with
+    "primary_outcomes must contain only non-empty strings", which names the symptom and not the
+    colon, and it does so on the deployment rather than here. Caught at the pack instead.
+    """
+    import pathlib
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "packages" / "specpack" / "roles"
+    offenders: list[str] = []
+    for spec in sorted(root.glob("*.yaml")):
+        doc = yaml.safe_load(spec.read_text(encoding="utf-8")) or {}
+        lists = {
+            "primary_outcomes": doc.get("primary_outcomes") or [],
+            "output_contracts": doc.get("output_contracts") or [],
+            "must": (doc.get("boundaries") or {}).get("must") or [],
+            "must_not": (doc.get("boundaries") or {}).get("must_not") or [],
+        }
+        for field, entries in lists.items():
+            for entry in entries:
+                if not isinstance(entry, str) or not entry.strip():
+                    offenders.append(f"{spec.name}:{field} -> {entry!r}")
+    assert not offenders, (
+        "these list entries are not strings — usually an unquoted colon making YAML read a "
+        f"sentence as a mapping: {offenders}"
+    )
