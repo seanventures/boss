@@ -14484,6 +14484,61 @@ def save_skill_definition(payload: dict) -> dict:
 # --------------------------------------------------------------------------- #
 
 
+@app.put("/v1/channels/{provider}/client")
+def save_channel_oauth_client(provider: str, payload: dict) -> dict:
+    """Store THIS PROJECT's own Google OAuth client.
+
+    Per project rather than per installation: a shared client would make the BOSS vendor the
+    applicant for every customer's YouTube access — one verification covering everybody, one
+    quota pool, and one credential whose compromise reaches every connected channel.
+
+    The secret goes to the secret backend. No table holds it, so no agent can query it: an
+    agent that can read a credential can also print it into a message explaining an error.
+    """
+    from .services.channel_oauth import ChannelOAuthError, save_oauth_client
+
+    if provider != "youtube":
+        raise HTTPException(status_code=404, detail=f"no channel provider '{provider}'")
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip() or "executive_console"
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "integration_manage")
+        try:
+            return save_oauth_client(
+                connection, settings, project_id=project_id, actor=actor,
+                client_id=str(payload.get("client_id") or ""),
+                client_secret=str(payload.get("client_secret") or ""),
+                redirect_uri=str(payload.get("redirect_uri") or ""),
+            )
+        except ChannelOAuthError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/channels/{provider}/client")
+def channel_oauth_client_status(provider: str, project_id: str) -> dict:
+    """Whether a client is configured, and the redirect URI to register with Google.
+
+    Returns NEITHER half of the client. The hint is the last twelve characters of the id —
+    enough for a person to tell which one is loaded, useless to anyone else.
+    """
+    from .services.channel_oauth import oauth_client_status
+
+    if provider != "youtube":
+        raise HTTPException(status_code=404, detail=f"no channel provider '{provider}'")
+    with begin(engine) as connection:
+        status = oauth_client_status(connection, project_id)
+    # The path the operator must paste into Google, built from what this API is actually
+    # reachable at — so it cannot disagree with the endpoint that receives the redirect.
+    base = (settings.google_oauth_redirect_uri or "").strip()
+    return {
+        **status,
+        "callback_path": f"/v1/channels/{provider}/callback",
+        "installation_default_redirect_uri": base or None,
+    }
+
+
 @app.post("/v1/channels/{provider}/connect", status_code=201)
 def start_channel_connection(provider: str, payload: dict) -> dict:
     """Begin an OAuth connection. Returns the URL to send the operator to.

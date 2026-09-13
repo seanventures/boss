@@ -35,10 +35,12 @@ def test_an_unconfigured_install_says_which_variables_to_set(client):
                     json={"project_id": PROJECT, "actor": "ceo"})
     assert r.status_code == 422
     detail = r.json()["detail"]
+    # BOTH routes, because two different people hit this: a customer who should enter their own
+    # client in the console, and a self-host operator who should set the variables.
+    assert "Add one in the console" in detail
     for var in ("BOSS_GOOGLE_OAUTH_CLIENT_ID", "BOSS_GOOGLE_OAUTH_CLIENT_SECRET",
                 "BOSS_GOOGLE_OAUTH_REDIRECT_URI"):
         assert var in detail
-    assert "YouTube Data API v3" in detail
 
 
 def test_connecting_needs_a_permission_somebody_actually_holds(client):
@@ -264,3 +266,123 @@ def test_the_standards_are_seeded_as_an_ordinary_editable_skill(client, engine):
         assert again["seeded"] is False
         assert get_skill(connection, PROJECT,
                          "youtube_publishing_standards")["knowledge"] == "Our own rules."
+
+
+# ---------------------------------------------------------------------------
+# A customer brings their own OAuth client
+# ---------------------------------------------------------------------------
+#
+# "I want customers/users to upload this to BOSS and then BOSS should manage the secrets
+# properly."
+#
+# Per PROJECT, not per installation. A single shared client would make the BOSS vendor the
+# applicant for every customer's YouTube access: one Google verification covering everybody,
+# one quota pool they all compete for, and one credential whose compromise reaches every
+# connected channel.
+
+
+def _save_client(client, **over):
+    body = {
+        "project_id": PROJECT, "actor": "ceo",
+        "client_id": "1234567890-abcdefghijklmnop.apps.googleusercontent.com",
+        "client_secret": "GOCSPX-super-secret-value",
+        "redirect_uri": "https://boss-api.local.sean.network/v1/channels/youtube/callback",
+    }
+    body.update(over)
+    return client.put("/v1/channels/youtube/client", json=body)
+
+
+def test_a_project_can_bring_its_own_oauth_client(client):
+    r = _save_client(client)
+    assert r.status_code == 200, r.text
+    assert r.json()["configured"] is True
+
+    status = client.get("/v1/channels/youtube/client",
+                        params={"project_id": PROJECT}).json()
+    assert status["configured"] is True
+    assert status["source"] == "project"
+
+
+def test_neither_half_of_the_client_can_be_read_back(client):
+    """The status endpoint exists to say IF one is configured, not WHICH one."""
+    _save_client(client)
+    body = client.get("/v1/channels/youtube/client",
+                      params={"project_id": PROJECT}).text
+    assert "GOCSPX-super-secret-value" not in body
+    assert "1234567890-abcdefghijklmnop" not in body
+    # A hint short enough to identify and useless to impersonate with.
+    hint = client.get("/v1/channels/youtube/client",
+                      params={"project_id": PROJECT}).json()["client_id_hint"]
+    assert hint and len(hint.strip("…")) <= 12
+
+
+def test_no_agent_can_query_the_client_out_of_the_database(client, engine):
+    """It lives in the secret backend, not in a table an agent can SELECT from.
+
+    This is the difference between a design that is secure and one that only feels secure: an
+    agent that can read a credential can also print it into a message explaining an error.
+    """
+    from sqlalchemy import text
+
+    _save_client(client)
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text("SELECT metadata::text FROM secret_refs WHERE project_id = :p "
+                 "AND secret_kind = 'oauth_client'"),
+            {"p": PROJECT},
+        ).scalars().all()
+    assert rows, "the reference row should exist"
+    for row in rows:
+        assert "GOCSPX-super-secret-value" not in row
+
+
+def test_a_project_client_takes_precedence_over_the_installation_default(client, engine):
+    """A customer who has entered their own must not silently keep using the vendor's."""
+    from apps.api.app.services.channel_oauth import _require_client
+
+    _save_client(client, client_id="project-owned-id", client_secret="project-owned-secret")
+    with engine.begin() as connection:
+        cid, csec, redirect = _require_client(api_main.settings, connection, PROJECT)
+    assert cid == "project-owned-id"
+    assert csec == "project-owned-secret"
+    assert redirect.endswith("/v1/channels/youtube/callback")
+
+
+def test_a_project_without_its_own_client_falls_back_to_the_installation(engine):
+    """A self-host that set the environment variables needs no UI at all.
+
+    Exercised on the service rather than the endpoint: `require_project_actor` crashes on a
+    project that does not exist (a pre-existing rough edge, see test_audit_summary), which
+    would be testing that bug rather than this fallback.
+    """
+    from apps.api.app.services.channel_oauth import ChannelOAuthError, _require_client
+
+    with engine.begin() as connection:
+        try:
+            cid, _csec, _redirect = _require_client(
+                api_main.settings, connection, "project-with-no-client-row")
+        except ChannelOAuthError as error:
+            # No project client AND no installation default: the message must serve both
+            # audiences rather than assuming which one is reading.
+            assert "Add one in the console" in str(error)
+            assert "BOSS_GOOGLE_OAUTH_CLIENT_ID" in str(error)
+        else:
+            # An installation default IS set, so it was used. That is the fallback working.
+            assert cid == (api_main.settings.google_oauth_client_id or "").strip()
+
+
+def test_a_plain_http_redirect_is_refused_before_google_refuses_it(client):
+    r = _save_client(client, redirect_uri="http://boss-api.local.sean.network/cb")
+    assert r.status_code == 422
+    assert "https" in r.json()["detail"]
+
+
+def test_configuring_a_client_needs_the_integration_permission(client):
+    assert _save_client(client, actor="not-a-member").status_code == 403
+
+
+def test_the_status_endpoint_tells_the_operator_what_to_paste_into_google(client):
+    """The commonest failure in this flow is redirect_uri_mismatch."""
+    status = client.get("/v1/channels/youtube/client",
+                        params={"project_id": PROJECT}).json()
+    assert status["callback_path"] == "/v1/channels/youtube/callback"

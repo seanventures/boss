@@ -171,13 +171,148 @@ def _http():
     return httpx
 
 
-def _require_client(settings: Settings) -> tuple[str, str, str]:
-    """The app's OAuth client, or a sentence saying exactly what to set.
+#: Where a project's own OAuth client lives in the secret store. One entry holding both halves,
+#: because they are only ever used together and a project with half a client is not a state
+#: worth being able to represent.
+def _client_ref_key(project_id: str) -> str:
+    return f"channel/{project_id}/google/oauth_client"
 
-    Refusing with the three variable names is the difference between a ten-minute setup and an
-    afternoon: the failure an operator hits otherwise is Google's own `invalid_client`, which
-    says nothing about which of three things is missing here.
+
+def save_oauth_client(
+    connection: Connection,
+    settings: Settings,
+    *,
+    project_id: str,
+    actor: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+) -> dict[str, Any]:
+    """A customer's OWN Google OAuth client, stored for this project.
+
+    WHY PER PROJECT, AND NOT ONE CLIENT FOR THE WHOLE INSTALLATION.
+    ---------------------------------------------------------------
+    A single shared client would make the BOSS vendor the applicant for every customer's
+    YouTube access: one Google verification covering everybody, one quota pool everybody
+    competes for, and one credential whose compromise reaches every connected channel. Each
+    customer bringing their own Cloud project inverts all three — they verify their own app if
+    they ever need to, their quota is theirs, and the blast radius of a leak is one tenant.
+
+    The installation-level environment variables remain as a FALLBACK, which is what makes a
+    single-tenant self-host (this one) work with no UI at all.
+
+    Stored in the secret backend, never in a table an agent can query. `client_secret` is the
+    half that matters: `client_id` is visible in every consent URL, while the secret is what
+    lets a holder impersonate the app.
     """
+    cid = str(client_id or "").strip()
+    csec = str(client_secret or "").strip()
+    redirect = str(redirect_uri or "").strip()
+    if not cid or not csec or not redirect:
+        raise ChannelOAuthError(
+            "client_id, client_secret and redirect_uri are all required.")
+    if not redirect.startswith("https://"):
+        # Google refuses plain http for web clients anyway; refusing here says why, before the
+        # operator has pasted it into the Cloud Console and waited for a cryptic rejection.
+        raise ChannelOAuthError("redirect_uri must be https.")
+
+    kind = default_secret_backend(settings)
+    ref_key = _client_ref_key(project_id)
+    try:
+        backend_for(kind, settings).put(
+            ref_key, json.dumps({"client_id": cid, "client_secret": csec}))
+    except SecretUnavailable as error:
+        raise ChannelOAuthError(f"Could not store the client: {error}") from error
+
+    existing = connection.execute(
+        text("SELECT id FROM secret_refs WHERE project_id = :p AND ref_key = :k"),
+        {"p": project_id, "k": ref_key},
+    ).first()
+    # The metadata holds only NON-SECRET facts: the redirect this client was registered with,
+    # and a hint so a person can tell which client is loaded without it being readable.
+    meta = json.dumps({
+        "provider": "google",
+        "redirect_uri": redirect,
+        "client_id_hint": f"…{cid[-12:]}" if len(cid) > 12 else cid,
+    })
+    if existing:
+        connection.execute(
+            text("UPDATE secret_refs SET metadata = CAST(:m AS JSONB), status='active', "
+                 "updated_at = now() WHERE id = :i"),
+            {"m": meta, "i": existing[0]},
+        )
+        ref_id = str(existing[0])
+    else:
+        ref_id = make_id("secref")
+        connection.execute(
+            text(
+                """
+                INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind,
+                                         ref_key, provider, secret_kind, storage_backend,
+                                         status, metadata, created_by)
+                VALUES (:id, :p, 'project', :p, :kind, :ref_key, 'google', 'oauth_client',
+                        :kind, 'active', CAST(:m AS JSONB), :actor)
+                """
+            ),
+            {"id": ref_id, "p": project_id, "kind": kind, "ref_key": ref_key,
+             "m": meta, "actor": actor},
+        )
+    emit_event(connection, project_id, "channel.oauth_client_configured", actor,
+               "secret_ref", ref_id, {"provider": "google", "redirect_uri": redirect})
+    return {"provider": "google", "configured": True, "redirect_uri": redirect}
+
+
+def oauth_client_status(connection: Connection, project_id: str) -> dict[str, Any]:
+    """Whether this project has its own client. NEVER returns either half of it."""
+    row = connection.execute(
+        text("SELECT metadata, updated_at FROM secret_refs WHERE project_id = :p "
+             "AND ref_key = :k AND status = 'active'"),
+        {"p": project_id, "k": _client_ref_key(project_id)},
+    ).mappings().first()
+    if not row:
+        return {"configured": False, "source": None}
+    meta = row["metadata"] or {}
+    return {
+        "configured": True,
+        "source": "project",
+        "redirect_uri": meta.get("redirect_uri"),
+        "client_id_hint": meta.get("client_id_hint"),
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+def _require_client(
+    settings: Settings,
+    connection: Optional[Connection] = None,
+    project_id: str = "",
+) -> tuple[str, str, str]:
+    """This project's OAuth client, or the installation's, or a sentence saying what to do.
+
+    Project first, installation second. A customer who has entered their own client must not
+    silently keep using the vendor's, and a self-host that has set the environment variables
+    must not be forced through a UI it does not need.
+    """
+    if connection is not None and project_id:
+        row = connection.execute(
+            text("SELECT id, metadata FROM secret_refs WHERE project_id = :p "
+                 "AND ref_key = :k AND status = 'active'"),
+            {"p": project_id, "k": _client_ref_key(project_id)},
+        ).mappings().first()
+        if row:
+            from .secret_backends import resolve_secret_ref
+
+            try:
+                blob = json.loads(resolve_secret_ref(connection, str(row["id"]), settings))
+            except Exception as error:  # noqa: BLE001
+                raise ChannelOAuthError(
+                    "This project has an OAuth client configured but it could not be read: "
+                    f"{error}. Re-enter it."
+                ) from error
+            redirect = str((row["metadata"] or {}).get("redirect_uri") or "")
+            return (str(blob.get("client_id") or ""),
+                    str(blob.get("client_secret") or ""),
+                    redirect)
+
     client_id = (settings.google_oauth_client_id or "").strip()
     client_secret = (settings.google_oauth_client_secret or "").strip()
     redirect = (settings.google_oauth_redirect_uri or "").strip()
@@ -190,10 +325,10 @@ def _require_client(settings: Settings) -> tuple[str, str, str]:
     ]
     if missing:
         raise ChannelOAuthError(
-            "This installation has no Google OAuth client configured. Set "
+            "No Google OAuth client for this project. Add one in the console (Client ID, "
+            "Client secret and redirect URI from your own Google Cloud project), or set "
             + ", ".join(missing)
-            + " — create the client in Google Cloud Console, enable YouTube Data API v3, and "
-            "register the redirect URI on it exactly as set here."
+            + " to give every project on this installation the same one."
         )
     return client_id, client_secret, redirect
 
@@ -246,7 +381,7 @@ def start(
     connection_key: str = "youtube_default",
 ) -> dict[str, Any]:
     """Begin a connection. Returns the URL to send the operator to."""
-    client_id, _secret, redirect = _require_client(settings)
+    client_id, _secret, redirect = _require_client(settings, connection, project_id)
     definition_id = ensure_definition(connection, project_id, actor)
 
     # A fresh nonce every time, and the old pending row is replaced rather than accumulated:
@@ -336,7 +471,8 @@ def complete(
         raise ChannelOAuthError(
             "That authorisation has expired or was already used. Start the connection again.")
 
-    client_id, client_secret, redirect = _require_client(settings)
+    client_id, client_secret, redirect = _require_client(
+        settings, connection, str(pending["project_id"]))
     httpx = _http()
     try:
         response = httpx.post(
@@ -517,7 +653,7 @@ def access_token_for(
     if not refs:
         raise ChannelOAuthError(
             f"The '{connection_key}' connection has no stored credential. Reconnect it.")
-    client_id, client_secret, _redirect = _require_client(settings)
+    client_id, client_secret, _redirect = _require_client(settings, connection, project_id)
     refresh_token = resolve_secret_ref(connection, str(refs[0]), settings)
     return _exchange_refresh(settings, refresh_token, client_id, client_secret)
 
