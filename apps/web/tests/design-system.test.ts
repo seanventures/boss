@@ -328,7 +328,11 @@ describe("BOSS mission-control design system", () => {
     // feedback, and motion preference are system-level behavior, not isolated
     // page decoration.
     const forms = readFileSync(resolve(__dirname, "../app/client-forms.tsx"), "utf8");
-    expect(shell).toContain('className={`bx-nav-item${a.id === active ? " active" : ""}`}');
+    // The rail marks the current selection. It keys off `selected` rather than `active`:
+    // `active` is the area currently PAINTED, and during a navigation the two differ on
+    // purpose so the outgoing screen stays visible while the incoming one loads. The
+    // highlight must follow the press, so it is the one that reads `selected`.
+    expect(shell).toContain('className={`bx-nav-item${a.id === selected ? " active" : ""}`}');
     expect(shell).toContain('role="dialog"');
     expect(shell).toContain("aria-modal=\"true\"");
     expect(forms).toContain("role=\"alert\"");

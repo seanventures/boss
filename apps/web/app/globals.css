@@ -1901,6 +1901,49 @@ tr[data-expanded] { background: var(--surface-2); }
   padding: 30px 28px 90px;
 }
 
+/* NAVIGATION IN FLIGHT.
+ *
+ * The console renders one area per request, so opening an area is a server round trip. The
+ * area being left stays painted for that trip — blanking it was the bug this replaces — which
+ * means the only thing that would otherwise tell an operator their click registered is the
+ * rail highlight. This hairline says the console is fetching, and nothing else moves. */
+.bx-nav-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 60;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent, #4ade9b) 40%,
+    var(--accent, #4ade9b) 60%,
+    transparent 100%
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: bx-nav-progress-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes bx-nav-progress-sweep {
+  0% { background-position: -40% 0; }
+  100% { background-position: 140% 0; }
+}
+
+/* The outgoing area is real content, not a placeholder — but it is no longer current, so it
+ * reads a shade back rather than fully live. Subtle on purpose: a heavy dim would be the
+ * blank screen again, in grey. */
+.bx-content[data-nav-pending="true"] {
+  opacity: 0.72;
+  transition: opacity 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bx-nav-progress { animation: none; background-position: 50% 0; }
+  .bx-content[data-nav-pending="true"] { transition: none; }
+}
+
 .frame {
   display: grid;
   gap: 22px;

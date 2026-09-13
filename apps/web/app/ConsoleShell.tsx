@@ -323,6 +323,18 @@ export default function ConsoleShell({
   };
   const deepLinkArea = (AREAS.some((a) => a.id === initialArea) ? initialArea : undefined) as AreaId | undefined;
   const [active, setActive] = useState<AreaId>(deepLinkArea ?? "overview");
+  // `active` is the area currently PAINTED; `navTarget` is the one the operator last pressed.
+  // They differ only while a navigation is in flight. The rail highlights `navTarget` so the
+  // press is acknowledged instantly; the content keeps showing `active` so the screen is never
+  // blank. `navPending` drives the progress hairline.
+  const [navTarget, setNavTarget] = useState<AreaId | null>(null);
+  const [navPending, startNav] = useTransition();
+  const selected = navTarget ?? active;
+  useEffect(() => {
+    // The transition committed (or the URL changed underneath us). Stop showing a target that
+    // is now simply the active area, so a later failure cannot leave the rail lying.
+    if (navTarget && navTarget === active) setNavTarget(null);
+  }, [navTarget, active]);
   const [navOpen, setNavOpen] = useState(false);
   // Open by default. A section that starts closed hides the areas inside it from anyone who
   // does not already know they are there, which for a newly-added area is indistinguishable
@@ -508,7 +520,19 @@ export default function ConsoleShell({
   }, [queryString]);
 
   const go = useCallback((id: AreaId) => {
-    setActive(id);
+    // THE AREA FLIPS WHEN THE NEW AREA ARRIVES, NOT WHEN THE CLICK HAPPENS.
+    //
+    // `main.bx-content[data-active=X]` reveals `section[data-area=X]` and hides every other
+    // section. Setting `active` on the click therefore hid the area being left BEFORE the area
+    // being opened existed in the DOM — and since page.tsx now renders one area per request,
+    // that section only arrives after a server round trip. The gap between the two rendered as
+    // an empty page for the whole trip: "every option I choose on the left pane takes several
+    // seconds to render, until then it shows blank."
+    //
+    // Inside a transition, React keeps the current tree mounted and painted until the new one
+    // is ready, and commits `setActive` together with it. The nav highlight follows the click
+    // immediately via `navTarget` so the press still feels answered.
+    setNavTarget(id);
     setNavOpen(false);
     setPaletteOpen(false);
     setQuery("");
@@ -527,15 +551,25 @@ export default function ConsoleShell({
       const url = new URL(window.location.href);
       url.searchParams.set("area", id);
       if (url.toString() !== window.location.href) {
-        router.push(`${url.pathname}${url.search}`);
-        // NO popstate HERE. See the effect below: `router.push` is asynchronous, so announcing
-        // the change now announces the OLD url.
+        startNav(() => {
+          router.push(`${url.pathname}${url.search}`);
+          setActive(id);
+          // NO popstate HERE. See the effect below: `router.push` is asynchronous, so
+          // announcing the change now announces the OLD url.
+        });
+      } else {
+        // Already on this area (a re-click, or a deep link that matches). Nothing will come
+        // back from the server to commit the transition, so commit it here or the nav
+        // highlight would stay pending forever.
+        setActive(id);
       }
     } catch {
-      /* non-browser / unsupported — ignore */
+      // Non-browser / unsupported. The URL could not be read, so no navigation will arrive to
+      // commit the area — set it directly rather than leaving the console on the old one.
+      setActive(id);
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [router]);
+  }, [router, startNav]);
 
   // Quick-action links (AreaLink in the Overview command center) switch areas
   // client-side via this event — instant, no full-page navigation/refetch.
@@ -893,13 +927,13 @@ export default function ConsoleShell({
                               <button
                                 key={child.id}
                                 type="button"
-                                className={`bx-nav-item bx-nav-child${child.id === active ? " active" : ""}`}
-                                aria-current={child.id === active ? "page" : undefined}
+                                className={`bx-nav-item bx-nav-child${child.id === selected ? " active" : ""}`}
+                                aria-current={child.id === selected ? "page" : undefined}
                                 data-area-nav={child.id}
                                 onClick={() => go(child.id)}
                               >
                                 <ChildIcon size={15}
-                                            weight={child.id === active ? "fill" : "regular"} aria-hidden />
+                                            weight={child.id === selected ? "fill" : "regular"} aria-hidden />
                                 <span>{labelFor(child)}</span>
                                 {childBadge ? <span className="bx-nav-badge">{childBadge}</span> : null}
                               </button>
@@ -921,14 +955,14 @@ export default function ConsoleShell({
                   <button
                     key={a.id}
                     type="button"
-                    className={`bx-nav-item${a.id === active ? " active" : ""}`}
-                    aria-current={a.id === active ? "page" : undefined}
+                    className={`bx-nav-item${a.id === selected ? " active" : ""}`}
+                    aria-current={a.id === selected ? "page" : undefined}
                     data-area-nav={a.id}
                     data-paid-badge={paidBadge ? "true" : undefined}
                     data-sso-visible={a.id === "enterprise" ? "true" : undefined}
                     onClick={() => go(a.id)}
                   >
-                    <Icon size={17} weight={a.id === active ? "fill" : "regular"} aria-hidden />
+                    <Icon size={17} weight={a.id === selected ? "fill" : "regular"} aria-hidden />
                     <span>{labelFor(a)}</span>
                     {ssoBadge ? (
                       <span
@@ -1133,7 +1167,16 @@ export default function ConsoleShell({
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath
             it, unreachable. */}
+        {/* The area being left stays on screen while the next one is fetched, so without this
+            a slow area looks like a dead click on the old screen. A hairline across the top is
+            the smallest honest signal that the press was taken and work is in flight. */}
+        {navPending ? (
+          <div className="bx-nav-progress" role="status" aria-live="polite">
+            <span className="sr-only">Opening {navTarget ?? active}</span>
+          </div>
+        ) : null}
         <main className="bx-content" data-active={active} aria-label={activeDef.label}
+              data-nav-pending={navPending ? "true" : undefined}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
           {children}
