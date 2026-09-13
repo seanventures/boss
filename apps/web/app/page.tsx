@@ -77,7 +77,7 @@ import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
-import { emptyAuditSummary, fetchAuditSummary } from "../lib/audit";
+import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
@@ -809,23 +809,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchLatestCanary(activeProjectId, needs("ops")),
       fetchPlans(activeProjectId, needs("work")),
       Promise.resolve(budgetArea.budgetAllocations),
-      // THE SINGLE BIGGEST COST ON THIS PAGE, FOR EIGHT NUMBERS.
-      //
-      // Measured at 13.2 SECONDS — more than half the render, and larger than the other 78
-      // feeds combined. It calls /v1/audit/export, which serialises the entire audit trail
-      // (every task, job, decision, artifact, receipt, reservation, routing log and event)
-      // so the ops screen can display eight counts.
-      //
-      // It is rendered ONLY in data-area="ops". Every other area waited 13s for something it
-      // never showed — which is why every area cost the same regardless of content.
-      //
-      // Skipped elsewhere, and the panel already handles an unreachable summary by saying so,
-      // which is the same shape as "not loaded for this area".
-      needs("ops")
-        ? fetchAuditSummary(activeProjectId)
-        : Promise.resolve(emptyAuditSummary(
-            "Audit counts load on the Ops area — they are too expensive to fetch on every page.",
-            activeProjectId)),
+      // Was the single biggest cost on this page, for eight numbers: it called
+      // /v1/audit/export, which serialises the entire audit trail — 192 MB in 62 seconds on
+      // this project — so the Ops screen could display eight counts. It now asks
+      // /v1/audit/summary, which counts in SQL and answers in well under a second, so this is
+      // an ordinary area gate like the rest.
+      fetchAuditSummary(activeProjectId, needs("ops")),
       fetchChangeJournalFeed(activeProjectId, 8, needs("ops")),
       fetchSelfImprovementFeed(activeProjectId),
       fetchOutboxFeed(activeProjectId, 8, needs("comms")),

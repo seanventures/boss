@@ -37,9 +37,17 @@ export function emptyAuditSummary(reason?: string, projectId = PROJECT_ID): Audi
   };
 }
 
-export async function fetchAuditSummary(projectId = PROJECT_ID): Promise<AuditSummary> {
+export async function fetchAuditSummary(
+  projectId = PROJECT_ID,
+  active = true,
+): Promise<AuditSummary> {
+  // Not rendered this request. Same shape the unreachable path returns, no round trip.
+  if (!active) return emptyAuditSummary("not requested", projectId);
   try {
-    const payload = await client.exportAuditTrail(resolveProjectId(projectId));
+    // Counts, not the export. This panel shows eight integers; asking for the export got them
+    // by serialising every row in the project — 192 MB in 62 seconds, measured — and that was
+    // the entire reason the Ops area took ~25 seconds to render.
+    const payload = await client.summarizeAuditTrail(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,

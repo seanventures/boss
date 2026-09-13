@@ -110,13 +110,22 @@ describe("only the requested area is fetched", () => {
       ["fetchSandboxFeed", "sandboxes"],
       ["fetchAgentStudioFeed", "studio"],
       ["fetchWorkOrchestrationFeed", "portfolio"],
+      ["fetchAuditSummary", "ops"],
     ];
     for (const [fn, area] of mustGate) {
       const call = new RegExp(`${fn}\\((?:[^()]|\\([^()]*\\))*\\)`, "s").exec(wave)?.[0];
       expect(call, `${fn} is not called in the main wave`).toBeTruthy();
       expect(call, `${fn} fetches on every area`).toContain(`needs("${area}")`);
     }
-    expect(wave).toContain('needs("ops")\n        ? fetchAuditSummary(activeProjectId)');
+  });
+
+  it("the audit panel asks for counts, not for the whole audit trail", () => {
+    // /v1/audit/export serialises every task, job, decision, artifact, receipt, reservation,
+    // routing log and event so the caller can call len() on each list: 192 MB in 62 seconds
+    // on a real project, to render eight integers. That was the whole Ops-area render time.
+    const audit = codeOnly("lib/audit.ts");
+    expect(audit).toContain("client.summarizeAuditTrail(");
+    expect(audit).not.toContain("client.exportAuditTrail(");
   });
 
   it("the feeds still fetched everywhere are the ones read everywhere", () => {

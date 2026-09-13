@@ -98,6 +98,7 @@ from .schemas import (
     AccountConnectUnlinkRequest,
     AuditExportCounts,
     AuditExportResponse,
+    AuditSummaryResponse,
     AuditExportScope,
     BreakGlassGrantCreateRequest,
     BreakGlassGrantListResponse,
@@ -20404,6 +20405,28 @@ def get_change_journal_item(artifact_id: str, project_id: str) -> ChangeJournalD
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return ChangeJournalDetail(**item)
+
+
+@app.get("/v1/audit/summary", response_model=AuditSummaryResponse)
+def summarize_audit_trail(project_id: str, actor: str = "ceo") -> AuditSummaryResponse:
+    """The eight counts the console's audit panel shows, without the 192 MB export.
+
+    Registered BEFORE /v1/audit/export only for readability; the paths do not overlap.
+    Same `audit_export` permission — it is the same information, at less than 1 KB.
+    """
+    with begin(engine) as connection:
+        try:
+            require_project_actor(connection, project_id, actor, "audit_export")
+            payload = audit.summary(connection, project_id)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return AuditSummaryResponse(
+            project_id=payload["project_id"],
+            generated_at=payload["generated_at"],
+            counts=AuditExportCounts(**payload["counts"]),
+        )
 
 
 @app.get("/v1/audit/export", response_model=AuditExportResponse)

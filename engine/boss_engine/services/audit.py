@@ -103,6 +103,56 @@ class AuditTrailService:
         item["content"] = self._json_ready(row.get("content") or {})
         return item
 
+    # project_id is the only filter an unscoped export applies, so the counts it reports are
+    # exactly these. Kept beside `export` so the two cannot drift apart unnoticed.
+    COUNT_TABLES = {
+        "tasks": "tasks",
+        "jobs": "jobs",
+        "decisions": "decisions",
+        "artifacts": "artifacts",
+        "receipts": "receipts",
+        "budget_reservations": "budget_reservations",
+        "cost_receipts": "cost_receipts",
+        "routing_logs": "routing_logs",
+        "deadletters": "deadletters",
+        "events": "events",
+    }
+
+    def summary(self, connection: Connection, project_id: str) -> dict:
+        """The counts an unscoped export reports, without building the export.
+
+        The console's audit panel displays eight integers. It got them by calling
+        /v1/audit/export, which serialises every task, job, decision, artifact, receipt,
+        reservation, routing log and event in the project so the caller can call len() on
+        each list. Measured on the live deployment: 192 MB and 62 seconds, for eight numbers
+        — and it is the whole reason the Ops area took ~25 seconds to render.
+
+        It also emitted an `audit.export_generated` event every time, so simply opening Ops
+        wrote an audit record claiming an export had been taken. Counting does not do that;
+        a summary is a read, not an export, and the audit trail should not say otherwise.
+        """
+        project = connection.execute(
+            text("SELECT id FROM projects WHERE id = :project_id"),
+            {"project_id": project_id},
+        ).first()
+        if not project:
+            raise ValueError("Unknown project_id")
+        counts = {
+            key: int(
+                connection.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE project_id = :project_id"),
+                    {"project_id": project_id},
+                ).scalar()
+                or 0
+            )
+            for key, table in self.COUNT_TABLES.items()
+        }
+        return {
+            "project_id": project_id,
+            "generated_at": now_utc().isoformat(),
+            "counts": counts,
+        }
+
     def export(
         self,
         connection: Connection,

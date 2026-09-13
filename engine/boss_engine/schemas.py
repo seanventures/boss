@@ -3291,6 +3291,14 @@ class AuditExportCounts(BaseModel):
     events: int
 
 
+class AuditSummaryResponse(BaseModel):
+    """Just the counts an unscoped export reports. See AuditTrailService.summary."""
+
+    project_id: str
+    generated_at: str
+    counts: AuditExportCounts
+
+
 class AuditExportResponse(BaseModel):
     project_id: str
     project_name: str

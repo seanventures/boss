@@ -2642,6 +2642,13 @@ export type AuditExportCounts = {
   events: number;
 };
 
+/** The counts an unscoped export reports, without the export. See GET /v1/audit/summary. */
+export type AuditSummaryResponse = {
+  project_id: string;
+  generated_at: string;
+  counts: AuditExportCounts;
+};
+
 export type AuditExportResponse = {
   project_id: string;
   project_name: string;
@@ -8628,6 +8635,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listReceipts(projectId: string, limit = 50, offset = 0) {
       return request<ReceiptListResponse>("GET", "/v1/receipts", {
         query: { project_id: projectId, limit, offset },
+      });
+    },
+    /**
+     * The counts only. Prefer this over exportAuditTrail when you need numbers: the export
+     * serialises the entire audit trail (192 MB / 62s on a real project) and callers that
+     * only read `counts` were paying all of it.
+     */
+    summarizeAuditTrail(projectId: string, actor?: string) {
+      return request<AuditSummaryResponse>("GET", "/v1/audit/summary", {
+        query: { project_id: projectId, actor },
       });
     },
     exportAuditTrail(
