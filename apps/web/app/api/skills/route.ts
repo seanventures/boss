@@ -22,11 +22,16 @@ export async function GET(req: Request) {
   // the default is what this project authored. All three render one page, so they share a
   // route rather than growing three that each need the same auth and error handling.
   const view = url.searchParams.get("view");
+  // `mcp` is the fourth: a server is where a connector's tools live, and a skill with
+  // behaviour "mcp_tool" names one of them. Same page because they answer the same question —
+  // what can an agent actually do here — and splitting them made an operator check two.
   const path = view === "builtin"
     ? `/v1/skills?project_id=${encodeURIComponent(projectId)}`
     : view === "assignments"
       ? `/v1/role-skills?project_id=${encodeURIComponent(projectId)}`
-      : `/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`;
+      : view === "mcp"
+        ? `/v1/mcp/servers?project_id=${encodeURIComponent(projectId)}`
+        : `/v1/skill-definitions?project_id=${encodeURIComponent(projectId)}`;
   try {
     const r = await fetch(`${API_URL}${path}`, {
       headers: authHeaders({ "Content-Type": "application/json" }),

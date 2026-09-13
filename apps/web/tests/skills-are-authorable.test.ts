@@ -21,7 +21,10 @@ describe("the area exists in all the places an area has to exist", () => {
     // Adding an area needs five things and the invisible one is the CSS. A test has caught
     // that twice now.
     expect(SHELL).toContain('| "skills"');
-    expect(SHELL).toContain('{ id: "skills", label: "Skills"');
+    // The label names both things the area holds: skills you author, and the MCP servers
+    // they reach. Asserted on the ID and the label separately, so a copy change does not
+    // read as the area having vanished.
+    expect(SHELL).toContain('{ id: "skills", label: "Skills and MCP"');
     expect(PAGE).toContain('data-area="skills"');
     expect(CSS).toContain('.bx-content[data-active="skills"]');
     expect(EDITION).toContain('"skills"');

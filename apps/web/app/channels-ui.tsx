@@ -276,14 +276,23 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
 
       <details className="stack-card" data-testid="channel-client" open={!status?.configured}>
         <summary className="skill-form-summary">
+          {/* ONE CLIENT FOR THE WHOLE PROJECT, AND THE SUMMARY HAS TO SAY SO.
+              Sitting under a card that names a connected channel, "Google OAuth client" reads
+              as belonging to THAT channel — so an operator connecting a second one cannot tell
+              whether they also need a second client. They do not: the client is the Cloud
+              APPLICATION, and every channel authorises against it. */}
           {status?.configured
-            ? `Google OAuth client — configured (${status.client_id_hint})`
-            : "Google OAuth client — not set up yet"}
+            ? `Google Cloud client for this project — configured (${status.client_id_hint})`
+            : "Google Cloud client for this project — not set up yet"}
         </summary>
         <p className="detail">
-          BOSS uses your own Google Cloud project, not a shared one: your quota is yours, and a
-          leak anywhere else cannot reach your channel. Create an OAuth client (Web application)
-          with the YouTube Data API and Drive API enabled, then paste it here.
+          <b>Shared by every Google channel in this project</b>, not one per channel —
+          connecting another channel uses this same client and needs nothing new here.
+        </p>
+        <p className="detail">
+          BOSS uses your own Google Cloud project rather than a shared one: your quota is yours,
+          and a leak anywhere else cannot reach your channels. Create an OAuth client (Web
+          application) with the YouTube Data API and Drive API enabled, then paste it here.
         </p>
         <div className="setup-form">
           <label className="setup-field">

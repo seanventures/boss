@@ -1730,7 +1730,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("skills") ? (
-        <section className="panel-stack" data-area="skills" aria-label="Skills">
+        <section className="panel-stack" data-area="skills" aria-label="Skills and MCP">
           {/* ORDER IS THE RECOMMENDATION. Authoring is what an operator came for, so it is
               first; Channels is setup done once, so it sits below it; the catalogues are
               reference and are shut. Channels is passed AS A CHILD rather than rendered

@@ -126,3 +126,26 @@ describe("a channel can be reconnected and disconnected", () => {
     expect(ROUTE).toContain('const ALLOWED = ["save_client", "connect", "disconnect"] as const;');
   });
 });
+
+/**
+ * One OAuth client, shared by every channel in the project.
+ *
+ * "The google oauth client configured is for same existing channel or for new one? The UI is
+ * still confusing here."
+ *
+ * It sits under a card that names a connected channel, so "Google OAuth client" reads as
+ * belonging to THAT channel — and an operator connecting a second one cannot tell whether they
+ * also need a second client. They do not: the client is the Cloud APPLICATION, and every
+ * channel authorises against it.
+ */
+describe("the client card says what it is scoped to", () => {
+  it("names the project, not the channel", () => {
+    expect(UI).toContain("Google Cloud client for this project");
+    expect(UI).not.toContain("`Google OAuth client — configured");
+  });
+
+  it("and says outright that connecting another channel needs nothing new here", () => {
+    expect(UI).toContain("Shared by every Google channel in this project");
+    expect(UI).toContain("needs nothing new here");
+  });
+});

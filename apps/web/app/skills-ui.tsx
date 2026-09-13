@@ -43,6 +43,14 @@ const BLANK = {
   risk_tier: "1", trusted: false,
 };
 
+/** A registered MCP server. Where a connector's tools live — the realistic path to a
+ *  third-party account, since the server holds the integration and a skill names one of its
+ *  tools. Read-only here: adding one is a governed registration, not a form field. */
+type McpServer = {
+  id: string; name: string; url: string; transport?: string; risk_tier?: number;
+  data_boundary?: string; enabled?: boolean; description?: string;
+};
+
 /** One of the skills BOSS ships. A different shape from an authored one: it has an executor
  *  behind it and a project enables it rather than writing it. */
 type BuiltIn = { id: string; kind?: string; source?: string; risk_tier?: number;
@@ -71,6 +79,7 @@ export function SkillsHome(
 ) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [builtIn, setBuiltIn] = useState<BuiltIn[] | null>(null);
+  const [mcp, setMcp] = useState<McpServer[] | null>(null);
   const [draft, setDraft] = useState({ ...BLANK });
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -145,6 +154,17 @@ export function SkillsHome(
       setNote({ ok: false, text: String((e as Error)?.message ?? e) });
     }
   }, [busy, projectId, actor, reloadAssignments]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/skills?view=mcp&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        setMcp(r.ok ? (((await r.json()).items ?? []) as McpServer[]) : []);
+      } catch { setMcp([]); }
+    })();
+  }, [projectId]);
 
   // WHAT THIS INSTALL ALREADY HAS. Shown beside what the operator wrote, because "you have no
   // skills" is false on a fresh project — BOSS ships seventeen, and several of them are the
@@ -376,6 +396,56 @@ export function SkillsHome(
                     canPlaceInWorkflow={false}
                   />
                 )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
+
+      <details className="stack-card" data-testid="mcp-servers">
+        <summary className="skill-form-summary">
+          MCP servers{mcp === null ? "" : ` (${mcp.length})`}
+        </summary>
+        <div className="section-head">
+          <div>
+            <h2>Tools BOSS reaches over a protocol.</h2>
+            <p className="detail">
+              An MCP server holds an integration — a third-party account, a data source — and a
+              skill names one of its tools. This is the realistic path to connecting something
+              BOSS does not ship, because the server maintains the API and the auth, not BOSS.
+            </p>
+          </div>
+        </div>
+        {mcp === null ? <p className="detail">Loading…</p>
+         : mcp.length === 0 ? (
+           <p className="detail" data-testid="mcp-empty">
+             None registered. A server is registered through the API — deliberately not a form
+             here, because pointing BOSS at a tool endpoint is a governed act with a risk tier
+             and a data boundary, not a text field.
+           </p>
+         ) : (
+          <ul className="skill-list" data-testid="mcp-list">
+            {mcp.map((m) => (
+              <li key={m.id} className="skill-row" data-enabled={m.enabled !== false}>
+                <span className="skill-row-main">
+                  <b>{m.name}</b>
+                  {m.transport ? (
+                    <span className="cap-badge tone-muted">{m.transport}</span>
+                  ) : null}
+                  {(m.risk_tier ?? 0) >= 2 ? (
+                    <span className="cap-badge tone-amber">needs a person</span>
+                  ) : null}
+                  {m.data_boundary ? (
+                    <span className="cap-badge tone-muted">{m.data_boundary}</span>
+                  ) : null}
+                  {m.enabled === false ? (
+                    <span className="cap-badge tone-muted">off</span>
+                  ) : null}
+                </span>
+                {m.description ? <span className="detail">{m.description}</span> : null}
+                {/* The URL, quietly. It is how an operator tells two servers apart when the
+                    names are similar, and it is not a secret. */}
+                <code className="detail">{m.url}</code>
               </li>
             ))}
           </ul>
