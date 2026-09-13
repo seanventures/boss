@@ -56,11 +56,47 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
           redirect_uri: f.redirect_uri || body.redirect_uri || defaultRedirect(body),
         }));
       }
-      if (c.ok) setChannels(((await c.json()).channels ?? []) as Channel[]);
+      if (c.ok) {
+        const found = ((await c.json()).channels ?? []) as Channel[];
+        setChannels(found);
+        if (found.some((x) => x.status === "active")) setAwaiting(0);
+      }
     } catch { /* leave what we had */ }
   }, [projectId]);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  // CONSENT HAPPENS IN ANOTHER TAB, SO THIS ONE HAS TO NOTICE WHEN IT IS DONE.
+  //
+  // The operator authorises on Google's page and switches back to a console that fetched its
+  // channel list before any of that happened — so it still says "No channel connected yet"
+  // about a channel that is connected. Telling them to refresh is not a fix; the page knows
+  // perfectly well when it has been returned to.
+  useEffect(() => {
+    const onReturn = () => {
+      if (document.visibilityState === "visible") void reload();
+    };
+    window.addEventListener("focus", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => {
+      window.removeEventListener("focus", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
+    };
+  }, [reload]);
+
+  // AND A SHORT POLL AFTER PRESSING CONNECT, because a fast operator can finish consent
+  // without this tab ever losing focus — on a second monitor, or with the popup dismissed by
+  // the browser. Bounded: ten checks over thirty seconds, then it stops rather than polling a
+  // dead connection attempt forever.
+  const [awaiting, setAwaiting] = useState(0);
+  useEffect(() => {
+    if (awaiting <= 0) return;
+    const timer = setTimeout(() => {
+      void reload();
+      setAwaiting((n) => n - 1);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [awaiting, reload]);
 
   const saveClient = useCallback(async () => {
     if (busy) return;
@@ -101,7 +137,8 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
       // A NEW TAB, not a redirect. The console holds unsaved state on other screens, and
       // Google's consent ends on a page that is not this app.
       window.open(String(data.authorization_url), "_blank", "noopener");
-      setNote({ ok: true, text: "Authorise in the tab that opened, then come back and refresh." });
+      setAwaiting(10);
+      setNote({ ok: true, text: "Authorise in the tab that opened — this page will notice." });
     } catch (e) {
       setBusy(false);
       setNote({ ok: false, text: String((e as Error)?.message ?? e) });

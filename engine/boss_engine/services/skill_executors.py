@@ -826,3 +826,86 @@ def execute_publish_youtube(
          "duration_seconds": info.get("duration_seconds")},
     )
     return {**result, "media_artifact_id": source_artifact}
+
+
+@register_executor("drive.list_videos")
+def execute_drive_list_videos(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """The videos an operator could pick, so a workflow can be given one by name.
+
+    A read, and the only step in the media pipeline that is. It exists because the alternative
+    is asking an operator for a Drive file id — a 33-character opaque string they would have to
+    dig out of a URL — when what they know is "the one called MS_latest_FULL_1080p".
+    """
+    from .drive_media import list_videos
+
+    files = list_videos(
+        context.connection, context.settings,
+        project_id=context.project_id,
+        folder_id=str(inputs.get("folder_id") or ""),
+        connection_key=str(inputs.get("connection_key") or "youtube_default"),
+        limit=int(inputs.get("limit") or 50),
+    )
+    return {"files": files, "count": len(files)}
+
+
+@register_executor("drive.import_video")
+def execute_drive_import_video(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Turn a Drive file into a media artifact the editing steps can take.
+
+    THE ENTRY POINT OF THE WHOLE PIPELINE. Every editing step takes a `media_artifact_id`, and
+    until this exists there is no way to make the first one — an operator with a video in Drive
+    has no way to start. It downloads nothing: an artifact records WHERE the media is, and the
+    step that needs the bytes fetches them itself.
+    """
+    from .drive_media import DriveMediaError, record_artifact
+    from .channel_oauth import access_token_for
+
+    file_id = str(inputs.get("file_id") or "").strip()
+    if not file_id:
+        raise ValueError("file_id is required — use drive.list_videos to find one")
+    connection_key = str(inputs.get("connection_key") or "youtube_default")
+
+    # Read the file's metadata so the artifact carries a NAME rather than an opaque id, and so
+    # a file that is not a video fails here instead of inside ffmpeg three steps later.
+    import httpx
+
+    token = access_token_for(
+        context.connection, context.settings,
+        project_id=context.project_id, connection_key=connection_key)
+    r = httpx.get(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        params={"fields": "id,name,mimeType,size,webViewLink"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30.0,
+    )
+    if r.status_code != 200:
+        raise DriveMediaError(
+            f"Could not read that Drive file ({r.status_code}). Check the id, and that the "
+            "connected Google account can see it.")
+    info = r.json() or {}
+    mime = str(info.get("mimeType") or "")
+    if not mime.startswith("video/"):
+        raise DriveMediaError(f"'{info.get('name')}' is {mime or 'of unknown type'}, not a video.")
+
+    artifact_id = record_artifact(
+        context.connection, project_id=context.project_id, actor=context.actor,
+        kind="media_video",
+        drive_file={
+            "file_id": info.get("id"),
+            "name": info.get("name"),
+            "view_url": info.get("webViewLink")
+                        or f"https://drive.google.com/file/d/{info.get('id')}/view",
+            "bytes": int(info.get("size") or 0),
+        },
+        detail={"operation": "import", "mime_type": mime},
+    )
+    return {
+        "media_artifact_id": artifact_id,
+        "name": info.get("name"),
+        "bytes": int(info.get("size") or 0),
+        "drive_file_id": info.get("id"),
+    }

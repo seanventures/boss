@@ -58,3 +58,32 @@ describe("connecting a channel", () => {
     expect(UI).toContain("client_id_hint");
   });
 });
+
+describe("the page notices a connection made in another tab", () => {
+  it("refetches when the operator comes back", () => {
+    // Consent happens on Google's page. The operator switches back to a console that fetched
+    // its channel list before any of that happened, so it still says "No channel connected
+    // yet" about a channel that IS connected — which is what happened the first time anyone
+    // used this, and cost a hard refresh to discover.
+    expect(UI).toContain('window.addEventListener("focus", onReturn)');
+    expect(UI).toContain('document.addEventListener("visibilitychange", onReturn)');
+    // Cleaned up: a listener per mount on a long-lived console is a leak.
+    expect(UI).toContain('window.removeEventListener("focus", onReturn)');
+  });
+
+  it("and polls briefly after Connect, for the case where focus never left", () => {
+    // A second monitor, or a popup the browser dismissed: consent can finish without this tab
+    // ever blurring.
+    expect(UI).toContain("setAwaiting(10)");
+    // BOUNDED. A poll that never stops is a poll that hammers the API for the rest of the
+    // session when the operator abandons the consent screen.
+    expect(UI).toContain("setAwaiting((n) => n - 1)");
+    expect(UI).toContain("if (awaiting <= 0) return;");
+    // And it stops the moment it lands, rather than running out the clock.
+    expect(UI).toContain('if (found.some((x) => x.status === "active")) setAwaiting(0);');
+  });
+
+  it("no longer tells the operator to refresh", () => {
+    expect(UI).not.toContain("come back and refresh");
+  });
+});

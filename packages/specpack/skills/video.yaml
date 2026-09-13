@@ -106,6 +106,28 @@ skills:
       requires_connection: google
       requires_connection_health: healthy
 
+  - id: drive.import_video
+    kind: media_edit
+    # THE ENTRY POINT. Records where a video is; downloads nothing. Every editing step takes a
+    # media_artifact_id, and without this there is no way to make the first one.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: Turn a Drive video into a media artifact the editing steps can take.
+    data_boundary: internal
+    input_schema:
+      file_id: string
+    output_schema:
+      media_artifact_id: string
+      name: string
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_connection: google
+
   - id: drive.list_videos
     kind: media_edit
     # A read. Lists only video mime types, and only what the connected account can already see.
