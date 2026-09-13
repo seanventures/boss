@@ -26,7 +26,14 @@ def test_the_scopes_are_the_narrowest_that_can_do_the_job():
     # verified by reading the channel's own name back.
     assert not any(s.endswith("/youtube") for s in YOUTUBE_SCOPES)
     assert not any("force-ssl" in s for s in YOUTUBE_SCOPES)
-    assert len(YOUTUBE_SCOPES) == 2
+    # Drive rides the SAME consent, so the media pipeline needs one credential rather than two
+    # with two expiries. `drive.file` reaches only files BOSS created; `drive.readonly` is the
+    # restricted one and the honest cost of reading a source the operator uploaded themselves.
+    assert "https://www.googleapis.com/auth/drive.file" in YOUTUBE_SCOPES
+    assert "https://www.googleapis.com/auth/drive.readonly" in YOUTUBE_SCOPES
+    # Nothing broader than that: no `drive` (full access), no `drive.appdata`.
+    assert not any(s.endswith("/drive") for s in YOUTUBE_SCOPES)
+    assert len(YOUTUBE_SCOPES) == 4
 
 
 def test_an_unconfigured_install_says_which_variables_to_set(client):
@@ -386,3 +393,82 @@ def test_the_status_endpoint_tells_the_operator_what_to_paste_into_google(client
     status = client.get("/v1/channels/youtube/client",
                         params={"project_id": PROJECT}).json()
     assert status["callback_path"] == "/v1/channels/youtube/callback"
+
+
+# ---------------------------------------------------------------------------
+# The path a real connection actually takes
+# ---------------------------------------------------------------------------
+#
+# Every test above stops at "no OAuth client configured", because none is. That is a real
+# assertion and it left a hole: `start()` was never reached, so a TypeError on its first line
+# — IntegrationRegistryService() constructed without its required `settings` — shipped, and the
+# operator found it by pressing Connect.
+#
+# These configure a client so the flow runs for real, up to the point where Google itself would
+# be involved.
+
+
+def test_starting_a_connection_builds_a_consent_url(client, engine):
+    """Reaches `start()`, which is what the earlier tests never did."""
+    _save_client(client, client_id="test-client-id.apps.googleusercontent.com")
+    r = client.post("/v1/channels/youtube/connect",
+                    json={"project_id": PROJECT, "actor": "ceo"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    url = body["authorization_url"]
+
+    assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    assert "test-client-id.apps.googleusercontent.com" in url
+    # offline + consent is what mints a REFRESH token. Without prompt=consent a
+    # re-authorisation returns only an access token, and the connection works for an hour and
+    # then silently stops — the worst failure shape available here.
+    assert "access_type=offline" in url
+    assert "prompt=consent" in url
+    # Every scope the media pipeline needs, on one consent.
+    for scope in ("youtube.upload", "youtube.readonly", "drive.readonly", "drive.file"):
+        assert scope in url
+    assert body["connection_id"]
+
+
+def test_the_integration_definition_is_published_on_first_connect(client, engine):
+    """`ensure_definition` runs here and is idempotent.
+
+    It constructs IntegrationRegistryService, which needs `settings` — the argument whose
+    absence produced "missing 1 required positional argument" the first time anyone pressed
+    Connect.
+    """
+    from sqlalchemy import text
+
+    from apps.api.app.services.channel_oauth import INTEGRATION_KEY, ensure_definition
+
+    with engine.begin() as connection:
+        first = ensure_definition(connection, api_main.settings, PROJECT, "ceo")
+        again = ensure_definition(connection, api_main.settings, PROJECT, "ceo")
+        assert first == again, "publishing the definition twice must not make a second one"
+
+        row = connection.execute(
+            text("SELECT integration_key, status, skill_contracts FROM integration_definitions "
+                 "WHERE id = :i"),
+            {"i": first},
+        ).mappings().one()
+    assert row["integration_key"] == INTEGRATION_KEY
+    assert row["status"] == "active"
+    # All four capabilities, because one consent carries both YouTube and Drive.
+    assert set(row["skill_contracts"]) == {
+        "video.publish", "channel.read", "drive.read", "drive.write"}
+
+
+def test_starting_twice_replaces_the_pending_connection(client):
+    """An abandoned consent screen must not leave a state that still validates tomorrow."""
+    _save_client(client)
+    first = client.post("/v1/channels/youtube/connect",
+                        json={"project_id": PROJECT, "actor": "ceo"}).json()
+    second = client.post("/v1/channels/youtube/connect",
+                         json={"project_id": PROJECT, "actor": "ceo"}).json()
+    assert first["state"] != second["state"]
+
+    # The first nonce is gone, so a late callback carrying it is refused.
+    stale = client.get("/v1/channels/youtube/callback",
+                       params={"code": "x", "state": first["state"]})
+    assert stale.status_code == 400
+    assert "expired or was already used" in stale.text

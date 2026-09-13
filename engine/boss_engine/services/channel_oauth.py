@@ -350,8 +350,10 @@ def _require_client(
     return client_id, client_secret, redirect
 
 
-def ensure_definition(connection: Connection, project_id: str, actor: str) -> str:
-    """The YouTube integration, published for this project. Idempotent."""
+def ensure_definition(
+    connection: Connection, settings: Settings, project_id: str, actor: str
+) -> str:
+    """The Google integration, published for this project. Idempotent."""
     from .governed_collaboration import IntegrationRegistryService
 
     existing = connection.execute(
@@ -362,44 +364,91 @@ def ensure_definition(connection: Connection, project_id: str, actor: str) -> st
     if existing:
         return str(existing[0])
 
-    published = IntegrationRegistryService().publish_definition(
+    # EVERY FIELD THE REGISTRY REQUIRES, STATED RATHER THAN GUESSED.
+    #
+    # A contract missing any of these is rejected at publish time, and the first version of
+    # this function supplied four of the twelve — which nobody found until an operator pressed
+    # Connect, because no test reached this line.
+    #
+    # `side_effect_class` is the one that matters: anything but "read" must require a receipt
+    # and a dedupe key, which is the registry enforcing the same rule the publish skill states.
+    def contract(
+        description: str, *, risk: int, scopes: list[str], effect: str,
+        inputs: dict, outputs: dict, evidence: list[str],
+    ) -> dict[str, Any]:
+        writes = effect != "read"
+        return {
+            "description": description,
+            "risk_tier": risk,
+            "scopes": scopes,
+            "side_effect_class": effect,
+            "input_schema": inputs,
+            "output_schema": outputs,
+            "permissions": {"required_permissions": ["integration_manage"]},
+            "data_boundaries": ["public"] if effect == "publish" else ["internal"],
+            "cost": {"estimator": "fixed", "category": "tool"},
+            # A publish gets ONE attempt: the failure may have happened after the upstream
+            # accepted the bytes, so a retry can publish the same video twice.
+            "retry": {"max_attempts": 1 if effect == "publish" else 2,
+                      "backoff": "none" if effect == "publish" else "exponential"},
+            "receipt_required": writes,
+            "dedupe_required": writes,
+            "artifact_requirements": ["media_artifact"] if writes else [],
+            "evidence_requirements": evidence,
+        }
+
+    published = IntegrationRegistryService(settings).create_definition(
         connection,
         project_id=project_id,
         integration_key=INTEGRATION_KEY,
         name="Google (YouTube + Drive)",
         category="media_channel",
         skill_contracts={
-            "video.publish": {
-                "description": "Upload a video to the connected channel.",
-                # Tier 3 here for the same reason `social_publish` is tier 3: publishing is
-                # irreversible and public. A connection cannot lower it.
-                "risk_tier": 3,
-                "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
-            },
-            "channel.read": {
-                "description": "Read the connected channel's own name and quota.",
-                "risk_tier": 0,
-                "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
-            },
-            "drive.read": {
-                "description": "Read a source video from the operator's Drive.",
-                "risk_tier": 1,
-                "scopes": ["https://www.googleapis.com/auth/drive.readonly"],
-            },
-            "drive.write": {
-                # Tier 1, not 3: it creates a NEW file and can only touch files BOSS created,
-                # so nothing of the operator's can be overwritten or lost by it.
-                "description": "Write an edited video back to Drive.",
-                "risk_tier": 1,
-                "scopes": ["https://www.googleapis.com/auth/drive.file"],
-            },
+            "video.publish": contract(
+                "Upload a video to the connected channel.",
+                # Tier 3 for the same reason `social_publish` is: publishing is irreversible
+                # and public. A connection cannot lower it.
+                risk=3, effect="publish",
+                scopes=["https://www.googleapis.com/auth/youtube.upload"],
+                inputs={"media_artifact_id": "string", "title": "string",
+                        "made_for_kids": "boolean"},
+                outputs={"video_id": "string", "video_url": "string"},
+                evidence=["video_id", "video_url", "the approval it published under"],
+            ),
+            "channel.read": contract(
+                "Read the connected channel's own name and quota.",
+                risk=0, effect="read",
+                scopes=["https://www.googleapis.com/auth/youtube.readonly"],
+                inputs={}, outputs={"channel_id": "string", "title": "string"},
+                evidence=[],
+            ),
+            "drive.read": contract(
+                "Read a source video from the operator's Drive.",
+                risk=1, effect="read",
+                scopes=["https://www.googleapis.com/auth/drive.readonly"],
+                inputs={"file_id": "string"},
+                outputs={"path": "string", "bytes": "integer"},
+                evidence=[],
+            ),
+            "drive.write": contract(
+                # Tier 1, not 3: it creates a NEW file and `drive.file` cannot reach anything
+                # BOSS did not create, so nothing of the operator's can be lost by it.
+                "Write an edited video back to Drive.",
+                risk=1, effect="write",
+                scopes=["https://www.googleapis.com/auth/drive.file"],
+                inputs={"local_path": "string", "name": "string"},
+                outputs={"file_id": "string", "view_url": "string"},
+                evidence=["file_id", "view_url"],
+            ),
         },
         executor_bindings=[
             {"skill_id": "publish_youtube", "capability": "video.publish"},
-            {"skill_id": "drive_read_file", "capability": "drive.read"},
-            {"skill_id": "drive_write_file", "capability": "drive.write"},
+            {"skill_id": "drive.list_videos", "capability": "drive.read"},
         ],
-        provenance={"source": "builtin", "provider": "google", "api": "youtube_data_v3"},
+        # `trusted` is required: the registry refuses an untrusted definition outright. True
+        # here because this one ships with BOSS rather than arriving from a tenant.
+        provenance={"source": "builtin", "trusted": True,
+                    "provider": "google", "api": "youtube_data_v3+drive_v3"},
         actor=actor,
     )
     return str(published["id"])
@@ -415,7 +464,7 @@ def start(
 ) -> dict[str, Any]:
     """Begin a connection. Returns the URL to send the operator to."""
     client_id, _secret, redirect = _require_client(settings, connection, project_id)
-    definition_id = ensure_definition(connection, project_id, actor)
+    definition_id = ensure_definition(connection, settings, project_id, actor)
 
     # A fresh nonce every time, and the old pending row is replaced rather than accumulated:
     # an abandoned consent screen must not leave a state that still validates tomorrow.
