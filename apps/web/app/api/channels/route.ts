@@ -40,11 +40,35 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
   const action = String(body.action ?? "");
-  // An allowlist, not a lookup: an action that is not one of these two must not reach the API
-  // at all, whatever it names.
-  if (action !== "save_client" && action !== "connect") {
+  // An allowlist, not a lookup: an action that is not one of these must not reach the API at
+  // all, whatever it names.
+  const ALLOWED = ["save_client", "connect", "disconnect"] as const;
+  if (!ALLOWED.includes(action as (typeof ALLOWED)[number])) {
     return NextResponse.json({ error: `unknown action '${action}'` }, { status: 400 });
   }
+
+  // DISCONNECT IS A DELETE WITH QUERY PARAMS, not a body — so it cannot share the shape below.
+  if (action === "disconnect") {
+    const q = `?project_id=${encodeURIComponent(String(body.project_id ?? ""))}`
+      + `&connection_key=${encodeURIComponent(String(body.connection_key ?? ""))}`
+      + `&actor=${encodeURIComponent(String(body.actor ?? "executive_console"))}`;
+    try {
+      const r = await fetch(`${API_URL}/v1/channels/youtube${q}`, {
+        method: "DELETE",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        cache: "no-store",
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
+                                 { status: r.status });
+      }
+      return NextResponse.json(data);
+    } catch (e) {
+      return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+    }
+  }
+
   const path = action === "save_client"
     ? "/v1/channels/youtube/client"
     : "/v1/channels/youtube/connect";

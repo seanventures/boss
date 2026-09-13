@@ -482,14 +482,17 @@ def start(
     client_id, _secret, redirect = _require_client(settings, connection, project_id)
     definition_id = ensure_definition(connection, settings, project_id, actor)
 
-    # A fresh nonce every time, and the old pending row is replaced rather than accumulated:
-    # an abandoned consent screen must not leave a state that still validates tomorrow.
+    # A fresh nonce every time, and the row is UPSERTED rather than inserted.
+    #
+    # connection_key is unique per project, so an INSERT here fails the moment there is
+    # already a connection under that key — which is every RECONNECT. Testing-mode refresh
+    # tokens expire after seven days, so reconnecting is not an edge case, it is the weekly
+    # path. The first version of this could only ever be used once.
+    #
+    # Upserting also keeps the connection's IDENTITY across a reconnect: the same row id, so
+    # anything referring to this connection still refers to it, and the secret_ref_ids from
+    # the previous token are cleared here rather than being orphaned by a delete-and-recreate.
     state = secrets.token_urlsafe(32)
-    connection.execute(
-        text("DELETE FROM integration_connections WHERE project_id = :p "
-             "AND connection_key = :k AND status = 'pending'"),
-        {"p": project_id, "k": connection_key},
-    )
     row_id = make_id("iconn")
     connection.execute(
         text(
@@ -503,6 +506,15 @@ def start(
               CAST(:caps AS JSONB), '["public"]'::jsonb, 3,
               'pending', 3600, CAST(:prov AS JSONB), 'pending', :actor
             )
+            ON CONFLICT (project_id, connection_key) DO UPDATE SET
+              status = 'pending',
+              health_status = 'pending',
+              -- The OLD token's reference goes, because it is about to be replaced. Leaving it
+              -- would mean a failed re-consent silently keeps publishing on a credential the
+              -- operator thinks they just rotated.
+              secret_ref_ids = '[]'::jsonb,
+              provenance = integration_connections.provenance || EXCLUDED.provenance,
+              updated_at = now()
             """
         ),
         {

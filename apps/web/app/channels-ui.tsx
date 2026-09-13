@@ -120,13 +120,19 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
     }
   }, [busy, form, projectId, actor, reload]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (connectionKey?: string) => {
     if (busy) return;
     setBusy(true); setNote(null);
     try {
       const r = await fetch("/api/channels", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "connect", project_id: projectId, actor }),
+        // RECONNECT AND CONNECT-ANOTHER ARE THE SAME CALL, differing only in the key. Passing
+        // the EXISTING key re-authorises that channel in place and keeps its identity;
+        // passing a fresh one adds a second channel beside it.
+        body: JSON.stringify({
+          action: "connect", project_id: projectId, actor,
+          ...(connectionKey ? { connection_key: connectionKey } : {}),
+        }),
       });
       const data = await r.json().catch(() => ({}));
       setBusy(false);
@@ -145,7 +151,44 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
     }
   }, [busy, projectId, actor]);
 
+  const disconnect = useCallback(async (connectionKey: string, title: string) => {
+    if (busy) return;
+    // A CONFIRM, because this revokes the token at Google as well as locally. It is
+    // recoverable — reconnect and consent again — but it stops every scheduled publish until
+    // somebody does, and that should not happen on a misclick.
+    if (!window.confirm(
+      `Disconnect ${title}? BOSS will revoke the token at Google and cannot publish to this `
+      + "channel until it is reconnected.")) return;
+    setBusy(true); setNote(null);
+    try {
+      const r = await fetch("/api/channels", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "disconnect", project_id: projectId, actor, connection_key: connectionKey,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      setBusy(false);
+      if (!r.ok) { setNote({ ok: false, text: String(data?.error ?? `HTTP ${r.status}`) }); return; }
+      setNote({ ok: true, text: `${title} disconnected.` });
+      void reload();
+    } catch (e) {
+      setBusy(false);
+      setNote({ ok: false, text: String((e as Error)?.message ?? e) });
+    }
+  }, [busy, projectId, actor, reload]);
+
   const connected = (channels ?? []).filter((c) => c.status === "active");
+
+  /** A key no existing connection is using, so "connect another" adds rather than replaces. */
+  const nextKey = useCallback(() => {
+    const taken = new Set((channels ?? []).map((c) => c.connection_key));
+    for (let n = 2; n < 50; n += 1) {
+      const candidate = `youtube_${n}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return `youtube_${Date.now()}`;
+  }, [channels]);
 
   return (
     <section className="panel-stack" aria-label="Channels">
@@ -191,6 +234,26 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
                     Stored, but the channel could not be read back: {c.channel?.reason}
                   </span>
                 ) : null}
+                {/* RECONNECT IS NOT AN EDGE CASE. A testing-mode refresh token expires after
+                    seven days, so this is the weekly path, and the failure it fixes shows up
+                    as a publish failing with an auth error rather than as anything that looks
+                    like an expired credential. */}
+                <div className="skill-assign">
+                  <button type="button" className="linklike" disabled={busy}
+                          data-testid={`channel-reconnect-${c.connection_key}`}
+                          title="Re-authorise this channel. Needed about weekly while the app
+                                 is in Google testing mode, where refresh tokens expire after
+                                 seven days."
+                          onClick={() => void connect(c.connection_key)}>
+                    Reconnect
+                  </button>
+                  <button type="button" className="linklike" disabled={busy}
+                          data-testid={`channel-disconnect-${c.connection_key}`}
+                          onClick={() => void disconnect(
+                            c.connection_key, c.channel?.title || c.connection_key)}>
+                    Disconnect
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -204,7 +267,8 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
                   disabled={busy || !status?.configured}
                   title={status?.configured ? undefined
                          : "Add your Google OAuth client below first"}
-                  onClick={() => void connect()}>
+                  onClick={() => void connect(
+                    connected.length > 0 ? nextKey() : undefined)}>
             {connected.length > 0 ? "Connect another channel" : "Connect YouTube"}
           </button>
         </div>

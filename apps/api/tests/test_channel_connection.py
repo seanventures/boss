@@ -494,3 +494,120 @@ def test_starting_twice_replaces_the_pending_connection(client):
                        params={"code": "x", "state": first["state"]})
     assert stale.status_code == 400
     assert "expired or was already used" in stale.text
+
+
+# ---------------------------------------------------------------------------
+# Reconnecting, which is the weekly path and not an edge case
+# ---------------------------------------------------------------------------
+#
+# A testing-mode refresh token expires after seven days, so an operator re-authorises roughly
+# weekly. The first version of `start()` INSERTed a row, and connection_key is unique per
+# project — so it worked exactly once and every reconnect afterwards died on the constraint.
+
+
+def test_a_channel_can_be_reconnected(client):
+    """The whole point: this must work the second time, and the fiftieth."""
+    _save_client(client)
+    first = client.post("/v1/channels/youtube/connect",
+                        json={"project_id": PROJECT, "actor": "ceo"})
+    assert first.status_code == 201, first.text
+    again = client.post("/v1/channels/youtube/connect",
+                        json={"project_id": PROJECT, "actor": "ceo"})
+    assert again.status_code == 201, again.text
+    assert again.json()["state"] != first.json()["state"]
+
+
+def test_reconnecting_keeps_the_connection_identity(client, engine):
+    """Same row, so anything referring to this connection still refers to it.
+
+    Delete-and-recreate would orphan the previous secret_refs and change the id under any
+    workflow step that named it.
+    """
+    from sqlalchemy import text
+
+    _save_client(client)
+    client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    with engine.begin() as connection:
+        before = connection.execute(
+            text("SELECT id FROM integration_connections WHERE project_id = :p "
+                 "AND connection_key = 'youtube_default'"),
+            {"p": PROJECT},
+        ).scalar()
+
+    client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text("SELECT id FROM integration_connections WHERE project_id = :p "
+                 "AND connection_key = 'youtube_default'"),
+            {"p": PROJECT},
+        ).scalars().all()
+    assert rows == [before], "a reconnect must reuse the row, not add a second"
+
+
+def test_reconnecting_clears_the_previous_token_reference(client, engine):
+    """A failed re-consent must not silently keep publishing on the old credential.
+
+    The operator pressed Reconnect because they believe the credential is being replaced. If
+    the old secret_ref survived a half-finished flow, it would keep working — and the next
+    publish would go out on a token they thought was gone.
+    """
+    from sqlalchemy import text
+
+    _save_client(client)
+    client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE integration_connections SET secret_ref_ids = '[\"secref_old\"]'::jsonb "
+                 "WHERE project_id = :p AND connection_key = 'youtube_default'"),
+            {"p": PROJECT},
+        )
+
+    client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    with engine.begin() as connection:
+        refs = connection.execute(
+            text("SELECT secret_ref_ids FROM integration_connections WHERE project_id = :p "
+                 "AND connection_key = 'youtube_default'"),
+            {"p": PROJECT},
+        ).scalar()
+    assert refs == [], "the old token reference must go when a reconnect starts"
+
+
+def test_a_second_channel_uses_its_own_key_and_does_not_replace_the_first(client, engine):
+    """"Connect another channel" must add, not overwrite."""
+    from sqlalchemy import text
+
+    _save_client(client)
+    client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    client.post("/v1/channels/youtube/connect",
+                json={"project_id": PROJECT, "actor": "ceo", "connection_key": "youtube_2"})
+    with engine.begin() as connection:
+        keys = connection.execute(
+            text("SELECT connection_key FROM integration_connections WHERE project_id = :p "
+                 "ORDER BY connection_key"),
+            {"p": PROJECT},
+        ).scalars().all()
+    assert "youtube_default" in keys
+    assert "youtube_2" in keys
+
+
+def test_disconnecting_revokes_locally_even_when_google_is_unreachable(client, engine):
+    """A connection nobody can revoke because a third party is down is worse than one revoked
+    on one side."""
+    from sqlalchemy import text
+
+    _save_client(client)
+    client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    r = client.delete(
+        "/v1/channels/youtube",
+        params={"project_id": PROJECT, "connection_key": "youtube_default", "actor": "ceo"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "revoked"
+    with engine.begin() as connection:
+        row = connection.execute(
+            text("SELECT status, secret_ref_ids FROM integration_connections "
+                 "WHERE project_id = :p AND connection_key = 'youtube_default'"),
+            {"p": PROJECT},
+        ).mappings().one()
+    assert row["status"] == "revoked"
+    assert row["secret_ref_ids"] == []

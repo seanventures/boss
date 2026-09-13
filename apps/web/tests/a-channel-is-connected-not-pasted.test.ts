@@ -47,9 +47,13 @@ describe("connecting a channel", () => {
   });
 
   it("the route takes its action from an allowlist, never from a path", () => {
-    expect(ROUTE).toContain('if (action !== "save_client" && action !== "connect")');
-    // No interpolation of caller input into the upstream path.
-    expect(ROUTE).not.toMatch(/\$\{[^}]*body\.[^}]*\}`/);
+    // An allowlist checked against a fixed tuple — it grew from two actions to three, so the
+    // assertion names the property rather than the exact condition.
+    expect(ROUTE).toContain('const ALLOWED = ["save_client", "connect", "disconnect"] as const;');
+    expect(ROUTE).toContain("if (!ALLOWED.includes(action as (typeof ALLOWED)[number]))");
+    // The upstream PATH is never built from caller input — only query values are, and those
+    // are encodeURIComponent'd.
+    expect(ROUTE).not.toMatch(/\$\{[^}]*body\.action[^}]*\}/);
   });
 
   it("nothing on this screen renders a credential", () => {
@@ -85,5 +89,40 @@ describe("the page notices a connection made in another tab", () => {
 
   it("no longer tells the operator to refresh", () => {
     expect(UI).not.toContain("come back and refresh");
+  });
+});
+
+/**
+ * Reconnecting, which is the weekly path.
+ *
+ * A testing-mode refresh token expires after seven days. Without a way to re-authorise, the
+ * first symptom an operator sees is a publish failing with an auth error — which looks like a
+ * bug rather than like a credential that did what it always said it would.
+ */
+describe("a channel can be reconnected and disconnected", () => {
+  it("reconnect re-authorises THIS channel rather than adding another", () => {
+    // Same call, differing only in the key: passing the existing one re-authorises in place.
+    expect(UI).toContain("const connect = useCallback(async (connectionKey?: string) => {");
+    expect(UI).toContain("onClick={() => void connect(c.connection_key)}");
+  });
+
+  it("and connect-another gets a key nobody is using", () => {
+    // connection_key is unique per project. Reusing it would make "connect another" overwrite
+    // the channel already there.
+    expect(UI).toContain("const nextKey = useCallback(");
+    expect(UI).toContain("connected.length > 0 ? nextKey() : undefined");
+  });
+
+  it("disconnect asks first", () => {
+    // It revokes the token at Google as well as locally: recoverable, but it stops every
+    // publish until somebody re-consents, which should not happen on a misclick.
+    const fn = UI.slice(UI.indexOf("const disconnect = useCallback"));
+    expect(fn.slice(0, 600)).toContain("window.confirm");
+    expect(fn.slice(0, 600)).toContain("revoke the token at Google");
+  });
+
+  it("the route allows exactly the three actions it implements", () => {
+    expect(UI.length).toBeGreaterThan(0);
+    expect(ROUTE).toContain('const ALLOWED = ["save_client", "connect", "disconnect"] as const;');
   });
 });
