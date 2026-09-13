@@ -1,0 +1,128 @@
+# Editing a video, as a BOSS capability.
+#
+# `builtin`, not `sandboxed_command`, and the difference is the entire safety argument. That
+# kind exists for operator-authored command lines and refuses without micro-VM isolation —
+# correctly, since an arbitrary ffmpeg line on the control plane is remote code execution
+# against the host holding every project's credentials.
+#
+# Nothing here is operator-authored. BOSS owns every argument vector; the operator supplies a
+# corner from a fixed set and timecodes matched against a regex, and no shell is involved at
+# all. See engine/boss_engine/services/video_edit.py.
+#
+# EVERY STEP TAKES A DRIVE FILE AND LEAVES A DRIVE FILE. Steps cannot hand each other a local
+# path — each runs in its own invocation and the working directory is gone by the time the next
+# starts. The unit passed between them is an artifact naming a Drive file, which has the useful
+# side effect that an operator can watch the output of any intermediate step.
+skills:
+  - id: video.trim
+    kind: media_edit
+    # Writes a new file and destroys nothing. The source is never modified: `drive.file` cannot
+    # reach a file BOSS did not create.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: Cut a video to a start and end timecode, re-encoding so the cut lands where asked.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      start: string
+      end: string
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: video.watermark
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Overlay a logo in a corner, scaled as a fraction of the video's own width so the same
+      setting looks right on every aspect ratio the channel uses.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      logo_artifact_id: string
+      corner: string?
+      scale: number?
+      margin: integer?
+      opacity: number?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      # A fixed vocabulary, because this value becomes part of a filter expression.
+      allowed_values:
+        corner: [top_right, top_left, bottom_right, bottom_left]
+
+  - id: video.bookend
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Put a title clip before and a thank-you clip after, normalising every part to one format
+      first. A clip with no audio track gets silence at its own length rather than failing.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      intro_artifact_id: string?
+      outro_artifact_id: string?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: drive.list_videos
+    kind: media_edit
+    # A read. Lists only video mime types, and only what the connected account can already see.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: List the videos in the operator's Drive, so a workflow can be given one by name.
+    data_boundary: internal
+    input_schema:
+      folder_id: string?
+      limit: integer?
+    output_schema:
+      files: array
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_connection: google

@@ -246,6 +246,28 @@ CAPABILITIES: dict[str, Capability] = {
             is_async=True,
         ),
         _cap(
+            key="video_edit",
+            # OWNS WHAT THE FINISHED FILE LOOKS LIKE — the cut, the branding, the bookends.
+            # Separate from the role that PUBLISHES it, so the agent that can put something in
+            # front of an audience is not the one that assembled it.
+            captain="video_editor",
+            label="Edit the video",
+            summary="Trim, brand and bookend a video, leaving the source untouched.",
+            # No built-in tool: which edit happens is decided by the SKILL the step binds to
+            # (video.trim, video.watermark, video.bookend), which is what lets one capability
+            # serve a three-step edit chain without three capabilities.
+            tool=None,
+            # Writes a new file and destroys nothing. `drive.file` cannot reach a file BOSS did
+            # not create, so the operator's source is safe by permission rather than by policy.
+            risk_tier=1,
+            required_inputs=("media_artifact_id",),
+            optional_inputs=("start", "end", "logo_artifact_id", "corner", "scale", "margin",
+                             "intro_artifact_id", "outro_artifact_id", "output_name",
+                             "output_folder_id"),
+            produces=("media_artifact_id", "view_url", "duration_seconds"),
+            typical_minutes=6,
+        ),
+        _cap(
             key="social_publish",
             # OWNS THE ACCOUNT AND ANSWERS FOR WHAT GOES OUT ON IT.
             #
@@ -459,6 +481,10 @@ REGISTERED_ROLES = frozenset({
     # role a per-platform publishing agent reports to: a channel credential belongs to somebody
     # whose remit is the audience, not to whichever step happened to need it.
     "media_publisher",
+    # OWNS WHAT THE FINISHED FILE LOOKS LIKE. Separate from the publisher on purpose: the agent
+    # that can put something in front of an audience should not be the one that assembled it,
+    # and an editing mistake should be catchable by somebody who did not make it.
+    "video_editor",
 })
 
 

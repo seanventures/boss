@@ -7,6 +7,7 @@ Receipt at this boundary so a future real-mode caller cannot bypass effect evide
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -14,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .core import emit_event
 from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
 from .resource_plane import ResourcePlaneService
@@ -613,3 +615,214 @@ def execute_sandboxed_command(
         }
     finally:
         sandbox.teardown()
+
+
+# ---------------------------------------------------------------------------
+# Media: editing a video, and publishing it
+# ---------------------------------------------------------------------------
+#
+# EVERY STEP TAKES A DRIVE FILE AND LEAVES A DRIVE FILE.
+#
+# Steps cannot hand each other a local path. Each runs in its own invocation, possibly on a
+# different worker, and the working directory is gone by the time the next one starts. So the
+# unit passed between them is an ARTIFACT naming a Drive file — which has the useful side
+# effect that an operator can watch the output of any intermediate step without BOSS building a
+# viewer for it.
+#
+# The download/edit/upload round trip is real cost (a 135 MB video, twice over the wire per
+# step) and it is the price of steps that are independently retryable and independently
+# inspectable. A single fused "edit everything" step would be faster and would fail as one
+# opaque unit.
+
+
+def _media_artifact(context: "SkillExecutorContext", artifact_id: str) -> dict[str, Any]:
+    """The Drive file an artifact points at."""
+    from sqlalchemy import text as _sql
+
+    row = context.connection.execute(
+        _sql("SELECT content FROM artifacts WHERE id = :i AND project_id = :p"),
+        {"i": artifact_id, "p": context.project_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError(f"no artifact {artifact_id!r} in this project")
+    content = row["content"] or {}
+    if not content.get("drive_file_id"):
+        raise ValueError(
+            f"artifact {artifact_id!r} is not a media file — it names no Drive file")
+    return content
+
+
+def _edit_in_drive(
+    context: "SkillExecutorContext",
+    inputs: dict[str, Any],
+    *,
+    operation: str,
+    apply_edit,
+    extra_downloads: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Download, edit, verify, upload, record. The shape every video step shares.
+
+    Written once because the interesting part of each operation is the ffmpeg call, and five
+    copies of the download/upload scaffolding is five places for the cleanup to be forgotten.
+    """
+    from .drive_media import download, record_artifact, upload, workspace
+    from .video_edit import verify_playable
+
+    source_artifact = str(inputs.get("media_artifact_id") or "").strip()
+    if not source_artifact:
+        raise ValueError("media_artifact_id is required")
+    source = _media_artifact(context, source_artifact)
+    connection_key = str(inputs.get("connection_key") or "youtube_default")
+    folder_id = str(inputs.get("output_folder_id") or "")
+
+    with workspace(f"boss-{operation}-") as work:
+        local = download(
+            context.connection, context.settings,
+            project_id=context.project_id, file_id=source["drive_file_id"],
+            dest_dir=work, connection_key=connection_key,
+        )["path"]
+
+        # Clips this operation also needs (an intro, an outro, a logo), each named by its own
+        # artifact so they are versioned and inspectable like anything else.
+        fetched: dict[str, str] = {}
+        for field in extra_downloads:
+            artifact_id = str(inputs.get(field) or "").strip()
+            if not artifact_id:
+                continue
+            asset = _media_artifact(context, artifact_id)
+            fetched[field] = download(
+                context.connection, context.settings,
+                project_id=context.project_id, file_id=asset["drive_file_id"],
+                dest_dir=work, connection_key=connection_key,
+            )["path"]
+
+        edited = apply_edit(local, work, fetched)
+        # VERIFIED BEFORE IT IS UPLOADED. ffmpeg exits 0 on empty and silent output, and an
+        # unwatchable file that reached Drive looks exactly like a successful step.
+        info = verify_playable(edited, expect_audio=bool(inputs.get("expect_audio", True)))
+
+        name = str(inputs.get("output_name") or "").strip() or os.path.basename(edited)
+        written = upload(
+            context.connection, context.settings,
+            project_id=context.project_id, local_path=edited, name=name,
+            folder_id=folder_id, connection_key=connection_key, actor=context.actor,
+        )
+
+    artifact_id = record_artifact(
+        context.connection, project_id=context.project_id, actor=context.actor,
+        kind="media_video", drive_file=written, source_artifact_id=source_artifact,
+        detail={"operation": operation, **info},
+    )
+    return {
+        "media_artifact_id": artifact_id,
+        "drive_file_id": written["file_id"],
+        "view_url": written["view_url"],
+        "duration_seconds": info.get("duration_seconds"),
+        "width": info.get("width"),
+        "height": info.get("height"),
+    }
+
+
+@register_executor("video.trim")
+def execute_video_trim(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    from .video_edit import trim
+
+    return _edit_in_drive(
+        context, inputs, operation="trim",
+        apply_edit=lambda src, work, _extra: trim(
+            src, start=str(inputs.get("start") or "0"),
+            end=str(inputs.get("end") or ""), work_dir=work),
+    )
+
+
+@register_executor("video.watermark")
+def execute_video_watermark(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    from .video_edit import watermark
+
+    if not str(inputs.get("logo_artifact_id") or "").strip():
+        raise ValueError("logo_artifact_id is required — the image to overlay")
+    return _edit_in_drive(
+        context, inputs, operation="watermark",
+        extra_downloads=("logo_artifact_id",),
+        apply_edit=lambda src, work, extra: watermark(
+            src, image=extra["logo_artifact_id"], work_dir=work,
+            corner=str(inputs.get("corner") or "top_right"),
+            scale=float(inputs.get("scale") or 0.12),
+            margin=int(inputs.get("margin") or 24),
+            opacity=float(inputs.get("opacity") or 1.0)),
+    )
+
+
+@register_executor("video.bookend")
+def execute_video_bookend(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    from .video_edit import bookend
+
+    if not (str(inputs.get("intro_artifact_id") or "").strip()
+            or str(inputs.get("outro_artifact_id") or "").strip()):
+        raise ValueError("bookend needs an intro_artifact_id, an outro_artifact_id, or both")
+    return _edit_in_drive(
+        context, inputs, operation="bookend",
+        extra_downloads=("intro_artifact_id", "outro_artifact_id"),
+        apply_edit=lambda src, work, extra: bookend(
+            src, work_dir=work,
+            intro=extra.get("intro_artifact_id"),
+            outro=extra.get("outro_artifact_id")),
+    )
+
+
+@register_executor("publish_youtube")
+def execute_publish_youtube(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Publish the edited video to the connected channel, as PRIVATE.
+
+    The last step of the media pipeline and the only one with an effect outside BOSS. It takes
+    the same media artifact every editing step produces, so the thing published is provably the
+    thing that was reviewed — not a file somebody re-uploaded in between.
+    """
+    from .drive_media import download, workspace
+    from .video_edit import verify_playable
+    from .youtube_publish import upload_video
+
+    source_artifact = str(inputs.get("media_artifact_id") or "").strip()
+    if not source_artifact:
+        raise ValueError("media_artifact_id is required")
+    source = _media_artifact(context, source_artifact)
+    connection_key = str(inputs.get("connection_key") or "youtube_default")
+
+    with workspace("boss-publish-") as work:
+        local = download(
+            context.connection, context.settings,
+            project_id=context.project_id, file_id=source["drive_file_id"],
+            dest_dir=work, connection_key=connection_key,
+        )["path"]
+        # CHECKED AGAIN, IMMEDIATELY BEFORE THE IRREVERSIBLE ACT. The edit step verified its
+        # own output, but something could have replaced the Drive file since. Publishing an
+        # empty or silent video is not recoverable by deleting it — people have seen it.
+        info = verify_playable(local, expect_audio=bool(inputs.get("expect_audio", True)))
+        result = upload_video(
+            context.connection, context.settings,
+            project_id=context.project_id, local_path=local,
+            title=str(inputs.get("title") or ""),
+            description=str(inputs.get("description") or ""),
+            tags=inputs.get("tags") or [],
+            # No default: absent means absent, and upload_video refuses rather than guessing a
+            # legal declaration.
+            made_for_kids=inputs.get("made_for_kids"),
+            visibility=str(inputs.get("visibility") or "private"),
+            connection_key=connection_key,
+        )
+
+    emit_event(
+        context.connection, context.project_id, "video.published", context.actor,
+        "youtube_video", str(result["video_id"]),
+        {"visibility": result["visibility"], "media_artifact_id": source_artifact,
+         "duration_seconds": info.get("duration_seconds")},
+    )
+    return {**result, "media_artifact_id": source_artifact}

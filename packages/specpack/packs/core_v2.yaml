@@ -33,6 +33,9 @@ installs:
     # per-platform publishing agent reports to — a credential that reaches a real audience
     # belongs to somebody whose remit is the audience, not to whichever step needed it.
     - media_publisher
+    # Assembles the file the publisher then puts out. Split from media_publisher so an editing
+    # mistake is caught by somebody who did not make it.
+    - video_editor
   workflows:
     - ceo_command_to_pr
     - decision_inbox
