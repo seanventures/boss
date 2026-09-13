@@ -183,6 +183,25 @@ class Settings(BaseSettings):
     )
     aws_region: str = Field(default="us-east-1", alias="BOSS_AWS_REGION")
     aws_role_arn: Optional[str] = Field(default=None, alias="BOSS_AWS_ROLE_ARN")
+    # GOOGLE / YOUTUBE — publishing to a channel the operator owns.
+    #
+    # App-level, not per-project: one OAuth client serves every project on this installation,
+    # and the thing that differs per project is the REFRESH TOKEN, which is per-connection and
+    # lives in the secret store rather than here. The secret below is the app's own client
+    # secret, which alone grants nothing — it cannot reach a channel without a user consenting.
+    google_oauth_client_id: Optional[str] = Field(
+        default=None, alias="BOSS_GOOGLE_OAUTH_CLIENT_ID"
+    )
+    google_oauth_client_secret: Optional[str] = Field(
+        default=None, alias="BOSS_GOOGLE_OAUTH_CLIENT_SECRET"
+    )
+    #: Where Google sends the operator back. Must match a redirect URI registered on the OAuth
+    #: client exactly, including scheme and path. Google never fetches this itself — the
+    #: redirect happens in the operator's own browser — so a tailnet-only host works.
+    google_oauth_redirect_uri: Optional[str] = Field(
+        default=None, alias="BOSS_GOOGLE_OAUTH_REDIRECT_URI"
+    )
+
     # Azure Resource Manager + Azure OpenAI (models also use AZURE_OPENAI_* above)
     azure_tenant_id: Optional[str] = Field(default=None, alias="BOSS_AZURE_TENANT_ID")
     azure_client_id: Optional[str] = Field(default=None, alias="BOSS_AZURE_CLIENT_ID")

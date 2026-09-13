@@ -1,0 +1,100 @@
+# Publishing to a YouTube channel the operator owns.
+#
+# THE RULES HERE ARE ENFORCED, NOT ADVISED.
+#
+# An operator asked for publishing guardrails "defined as skills and editable whenever
+# required". Both halves of that are right, but they are not the same half. A rule that only
+# exists as text is a suggestion to a model, and the failures these prevent — a duplicate
+# upload, a retry storm, a leaked token — are exactly the ones a model under pressure talks
+# itself out of. So the rules split in two:
+#
+#   * STRUCTURAL (here): retry limits, dedupe keys, approval gates, scopes, forbidden
+#     operations. Enforced by the runtime whatever any prompt says. Deliberately NOT editable
+#     from the console — "never leak the credential" must not be a toggle.
+#
+#   * STANDARDS (the seeded `youtube_publishing_standards` skill): house style, what belongs on
+#     this channel, how titles are written, the judgement calls. Editable by the operator in the
+#     Skills page or by asking BOSS, because those SHOULD change per team.
+#
+# What follows is the first half.
+skills:
+  - id: publish_youtube
+    kind: media_channel
+    # Irreversible and public. You cannot un-publish something people have already seen.
+    risk_tier: 3
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Upload a video to the connected YouTube channel as PRIVATE, using the channel connection
+      the assigned agent holds. Making it public is a separate, separately approved act.
+    data_boundary: public
+    input_schema:
+      media_artifact_id: string
+      title: string
+      description: string?
+      tags: array?
+      # LEGALLY REQUIRED, NOT OPTIONAL IN PRACTICE. YouTube requires every upload to declare
+      # whether it is made for kids (COPPA). Getting it wrong is a compliance problem, not a
+      # metadata problem, so it is a required input with no default — BOSS must not guess.
+      made_for_kids: boolean
+      # DEFAULTS TO PRIVATE AND MAY NOT BE SET TO PUBLIC HERE. See policy.forbidden_values.
+      visibility: string?
+      schedule_at: string?
+    output_schema:
+      video_id: string
+      video_url: string
+      visibility: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: tool
+    retry:
+      # ONE ATTEMPT. NEVER MORE.
+      #
+      # A failed upload is not safely retryable: the failure may have occurred AFTER YouTube
+      # accepted the bytes, so a retry can publish the same video twice. The resumable-upload
+      # protocol exists to resume a single attempt, which is not the same as starting a second
+      # one. A human decides whether to try again, having looked.
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [media_publisher, workflow_runner]
+      required_permissions: [integration_manage]
+      # Held for completeness: the OAuth scope BOSS requests cannot perform any of these, so
+      # they are refused twice — by Google, and by this list.
+      forbidden_operations:
+        - videos.delete
+        - videos.update
+        - playlists.insert
+        - comments.insert
+        - subscriptions.insert
+    policy:
+      requires_receipt: true
+      requires_approval: [ceo]
+      # ONE VIDEO, ONE UPLOAD. The key is the MEDIA, not the title or the moment — retitling
+      # and re-running must collide with the first upload rather than produce a second video.
+      dedupe_key_template: "youtube.publish:{channel_id}:{media_artifact_id}"
+      # The channel must be one this project has actually connected. Same shape as
+      # github.create_pr_real's allowed_targets: a real effect needs a named, bound target.
+      requires_connection: youtube
+      requires_connection_health: healthy
+      # PRIVATE ON ARRIVAL. Publishing to public is the irreversible half, and it should be a
+      # decision someone makes looking at the uploaded video, not a parameter on the job that
+      # produced it.
+      forbidden_values:
+        visibility: [public]
+      default_values:
+        visibility: private
+      # One upload at a time per channel. Concurrent uploads race the dedupe check and burn
+      # quota, and a YouTube channel has no use case that needs two at once.
+      max_concurrent_per_connection: 1
+      # An upload costs 1600 of a 10,000-unit daily quota. Exhausting it takes the channel's
+      # whole API surface down for the day, including the read that verifies a connection.
+      quota_units: 1600
+      quota_guard: daily
+    evidence:
+      must_attach:
+        - video_id
+        - video_url
+        - the media artifact that was uploaded
+        - the approval decision it published under

@@ -1376,12 +1376,27 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "investigations"
         and _parts[4] in {"db", "host", "do"}
     )
+    # A CHANNEL OAUTH CALLBACK IS A BROWSER REDIRECT, NOT AN API CALL.
+    #
+    # Google sends the operator's browser here after consent, and a browser following a
+    # redirect carries no bearer token — so requiring one would make the flow impossible
+    # rather than secure. What authenticates this request is the `state` nonce in its query:
+    # BOSS minted it, stored it on a pending connection row, and it is single-use (the row is
+    # activated or gone once spent). Same model as the signed webhooks above — the path is
+    # exempt from TRANSPORT auth because it verifies its own credential.
+    #
+    # Only the callback. `/connect`, the list and the disconnect all still require a key.
+    is_channel_callback = (
+        len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "channels"
+        and _parts[4] == "callback"
+    )
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
         or is_preview_web
         or is_inbound_webhook
         or is_github_webhook
+        or is_channel_callback
         or is_plane_webhook
         or is_bitbucket_webhook
         or is_reliability_alert
@@ -14461,6 +14476,145 @@ def save_skill_definition(payload: dict) -> dict:
         except SkillDefinitionError as error:
             # 422, not 500: everything this raises is something the operator can fix, and the
             # message is already written for them.
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+# --------------------------------------------------------------------------- #
+# Connecting a channel the operator owns                                        #
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/v1/channels/{provider}/connect", status_code=201)
+def start_channel_connection(provider: str, payload: dict) -> dict:
+    """Begin an OAuth connection. Returns the URL to send the operator to.
+
+    `integration_manage` rather than `workflow_manage`: connecting a channel binds a credential
+    that reaches a real audience, which is a different decision from arranging the steps of a
+    workflow and should be grantable separately.
+    """
+    from .services.channel_oauth import ChannelOAuthError, start
+
+    if provider != "youtube":
+        raise HTTPException(status_code=404, detail=f"no channel provider '{provider}'")
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip() or "executive_console"
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "integration_manage")
+        try:
+            return start(
+                connection, settings, project_id=project_id, actor=actor,
+                connection_key=str(payload.get("connection_key") or "youtube_default"),
+            )
+        except ChannelOAuthError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/channels/{provider}/callback")
+def finish_channel_connection(
+    provider: str,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+) -> Response:
+    """Where Google sends the operator back.
+
+    Deliberately UNAUTHENTICATED, and safe to be: it carries no project id and does nothing
+    without a `state` nonce that BOSS itself minted and stored, which is single-use — the
+    pending row is activated or gone once spent. Requiring a bearer token here would break the
+    flow, because this request is a browser redirect and not an API call.
+
+    Returns HTML rather than JSON: a person is looking at this in a tab.
+    """
+    from .services.channel_oauth import ChannelOAuthError, complete
+
+    def page(title: str, body: str, ok: bool) -> Response:
+        colour = "#34d399" if ok else "#f2647a"
+        return Response(
+            content=(
+                "<!doctype html><meta charset='utf-8'>"
+                "<title>BOSS — channel connection</title>"
+                "<style>body{background:#090d17;color:#e6edf3;font:16px/1.6 system-ui,sans-serif;"
+                "display:grid;place-items:center;height:100vh;margin:0}"
+                "div{max-width:32rem;padding:2rem}"
+                f"h1{{color:{colour};font-size:1.25rem;margin:0 0 .75rem}}"
+                "p{margin:.5rem 0;opacity:.85}</style>"
+                f"<div><h1>{title}</h1><p>{body}</p>"
+                "<p>You can close this tab and return to the console.</p></div>"
+            ),
+            media_type="text/html",
+            status_code=200 if ok else 400,
+        )
+
+    if provider != "youtube":
+        return page("Unknown provider", f"BOSS has no channel provider '{provider}'.", False)
+    if error:
+        # Google's own words. The commonest is access_denied, which simply means the operator
+        # pressed Cancel — not a fault, and it should not read like one.
+        return page("Not connected", f"Google returned: {error}", False)
+    with begin(engine) as connection:
+        try:
+            result = complete(connection, settings, code=code, state=state)
+        except ChannelOAuthError as failure:
+            return page("Could not connect", str(failure), False)
+    channel = result.get("channel") or {}
+    if channel.get("verified"):
+        return page("Channel connected",
+                    f"BOSS can now publish to <b>{channel.get('title')}</b>.", True)
+    return page("Connected, but unverified",
+                "The credential is stored, but BOSS could not read the channel back: "
+                f"{channel.get('reason')}", True)
+
+
+@app.get("/v1/channels")
+def list_channel_connections(project_id: str) -> dict:
+    """Connected channels. Never returns a credential — only whether one is bound."""
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                "SELECT c.connection_key, c.status, c.health_status, c.granted_capabilities, "
+                "       c.max_risk_tier, c.provenance, c.updated_at, d.integration_key "
+                "  FROM integration_connections c "
+                "  JOIN integration_definitions d ON d.id = c.integration_definition_id "
+                " WHERE c.project_id = :p AND d.category = 'media_channel' "
+                " ORDER BY c.connection_key"
+            ),
+            {"p": project_id},
+        ).mappings().all()
+    return {"project_id": project_id, "channels": [
+        {
+            "connection_key": r["connection_key"],
+            "provider": r["integration_key"],
+            "status": r["status"],
+            "health": r["health_status"],
+            "capabilities": r["granted_capabilities"],
+            "max_risk_tier": r["max_risk_tier"],
+            # The channel identity, NOT the provenance blob: that carries the state nonce and
+            # who started it, neither of which belongs on a list endpoint.
+            "channel": (r["provenance"] or {}).get("channel") or {},
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        }
+        for r in rows
+    ]}
+
+
+@app.delete("/v1/channels/{provider}")
+def disconnect_channel(
+    provider: str,
+    project_id: str,
+    connection_key: str = "youtube_default",
+    actor: str = "executive_console",
+) -> dict:
+    """Revoke the token at Google and locally. Either alone leaves a live credential."""
+    from .services.channel_oauth import ChannelOAuthError, disconnect
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "integration_manage")
+        try:
+            return disconnect(connection, settings, project_id=project_id,
+                              connection_key=connection_key, actor=actor)
+        except ChannelOAuthError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 

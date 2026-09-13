@@ -70,6 +70,12 @@ class MemberDirectoryService:
                     "infra_provision",
                     "providerops_manage",
                     "github_manage",
+                    # Binding an outside ACCOUNT to this project — a YouTube channel, an
+                    # Instagram profile. Separate from workflow_manage on purpose: one
+                    # arranges steps, this one hands over a credential that reaches a real
+                    # audience, and an operator may reasonably be trusted with the first
+                    # and not the second.
+                    "integration_manage",
                     "workflow_manage",
                     "workflow_execute",
                 ],
@@ -87,6 +93,12 @@ class MemberDirectoryService:
                     "infra_provision",
                     "providerops_manage",
                     "github_manage",
+                    # Binding an outside ACCOUNT to this project — a YouTube channel, an
+                    # Instagram profile. Separate from workflow_manage on purpose: one
+                    # arranges steps, this one hands over a credential that reaches a real
+                    # audience, and an operator may reasonably be trusted with the first
+                    # and not the second.
+                    "integration_manage",
                     "workflow_execute",
                 ],
             },
@@ -121,6 +133,12 @@ class MemberDirectoryService:
                     "health_refresh",
                     "infra_provision",
                     "github_manage",
+                    # Binding an outside ACCOUNT to this project — a YouTube channel, an
+                    # Instagram profile. Separate from workflow_manage on purpose: one
+                    # arranges steps, this one hands over a credential that reaches a real
+                    # audience, and an operator may reasonably be trusted with the first
+                    # and not the second.
+                    "integration_manage",
                 ],
             },
             {
@@ -165,6 +183,12 @@ class MemberDirectoryService:
                     "infra_provision",
                     "providerops_manage",
                     "github_manage",
+                    # Binding an outside ACCOUNT to this project — a YouTube channel, an
+                    # Instagram profile. Separate from workflow_manage on purpose: one
+                    # arranges steps, this one hands over a credential that reaches a real
+                    # audience, and an operator may reasonably be trusted with the first
+                    # and not the second.
+                    "integration_manage",
                     "workflow_manage",
                     "workflow_execute",
                 ],
@@ -193,6 +217,12 @@ class MemberDirectoryService:
                     "infra_provision",
                     "providerops_manage",
                     "github_manage",
+                    # Binding an outside ACCOUNT to this project — a YouTube channel, an
+                    # Instagram profile. Separate from workflow_manage on purpose: one
+                    # arranges steps, this one hands over a credential that reaches a real
+                    # audience, and an operator may reasonably be trusted with the first
+                    # and not the second.
+                    "integration_manage",
                     "workflow_manage",
                     "workflow_execute",
                 ],
