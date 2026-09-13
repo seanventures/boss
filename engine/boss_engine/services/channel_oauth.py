@@ -67,14 +67,30 @@ YOUTUBE_SCOPES = (
     # and putting it on the SAME consent means one authorisation instead of two credentials
     # with two expiries.
     #
-    # `drive.readonly` is a RESTRICTED scope and the honest cost of this design: it reads the
-    # whole Drive, because `drive.file` cannot see a file the app did not create — and the
-    # source video is one the operator uploaded themselves. Fine for a test-user install;
-    # a product ships a Google Picker instead, where choosing a file grants access to that
-    # ONE file under drive.file and no restricted scope is needed at all.
-    "https://www.googleapis.com/auth/drive.readonly",
-    # Writing the edited video back. `drive.file` covers it because BOSS created that file.
-    "https://www.googleapis.com/auth/drive.file",
+    # WHY `drive` AND NOT `drive.readonly` + `drive.file`, WHICH IS WHAT THIS WANTED.
+    #
+    # Google refuses that combination outright:
+    #
+    #     "This request contains scopes that cannot be requested together:
+    #      [youtube.upload, youtube.readonly, drive.file]"   — Error 400: invalid_request
+    #
+    # `drive.file` is tied to the per-file Picker model and may not be mixed with non-Drive
+    # scopes in one consent. So the least-privilege pair this design wanted is not available
+    # on a single authorisation, and the choice is between:
+    #
+    #   * `drive.readonly` alone — reads the source, CANNOT write the edited video back, so
+    #     the operator reviews on YouTube (private) rather than in Drive; or
+    #   * `drive` — read and write, one scope, and more access than this actually needs.
+    #
+    # `drive` is used because the operator asked for the edited video to land back in their
+    # Drive for review. It is RESTRICTED, which is the honest cost: fine for a test-user
+    # install, and a verification burden if this ever ships to customers.
+    #
+    # THE CLEANER SHAPE, WHEN THIS MATTERS: two separate connections, one consent each, so
+    # Drive can use drive.file with a Picker and never request a restricted scope at all. That
+    # is real work — two tokens, two expiries, two health checks — and it is the right answer
+    # for a product rather than for proving this pipeline works.
+    "https://www.googleapis.com/auth/drive",
 )
 
 #: One Google connection, several capabilities. Keyed on the PROVIDER rather than on YouTube:
@@ -425,7 +441,7 @@ def ensure_definition(
             "drive.read": contract(
                 "Read a source video from the operator's Drive.",
                 risk=1, effect="read",
-                scopes=["https://www.googleapis.com/auth/drive.readonly"],
+                scopes=["https://www.googleapis.com/auth/drive"],
                 inputs={"file_id": "string"},
                 outputs={"path": "string", "bytes": "integer"},
                 evidence=[],
@@ -435,7 +451,7 @@ def ensure_definition(
                 # BOSS did not create, so nothing of the operator's can be lost by it.
                 "Write an edited video back to Drive.",
                 risk=1, effect="write",
-                scopes=["https://www.googleapis.com/auth/drive.file"],
+                scopes=["https://www.googleapis.com/auth/drive"],
                 inputs={"local_path": "string", "name": "string"},
                 outputs={"file_id": "string", "view_url": "string"},
                 evidence=["file_id", "view_url"],

@@ -27,13 +27,33 @@ def test_the_scopes_are_the_narrowest_that_can_do_the_job():
     assert not any(s.endswith("/youtube") for s in YOUTUBE_SCOPES)
     assert not any("force-ssl" in s for s in YOUTUBE_SCOPES)
     # Drive rides the SAME consent, so the media pipeline needs one credential rather than two
-    # with two expiries. `drive.file` reaches only files BOSS created; `drive.readonly` is the
-    # restricted one and the honest cost of reading a source the operator uploaded themselves.
-    assert "https://www.googleapis.com/auth/drive.file" in YOUTUBE_SCOPES
-    assert "https://www.googleapis.com/auth/drive.readonly" in YOUTUBE_SCOPES
-    # Nothing broader than that: no `drive` (full access), no `drive.appdata`.
-    assert not any(s.endswith("/drive") for s in YOUTUBE_SCOPES)
-    assert len(YOUTUBE_SCOPES) == 4
+    # with two expiries.
+    #
+    # `drive`, not the `drive.readonly` + `drive.file` pair this wanted: Google refuses that
+    # combination outright — "scopes that cannot be requested together", because drive.file is
+    # tied to the per-file Picker model and may not be mixed with non-Drive scopes. The
+    # least-privilege version of this is not available on one authorisation.
+    assert "https://www.googleapis.com/auth/drive" in YOUTUBE_SCOPES
+    assert "https://www.googleapis.com/auth/drive.file" not in YOUTUBE_SCOPES
+    assert len(YOUTUBE_SCOPES) == 3
+
+
+def test_the_drive_scope_is_a_deliberate_compromise_and_says_so():
+    """`drive` is more access than this needs, and the code must not be quiet about it.
+
+    A restricted scope taken for a real reason is a decision; one taken silently is a leak
+    waiting to be discovered at verification time by somebody who did not choose it.
+    """
+    import inspect
+
+    from apps.api.app.services import channel_oauth
+
+    source = inspect.getsource(channel_oauth)
+    assert "cannot be requested together" in source
+    assert "RESTRICTED" in source
+    # And the cleaner shape is named, so the compromise does not become the permanent design
+    # by nobody remembering there was one.
+    assert "two separate connections" in source
 
 
 def test_an_unconfigured_install_says_which_variables_to_set(client):
@@ -424,9 +444,11 @@ def test_starting_a_connection_builds_a_consent_url(client, engine):
     # then silently stops — the worst failure shape available here.
     assert "access_type=offline" in url
     assert "prompt=consent" in url
-    # Every scope the media pipeline needs, on one consent.
-    for scope in ("youtube.upload", "youtube.readonly", "drive.readonly", "drive.file"):
+    # Every scope the media pipeline needs, on one consent — and no more than that.
+    for scope in ("youtube.upload", "youtube.readonly", "auth%2Fdrive"):
         assert scope in url
+    # The combination Google refuses must not creep back in.
+    assert "drive.file" not in url
     assert body["connection_id"]
 
 
