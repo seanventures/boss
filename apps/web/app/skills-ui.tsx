@@ -160,7 +160,7 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
         {skills === null ? <p className="detail">Loading…</p>
          : skills.length === 0 ? (
            <p className="detail" data-testid="skills-empty">
-             Nothing authored yet. The form below is the whole of it.
+             Nothing authored yet. Describe one to BOSS below and it will draft it for you.
            </p>
          ) : (
           <ul className="skill-list" data-testid="skill-list">
@@ -234,13 +234,38 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
         )}
       </article>
 
-      <article className="stack-card" data-testid="skill-form">
+      {/* DESCRIBE IT; DO NOT SPECIFY IT.
+          The form below asks an operator to already know what a behaviour kind is, which
+          fields a sandboxed command needs, and that its image has to be digest-pinned. That is
+          the shape of the DATA, not the shape of anything a person wants to say. What they
+          want to say is "trim a video between two timecodes and stamp our watermark on it" —
+          so that is the way in, and BOSS turns the answers into the skill and offers it back
+          as one press. The form stays for correcting a field afterwards; it is no longer the
+          thing you meet first. */}
+      <article className="stack-card" data-testid="skill-agent">
         <div className="section-head">
           <div>
             <span className="eyebrow">Author a skill</span>
-            <h2>{draft.skill_key ? `Editing ${draft.skill_key}` : "New skill"}</h2>
+            <h2>Tell BOSS what it should be able to do.</h2>
           </div>
         </div>
+        <p className="detail">
+          Describe the job in your own words. BOSS asks for whatever it still needs — what it
+          takes in, what it hands back, how it runs — and then offers the finished skill to
+          create in one press.
+        </p>
+        <button type="button" className="cap-btn primary" data-testid="skill-agent-open"
+                onClick={() => askBossAboutSkills(projectId)}>
+          Design a skill with BOSS
+        </button>
+      </article>
+
+      <details className="stack-card" data-testid="skill-form">
+        <summary className="skill-form-summary">
+          {draft.skill_key
+            ? `Edit ${draft.skill_key} by hand`
+            : "Write one by hand instead"}
+        </summary>
         <div className="setup-form">
           <label className="setup-field">
             <span>Name</span>
@@ -387,7 +412,28 @@ export function SkillsHome({ projectId, actor }: { projectId: string; actor: str
             {note.text}
           </p>
         ) : null}
-      </article>
+      </details>
     </section>
   );
+}
+
+/** Open the dock addressed to the Program Manager, whose remit is process, with an opener that
+ *  says what it can do here. Same door the Workflow page uses to design a workflow — a skill is
+ *  the unit a custom workflow step runs, so it is the same conversation one level down. */
+function askBossAboutSkills(projectId: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", "general");
+    url.searchParams.set("dock_role", "Program Manager");
+    url.searchParams.set(
+      "dock_ask",
+      "I want to create a skill for this project. A skill is the reusable unit of doing that a"
+      + " workflow step runs — trimming a video, posting to a channel, calling one tool on an"
+      + " MCP server. Ask me what you need to know, then draft it and I will create it."
+      + ` Start by telling me which skills ${projectId} already has, so I do not ask for one`
+      + " that exists.",
+    );
+    window.history.replaceState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
 }

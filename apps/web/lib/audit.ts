@@ -42,7 +42,11 @@ export async function fetchAuditSummary(
   active = true,
 ): Promise<AuditSummary> {
   // Not rendered this request. Same shape the unreachable path returns, no round trip.
-  if (!active) return emptyAuditSummary("not requested", projectId);
+  //
+  // The reason is a sentence, not a flag. A count of 0 and a count that was never fetched must
+  // not look the same — one is a fact about the system, the other a fact about the page — and
+  // the panel prints this string when it has no numbers.
+  if (!active) return emptyAuditSummary("Audit counts load on the Ops area.", projectId);
   try {
     // Counts, not the export. This panel shows eight integers; asking for the export got them
     // by serialising every row in the project — 192 MB in 62 seconds, measured — and that was

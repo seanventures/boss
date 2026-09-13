@@ -1121,25 +1121,40 @@ def test_a_failing_feed_still_cannot_take_the_console_down():
 
 
 def test_the_audit_export_does_not_run_on_every_page():
-    """Measured: /v1/audit/export took 13.2s — more than half the page load, and more than the
-    other 78 feeds combined. It serialises the ENTIRE audit trail (every task, job, decision,
-    artifact, receipt, reservation, routing log and event) so the ops screen can show eight
-    counts, and it is rendered only in data-area="ops". Every other area waited 13 seconds for
-    something it never displayed."""
-    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
-    i = src.index("fetchAuditSummary(activeProjectId)")
-    guard = src[max(0, i - 900):i]
-    assert 'requestedArea === "ops"' in guard, (
-        "the audit export is unconditional again — 13s on every page for eight numbers"
+    """The Ops panel shows eight integers. It got them from /v1/audit/export, which serialises
+    the ENTIRE audit trail (every task, job, decision, artifact, receipt, reservation, routing
+    log and event) so the caller can call len() on each list — measured on the live deployment
+    at 191,937,957 bytes in 62.1 seconds, when every other feed on that page answers in ~0.22s.
+
+    Two things keep it from happening again, and both are asserted here: the console asks for
+    counts rather than an export, and it only asks on the area that displays them."""
+    page = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    audit = pathlib.Path("apps/web/lib/audit.ts").read_text(encoding="utf-8")
+
+    # 1. Counts, not the export. This is the part that made the cost disappear rather than
+    #    move: /v1/audit/summary counts in SQL and answers in under a second.
+    assert "client.summarizeAuditTrail(" in audit, (
+        "the audit panel is asking for the whole trail again — 192 MB for eight numbers"
     )
-    assert "emptyAuditSummary" in src, "no stand-in for the areas that skip it"
+    assert "client.exportAuditTrail(" not in audit
+
+    # 2. And still only on the area that renders it, like every other single-area feed.
+    i = page.index("fetchAuditSummary(activeProjectId")
+    call = page[i:page.index(")", i) + 1]
+    assert 'needs("ops")' in call, (
+        "the audit summary is unconditional again — every area pays for a panel only Ops shows"
+    )
 
 
 def test_a_skipped_feed_says_why_rather_than_showing_zero():
     """A count of 0 and a count that was never fetched must not look the same — one is a fact
-    about the system, the other is a fact about the page."""
-    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
-    i = src.index("emptyAuditSummary(")
-    assert "too expensive to fetch on every page" in src[i:i + 400], (
-        "the skipped summary gives no reason"
-    )
+    about the system, the other is a fact about the page. So the skipped value carries a
+    sentence a reader can act on, not a bare zero and not an internal flag."""
+    audit = pathlib.Path("apps/web/lib/audit.ts").read_text(encoding="utf-8")
+    i = audit.index("if (!active)")
+    skipped = audit[i:i + 200]
+    assert "emptyAuditSummary(" in skipped, "the skipped summary is not the declared empty"
+    reason = skipped[skipped.index('emptyAuditSummary("') + len('emptyAuditSummary("'):]
+    reason = reason[:reason.index('"')]
+    assert reason.endswith("."), f"the reason is a flag, not a sentence: {reason!r}"
+    assert "Ops" in reason, f"the reason does not say where the counts do load: {reason!r}"

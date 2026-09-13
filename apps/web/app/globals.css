@@ -9402,3 +9402,34 @@ a.agent-chip-name:hover { text-decoration: underline; }
 /* The workflow agent sits on the tab row but is not a tab: it opens a conversation rather than
    switching what you are looking at. Pushed to the end so it never reads as a fourth view. */
 .dw-tab-agent { margin-left: auto; }
+
+/* The hand-written skill form, folded away.
+ *
+ * It asks an operator to already know what a behaviour kind is and that a sandbox image has to
+ * be digest-pinned — the shape of the data, not the shape of anything a person wants to say.
+ * It stays, because correcting one field by hand beats another round of conversation, but it
+ * is no longer what you meet first. */
+.skill-form-summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.92rem;
+  color: var(--muted, #8b949e);
+  padding: 2px 0;
+}
+
+.skill-form-summary::-webkit-details-marker { display: none; }
+
+.skill-form-summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 120ms ease-out;
+}
+
+details[open] > .skill-form-summary::before { transform: rotate(90deg); }
+
+.skill-form-summary:hover { color: var(--text, #e6edf3); }
+
+@media (prefers-reduced-motion: reduce) {
+  .skill-form-summary::before { transition: none; }
+}

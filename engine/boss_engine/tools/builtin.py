@@ -454,6 +454,10 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 # WRITE TOOLS — create workflow tasks
 # ===========================================================================
 def _register_write_tools(reg: ToolRegistry) -> None:
+    # Read from the service rather than restated here. The enum goes into the tool schema the
+    # model sees, so a behaviour added there and forgotten here would be a behaviour the agent
+    # is told does not exist.
+    _SKILL_BEHAVIOURS = services_module("skill_definitions").BEHAVIOURS
     @reg.tool(
         "create_code_task",
         "Start a governed coding-agent task: BOSS provisions a sandbox, implements "
@@ -871,6 +875,85 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             except Exception as error:  # noqa: BLE001
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
         return {"status": "defined", "step_key": created.get("step_key"), "skill": skill_key}
+
+    @reg.tool(
+        "draft_skill",
+        "Create a skill from what the operator has told you. A skill is the reusable unit of "
+        "doing — trimming a video, posting to a channel, calling one tool on an MCP server — "
+        "and it is what a custom workflow step runs and what an agent can be given. Ask for "
+        "whatever you still need (what it does, what it takes in, what it hands back, and how "
+        "it runs) BEFORE calling this: the operator approves the finished skill with one press, "
+        "so the draft you propose is the thing that gets created.",
+        _obj(
+            {
+                "skill_key": {"type": "string",
+                              "description": "lower_snake_case, 3-49 chars. Stable: workflow "
+                                             "steps point at it by this name."},
+                "label": {"type": "string", "description": "what a person calls it"},
+                "summary": {"type": "string", "description": "one line, what it does"},
+                "behaviour_kind": {
+                    "type": "string",
+                    "enum": list(_SKILL_BEHAVIOURS),
+                    "description": "builtin = a capability BOSS already has; mcp_tool = one "
+                                   "named tool on a registered MCP server, which is how you "
+                                   "reach a third-party account; sandboxed_command = a pinned "
+                                   "container image run in the sandbox.",
+                },
+                "knowledge": {"type": "string",
+                              "description": "the standard it holds to — house style, the "
+                                             "format your team uses. Carried into every run."},
+                "inputs": {"type": "array", "items": {"type": "object"},
+                           "description": "[{name, required, description}]"},
+                "produces": {"type": "array", "items": {"type": "object"}},
+                "config": {"type": "object",
+                           "description": "behaviour-specific. mcp_tool needs server and tool; "
+                                          "sandboxed_command needs a digest-pinned image and a "
+                                          "command template whose placeholders are all declared "
+                                          "inputs."},
+                "risk_tier": {"type": "integer",
+                              "description": "0-3. Anything that spends money, publishes, or "
+                                             "touches an outside account is not tier 0."},
+                "project_id": {"type": "string"},
+            },
+            ["skill_key", "label", "behaviour_kind"],
+        ),
+        kind="write",
+        reversibility="safe",
+    )
+    def draft_skill(ctx, *, project_id, actor, args):
+        skills = services_module("skill_definitions")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            try:
+                created = skills.save_skill(
+                    c,
+                    project_id=pid,
+                    actor=actor,
+                    skill_key=str(args.get("skill_key") or "").strip().lower(),
+                    label=str(args.get("label") or ""),
+                    behaviour_kind=str(args.get("behaviour_kind") or ""),
+                    summary=str(args.get("summary") or ""),
+                    knowledge=str(args.get("knowledge") or ""),
+                    inputs=args.get("inputs") or [],
+                    produces=args.get("produces") or [],
+                    config=args.get("config") or {},
+                    risk_tier=int(args.get("risk_tier") or 1),
+                )
+            except Exception as error:  # noqa: BLE001
+                # THE MESSAGE IS THE REPAIR INSTRUCTION. save_skill's errors say precisely what
+                # is wrong (a placeholder that is not a declared input, an unpinned image), and
+                # the model can fix the draft and re-propose from them. Flattening them to
+                # "invalid" would cost the operator a round trip for nothing.
+                return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+        return {
+            "status": "defined",
+            "skill_key": created.get("skill_key"),
+            "behaviour_kind": created.get("behaviour_kind"),
+            "risk_tier": created.get("risk_tier"),
+            # A skill on its own is not yet placeable. Saying so here is what stops the next
+            # answer being "it's created" followed by an operator who cannot find it anywhere.
+            "next": "draft_custom_step binds this skill to a workflow step so it can be placed.",
+        }
 
     @reg.tool(
         "list_capabilities",
@@ -4816,6 +4899,11 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "draft_workflow",
     "draft_custom_step",
     "delete_workflow",
+    # AUTHORING THE UNIT OF DOING. A skill is what a custom step runs, so it is the same kind
+    # of act as the two above — it changes what CAN be built, not what is running — and it
+    # spends nothing. It is how an operator gets a skill by describing one instead of filling
+    # in a form they should not have to understand.
+    "draft_skill",
     # STARTING WORK MEANS STARTING A WORKFLOW.
     #
     # `create_discovery` and `request_meeting` are deliberately NOT here. Research and the PRD

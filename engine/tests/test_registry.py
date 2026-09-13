@@ -117,6 +117,9 @@ _EXPECTED_TOOLS: set[str] = {
     "draft_workflow",
     "draft_custom_step",
     "delete_workflow",
+    # Authoring the unit of doing, so an operator can get a skill by describing one in the
+    # conversation rather than filling in a form about behaviour kinds and digest pinning.
+    "draft_skill",
     "list_capabilities",
     "list_skills",
     "start_workflow",
@@ -140,11 +143,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 84, (
+    assert len(reg.names()) == 85, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 52
-    assert len(write) == 32
+    assert len(write) == 33
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -349,6 +352,10 @@ _SAFE_WRITES = [
     # it. Publishing a new VERSION is also additive — the previous one is still there. The
     # destructive sibling, delete_workflow, declares destroys_work and is press-only.
     "draft_custom_step",
+    # Same act, one level down: a skill is the unit a custom step runs. Saving one is
+    # idempotent on (project, skill_key) and nothing executes until a step binds it and a
+    # workflow places that step.
+    "draft_skill",
     "draft_workflow",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's
