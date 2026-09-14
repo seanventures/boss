@@ -95,6 +95,11 @@ type Installed = {
   is_catalogue: boolean;
   forked_from_version_id: string | null;
   namespace: string;
+  description?: string | null;
+  /** Enough to DRAW an operator's own workflow rather than only count it. Optional because a
+   *  definition with no published version has neither. */
+  step_count?: number;
+  active_version?: number | null;
 };
 
 export type RunStep = {
@@ -854,6 +859,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               setTab("design");
             }
           }}
+          // Same landing as a fork: select it in the builder and switch to that tab, so the
+          // card and the "Editing" picker are two doors into one thing rather than two lists
+          // that disagree about what exists.
+          onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
         />
       ) : tab === "steps" ? (
         <StepsView
@@ -3477,7 +3486,8 @@ function ChangeRecord({ documentId }: { documentId: string }) {
 /* ── Catalogue ───────────────────────────────────────────────────────────────── */
 
 
-function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork }: {
+function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork,
+                        onEditMine }: {
   catalogue: CatalogueEntry[];
   installed: Installed[];
   busy: string | null;
@@ -3486,6 +3496,9 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
   /** The work class travels with the key: the sample must fit the lane it runs in. */
   onStart: (key: string, workClass: string) => void;
   onFork: (key: string) => void;
+  /** Open one of the operator's own workflows in the builder, by definition id — the same
+   *  handle the builder's "Editing" picker uses, so the card and the dropdown agree. */
+  onEditMine: (definitionId: string) => void;
 }) {
   // Only the CATALOGUE ones count toward "installed". `installed` also holds the customer's own
   // forks, so counting all of them read "14 of 12 installed in this project" — a number that
@@ -3494,13 +3507,65 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
     () => new Set(installed.filter((i) => i.is_catalogue).map((i) => i.workflow_key)),
     [installed],
   );
-  const mine = useMemo(() => installed.filter((i) => !i.is_catalogue).length, [installed]);
+  // WHAT THE OPERATOR MADE, AS THINGS RATHER THAN AS A NUMBER.
+  //
+  // This used to be `.length`, rendered as the tail of a sentence — "· 1 of your own" — and
+  // that was the ONLY trace of an operator's own workflow anywhere on this screen. The grid
+  // below maps `catalogue`, which holds shipped entries only. So a workflow BOSS had just
+  // published was real, editable, startable, and invisible: reported as "the workflow itself
+  // does not exist in Catalogue and how is it coming to Edit mode, it is completely wrong".
+  //
+  // It is not the Edit list that was wrong. It was this one, for leaving them out.
+  const ours = useMemo(
+    () => installed.filter((i) => !i.is_catalogue), [installed]);
   return (
     <div className="dw-catalogue">
+      {ours.length > 0 ? (
+        <section className="dw-mine" data-testid="dw-mine">
+          <div className="dw-runs-head">
+            <span className="detail">
+              Your workflows · {ours.length}
+            </span>
+          </div>
+          <div className="dw-grid">
+            {ours.map((item) => (
+              <article key={item.id} className="dw-card" data-testid={`dw-mine-${item.workflow_key}`}>
+                <header className="dw-card-head">
+                  <h4>{item.name}</h4>
+                  <span className="dw-class" data-class="yours">yours</span>
+                </header>
+                <p className="detail dw-card-desc">
+                  {item.description || "No description."}
+                </p>
+                <dl className="dw-stats">
+                  <div><dt>Steps</dt><dd>{item.step_count ?? 0}</dd></div>
+                  <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
+                  <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
+                </dl>
+                <div className="dw-card-actions">
+                  {/* Startable only once a version exists — a definition with no published
+                      version has nothing to run, and offering the button anyway is how an
+                      operator gets an error instead of a run. */}
+                  <button type="button" className="cap-btn primary"
+                          disabled={!!busy || !item.active_version}
+                          onClick={() => onStart(item.workflow_key, "")}
+                          data-testid={`dw-start-mine-${item.workflow_key}`}>
+                    {item.active_version ? "Start one" : "No version yet"}
+                  </button>
+                  <button type="button" className="cap-btn" disabled={!!busy}
+                          onClick={() => onEditMine(item.id)}
+                          data-testid={`dw-edit-mine-${item.workflow_key}`}>
+                    Edit
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <div className="dw-runs-head">
         <span className="detail">
           {have.size} of {catalogue.length} standard workflows installed
-          {mine > 0 ? ` · ${mine} of your own` : ""}
         </span>
         <button type="button" className="cap-btn" onClick={onInstall} disabled={!!busy}
                 data-testid="dw-install">

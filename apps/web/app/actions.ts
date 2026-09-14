@@ -150,6 +150,11 @@ export async function runAgentActionAction(
   tool: string,
   args: Record<string, unknown>,
   threadId?: string,
+  // WHICH OFFER, AND WHAT IT SAID. Without the id the server cannot strike the button from
+  // the message that made it, so a refresh replays every offer the turn produced — reported
+  // as "I refreshed and it displays all 4 operations again".
+  actionId?: string,
+  label?: string,
 ): Promise<ActionResult> {
   const result = await postJsonReturn("/v1/engine/agent/action", {
     project_id: projectId,
@@ -157,6 +162,8 @@ export async function runAgentActionAction(
     tool,
     args: args ?? {},
     thread_id: threadId || undefined,
+    action_id: actionId || undefined,
+    label: label || undefined,
   });
   revalidatePath("/");
   return result;

@@ -155,6 +155,106 @@ class AgentService:
         )
         return self._serialize_message(row)
 
+    @staticmethod
+    def _offers(raw: Any) -> list[dict[str, Any]]:
+        """`proposed_actions` comes back as a list from JSONB and as text from some drivers."""
+        if isinstance(raw, str):
+            raw = json.loads(raw or "[]")
+        return [o for o in (raw or []) if isinstance(o, dict)]
+
+    def record_action_outcome(
+        self,
+        connection: Connection,
+        *,
+        thread_id: str,
+        action_id: str,
+        tool: str,
+        args: dict[str, Any],
+        label: str,
+        ok: bool,
+        result: dict[str, Any],
+        error: str,
+    ) -> None:
+        """Write a pressed button into the conversation, and spend the offer.
+
+        THE BUTTON WAS A DEAD END, AND THIS IS WHY THE AGENT LOOPED.
+        ------------------------------------------------------------
+        `/v1/engine/agent/action` ran the tool, emitted an event, returned the result — and
+        never touched the thread. Every trace of the press lived in React state:
+
+          * Refresh the page and the offers came back, all of them, because the stored
+            assistant message still carried its `proposed_actions` untouched. An operator who
+            had already published a workflow was shown the same four buttons again.
+          * Worse, the NEXT TURN read that same untouched history. The model saw itself offer
+            an action and saw no outcome of any kind, concluded the operator had not chosen
+            yet, and offered it again. Ten times, if asked ten times.
+
+        The earlier repair loop only fed FAILURES back, from the client. A success was still
+        invisible, which is the case the operator actually hit: the write succeeded and the
+        agent had no idea, so it proposed it again.
+
+        So the outcome becomes a real message — durable, in the transcript the model reads —
+        and the offer is struck from the message that made it.
+        """
+        payload = {k: v for k, v in (result or {}).items() if k not in ("ok", "tool")}
+        detail = json.dumps(payload, default=str)[:600] if payload else ""
+        # Addressed to the model as much as to the operator: the next turn reads this and must
+        # not re-offer what it says already happened.
+        content = (
+            f"✓ The operator pressed **{label or tool}**, and `{tool}` ran and SUCCEEDED."
+            + (f"\n\nIt returned:\n\n```json\n{detail}\n```" if detail else "")
+            + "\n\nThis is done. Do not offer it again — say what changed and what is next."
+            if ok else
+            f"⚠ The operator pressed **{label or tool}**, and `{tool}` FAILED.\n\n"
+            f"```\n{error or 'unknown error'}\n```\n\n"
+            "Read that error literally, fix the arguments, and offer a CORRECTED action. Do "
+            "not re-offer the same call unchanged."
+        )
+        # SPEND THE OFFER WHEREVER IT WAS MADE. Matched on the action id when the client sent
+        # one, and on the tool name otherwise, so an older console that does not send an id
+        # still stops replaying its buttons.
+        def _spend(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                o for o in offers
+                if not (str(o.get("id") or "") == action_id
+                        or (not action_id and str(o.get("tool") or "") == tool))
+            ]
+
+        rows = connection.execute(
+            text(
+                "SELECT id, proposed_actions FROM agent_messages "
+                " WHERE thread_id = :t "
+                "   AND jsonb_array_length(COALESCE(proposed_actions, '[]'::jsonb)) > 0 "
+                " ORDER BY created_at DESC, id DESC"
+            ),
+            {"t": thread_id},
+        ).mappings().all()
+
+        # THE THREE BUTTONS YOU DID NOT PRESS MUST SURVIVE THE ONE YOU DID.
+        #
+        # The console renders offers from the NEWEST assistant message only — older ones are
+        # treated as answered by the turns after them. So appending this outcome with no
+        # offers would silently retire every sibling offer as well: press "publish v3" and the
+        # two unrelated cleanup buttons disappear, which is a second way for a press to look
+        # like it broke something.
+        survivors = _spend(self._offers(rows[0]["proposed_actions"]) if rows else [])
+
+        self.append_message(
+            connection, thread_id=thread_id, role="assistant", content=content,
+            tool_calls=[{"tool": tool, "args": args or {}, "ok": ok, "error": error or ""}],
+            actions=[{"id": action_id, "tool": tool, "ok": ok}],
+            proposed_actions=survivors,
+        )
+        for row in rows:
+            offers = self._offers(row["proposed_actions"])
+            kept = _spend(offers)
+            if len(kept) != len(offers):
+                connection.execute(
+                    text("UPDATE agent_messages SET proposed_actions = CAST(:p AS JSONB) "
+                         " WHERE id = :id"),
+                    {"p": json.dumps(kept), "id": row["id"]},
+                )
+
     def list_messages(
         self, connection: Connection, thread_id: str
     ) -> list[dict[str, Any]]:

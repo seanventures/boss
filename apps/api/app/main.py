@@ -10945,12 +10945,32 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
         spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
         args={**dict(payload.args or {}), "_operator_confirmed": True},
     )
+    ok = bool(result.get("ok", True))
     with begin(engine) as connection:
         emit_event(connection, payload.project_id, "agent.action_accepted", payload.actor,
                    "agent_action", spec.name,
                    {"tool": spec.name, "args": payload.args,
-                    "ok": bool(result.get("ok", True)),
+                    "ok": ok,
                     "thread_id": payload.thread_id})
+        # THE PRESS GOES IN THE TRANSCRIPT, OR IT MIGHT AS WELL NOT HAVE HAPPENED.
+        #
+        # Reported: "I just did all the operations, then nothing happened, no workflow got
+        # created, then I refreshed and it displays all 4 operations again."
+        #
+        # Both halves of that are this line's absence. The offers came back because the stored
+        # message still carried them; and the agent re-proposed them because the next turn read
+        # a history in which the operator appeared never to have clicked anything. An event row
+        # is for audit — the model does not read events, it reads the thread.
+        if payload.thread_id:
+            from boss_engine.services.agent_service import AgentService
+
+            AgentService(settings).record_action_outcome(
+                connection, thread_id=payload.thread_id,
+                action_id=str(payload.action_id or ""), tool=spec.name,
+                args=dict(payload.args or {}), label=str(payload.label or ""),
+                ok=ok, result=result,
+                error=("" if ok else str(result.get("error") or "")),
+            )
     return AgentActionRunResponse(
         ok=bool(result.get("ok", True)), tool=spec.name, result=result,
         error=(None if result.get("ok", True) else str(result.get("error") or "")),

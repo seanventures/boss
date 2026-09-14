@@ -853,7 +853,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const acceptAction = useCallback((action: ProposedAction) => {
     startTransition(async () => {
-      const r = await runAgentActionAction(projectId, actor, action.tool, action.args, threadId ?? undefined);
+      const r = await runAgentActionAction(
+        projectId, actor, action.tool, action.args, threadId ?? undefined,
+        action.id, action.label);
       const payload = (r.data ?? {}) as Record<string, unknown>;
       const ok = r.ok && payload?.ok !== false;
       // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here

@@ -1268,6 +1268,13 @@ class AgentActionRunRequest(BaseModel):
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
     thread_id: Optional[str] = None
+    #: Which offer was pressed, so it can be struck from the message that made it. Optional
+    #: because an older console does not send it; without it the outcome is still recorded and
+    #: every offer of the same tool is spent, which is the safe direction to be wrong in.
+    action_id: Optional[str] = None
+    #: What the button said, so the transcript reads as the operator's action rather than as a
+    #: tool name they never saw.
+    label: Optional[str] = None
 
 
 class AgentActionRunResponse(BaseModel):

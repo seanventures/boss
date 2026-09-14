@@ -632,7 +632,17 @@ def list_definitions(
             f"""
             SELECT d.*,
                    COALESCE((SELECT count(*) FROM workflow_versions v
-                             WHERE v.workflow_definition_id=d.id), 0) AS version_count
+                             WHERE v.workflow_definition_id=d.id), 0) AS version_count,
+                   -- HOW BIG IT IS, so a workflow the operator made can be DRAWN and not
+                   -- merely counted. The catalogue grid renders shipped entries as cards with
+                   -- a step rail; the operator's own appeared nowhere but a dropdown, because
+                   -- this list carried no steps to draw. Reported as: "the workflow itself
+                   -- does not exist in Catalogue and how is it coming to Edit mode".
+                   COALESCE((SELECT jsonb_array_length(v.spec->'steps')
+                             FROM workflow_versions v
+                             WHERE v.id = d.active_version_id), 0) AS step_count,
+                   (SELECT v.version FROM workflow_versions v
+                     WHERE v.id = d.active_version_id) AS active_version
             FROM workflow_definitions d
             WHERE d.project_id=:project_id {clause}
             ORDER BY d.updated_at DESC, d.workflow_key
@@ -644,6 +654,9 @@ def list_definitions(
     for row in rows:
         item = _serialize_definition(row)
         item["version_count"] = int(row["version_count"])
+        item["step_count"] = int(row["step_count"] or 0)
+        item["active_version"] = (
+            int(row["active_version"]) if row["active_version"] is not None else None)
         items.append(item)
     return items
 
