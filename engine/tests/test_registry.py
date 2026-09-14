@@ -62,6 +62,11 @@ _EXPECTED_TOOLS: set[str] = {
     # Reconciling a run with a world that has moved on: re-test what stopped each step and put
     # back only the ones whose blocker has actually cleared.
     "recheck_workflow_run",
+    # A WORKFLOW RUN HAD NO READ TOOL AT ALL, so "what is the status?" about a wfr_ was
+    # answered with hand-written SQL — seven failed guesses at table and column names in one
+    # turn, and no answer for the operator. This also computes the way OUT of a failed run,
+    # because reporting `deadlettered` and stopping is what "it drops the ball" means.
+    "describe_workflow_run",
     # The whole factory in one read, so an open question does not become six lookups.
     "factory_briefing",
     "create_discovery",
@@ -143,10 +148,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 85, (
+    assert len(reg.names()) == 86, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 52
+    assert len(read) == 53
     assert len(write) == 33
     # the capabilities the user explicitly asked the agent to cover
     for name in (

@@ -274,6 +274,8 @@ class EngineAgent:
         messages.append({"role": "user", "content": message})
 
         trace: list[dict] = []
+        #: How many times each tool has FAILED this turn. See the nudge below `_run_tool`.
+        tool_failures: dict[str, int] = {}
         pending: list[dict] = []
         final_text = ""
         steps = 0
@@ -386,6 +388,48 @@ class EngineAgent:
                         "content": json.dumps(result, default=_jsonable)[:16000],
                     }
                 )
+
+                # THE SAME TOOL FAILING OVER AND OVER IS A FACT ABOUT BOSS, NOT ABOUT THE TASK.
+                #
+                # In one real thread `query_db` failed SEVEN times in eighteen calls —
+                # `workflows`, `work_class`, `workflow_key`, `graph`, `run_id`,
+                # `priority_band`, none of which exist — and the operator's question ("what is
+                # the status?") was never answered. Reported as "it is going into a rabbit hole
+                # and never coming out of the loop".
+                #
+                # The model could not see the pattern. Each failure arrives alone, looks like a
+                # small mistake it can correct, and correcting it is always locally reasonable;
+                # nothing in the turn ever said "this is the fourth time". So it retried
+                # forever, because the harness never told it it was in a loop.
+                #
+                # BOSS can already read its own source (search_code) and raise a fix
+                # (create_code_task). Asked why BOSS does not repair BOSS, this is the answer:
+                # it had the tools and was never given the trigger. This is the trigger.
+                if isinstance(result, dict) and (
+                        result.get("ok") is False or result.get("error")):
+                    tool_failures[name] = tool_failures.get(name, 0) + 1
+                    if tool_failures[name] == 3:
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"SYSTEM: `{name}` has now failed {tool_failures[name]} times "
+                                "this turn. Stop retrying it — you are in a loop and cannot "
+                                "see it from inside.\n\n"
+                                "Do this instead, in order:\n"
+                                "1. Is there a PURPOSE-BUILT tool for what you are trying to "
+                                "learn? Hand-written SQL is the fallback, not the first "
+                                "resort — e.g. a workflow run (wfr_) is `describe_workflow_run`"
+                                ", a code-task run (crun_) is `diagnose_run`.\n"
+                                "2. If there is genuinely no tool for this, that is a GAP IN "
+                                "BOSS. Use `search_code` to find the relevant platform code, "
+                                "and `create_code_task` to raise the fix. That is a real, "
+                                "expected part of your job.\n"
+                                "3. Either way, ANSWER THE OPERATOR NOW with what you already "
+                                "know, say plainly what you could not determine and why, and "
+                                "give them a concrete next step. Do not end the turn with an "
+                                "apology about your own tooling and nothing else."
+                            ),
+                        })
         else:
             # Only reachable if the reserved answer step ALSO produced nothing, which means the
             # model returned an empty completion — a provider fault, not a budget one. Say which.

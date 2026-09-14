@@ -339,8 +339,25 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         if not ok:
             return {"ok": False, "error": f"rejected: {why}"}
         max_rows = int(args.get("max_rows") or 100)
-        with ctx.begin() as c:
-            rows = c.execute(_text(sql)).mappings().all()
+        try:
+            with ctx.begin() as c:
+                rows = c.execute(_text(sql)).mappings().all()
+        except Exception as error:  # noqa: BLE001 — the schema belongs in the reply
+            # A WRONG COLUMN NAME MUST NOT COST A WHOLE TURN.
+            #
+            # Postgres says `column "run_id" does not exist` and stops. That is true and
+            # useless: it does not say what the column IS. So the agent guessed again, and
+            # again — one real thread spent SEVEN of its eighteen tool calls on
+            # `FROM workflows`, `work_class`, `workflow_key`, `graph`, `run_id`,
+            # `priority_band`, none of which exist — and answered "what is the status?" with
+            # an apology about its own SQL.
+            #
+            # Reported as: "it is going into a rabbit hole and never coming out of the loop."
+            #
+            # The schema is RIGHT THERE, one catalogue query away. Handing it back with the
+            # failure turns an unbounded guessing game into a single correction.
+            return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:400]}",
+                    **_schema_hint_for(ctx, sql)}
         capped = rows[:max_rows]
         return {
             "row_count": len(capped),
@@ -2899,6 +2916,64 @@ _WRITE_KEYWORDS = re.compile(
 )
 
 
+#: Tables named in a statement: FROM x, JOIN y, INTO z. Deliberately loose — this drives a
+#: HINT, so over-collecting costs a little output and under-collecting costs another turn.
+_SQL_TABLES = re.compile(
+    r"\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
+
+#: Keywords that follow FROM/JOIN and are not tables.
+_NOT_TABLES = {"select", "lateral", "only", "unnest", "generate_series", "values"}
+
+
+def _schema_hint_for(ctx, sql: str) -> dict[str, Any]:
+    """What the failed query SHOULD have said: the real tables and columns.
+
+    Returned alongside a query_db failure so a wrong identifier is corrected in one step
+    rather than discovered by elimination. See the call site for the thread this came from.
+    """
+    wanted = {
+        t.lower() for t in _SQL_TABLES.findall(sql or "")
+        if t.lower() not in _NOT_TABLES
+    }
+    if not wanted:
+        return {}
+    hint: dict[str, Any] = {}
+    try:
+        with ctx.begin() as c:
+            existing = c.execute(
+                _text("SELECT table_name, column_name FROM information_schema.columns "
+                      " WHERE table_schema = current_schema() AND table_name = ANY(:names) "
+                      " ORDER BY table_name, ordinal_position"),
+                {"names": sorted(wanted)},
+            ).mappings().all()
+            columns: dict[str, list[str]] = {}
+            for row in existing:
+                columns.setdefault(row["table_name"], []).append(row["column_name"])
+            if columns:
+                hint["columns"] = columns
+            missing = sorted(wanted - set(columns))
+            if missing:
+                # A TABLE THAT DOES NOT EXIST USUALLY HAS A NEIGHBOUR THAT DOES. `workflows`
+                # is not a table; `workflow_definitions`, `workflow_versions` and
+                # `workflow_runs` all are, and naming them ends the search immediately.
+                near = c.execute(
+                    _text("SELECT table_name FROM information_schema.tables "
+                          " WHERE table_schema = current_schema() "
+                          "   AND (" + " OR ".join(
+                              f"table_name LIKE :p{i}" for i in range(len(missing))) + ") "
+                          " ORDER BY table_name LIMIT 40"),
+                    {f"p{i}": f"%{name}%" for i, name in enumerate(missing)},
+                ).scalars().all()
+                hint["no_such_table"] = missing
+                hint["did_you_mean"] = list(near)
+    except Exception:  # noqa: BLE001 — a hint that fails must not replace the real error
+        return {}
+    if hint:
+        hint["hint"] = ("These are the REAL tables and columns. Correct the query from this "
+                        "and re-run it once — do not guess another name.")
+    return hint
+
+
 def _is_read_only(sql: str) -> tuple[bool, str]:
     if not sql:
         return False, "empty query"
@@ -3224,6 +3299,111 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
 
         with ctx.begin() as c:
             return _briefing(c, project_id)
+
+    @reg.tool(
+        "describe_workflow_run",
+        "THE ONE CALL for 'what happened to this workflow run' (wfr_...): its status, the "
+        "inputs it was started with, every step with attempts and its error, and — when it "
+        "failed — WHAT TO DO ABOUT IT. Use this instead of querying workflow_runs or "
+        "workflow_step_runs by hand. `diagnose_run` is for code-task runs (crun_) and does "
+        "not accept a wfr_.",
+        _obj({"run_id": {"type": "string", "description": "the wfr_... to describe"},
+              "project_id": {"type": "string"}},
+             ["run_id"]),
+        kind="read",
+    )
+    def describe_workflow_run(ctx, *, project_id, actor, args):
+        """A workflow run, and the way out of it.
+
+        THERE WAS NO READ TOOL FOR A WORKFLOW RUN AT ALL.
+        -------------------------------------------------
+        `diagnose_run` takes a crun_. Asked "what is the status?" about a wfr_, the agent had
+        nothing to call, so it wrote SQL — and spent seven tool calls in one turn discovering
+        that `workflows`, `work_class`, `workflow_key`, `graph`, `run_id` and `priority_band`
+        are not real. The operator got an apology about SQL instead of a status.
+
+        And the half that matters more: a deadlettered run was reported as a fact and left
+        there. "It is erroring out but there's no option or solution given to the user." A
+        run that stopped because an input was never supplied has an obvious remedy — supply
+        it — and nothing was computing that remedy, so nobody offered it.
+        """
+        run_id = str(args.get("run_id") or "").strip()
+        pid = args.get("project_id") or project_id
+        if not run_id:
+            return {"ok": False, "error": "run_id is required"}
+        if run_id.startswith("crun_"):
+            return {"ok": False,
+                    "error": f"{run_id} is a code-task run; call diagnose_run for those."}
+        with ctx.begin() as c:
+            run = c.execute(
+                _text("SELECT r.id, r.status, r.actor, r.input, r.output, r.error, "
+                      "       r.blocked_reason, r.created_at, r.completed_at, "
+                      "       d.workflow_key, d.name, v.version, v.spec "
+                      "  FROM workflow_runs r "
+                      "  JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
+                      "  JOIN workflow_versions v ON v.id = r.workflow_version_id "
+                      " WHERE r.id = :id AND r.project_id = :p"),
+                {"id": run_id, "p": pid}).mappings().first()
+            if run is None:
+                return {"ok": False, "error": f"no workflow run {run_id!r} on {pid}"}
+            steps = c.execute(
+                _text("SELECT step_id, step_kind, status, attempt, max_attempts, error, "
+                      "       input, output, updated_at "
+                      "  FROM workflow_step_runs WHERE workflow_run_id = :id "
+                      " ORDER BY created_at, step_id"),
+                {"id": run_id}).mappings().all()
+
+        spec = run["spec"] if isinstance(run["spec"], dict) else {}
+        declared = list((spec.get("input_schema") or {}).keys())
+        supplied = list((run["input"] or {}).keys())
+        missing = [k for k in declared if k not in supplied]
+        stopped = [dict(s) for s in steps
+                   if s["status"] in ("failed", "deadlettered", "cancelled")]
+
+        # WHAT TO DO, COMPUTED — not left for the reader to infer from an error string.
+        remedy: dict[str, Any] = {}
+        if run["status"] in ("failed", "deadlettered", "cancelled"):
+            if missing:
+                remedy = {
+                    "diagnosis": (
+                        f"This run was started without {', '.join(repr(m) for m in missing)}, "
+                        f"which {run['workflow_key']} v{run['version']} declares as required."),
+                    "do_this": (
+                        f"Start it again WITH those inputs: start_workflow with "
+                        f"workflow_key='{run['workflow_key']}' and an `input` object "
+                        f"containing {', '.join(missing)}. Offer that to the operator as a "
+                        f"button, asking them for any value you do not have."),
+                    "needs_from_operator": missing,
+                    # Named so an agent does not reach for write_db to "fix" a dead run.
+                    "do_not": "Do not edit workflow_runs directly; start a new run instead.",
+                }
+            elif stopped:
+                remedy = {
+                    "diagnosis": (
+                        f"Step {stopped[0]['step_id']!r} stopped: "
+                        f"{stopped[0].get('error') or 'no error recorded'}"),
+                    "do_this": (
+                        "If the cause has since been dealt with, recheck_workflow_run re-tests "
+                        "the recorded blocker and re-queues only what can now proceed. If it "
+                        "has not, say what the operator must change first."),
+                }
+        return {
+            "ok": True,
+            "run_id": run["id"],
+            "workflow": {"key": run["workflow_key"], "name": run["name"],
+                         "version": run["version"]},
+            "status": run["status"],
+            "error": run["error"],
+            "blocked_reason": run["blocked_reason"],
+            "started_by": run["actor"],
+            "started_at": _json_safe(run["created_at"]),
+            "completed_at": _json_safe(run["completed_at"]),
+            "declared_inputs": declared,
+            "supplied_inputs": supplied,
+            "missing_inputs": missing,
+            "steps": [_json_safe(dict(s)) for s in steps],
+            **({"remedy": remedy} if remedy else {}),
+        }
 
     @reg.tool(
         "recheck_workflow_run",
