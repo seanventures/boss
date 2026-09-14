@@ -737,8 +737,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "name": {"type": "string"},
                 "description": {"type": "string"},
                 "work_class": {"type": "string",
-                               "description": "the class of work this path is for, e.g. "
-                                              "project.new; omit to leave it unmapped"},
+                               "description": "optional label for a class of work other than "
+                                              "the default Build path. project.new / any are "
+                                              "refused here — apply those in the Workflows "
+                                              "area so a person chooses what Build follows"},
                 "steps": {
                     "type": "array",
                     "description": "in order: [{id, capability, skill?, captain?, approval?}]. "
@@ -799,12 +801,22 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 if problems:
                     return {"ok": False, "error": "; ".join(problems[:4])}
                 existing = c.execute(
-                    _text("SELECT id FROM workflow_definitions "
+                    _text("SELECT id, COALESCE(is_catalogue, false) AS is_catalogue "
+                          "FROM workflow_definitions "
                           "WHERE project_id=:p AND workflow_key=:k LIMIT 1"),
                     {"p": pid, "k": key},
-                ).scalar()
+                ).mappings().first()
                 if existing:
-                    definition_id = str(existing)
+                    # THE TWELVE BOSS SHIPS ARE READ-ONLY. The visual builder already
+                    # refuses this (`require_editable`). start_workflow and the unmapped
+                    # default both take the latest version of this key, so publishing
+                    # here would silently replace the gated path every new Build follows.
+                    if existing["is_catalogue"]:
+                        return {"ok": False,
+                                "error": f"{key} is one of BOSS's catalogue workflows. "
+                                         "Fork it and edit the fork; editing it would "
+                                         "change the path every new Build follows."}
+                    definition_id = str(existing["id"])
                 else:
                     definition_id = wf.create_definition(
                         c, project_id=pid, workflow_key=key,
@@ -818,7 +830,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
             work_class = str(args.get("work_class") or "").strip()
             mapped = None
-            if work_class:
+            # BUILD POSTS ONLY work_class=project.new. Mapping that slot — or the
+            # catalogue wildcard `any` — from a self-executing tool is how a drafted
+            # shortcut becomes the next Build. Apply in the Workflows area is the
+            # press that chooses the default path.
+            if work_class.lower() in {"project.new", "any", "*"}:
+                mapped = {"note": "published, not mapped: project.new/any is the default "
+                                  "Build path. Apply this workflow in the Workflows area "
+                                  "so a person chooses it."}
+            elif work_class:
                 try:
                     mapped = wf.create_mapping(
                         c, project_id=pid, workflow_version_id=published["id"],

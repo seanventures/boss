@@ -32,6 +32,106 @@ def test_drafting_is_conversational_and_deleting_is_a_press():
     assert "draft_workflow" not in EngineAgent.PROPOSE_ONLY
 
 
+def _draft(monkeypatch, *, existing, args):
+    """Call draft_workflow against a fake connection and a recording workflows module."""
+    from contextlib import contextmanager
+
+    from boss_engine.tools import builtin as builtin_mod
+    from boss_engine.tools.builtin import build_default_registry
+
+    calls = {"published": [], "mapped": [], "created": []}
+
+    class _Wf:
+        @staticmethod
+        def publish_version(*_args, **kwargs):
+            calls["published"].append(kwargs)
+            return {"id": "wfv_new", "version": 2}
+
+        @staticmethod
+        def create_definition(*_args, **kwargs):
+            calls["created"].append(kwargs)
+            return {"id": "wfd_new"}
+
+        @staticmethod
+        def create_mapping(*_args, **kwargs):
+            calls["mapped"].append(kwargs)
+            return {"id": "wfm_new", "selector_value": kwargs.get("selector_value")}
+
+    real_services = builtin_mod.services_module
+
+    def _services(name):
+        return _Wf if name == "workflows" else real_services(name)
+
+    monkeypatch.setattr(builtin_mod, "services_module", _services)
+
+    class _Result:
+        def scalar(self):
+            return None if existing is None else existing.get("id")
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return existing
+
+    class _Conn:
+        def execute(self, _statement, _params=None):
+            return _Result()
+
+    class _Ctx:
+        @contextmanager
+        def begin(self):
+            yield _Conn()
+
+    out = build_default_registry().get("draft_workflow").handler(
+        _Ctx(), project_id="proj", actor="ceo", args=args,
+    )
+    return out, calls
+
+
+def test_drafting_cannot_overwrite_a_catalogue_workflow(monkeypatch):
+    """Standard Product Delivery is read-only. Fork it.
+
+    `draft_workflow` executes without a press. `start_workflow` and the unmapped-project
+    default both take the latest published version of `standard_product_delivery`. A model
+    that reuses that key — the one `start_workflow` itself names — would silently replace
+    the gated path every new Build follows.
+    """
+    out, calls = _draft(
+        monkeypatch,
+        existing={"id": "wfd_catalogue", "is_catalogue": True},
+        args={"workflow_key": "standard_product_delivery", "name": "Shorter",
+              "steps": [{"capability": "notify", "input": {"message": "done"}}]},
+    )
+    assert out.get("ok") is False
+    error = str(out.get("error") or "").lower()
+    assert "fork" in error or "catalogue" in error
+    assert calls["published"] == []
+    assert calls["created"] == []
+
+
+def test_drafting_cannot_remap_what_build_follows(monkeypatch):
+    """Command Center Build posts only work_class=project.new.
+
+    `draft_workflow` is self-executable and its schema names project.new as the example.
+    create_mapping at priority 100 is the same slot Apply uses, and resolve_mapping
+    prefers the highest priority. A conversation that drafts a shorter path would
+    silently become the next Build — research, panel, merge and deploy never run.
+    """
+    out, calls = _draft(
+        monkeypatch,
+        existing=None,
+        args={"workflow_key": "simple_ship", "name": "Simple ship",
+              "work_class": "project.new",
+              "steps": [{"capability": "notify", "input": {"message": "done"}}]},
+    )
+    assert out.get("status") == "published"
+    assert calls["published"], "the new workflow should still be authored"
+    assert calls["mapped"] == []
+    note = str(out.get("mapping") or out.get("note") or out.get("error") or "").lower()
+    assert "not mapped" in note or "apply" in note
+
+
 def test_the_model_describes_a_sequence_and_the_graph_is_built_for_it():
     """Asking a model to emit `next` pointers is asking it to get a graph right in JSON, and the
     failure is silent: a mistyped pointer makes a workflow that stops after step one."""
