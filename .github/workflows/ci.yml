@@ -45,7 +45,13 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
+          # account_connect too: `make test` imports apps.api.app.main, whose routes pull
+          # in apps/account_connect (it uses Form(...)), and FastAPI refuses to build the
+          # dependant without python-multipart. That dependency is declared in
+          # apps/account_connect/requirements.txt and was never installed here — the job
+          # had been failing at an earlier step for so long that nothing reached it.
+          .venv/bin/pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt \
+                                 -r apps/account_connect/requirements.txt
       - name: Lint
         run: make lint
       - name: Engine lint (real-bug subset)

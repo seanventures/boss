@@ -70,6 +70,12 @@ services:
     image: boss-web:${BOSS_IMAGE_TAG:-goldeneye}
     environment:
       NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-https://${BOSS_API_HOSTNAME:-boss-api.local.sean.network}}
+      # THE ONE THAT WORKS AT RUNTIME. NEXT_PUBLIC_* is inlined at BUILD time, so setting
+      # it here does nothing for an image built without the matching --build-arg. The
+      # browser now calls its own origin and app/v1/[...path] proxies to this address,
+      # so an unset BOSS_API_URL means every client feed answers 503 — see
+      # deploy/goldeneye.compose.yaml, which already sets it.
+      BOSS_API_URL: ${BOSS_API_URL:-https://${BOSS_API_HOSTNAME:-boss-api.local.sean.network}}
       NEXT_PUBLIC_BOSS_PROJECT_ID: ${NEXT_PUBLIC_BOSS_PROJECT_ID:-boss-dogfood}
       BOSS_API_KEY: ${BOSS_API_KEY:-}
     expose:
