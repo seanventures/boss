@@ -9533,3 +9533,29 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .dw-steps .skill-row code {
   opacity: 0.8;
 }
+
+/* A message waiting its turn.
+ *
+ * Your own words, dimmed, in order. A queued message you cannot see is one you cannot tell was
+ * accepted — so the operator retypes it, and now there are two. */
+.agent-queued {
+  opacity: 0.62;
+  border-style: dashed;
+}
+
+.agent-queued-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 0.82rem;
+}
+
+/* Stop waiting. Deliberately quiet — it is the rarer action, and next to a primary Send it
+ * would read as the way out of a mistake rather than as an escape hatch. */
+.agent-stop {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.agent-stop:hover { opacity: 1; }

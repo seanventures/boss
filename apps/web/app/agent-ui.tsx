@@ -312,6 +312,19 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
+  //: MESSAGES TYPED WHILE A TURN IS RUNNING.
+  //:
+  //: Send was disabled while busy, so a second thought had to be held in the operator's head
+  //: for the two minutes a turn can take — or typed into the box and forgotten. A queue is the
+  //: obvious thing and the panel already has everything it needs for one: the turn ends, the
+  //: next message goes.
+  //:
+  //: Shown in the transcript as pending rather than kept invisible, because a message you
+  //: cannot see is a message you cannot tell was sent.
+  const [queued, setQueued] = useState<string[]>([]);
+  //: A turn the operator stopped waiting for. The work itself is a server action and cannot be
+  //: killed from here — so this says what is actually true rather than pretending to cancel.
+  const [released, setReleased] = useState(false);
   // HOW LONG, AND WHAT IF IT NEVER ANSWERS.
   // "It says it will monitor and update and I don't see any waiting signal — it just quits and
   // I don't know when it will come back." A spinner with no clock and no end state is why:
@@ -746,7 +759,15 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     // A SCREENSHOT ON ITS OWN IS A MESSAGE. "Look at this" is the most natural way to report a
     // broken screen, and requiring words alongside it would be the console insisting on
     // ceremony the operator did not need.
-    if ((!msg && !files.length) || busy) return;
+    if (!msg && !files.length) return;
+    // QUEUED, NOT REFUSED. An attachment cannot be queued — the file handles are consumed by
+    // the turn that sends them — so a message with files still waits for the turn to end.
+    if (busy && !files.length) {
+      setQueued((q) => [...q, msg]);
+      setInput("");
+      return;
+    }
+    if (busy) return;
     const shown = msg || "Look at what I've attached.";
     setMessages((m) => [...m, {
       role: "user", content: shown,
@@ -758,6 +779,41 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     setFiles([]);
     runTurn(fd);
   }, [input, files, busy, runTurn]);
+
+  // THE QUEUE DRAINS ITSELF WHEN THE TURN ENDS.
+  //
+  // One at a time and in order: sending them together would interleave the answers, and the
+  // second question usually depends on the first one's answer. `released` stops the drain —
+  // an operator who pressed Stop wanted the queued follow-ups stopped too, since they were
+  // written for a turn that is no longer the one running.
+  useEffect(() => {
+    if (busy || released || !queued.length) return;
+    const [next, ...rest] = queued;
+    setQueued(rest);
+    setMessages((m) => [...m, { role: "user", content: next }]);
+    const fd = new FormData();
+    fd.set("message", next);
+    runTurn(fd);
+  }, [busy, released, queued, runTurn]);
+
+  /** Stop waiting for the turn in flight, and drop anything queued behind it.
+   *
+   *  HONEST ABOUT WHAT IT CANNOT DO. A turn is a server action; there is no cancel endpoint,
+   *  so the model keeps going and its answer still lands in this thread. What this stops is
+   *  the WAITING — the composer comes back, the queue is cleared, and the transcript says so
+   *  rather than implying the work was killed. Calling it "Cancel" would be a lie the next
+   *  message exposes.
+   */
+  const release = useCallback(() => {
+    setReleased(true);
+    setQueued([]);
+    setMessages((m) => [...m, { role: "assistant", content:
+      "Stopped waiting. BOSS may still finish this turn — if it does, the answer appears here. "
+      + "Anything you had queued was dropped, so send what you actually want now." }]);
+  }, []);
+
+  // A new turn is a new wait.
+  useEffect(() => { if (busy) setReleased(false); }, [busy]);
 
   /**
    * Clear THIS conversation, and only this one.
@@ -1072,6 +1128,25 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             </article>
           ) : null}
 
+          {/* WHAT IS WAITING ITS TURN. Shown as your own words, dimmed, in order — a queued
+              message you cannot see is one you cannot tell was accepted, and the operator
+              would retype it. */}
+          {queued.map((q, i) => (
+            <article key={`queued-${i}`} className="agent-message user agent-queued"
+                     data-testid="agent-queued">
+              <span>You</span>
+              <p>{q}</p>
+              <span className="detail agent-queued-note">
+                queued — sends when this turn finishes
+                <button type="button" className="linklike"
+                        data-testid={`agent-unqueue-${i}`}
+                        onClick={() => setQueued((all) => all.filter((_, n) => n !== i))}>
+                  remove
+                </button>
+              </span>
+            </article>
+          ))}
+
           {/* INSIDE THE TRANSCRIPT, NOT UNDER IT.
               These were siblings of the scroll box on a fixed-height shell, so their height came
               OUT of the conversation: five proposals — each a button plus a paragraph of why —
@@ -1242,14 +1317,32 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               📎
             </button>
             <span className="agent-composer-hint">
-              {busy ? "BOSS is working…" : "Enter to send · Shift+Enter for a new line"}
+              {busy
+                ? (queued.length
+                    ? `BOSS is working — ${queued.length} queued`
+                    : "BOSS is working — send anyway to queue")
+                : "Enter to send · Shift+Enter for a new line"}
             </span>
-            {/* Circular, and disabled until there is something to send — a live-looking button
-                that does nothing is worse than one that says it is not ready. */}
+            {/* STOP WAITING, not cancel. A turn is a server action and cannot be killed from
+                here; this gives the composer back and drops the queue, and the transcript says
+                exactly that. A button labelled Cancel would be a lie the next message
+                exposes. */}
+            {busy ? (
+              <button type="button" className="linklike agent-stop"
+                      onClick={release} data-testid="agent-stop"
+                      title="Stop waiting for this turn. BOSS may still finish it; anything
+                             queued behind it is dropped.">
+                Stop
+              </button>
+            ) : null}
+            {/* NOT disabled while busy any more: pressing it queues. Still disabled with
+                nothing to send — a live-looking button that does nothing is worse than one
+                that says it is not ready. An attachment cannot be queued, so that case waits. */}
             <button type="submit" className="agent-send"
-                    disabled={busy || (!input.trim() && !files.length)}
-                    aria-label="Send message" data-testid="agent-send">
-              {busy ? <span className="agent-send-spin" aria-hidden /> : "↑"}
+                    disabled={(!input.trim() && !files.length) || (busy && !!files.length)}
+                    aria-label={busy ? "Queue message" : "Send message"}
+                    data-testid="agent-send">
+              {busy && files.length ? <span className="agent-send-spin" aria-hidden /> : "↑"}
             </button>
           </div>
         </form>

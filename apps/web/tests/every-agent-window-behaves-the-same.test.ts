@@ -60,7 +60,10 @@ describe("what you send it", () => {
   });
 
   it("a file with no words is still sendable", () => {
-    expect(DOCK).toContain("disabled={busy || (!input.trim() && !files.length)}");
+    // The `busy` half moved out when Send started queueing: pressing it during a turn adds to
+    // the queue rather than being refused. What must not change is that SOMETHING has to be
+    // there — words or a file.
+    expect(DOCK).toContain("disabled={(!input.trim() && !files.length) || (busy && !!files.length)}");
   });
 
   it("and the transcript shows what was sent", () => {

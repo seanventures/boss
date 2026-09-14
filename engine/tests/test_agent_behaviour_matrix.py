@@ -1158,3 +1158,112 @@ def test_a_skipped_feed_says_why_rather_than_showing_zero():
     reason = reason[:reason.index('"')]
     assert reason.endswith("."), f"the reason is a flag, not a sentence: {reason!r}"
     assert "Ops" in reason, f"the reason does not say where the counts do load: {reason!r}"
+
+
+def test_describe_role_finds_the_workforce_not_only_panel_seats():
+    """Every agent was opening by announcing that it did not exist.
+
+    Two tables hold roles. `meeting_roles` is panel SEATS — who sits in a PRD debate. `roles`
+    is the WORKFORCE: deployment_manager, program_manager, media_publisher, the agents an
+    operator actually addresses. describe_role only ever looked in the first, which on a real
+    project is empty while `roles` has 28 rows — so the Program Manager's own chat opened with
+    "There is no Program Manager role defined on this project", reported as giving a false
+    impression.
+    """
+    src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
+    block = src[src.index("def describe_role("):]
+    block = block[:block.index("def _register_deployment_target_tools")]
+
+    # The workforce is checked FIRST, because that is what a named agent is.
+    roles_at = block.index("FROM roles WHERE project_id = :p")
+    seats_at = block.index("FROM meeting_roles ")
+    assert roles_at < seats_at, "panel seats must be the fallback, not the first lookup"
+    # A panel seat still resolves, so asking about one keeps working.
+    assert "meeting_roles" in block
+    # And a genuine miss names what exists rather than sending the reader hunting for a typo.
+    assert '"available"' in block
+
+
+def test_a_turn_reports_what_it_is_doing_before_the_first_tool():
+    """The silence before the first tool call was the whole complaint.
+
+    on_step fires per tool, so the console showed real activity the moment tools started — and
+    nothing at all before that. On a long question the first model round-trip runs for a
+    minute or more while it decides what to look at, and the operator watched a generic "still
+    working, this turn is running long" for the entire time.
+    """
+    src = pathlib.Path("engine/boss_engine/agent/engine_agent.py").read_text(encoding="utf-8")
+    loop = src[src.index("for i in range(max_steps):"):]
+
+    # Reported BEFORE the round-trip: a line that appears once the work is done is not progress.
+    report_at = loop.index("reading your question and deciding what to look at")
+    call_at = loop.index("self._adapter_obj().create_chat_completion(")
+    assert report_at < call_at
+
+    # Each phase says something different, because "working" repeated is indistinguishable
+    # from nothing happening.
+    for phase in ("reading your question and deciding what to look at",
+                  "weighing what came back, and what to check next",
+                  "writing the answer"):
+        assert phase in loop
+
+
+def test_a_step_that_names_a_skill_defines_the_step_rather_than_refusing():
+    """The loop an operator reported as "the action button never does anything".
+
+    Two objects that sound like one. A SKILL is the unit of doing (`video.bookend`); a CUSTOM
+    STEP is the workflow-shaped wrapper that lets a graph place one. `_spec_from_steps` maps a
+    step's `skill:` onto `binding.custom_step`, so every draft naming a skill was validated as
+    a missing custom step — "this project does not have that skill" — the definition stayed
+    empty, and the agent proposed the identical thing again. Three times, in the real thread.
+
+    The model was right and the plumbing was not: naming the skill IS what the operator means.
+    """
+    src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
+
+    assert "def _ensure_steps_for_skills(" in src
+    helper = src[src.index("def _ensure_steps_for_skills("):src.index("def _draft_problems(")]
+    # BOTH kinds of skill: authored, and the ones BOSS ships. Only the first was ever checked,
+    # so the entire media pipeline validated as missing.
+    assert "_skill_exists(connection, project_id, wanted)" in helper
+    # A step key cannot hold a dot; a skill id routinely does.
+    assert 're.sub(r"[^a-z0-9_]+", "_", wanted.lower())' in helper
+    # Run BEFORE validation, or it cannot prevent the failure it exists for.
+    draft = src[src.index("def draft_workflow("):]
+    draft = draft[:draft.index("@reg.tool")]
+    assert draft.index("_ensure_steps_for_skills(") < draft.index("_draft_problems(")
+
+
+def test_validation_resolves_the_step_before_looking_for_a_skill():
+    """A step whose key differs from its skill id is every step BOSS defines.
+
+    `_draft_problems` looked the STEP key up in `skill_definitions` directly, so a step called
+    `video_bookend` bound to skill `video.bookend` reported the skill as missing — about a
+    step sitting in the table.
+    """
+    src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
+    block = src[src.index("def _draft_problems("):src.index("def _text(")]
+    assert "FROM workflow_custom_steps " in block
+    step_at = block.index("FROM workflow_custom_steps ")
+    skill_at = block.index("skills.get_skill(connection, project_id, skill_key)")
+    assert step_at < skill_at, "resolve the step, then the skill it binds"
+    # And a built-in skill counts. get_skill reads only what the project authored.
+    assert "skills._skill_exists(connection, project_id, skill_key)" in block
+
+
+def test_the_agent_is_told_to_act_once_confirmed_and_not_to_re_offer():
+    """"It just keeps asking the same question and never does anything."
+
+    The transcript had three assistant turns, each 2.5k-7.4k characters, each re-proposing an
+    action that had already been offered. The prompt asked for brevity and then ended by
+    telling the model to explain and wait — so it explained, at length, every time.
+    """
+    src = pathlib.Path(
+        "engine/boss_engine/services/intent_router.py").read_text(encoding="utf-8")
+    assert "DO NOT RE-OFFER WHAT YOU ALREADY OFFERED." in src
+    assert "ONCE THEY HAVE CONFIRMED, ACT." in src
+    # The prose around a button is a caption, with a number on it — "be brief" was already
+    # there and was ignored.
+    # Sliced to one source line: the sentence is built by string concatenation, so any phrase
+    # spanning a join is absent from the file even though it is present in the prompt.
+    assert "runs past 120 " in src

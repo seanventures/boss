@@ -35,11 +35,34 @@ describe("ask boss does not lock the operator out", () => {
     expect(field).not.toContain("disabled={busy}");
   });
 
-  it("still holds SEND while a turn is in flight", () => {
-    // Two turns at once is a different bug. The second half of the condition grew when files
-    // could be attached — a screenshot with no words is a message — but `busy` still holds it.
-    const bar = SRC.slice(SRC.indexOf("agent-composer-bar"));
-    expect(bar).toContain("disabled={busy || (!input.trim() && !files.length)}");
+  it("never starts a second turn, but no longer refuses the message either", () => {
+    // TWO TURNS AT ONCE IS STILL THE BUG. What changed is what happens instead of starting
+    // one: pressing Send while busy QUEUES, rather than doing nothing. Holding the button
+    // meant a second thought had to be kept in the operator's head for the two minutes a turn
+    // can take, or typed into the box and lost.
+    const send = SRC.slice(SRC.indexOf("const send = useCallback"));
+    const body = send.slice(0, send.indexOf("}, [input, files, busy, runTurn]);"));
+    // Queued, and the turn is NOT started.
+    expect(body).toContain("if (busy && !files.length) {");
+    expect(body).toContain("setQueued((q) => [...q, msg]);");
+    // An attachment cannot be queued — the file handles are consumed by the turn that sends
+    // them — so that case still waits.
+    expect(body).toContain("if (busy) return;");
+  });
+
+  it("the queue drains one at a time, in order", () => {
+    // Sending them together would interleave the answers, and the second question usually
+    // depends on the first one's answer.
+    expect(SRC).toContain("const [next, ...rest] = queued;");
+    expect(SRC).toContain("if (busy || released || !queued.length) return;");
+  });
+
+  it("Stop says what it actually does", () => {
+    // A turn is a server action; there is no cancel endpoint, so the model keeps going and its
+    // answer still lands. Calling this Cancel would be a lie the next message exposes.
+    expect(SRC).toContain('data-testid="agent-stop"');
+    expect(SRC).toContain("Stopped waiting. BOSS may still finish this turn");
+    expect(SRC).not.toMatch(/>\s*Cancel\s*</);
   });
 
   it("bounds the wait rather than the work", () => {

@@ -309,6 +309,27 @@ class EngineAgent:
                         "Partial findings are useful; a report of running out of steps is not."
                     ),
                 })
+            # THE SILENCE BEFORE THE FIRST TOOL WAS THE WHOLE PROBLEM.
+            #
+            # on_step fires per tool call, so the console showed real activity the moment tools
+            # started — and nothing at all before that. On a long question the first model
+            # round-trip takes a minute or more while it decides what to look at, and the
+            # operator watched a generic "still working, this turn is running long" for the
+            # entire time. Reported as wanting "some level abstract info what it is doing in
+            # one line and keep refreshing".
+            #
+            # The phase IS the information: deciding what to look at, then weighing what came
+            # back. Emitted before the round-trip rather than after, because a line that
+            # appears once the work is done is not progress.
+            if on_step is not None:
+                try:
+                    on_step(
+                        "reading your question and deciding what to look at" if i == 0
+                        else "writing the answer" if last
+                        else "weighing what came back, and what to check next"
+                    )
+                except Exception:  # noqa: BLE001 — never fail a turn to report progress
+                    pass
             msg, _usage = self._adapter_obj().create_chat_completion(
                 messages, tools=(None if last else schemas))
             messages.append(msg["raw"])

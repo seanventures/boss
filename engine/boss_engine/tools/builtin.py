@@ -749,6 +749,20 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # and delete it.
             try:
                 caps_by_key = {x["key"]: x for x in caps.palette()}
+                # A STEP THAT NAMES A REAL SKILL IS NOT A MISTAKE TO REFUSE.
+                #
+                # `skill: "video.bookend"` becomes binding.custom_step, and a custom step is a
+                # DIFFERENT object from a skill — a workflow_custom_steps row that binds one.
+                # So every draft naming a skill failed validation with "this project does not
+                # have that skill", the definition stayed empty, and the agent proposed the
+                # same thing again. That is the loop an operator reported as "it just keeps
+                # asking the same question and the action button never does anything".
+                #
+                # The model was right and the plumbing was not: naming the skill IS what the
+                # operator means. Defining the step that binds it is a safe write the agent is
+                # already trusted with (draft_custom_step is on the write allowlist), so it is
+                # done here rather than handed back as an error nobody can act on.
+                made = _ensure_steps_for_skills(c, pid, spec, actor)
                 problems = _draft_problems(c, pid, spec, caps_by_key, caps)
                 if problems:
                     return {"ok": False, "error": "; ".join(problems[:4])}
@@ -784,6 +798,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
         return {"status": "published", "workflow_key": key, "definition_id": definition_id,
                 "version": published.get("version"), "steps": len(spec["steps"]),
+                # Named, because a step BOSS defined on the operator's behalf is something they
+                # should be able to find and change afterwards.
+                **({"defined_steps": made} if made else {}),
                 **({"mapping": mapped} if mapped else {})}
 
     @reg.tool(
@@ -2560,6 +2577,60 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     return {"entry_step": built[0]["id"], "steps": built}
 
 
+def _ensure_steps_for_skills(connection, project_id: str, spec: dict, actor: str) -> list[str]:
+    """Define a custom step for any binding that names a skill but has no step yet.
+
+    THE TWO OBJECTS, AND WHY CONFUSING THEM LOOKED LIKE AN UNRESPONSIVE BUTTON.
+    A SKILL is the unit of doing — `video.bookend`, `publish_youtube`. A CUSTOM STEP is a
+    workflow-shaped wrapper around one, with a label, inputs and a risk tier, so a graph can
+    place it. A model asked for a workflow names skills, because that is what the work IS; the
+    step is bookkeeping it has no reason to know about.
+
+    Both kinds of skill count: `skill_definitions` holds what this project authored, and the
+    entitlements catalogue holds what BOSS ships. Only the first was ever checked, so every
+    built-in — the whole media pipeline — read as "this project does not have that skill".
+
+    Returns the step keys it created, so the caller can say what it did.
+    """
+    steps_service = services_module("workflow_custom_steps")
+    skills = services_module("skill_definitions")
+    created: list[str] = []
+    for entry in spec.get("steps", []):
+        binding = entry.get("binding") or {}
+        wanted = str(binding.get("custom_step") or "").strip()
+        if not wanted:
+            continue
+        existing = connection.execute(
+            _text("SELECT step_key FROM workflow_custom_steps "
+                  "WHERE project_id = :p AND step_key = :k LIMIT 1"),
+            {"p": project_id, "k": wanted},
+        ).first()
+        if existing:
+            continue
+        # Not a step. Is it a skill — authored, or one BOSS ships?
+        source = skills._skill_exists(connection, project_id, wanted)
+        if source is None:
+            # Leave it. `_draft_problems` says which skills this project has, which is a more
+            # useful sentence than anything invented here.
+            continue
+        # A step key cannot hold a dot; a skill id routinely does (`video.bookend`).
+        step_key = re.sub(r"[^a-z0-9_]+", "_", wanted.lower()).strip("_")[:48]
+        label = wanted.replace(".", " ").replace("_", " ").strip().title()
+        try:
+            steps_service.create(
+                connection, project_id=project_id, actor=actor,
+                step_key=step_key, label=label,
+                summary=f"Runs the {wanted} skill.",
+                binding_kind="skill", skill_id=wanted,
+                inputs=[], produces=[], knowledge="",
+            )
+        except Exception:  # noqa: BLE001 — a step that will not define is a problem
+            continue                                   # _draft_problems reports it properly
+        binding["custom_step"] = step_key
+        created.append(step_key)
+    return created
+
+
 def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
                     caps_module: Any) -> list[str]:
     """Everything wrong with a drafted spec, in sentences, before anything is written.
@@ -2573,8 +2644,26 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
     for entry in spec.get("steps", []):
         binding = entry.get("binding") or {}
         if binding.get("custom_step"):
-            skill_key = str(binding.get("custom_step") or "")
+            step_key = str(binding.get("custom_step") or "")
+            # THE STEP, THEN THE SKILL BEHIND IT.
+            #
+            # This looked the step key up in `skill_definitions` directly — so a step whose key
+            # differs from its skill id (every one BOSS defines, since a skill id holds dots
+            # and a step key cannot) reported "this project does not have that skill" about a
+            # step sitting in the table. Resolve the step first; only fall back to treating the
+            # name as a skill id for a spec written by hand.
+            row = connection.execute(
+                _text("SELECT skill_id, binding_kind FROM workflow_custom_steps "
+                      "WHERE project_id = :p AND step_key = :k LIMIT 1"),
+                {"p": project_id, "k": step_key},
+            ).mappings().first()
+            skill_key = str((row or {}).get("skill_id") or step_key)
             skill = skills.get_skill(connection, project_id, skill_key)
+            if skill is None and skills._skill_exists(connection, project_id, skill_key):
+                # A skill BOSS SHIPS. `get_skill` reads only what this project authored, so
+                # every built-in — the entire media pipeline — validated as missing.
+                skill = {"skill_key": skill_key, "risk_tier": 1, "enabled": True,
+                         "requires_approval": False, "trusted": True}
             problems.extend(caps_module.validate_custom_step(
                 {**entry, "binding": {"skill_id": skill_key}}, skill))
             continue
@@ -3701,13 +3790,41 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
         pid = args.get("project_id") or project_id
         wanted = str(args.get("role") or "").strip()
         with ctx.begin() as c:
+            # TWO TABLES HOLD ROLES, AND THIS ONLY LOOKED IN ONE.
+            #
+            # `meeting_roles` is panel SEATS — who sits in a PRD debate. `roles` is the
+            # WORKFORCE — deployment_manager, program_manager, media_publisher, the agents an
+            # operator actually addresses. On this project meeting_roles is empty and `roles`
+            # has 28 rows, so every single agent opened by announcing it did not exist:
+            # "There is no Program Manager role defined on this project", said by the Program
+            # Manager. Reported as giving a false impression, which is putting it kindly.
+            #
+            # The workforce is checked FIRST because that is what a named agent is. A panel
+            # seat is the fallback, so asking about one still works.
             row = c.execute(
-                _text("SELECT role_key, title, lens, risk_tier FROM meeting_roles "
-                      "WHERE project_id = :p "
-                      "AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w)) LIMIT 1"),
+                _text("SELECT role_key, display_name AS title, "
+                      "       NULL::text AS lens, 1 AS risk_tier "
+                      "  FROM roles WHERE project_id = :p "
+                      "   AND (lower(role_key) = lower(:w) OR lower(display_name) = lower(:w)) "
+                      " LIMIT 1"),
                 {"p": pid, "w": wanted}).mappings().first()
             if row is None:
-                return {"ok": False, "error": f"no role {wanted!r} on {pid}"}
+                row = c.execute(
+                    _text("SELECT role_key, title, lens, risk_tier FROM meeting_roles "
+                          "WHERE project_id = :p "
+                          "AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w)) "
+                          "LIMIT 1"),
+                    {"p": pid, "w": wanted}).mappings().first()
+            if row is None:
+                # NAME WHAT EXISTS. "No role X" sends the reader hunting for a typo; the list
+                # says whether they are even asking the right project.
+                available = c.execute(
+                    _text("SELECT role_key FROM roles WHERE project_id = :p "
+                          "ORDER BY role_key LIMIT 40"),
+                    {"p": pid}).scalars().all()
+                return {"ok": False,
+                        "error": f"no role {wanted!r} on {pid}",
+                        "available": list(available)}
             # The agent DEFINITION, when one has been published for this role: its prompts,
             # rules and requested skills are the SME's remit, and they live apart from the
             # panel lens so an operator can extend one without editing the other.
