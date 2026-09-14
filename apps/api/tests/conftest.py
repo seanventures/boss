@@ -1,6 +1,4 @@
 import os
-import uuid
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 os.environ.setdefault("BOSS_EDITION", "enterprise_self_hosted")
 
@@ -32,7 +30,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from apps.api.app.bootstrap import seed
-from apps.api.tests.db_guard import assert_safe_to_wipe
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
 from apps.api.app import main as api_main

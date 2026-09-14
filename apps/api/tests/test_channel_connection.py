@@ -8,7 +8,6 @@ automation returns "I believe I clicked Publish", and on a retry there is no way
 the first attempt landed.
 """
 
-import pytest
 
 from apps.api.app import main as api_main
 

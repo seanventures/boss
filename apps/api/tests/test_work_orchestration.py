@@ -3,7 +3,6 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
-from apps.api.app import main as api_main
 from apps.api.app.services.jobs import JobLeaseService
 from apps.api.app.services.work_orchestration import WorkOrchestrationService
 

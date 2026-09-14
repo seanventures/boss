@@ -10,7 +10,6 @@ skill is "this member of the workforce can do this when its own work calls for i
 either or neither must be expressible, which is what these tests pin.
 """
 
-import pytest
 
 from apps.api.app import main as api_main
 

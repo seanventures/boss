@@ -5,7 +5,7 @@ Read surfaces stay green; invalid inputs fail closed with 4xx.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 

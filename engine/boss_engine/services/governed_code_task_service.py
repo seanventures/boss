@@ -35,6 +35,10 @@ from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
 from . import design_prompts, plane_sync, verification_target
+from .bakeoff import (
+    fixture_for_run as bakeoff_fixture_for_run,
+    stage_fixture as stage_bakeoff_fixture,
+)
 from .code_agent import make_code_agent
 from .model_rate_limiter import get_rate_limiter, provider_of, is_rate_limit_error
 from .code_task_service import (
@@ -1543,7 +1547,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # repo-local node_modules/.bin on PATH and the process-group kill — not a second,
         # subtly different execution path. Attached per call because the sandbox is
         # provisioned after this closure is defined; it is idempotent.
-        if sandbox is not None and callable(getattr(sandbox, "run", None)):
+        if command_container is not None:
+            a.command_runner = command_container.as_command_runner()
+        elif sandbox is not None and callable(getattr(sandbox, "run", None)):
             a.command_runner = (
                 lambda cmd, timeout=None, _sb=sandbox: _sb.run(cmd, timeout=timeout)
             )
@@ -2049,6 +2055,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
     sandbox = None
     review_sandbox = None
+    command_container = None  # BOSS-410, only when the docker command runtime is selected
     cost = 0
     try:
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
@@ -2057,6 +2064,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         sandbox.provision(owner, repo, base_branch=base_branch,
                           work_branch=work_branch, token=token)
         root = sandbox.path
+        # BOSS-410: with the docker command runtime selected, agent-authored commands run in
+        # a network-less container with the workspace bind-mounted, rather than as a
+        # subprocess in the control plane's own container. One container per task. A failure
+        # to start is loud — never a silent downgrade to the weaker path.
+        if str(getattr(settings, "sandbox_command_runtime", "subprocess")).lower() == "docker":
+            from .container_runner import ContainerCommandRunner
+
+            command_container = ContainerCommandRunner(root, settings, task_id=run_id)
+            command_container.start()
+            logger.info("code_task.command_container run=%s id=%s", run_id,
+                        (command_container.container_id or "")[:12])
+        # BOSS-415: a bake-off task may ship the codebase it starts from, so a brownfield
+        # task ("find where this lives among many files") is deterministic instead of
+        # depending on what earlier runs left behind. Normal runs carry no fixture.
+        _fixture = bakeoff_fixture_for_run(run.get("finalize_ctx"))
+        if _fixture:
+            _staged = stage_bakeoff_fixture(root, _fixture)
+            logger.info("code_task.fixture_staged run=%s files=%s", run_id, len(_staged))
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")
@@ -4216,6 +4241,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.
         clear_llm_context()
+        if command_container is not None:
+            # A leaked container outlives the run that made it and nothing else reaps it.
+            command_container.stop()
         if sandbox is not None:
             sandbox.teardown()
         if review_sandbox is not None:

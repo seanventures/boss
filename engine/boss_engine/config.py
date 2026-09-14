@@ -891,6 +891,30 @@ class Settings(BaseSettings):
     native_agent_review_max_turns: int = Field(
         default=12, alias="BOSS_NATIVE_AGENT_REVIEW_MAX_TURNS"
     )
+    # --- containerised command execution (P0-D / BOSS-410) --------------
+    # Agent-authored commands run as a subprocess inside the API/worker container with
+    # full network egress. `subprocess` keeps that behaviour; `docker` runs them in a
+    # container with the workspace bind-mounted, NO network, non-root, no capabilities
+    # and resource limits. Model calls stay in the control plane either way — the
+    # container needs no network precisely because nothing in it should be talking out.
+    #
+    # Default stays `subprocess` until a live verification run on a real repository is
+    # recorded; `docker` fails closed with a readable reason rather than degrading.
+    sandbox_command_runtime: str = Field(
+        default="subprocess", alias="BOSS_SANDBOX_COMMAND_RUNTIME"
+    )
+    sandbox_docker_binary: str = Field(default="docker", alias="BOSS_SANDBOX_DOCKER_BINARY")
+    sandbox_container_image: str = Field(
+        default="python:3.11-slim", alias="BOSS_SANDBOX_CONTAINER_IMAGE"
+    )
+    #: "none" is the point. Set to "bridge" only for a task that genuinely must fetch.
+    sandbox_container_network: str = Field(
+        default="none", alias="BOSS_SANDBOX_CONTAINER_NETWORK"
+    )
+    sandbox_container_memory: str = Field(default="2g", alias="BOSS_SANDBOX_CONTAINER_MEMORY")
+    sandbox_container_cpus: str = Field(default="2", alias="BOSS_SANDBOX_CONTAINER_CPUS")
+    sandbox_container_pids: int = Field(default=512, alias="BOSS_SANDBOX_CONTAINER_PIDS")
+
     # --- agent-boundary permissions (P0-E / BOSS-411) -------------------
     # BOSS governs at the WORKFLOW level (decisions, gates, budget) and, until now,
     # not at all inside the sandbox. Factory ships four autonomy levels plus an

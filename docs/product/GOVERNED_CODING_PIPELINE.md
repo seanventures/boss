@@ -77,6 +77,20 @@ dual-control, and a full audit trail.
 
 ## 3. The pipeline — plain steps, run by different agents
 
+> **What the gate does by default.** BOSS ships `BOSS_CODE_GATE_NEVER_BLOCK=true`. A failing
+> gate drives up to three repair rounds; if those are spent and reviewers are still unhappy, the
+> run **ships with the dissent recorded** — the unresolved gates, the reviewer's reasoning and the
+> confidence land on the run and become their own follow-up task — rather than halting for a
+> human. That is a deliberate autonomy choice: a system that stops whenever its own reviewers stay
+> unhappy delivers nothing on exactly the runs that need it most, and the operator ends up
+> adjudicating the small defects the agents were hired to handle. Two failures are treated as facts
+> rather than opinions and still block: a regression against previously-passing tests, and no code
+> produced at all. Set `BOSS_CODE_GATE_NEVER_BLOCK=false` for fail-closed.
+>
+> Likewise `BOSS_CODE_REVIEW_PANEL_SIZE` defaults to **1**. The refute panel scales to *k*
+> reviewers with quorum aggregation; at 1 it is a single adversarial reviewer. Raise it for
+> higher assurance, at proportional cost and latency.
+
 **The one rule: whoever writes something does not approve it.** Five separations are enforced as
 policy, each step in its own isolated context:
 
@@ -112,7 +126,7 @@ flowchart TD
     S12 -->|"broke · loop<3"| S8
     S12 -->|green| S13{"consistency check"}
     S13 -->|"drift"| S8
-    S13 -->|agree| S14{"final gate · FAILS CLOSED"}
+    S13 -->|agree| S14{"final gate · records dissent"}
     S14 -->|fail| S8
     S14 -->|pass| G2{{"approve (human; 2 people at top risk)"}}
     G2 -->|approve| Done([Mergeable change + receipts])
@@ -146,7 +160,7 @@ flowchart TD
 | `check tests` | break the code on purpose to prove the tests catch it |
 | `run all tests` | the full suite — confirm nothing else broke |
 | `consistency check` | standards, spec, tests, and code all agree |
-| `final gate` | collect all evidence; **fail closed** — nothing merges without it |
+| `final gate` | collect all evidence. Failing gates drive repair (≤3 rounds); if repair is spent the run **ships with the dissent recorded** and re-queued as its own task, unless `BOSS_CODE_GATE_NEVER_BLOCK=false`, which restores fail-closed |
 | `approve` | human sign-off (two people at top risk) |
 
 ---
@@ -214,8 +228,8 @@ vendor, and they place strong models where reasoning is hard and low-cost models
 | **Pay for rigor only where it's worth it** | the cost/rigor dial: prototypes run ≈1×, production runs strict; the average workload stays low-cost |
 | **No "expensive surprise"** | trials default to Lean; a visible per-tier cost comparison in the console; effort auto-scales to risk |
 | **No vendor lock-in** | model-agnostic — Claude, OpenAI, Azure, or local; low-cost vs strong per step |
-| **Auditable & compliant** | every step leaves a receipt; the final gate fails closed; two-person sign-off on high-risk; a replayable evidence trail (the spec, tests, reviews, costs) |
-| **Safe by default** | sensitive changes (auth/payments/secrets) can't be cost-capped below standard rigor; nothing merges without a passing gate |
+| **Auditable & compliant** | every step leaves a receipt; unresolved gates are recorded on the run and re-queued rather than discarded; two-person sign-off on high-risk; a replayable evidence trail (the spec, tests, reviews, costs) |
+| **Safe by default** | sensitive changes (auth/payments/secrets) can't be cost-capped below standard rigor; a regression or an empty diff blocks even in advisory mode |
 | **Customizable for the enterprise** | define custom profiles per kind of work; per-project standards and defaults; edition-gated |
 | **Consistent quality across the org** | the same enforced pipeline runs for every coding task — quality doesn't depend on which engineer or which prompt |
 
@@ -244,7 +258,7 @@ too — not silently return `[]`.
 | check tests | `qa` | Flips the guard on purpose; if tests still pass, they're too weak |
 | run all tests | `integration_validator` | Full suite — did `add_lead`/`set_status` still work? |
 | consistency check | `qa` | Standards + spec + tests + code all agree? |
-| final gate | (automatic) | Collects all evidence; **fails closed** |
+| final gate | (automatic) | Collects all evidence; drives repair, then ships with dissent recorded |
 | approve | `release_manager` | Human sign-off (two people at top risk) |
 
 **Before vs. after.** Before (one agent): it writes a happy-path self-test; `list_by_status('WON')`
@@ -265,7 +279,7 @@ suite has teeth, and the grade itself is receipted. The bug is caught at three i
 
 Risk jumps to high automatically when the change touches login/payments/secrets/migrations/deploys.
 The rule holds at every level: whoever writes something doesn't approve it, the final gate fails
-closed, every step leaves a receipt, loops are bounded, nothing merges without the final gate.
+evidence is recorded, every step leaves a receipt, loops are bounded, and no gate result is discarded.
 
 ---
 
@@ -313,7 +327,7 @@ standards → spec → plan → review plan        (design phase — spec-driven
   → ┌ review code ┐
     ├ security    ┤  run CONCURRENTLY (read-only)   → check tests (mutation, serial)
     └ run all     ┘                                  → run all tests
-  → final gate (FAILS CLOSED) → PR
+  → final gate (repair ≤3, then ship-with-dissent; fail-closed is opt-in) → PR
 ```
 
 - **Design phase (Wire-Phase 2):** `standards → spec → plan → review plan` run before any code;

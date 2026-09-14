@@ -727,7 +727,6 @@ from .services.webhooks import (
     WebhookService,
 )
 from .services.plane_webhooks import PlaneWebhookService
-from .services.plane_client import PlaneClient
 from .services.github_community_service import GitHubCommunityService
 from .services.github_branches import (
     GitHubBranchPolicyNotFoundError,

@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 DEFAULT_PROJECT = os.environ.get("BOSS_PROJECT_ID", "boss-dogfood")
 
@@ -240,6 +241,113 @@ def _cmd_serve_mcp(args) -> int:
     return 0
 
 
+#: Terminal states a code-task run can reach. Anything else means still working.
+_CODE_TERMINAL = {"done", "failed", "cancelled", "blocked", "completed_no_pr", "inconclusive"}
+#: Which of those the shell should treat as success.
+_CODE_OK = {"done", "completed_no_pr"}
+
+
+def _emit(stream: bool, payload: dict) -> None:
+    """One JSON object per line, flushed.
+
+    Line-delimited rather than a JSON array so a consumer can act on the first event without
+    waiting for the run to end — which is the entire point of a stream.
+    """
+    if not stream:
+        return
+    sys.stdout.write(json.dumps(payload, default=str) + "\n")
+    sys.stdout.flush()
+
+
+def _cmd_code(args) -> int:
+    """Start a governed code task and, unless told otherwise, follow it to a verdict.
+
+    This is the headless entry point. Factory ships `droid exec -o json|stream-json` with
+    real exit codes and it is how their work reaches CI; BOSS had no equivalent, so running
+    a code task from a pipeline meant `call create_code_task` plus hand-rolled polling.
+
+    Governed by design: this goes through create_code_task, so the sandbox, the gates, the
+    receipts and the budget reservation all apply. There is deliberately no ungoverned
+    fast path here — an ungoverned BOSS is just a worse coding agent.
+    """
+    from .tools import build_default_registry
+
+    out = args.output
+    stream = out == "stream-json"
+    reg = build_default_registry()
+    ctx = _ctx()
+
+    payload = {"title": args.title or args.instructions[:80],
+               "instructions": args.instructions}
+    if args.repo:
+        payload["repository"] = args.repo
+    if args.base_branch:
+        payload["base_branch"] = args.base_branch
+    if args.profile:
+        payload["profile"] = args.profile
+    if args.criteria:
+        payload["acceptance_criteria"] = list(args.criteria)
+    if args.test_command:
+        payload["test_commands"] = list(args.test_command)
+
+    started = reg.invoke("create_code_task", ctx, project_id=args.project,
+                         actor="cli", args=payload)
+    if not started.get("ok", True):
+        if out == "text":
+            print(f"could not start: {started.get('error')}", file=sys.stderr)
+        else:
+            print(json.dumps(started, default=str))
+        return 1
+
+    run_id = (started.get("run_id") or started.get("run", {}).get("id")
+              or started.get("code_task", {}).get("run_id"))
+    _emit(stream, {"event": "started", "run_id": run_id, "result": started})
+    if out == "text":
+        print(f"started {run_id}")
+    if not args.wait:
+        if out == "json":
+            print(json.dumps(started, indent=2, default=str))
+        return 0
+
+    deadline = time.monotonic() + args.timeout
+    last_phase = None
+    run: dict = {}
+    while time.monotonic() < deadline:
+        got = reg.invoke("get_code_task", ctx, project_id=args.project, actor="cli",
+                         args={"run_id": run_id})
+        run = got.get("run") or {}
+        phase, state = run.get("phase"), run.get("status") or run.get("state")
+        if isinstance(state, dict):
+            state = state.get("status") or state.get("state")
+        if phase != last_phase:
+            last_phase = phase
+            _emit(stream, {"event": "phase", "run_id": run_id, "phase": phase,
+                           "status": state})
+            if out == "text":
+                print(f"  {phase}")
+        if str(state or "").lower() in _CODE_TERMINAL:
+            break
+        time.sleep(args.poll_interval)
+    else:
+        _emit(stream, {"event": "timeout", "run_id": run_id, "after_seconds": args.timeout})
+        if out == "text":
+            print(f"timed out after {args.timeout}s (run {run_id} is still going)",
+                  file=sys.stderr)
+        elif out == "json":
+            print(json.dumps({"run_id": run_id, "timed_out": True, "run": run},
+                             indent=2, default=str))
+        return 1
+
+    status = str(run.get("status") or "").lower()
+    _emit(stream, {"event": "finished", "run_id": run_id, "status": status, "run": run})
+    if out == "json":
+        print(json.dumps({"run_id": run_id, "status": status, "run": run},
+                         indent=2, default=str))
+    elif out == "text":
+        print(f"{status} ({run_id})")
+    return 0 if status in _CODE_OK else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="boss_engine", description="Run the BOSS engine standalone.")
     p.add_argument("--project", default=DEFAULT_PROJECT, help=f"project id (default {DEFAULT_PROJECT})")
@@ -264,6 +372,29 @@ def build_parser() -> argparse.ArgumentParser:
     ch = sub.add_parser("chat", help="interactive agent session")
     ch.add_argument("--allow-writes", action="store_true")
     ch.set_defaults(func=_cmd_chat)
+
+    cd = sub.add_parser(
+        "code", help="run a governed code task headlessly (CI-friendly)")
+    cd.add_argument("instructions", help="what to build or change")
+    cd.add_argument("--title", default="", help="short title (default: the instructions)")
+    cd.add_argument("--repo", default="", help="registered repo: owner/name, name, or binding id")
+    cd.add_argument("--base-branch", default="", help="branch to build on (default main)")
+    cd.add_argument("--profile", default="",
+                    choices=["", "lean", "balanced", "strict", "vag"],
+                    help="cost/rigor dial")
+    cd.add_argument("--criteria", action="append", default=[],
+                    help="acceptance criterion (repeatable)")
+    cd.add_argument("--test-command", action="append", default=[],
+                    help="verification command BOSS re-runs itself (repeatable)")
+    cd.add_argument("-o", "--output", default="text",
+                    choices=["text", "json", "stream-json"],
+                    help="stream-json emits one JSON object per line as the run progresses")
+    cd.add_argument("--no-wait", dest="wait", action="store_false", default=True,
+                    help="start the task and exit without following it")
+    cd.add_argument("--timeout", type=int, default=3600,
+                    help="seconds to follow the run before giving up (default 3600)")
+    cd.add_argument("--poll-interval", type=float, default=5.0)
+    cd.set_defaults(func=_cmd_code)
 
     m = sub.add_parser("serve-mcp", help="expose tools over MCP")
     m.add_argument("--http", action="store_true", help="HTTP transport (default: stdio)")

@@ -48,12 +48,59 @@ def build_run_request(task: dict, config: dict, batch_id: str, iteration: int,
             "task_key": task["key"],
             "iteration": iteration,
             "expect": task.get("expect", "pass"),
+            # Brownfield tasks ship the codebase they start from, so "find the right file
+            # among many" is measurable rather than dependent on repo history.
+            "fixture_files": task.get("fixture_files") or None,
+            "shape": task.get("shape", "greenfield"),
         }},
     }
     for key in ("owner", "repo", "base_branch"):
         if d.get(key):
             payload[key] = d[key]
     return {k: v for k, v in payload.items() if v is not None}
+
+
+def stage_fixture(root, fixture_files: Optional[dict]) -> list[str]:
+    """Write a bake-off task's starting codebase into a provisioned sandbox.
+
+    Why this exists: every task in the suite is "create <newfile>.py", which is the one
+    shape where an agent with no exploration tools is not handicapped — a whole-file write
+    IS the natural output and there is nothing to navigate. A 46-run study on that suite
+    therefore could not see the difference between a single-completion agent and a
+    tool-using one (BOSS-407). A brownfield task needs a repository that already exists,
+    deterministically, on every run.
+
+    Paths are confined to `root` for the same reason the agent's tools are: a fixture is
+    data from a config file, and config files get edited.
+    """
+    from pathlib import Path as _Path
+
+    if not fixture_files:
+        return []
+    base = _Path(root).resolve()
+    written: list[str] = []
+    for rel, content in sorted(fixture_files.items()):
+        target = (base / rel).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            raise ValueError(
+                f"fixture path {rel!r} resolves outside the sandbox root") from None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written.append(target.relative_to(base).as_posix())
+    return written
+
+
+def fixture_for_run(finalize_ctx: Optional[dict]) -> Optional[dict]:
+    """The fixture a run carries, if any. Normal runs carry none and are untouched."""
+    if not isinstance(finalize_ctx, dict):
+        return None
+    bake = finalize_ctx.get("bakeoff")
+    if not isinstance(bake, dict):
+        return None
+    files = bake.get("fixture_files")
+    return files if isinstance(files, dict) and files else None
 
 
 def aggregate_batch(connection, batch_id: str) -> dict:

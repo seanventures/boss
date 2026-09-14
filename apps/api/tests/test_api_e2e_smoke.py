@@ -12,7 +12,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import pytest
 
 
 PROJECT_ID = "boss-dogfood"
@@ -435,9 +434,11 @@ def test_resource_topology_and_provider_slos_e2e(client):
             json={"project_id": PROJECT_ID, "actor": ACTOR, "slo_id": slo_id},
         )
         assert ev.status_code == 200, ev.text
-        # fail-closed: without health samples should be unknown or ok/breached if data exists
-        status = (ev.json().get("status") or ev.json().get("items") or [{}])
-        assert ev.status_code == 200
+        # NOTE: the SLO status contract ("unknown without health samples; ok/breached once
+        # data exists") is NOT asserted here. It never was — the value was read into a
+        # variable, the line below re-asserted the status code that was already checked
+        # above, and the contract in this comment went unchecked. Left explicit rather than
+        # deleted so the gap is visible instead of looking like a covered case.
 
 
 def test_edition_and_cloud_catalog_e2e(client):

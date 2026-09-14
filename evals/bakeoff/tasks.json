@@ -1,5 +1,5 @@
 {
-  "_readme": "VAG bake-off task suite (spec \u00a78). Each task runs through the FULL governed pipeline per model config. Deterministic, stdlib-only Python tasks so pass/fail measures the model+harness, not the environment. expect=fail entries are KNOWN-BAD probes for the false-pass rate (the gate SHOULD fail them); they ship disabled until the false-pass audit starts.",
+  "_readme": "VAG bake-off task suite (spec \u00a78). Each task runs through the FULL governed pipeline per model config. Deterministic, stdlib-only Python tasks so pass/fail measures the model+harness, not the environment. Tasks carry a 'shape': 'greenfield' tasks create a new file; 'brownfield' tasks ship a 'fixture_files' codebase that is staged into the sandbox before the agent starts, so navigating an existing tree is part of what is measured (BOSS-415). expect=fail entries are KNOWN-BAD probes for the false-pass rate (the gate SHOULD fail them); they ship disabled until the false-pass audit starts.",
   "defaults": {
     "risk_tier": 2,
     "test_commands": [
@@ -81,6 +81,38 @@
         "mean([]) raises ValueError",
         "mean([5]) == 5.0"
       ]
+    },
+    {
+      "key": "bulk_discount_brownfield",
+      "title": "Bulk discount in an existing codebase",
+      "shape": "brownfield",
+      "notes": "BOSS-415. Every other task here is 'create <newfile>.py' \u2014 the one shape where an agent with no exploration tools is not handicapped, because a whole-file write IS the natural output and there is nothing to navigate. This task cannot be done without finding the right file: the rate lives in inventory/pricing/rules.py, and legacy_rules.py already contains a bulk-discount function that must NOT be used (docs/pricing.md says so). It is the measurement that tells us whether the tool loop is worth its turns.",
+      "instructions": "This repository already prices orders. Add quantity-based bulk discounts to the existing pricing path: 10 or more units of a SKU price at 95% of list, 50 or more at 85%, 100 or more at 80%. A per-SKU override in SKU_RATES must continue to win over any quantity rule. Do not change any public signature, do not add a dependency, and do not modify the existing tests.",
+      "acceptance_criteria": [
+        "Ordering 10 widgets at 10.0 each totals 95.0",
+        "Ordering 50 widgets at 10.0 each totals 425.0",
+        "Ordering 100 widgets at 10.0 each totals 800.0",
+        "Ordering 9 widgets at 10.0 each still totals 90.0",
+        "A SKU present in SKU_RATES uses that rate regardless of quantity",
+        "The existing tests in test_inventory.py still pass, unmodified",
+        "inventory/pricing/legacy_rules.py is not imported or extended"
+      ],
+      "fixture_files": {
+        "inventory/__init__.py": "from .catalog import Catalog\nfrom .order import Order\n\n__all__ = ['Catalog', 'Order']\n",
+        "inventory/catalog.py": "class Catalog:\n    def __init__(self, items=None):\n        self._items = dict(items or {})\n\n    def add(self, sku, unit_price):\n        if unit_price < 0:\n            raise ValueError('unit_price must not be negative')\n        self._items[sku] = unit_price\n\n    def unit_price(self, sku):\n        if sku not in self._items:\n            raise KeyError(sku)\n        return self._items[sku]\n\n    def skus(self):\n        return sorted(self._items)\n",
+        "inventory/order.py": "from .pricing.engine import price_line\n\n\nclass Order:\n    def __init__(self, catalog):\n        self.catalog = catalog\n        self.lines = []\n\n    def add_line(self, sku, quantity):\n        if quantity <= 0:\n            raise ValueError('quantity must be positive')\n        self.lines.append((sku, quantity))\n\n    def total(self):\n        return sum(price_line(self.catalog, sku, qty) for sku, qty in self.lines)\n",
+        "inventory/pricing/__init__.py": "from .engine import price_line\n\n__all__ = ['price_line']\n",
+        "inventory/pricing/engine.py": "from .rules import applicable_rate\n\n\ndef price_line(catalog, sku, quantity):\n    \"\"\"Price one order line. Every price in the system comes through here.\"\"\"\n    unit = catalog.unit_price(sku)\n    rate = applicable_rate(sku, quantity)\n    return round(unit * quantity * rate, 2)\n",
+        "inventory/pricing/rules.py": "#: Per-SKU overrides, applied before any quantity rule.\nSKU_RATES = {}\n\n\ndef applicable_rate(sku, quantity):\n    \"\"\"The multiplier applied to a line. 1.0 means list price.\"\"\"\n    if sku in SKU_RATES:\n        return SKU_RATES[sku]\n    return 1.0\n",
+        "inventory/pricing/legacy_rules.py": "\"\"\"Superseded by rules.py. Kept for the 2019 export format only. Do not extend.\"\"\"\n\nLEGACY_DISCOUNT_TIERS = [(100, 0.80), (50, 0.85), (10, 0.95)]\n\n\ndef legacy_bulk_discount(quantity):\n    for threshold, rate in LEGACY_DISCOUNT_TIERS:\n        if quantity >= threshold:\n            return rate\n    return 1.0\n",
+        "inventory/reports/__init__.py": "",
+        "inventory/reports/discounts.py": "\"\"\"Reporting only. Reads prices; never computes them.\"\"\"\n\n\ndef discount_summary(order):\n    return {'lines': len(order.lines), 'total': order.total()}\n",
+        "inventory/reports/bulk.py": "\"\"\"Reporting only. The word 'bulk' here is a report name, not a pricing rule.\"\"\"\n\n\ndef bulk_lines(order, minimum=10):\n    return [(sku, qty) for sku, qty in order.lines if qty >= minimum]\n",
+        "inventory/shipping.py": "FLAT_RATE = 4.99\n\n\ndef shipping_for(order):\n    return 0.0 if order.total() >= 50 else FLAT_RATE\n",
+        "inventory/tax.py": "RATE = 0.2\n\n\ndef tax_for(order):\n    return round(order.total() * RATE, 2)\n",
+        "docs/pricing.md": "# Pricing\n\nAll prices flow through `inventory/pricing/engine.py`, which asks\n`inventory/pricing/rules.py` for a multiplier. `legacy_rules.py` is dead code kept\nfor a 2019 export and must not be extended.\n",
+        "test_inventory.py": "import unittest\n\nfrom inventory import Catalog, Order\n\n\nclass TestExistingBehaviour(unittest.TestCase):\n    def setUp(self):\n        self.catalog = Catalog({'widget': 10.0, 'bolt': 2.0})\n\n    def test_a_single_line_is_list_price(self):\n        order = Order(self.catalog)\n        order.add_line('widget', 1)\n        self.assertEqual(order.total(), 10.0)\n\n    def test_small_quantities_are_not_discounted(self):\n        order = Order(self.catalog)\n        order.add_line('widget', 3)\n        self.assertEqual(order.total(), 30.0)\n\n    def test_quantity_must_be_positive(self):\n        order = Order(self.catalog)\n        with self.assertRaises(ValueError):\n            order.add_line('widget', 0)\n\n\nif __name__ == '__main__':\n    unittest.main()\n"
+      }
     }
   ]
 }
