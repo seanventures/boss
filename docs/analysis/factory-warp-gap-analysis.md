@@ -41,7 +41,7 @@ Branch `ai/codex/p0-native-coding-agent`. Plane epic **BOSS-406**.
 | P0-7 | Honest Community defaults | BOSS-413 | ✅ | **Premise was wrong** — see §10.7. The defect was the doc, not the default. Doc corrected; 7 tests pin doc claims to runtime defaults. |
 | P0-8 | Streaming turns + headless `boss code … -o json` | BOSS-414 | ✅ | `boss-engine code`, 3 output modes, real exit codes; 14 tests |
 | P0-9 | Time-to-first-value ≤ 5 min | — | ◻ | Needs pre-built images; partly blocked by P0-1 |
-| P0-10 | Hunk-level review feedback loop | — | ◻ | Largest remaining product gap vs Warp |
+| P0-10 | Line-anchored review comments (agent **and** human) | BOSS-425 | ◐ | Contract, parser, source-quoting, MCP tools and inline PR posting shipped; 19 tests. Console surface (BOSS-426) and live verification (BOSS-427) open. |
 | P0-I | Brownfield multi-file bake-off task | BOSS-415 | ✅ | 14-file fixture with decoys, staged deterministically; its own suite verified green; 11 tests |
 | — | OpenAPI route drift (197 routes) | BOSS-416 | ◻ | ~6,300-line generated diff; own PR |
 | — | Router self-correction paths were dead | BOSS-417 | ✅ | 6 tests |
@@ -757,3 +757,61 @@ markup.
 One correction from this pass: I first flagged MCP returning a *result* for an unknown tool as a
 bug. It is not — MCP reports tool errors as `result` + `isError`, and reserves JSON-RPC errors for
 protocol failures, which the server does correctly. My assertion was wrong, not the server.
+
+---
+
+## 14. Line-anchored review comments (2026-09-14)
+
+Closest thing in the competitor set: Warp's **Interactive Code Review**, and Factory's inline
+comments on diffs. Both concluded this is the *primary* interaction of an agentic coding
+product. BOSS had approve / reject / a paragraph of steering — all three acting on the whole run.
+
+### 14.1 The defect this fixes is a quality defect, not a UX one
+
+The reviewer emitted `FINDING: <SEVERITY> — <prose>`. The severity graded the gate correctly.
+The prose then went back to the implementer **with no location**, so a bounded repair round was
+spent re-reading the diff to work out *where* before it could change anything. A reviewer that
+can only say "error handling is weak" hands the implementer a search problem on top of a fix.
+
+### 14.2 What shipped
+
+```
+FINDING: MAJOR inventory/pricing/rules.py:14 — unknown SKU returns 1.0 instead of raising
+```
+
+- **The implementer is shown the code.** Each comment is rendered with three lines of context
+  and a marker on the line itself, ordered most-blocking-first. A comment pointing past the end
+  of a file says the code has **moved**, rather than being silently misapplied.
+- **People can leave them.** `add_review_comment` / `list_review_comments` /
+  `resolve_review_comment`. Operator comments are read *at the repair round*, not at run start —
+  a comment made while the agent is working reaches the next attempt, not the one after it — and
+  they are placed **ahead** of the panel's. Dismissing records a judgement call rather than
+  making a comment vanish.
+- **They land on the pull request**, at the lines they are about, through the review API's
+  inline comments. Posted as `COMMENT`, never `REQUEST_CHANGES`: the gate already owns the ship
+  decision, and a second blocking opinion on the PR would be a second place that decision lives.
+- **One parser.** `_parse_findings` delegates to `review_comments`, so the gate and the PR
+  comments read the same lines. Two parsers for one contract is two chances to disagree about
+  whether a change is safe.
+
+### 14.3 Decisions worth disagreeing with
+
+| Decision | Why |
+|---|---|
+| The anchor is **optional** | A model that forgets it degrades to the old behaviour. A dropped finding is a silent quality regression; an unanchored one is merely a worse comment. |
+| An ambiguous short path resolves to **nothing** | Reviewers write `rules.py` when the file is `inventory/pricing/rules.py`, and matching that by suffix keeps the comment useful — but when two files match, pointing the implementer at the *wrong* line is worse than giving it no line. |
+| PR review is `COMMENT`, not `REQUEST_CHANGES` | The fail-closed gate already decides. Two blocking opinions is two places to look. |
+| Comments live in `finalize_ctx`, not a new table | No migration for v1. If comments outgrow a run's lifetime they need their own table. |
+
+Two registry guards caught this and were **updated, not bypassed**: the pinned tool count
+(87 → 90; 55 read + 35 write) and the explicit `_SAFE_WRITES` allowlist, which exists so a write
+cannot quietly rely on the `safe` default.
+
+### 14.4 Not done
+
+- **No console surface** (BOSS-426). The data model, tools and PR posting exist; there is no UI
+  to read or write comments against a diff.
+- **Not verified on a live run** (BOSS-427). The prompt asks for anchors and the parser handles
+  every shape, but every test uses synthetic reviewer output — whether a real model reliably
+  produces `path:line` is unmeasured. The brownfield bake-off task (BOSS-415) is the natural
+  vehicle: it has a known defect at a known line.
