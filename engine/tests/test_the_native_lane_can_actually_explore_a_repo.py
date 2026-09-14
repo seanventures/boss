@@ -336,3 +336,52 @@ def test_tools_can_be_switched_off_entirely(repo: Path) -> None:
     out = _agent(repo, llm, BOSS_NATIVE_AGENT_TOOLS_ENABLED=False).run_role("do a thing", repo)
     assert out["summary"] == "legacy"
     assert llm.calls[0]["tools"] is None
+
+
+# --- latency: a reviewer must not starve the panel's lane ----------------------
+
+def test_a_review_step_gets_a_tighter_turn_cap_than_a_build_step(repo: Path) -> None:
+    """A paced slot is held for a whole role invocation, not per model call, and the
+    review panel runs concurrently against a per-provider in-flight cap of 3. A reviewer
+    that wanders for 40 turns starves the lane the other reviewers need. The claude_code
+    lane already separates these (90 build / 16 review)."""
+    agent = _agent(repo, _ScriptedLLM([]))
+    assert agent._max_turns(read_only=True) < agent._max_turns(read_only=False)
+    assert agent._max_turns(read_only=True) == 12
+    assert agent._max_turns(read_only=False) == 40
+
+
+def test_the_review_cap_is_the_one_actually_applied(repo: Path) -> None:
+    llm = _ScriptedLLM([_tool_turn("list_dir", {"path": "."}) for _ in range(50)])
+    out = _agent(repo, llm, BOSS_NATIVE_AGENT_REVIEW_MAX_TURNS=2).run_role(
+        "review", repo, read_only=True)
+    assert out["turns"] == 2
+    assert "2-turn cap" in out["summary"]
+
+
+def test_independent_reads_can_be_batched_into_one_turn(repo: Path) -> None:
+    """The measured latency bug on the claude lane was 1.00 tool calls per turn: reading
+    19 files cost 19 round trips. The native loop must execute every call the model
+    returns in a turn, so batching actually pays off."""
+    llm = _ScriptedLLM([
+        {"content": None, "raw": None, "tool_calls": [
+            {"id": "a", "name": "read_file", "arguments": json.dumps({"path": "src/calc.py"})},
+            {"id": "b", "name": "read_file", "arguments": json.dumps({"path": "src/util.py"})},
+            {"id": "c", "name": "list_dir", "arguments": json.dumps({"path": "."})},
+        ]},
+        {"content": "read them all in one turn", "tool_calls": None, "raw": None},
+    ])
+    out = _agent(repo, llm).run_role("look around", repo)
+    assert out["turns"] == 2, "three reads must cost ONE round trip, not three"
+    assert out["tool_calls"] == 3
+    tool_msgs = [m for m in llm.calls[-1]["messages"] if m.get("role") == "tool"]
+    assert len(tool_msgs) == 3
+    assert {m["tool_call_id"] for m in tool_msgs} == {"a", "b", "c"}
+
+
+def test_the_batching_rule_is_actually_sent_to_the_model(repo: Path) -> None:
+    llm = _ScriptedLLM([{"content": "ok", "tool_calls": None, "raw": None}])
+    _agent(repo, llm).run_role("do a thing", repo)
+    system = llm.calls[0]["messages"][0]["content"]
+    assert "TOGETHER IN ONE TURN" in system
+    assert "Do NOT narrate your plan between actions" in system

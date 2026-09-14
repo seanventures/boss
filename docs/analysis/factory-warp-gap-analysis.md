@@ -22,6 +22,37 @@ is out of scope for the OSS MVP and is no longer treated as a gap — only as a 
 
 ---
 
+## 0.1 P0 tracker
+
+Live status. `◻` not started · `◐` in progress · `✅` done and tested · `⛔` blocked.
+Branch `ai/codex/p0-native-coding-agent`. Plane epic **BOSS-406**.
+
+| # | Item | Plane | Status | Evidence |
+|---|---|---|---|---|
+| P0-1 | Public artifact: repo flip, SECURITY.md, root community kit, BOSS-300 licensing | — | ⛔ | Blocked on a product + legal decision, not code. Out of scope for this branch. |
+| P0-2 | CI green (missing make target, Python 3.9→3.11, engine unlinted) | BOSS-412 | ◐ | Target added, Python pinned, real-bug gate added and green. **Lint step still red** → BOSS-418. |
+| P0-2b | Clear 39 pre-existing ruff findings so `make lint` passes | BOSS-418 | ◻ | 24×E402, 14×F401, 1×F841 |
+| P0-3a | Engine-owned tool-calling coding agent | BOSS-407 | ✅ | `code_agent_tools.py`; 35 tests |
+| P0-3b | Harness adapter registry (claude_code/codex/opencode/aider) | BOSS-409 | ◻ | `_build_code_agent` is still an `if/elif` |
+| P0-4a | `AGENTS.md` / `CLAUDE.md` ingestion | BOSS-408 | ✅ | `load_repo_guide()`; 5 tests |
+| P0-4b | Semantic retrieval / repo index | — | ◻ | Deferred: exploration tools reduce the need. Measure via P0-I first. |
+| P0-5 | Container-per-code-task as the default substrate + egress allowlist | BOSS-410 | ◻ | microVM explicitly out of scope; local container is v1 |
+| P0-6 | Autonomy levels + allow/deny/blocklist at the agent boundary | BOSS-411 | ◻ | |
+| P0-7 | Honest Community defaults (panel ≥ 2, gate blocks) | BOSS-413 | ◻ | |
+| P0-8 | Streaming turns + headless `boss code … -o json` | BOSS-414 | ◻ | |
+| P0-9 | Time-to-first-value ≤ 5 min | — | ◻ | Needs pre-built images; partly blocked by P0-1 |
+| P0-10 | Hunk-level review feedback loop | — | ◻ | |
+| P0-I | Brownfield multi-file bake-off task | BOSS-415 | ◻ | Puts a number on P0-3a |
+| — | OpenAPI route drift (197 routes) | BOSS-416 | ◻ | ~6,300-line generated diff; own PR |
+| — | Router self-correction paths were dead | BOSS-417 | ✅ | Found by the new lint gate; 6 tests |
+
+**Regression budget.** The coding pipeline has had significant latency work
+(`_PARALLEL_TOOLS_RULE`, idle-stall detection, concurrent review panel, process-group
+kill, prompt-cache `--resume`). No P0 change may regress it. Every change below is
+checked against §11.
+
+---
+
 ## 1. What each product actually is
 
 ### Factory.ai — "The Autonomy Stack for Enterprise Teams"

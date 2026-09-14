@@ -43,7 +43,13 @@ class TestTheGuardStillFires:
     def test_a_role_answer_with_no_reading_at_all_is_challenged(self):
         body = _guard_source()
         assert 'c.get("tool") == "recall_role_experience"' in body
-        assert "self.agent.chat(" in body
+        # BOSS-417: this assertion used to read `self.agent.chat(`, and it PASSED for months
+        # while the guard did nothing at all — `IntentRouter` has no `agent` attribute, so the
+        # re-ask raised AttributeError on every turn inside `except Exception: reread = None`.
+        # A source grep proves the line is present, never that it runs. It is pinned to the
+        # real collaborator now, and test_the_grounding_reask_actually_runs.py checks the
+        # wiring (agent exists, actor is threaded, failures are logged) rather than the text.
+        assert "self._answer_agent().chat(" in body
 
     def test_and_is_labelled_if_it_still_will_not_read(self):
         assert "was NOT checked against" in _guard_source()

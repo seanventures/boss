@@ -54,6 +54,44 @@ SKIP_DIRS = {
 }
 
 
+#: Autonomy levels, least to most capable. See Settings.agent_autonomy_level.
+AUTONOMY_LEVELS = ("read_only", "edit", "standard", "full")
+
+
+def _csv(raw) -> set[str]:
+    return {item.strip().lower() for item in str(raw or "").split(",") if item.strip()}
+
+
+def resolve_autonomy(settings, *, read_only: bool) -> str:
+    """The level actually in force for this step.
+
+    A review step is `read_only` no matter what the operator configured: "the reviewer
+    cannot edit" is a governance invariant of the governed pipeline, not a preference.
+    """
+    if read_only:
+        return "read_only"
+    level = str(getattr(settings, "agent_autonomy_level", "standard") or "standard").lower()
+    return level if level in AUTONOMY_LEVELS else "standard"
+
+
+def blocklisted_commands(settings) -> set[str]:
+    return _csv(getattr(settings, "agent_command_blocklist", ""))
+
+
+def _base_executable(argv0: str) -> str:
+    """The name a blocklist entry has to match, after the usual ways of hiding it.
+
+    `/bin/rm`, `./rm` and `rm` are one command. Factory's blocklist resolves wrapper
+    shells, absolute paths and command substitution specifically to defeat bypasses;
+    shell syntax is already refused outright here, so path shapes are what is left.
+    """
+    name = (argv0 or "").strip()
+    if name.startswith("./"):
+        name = name[2:]
+    name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return name.lower()
+
+
 class ToolError(RuntimeError):
     """Raised for a refusal the MODEL should see and correct (bad path, missing file).
 
@@ -84,9 +122,13 @@ class SandboxToolset:
         read_only: bool = False,
         command_runner: Optional[Callable[[str, Optional[int]], "object"]] = None,
         settings=None,
+        autonomy: Optional[str] = None,
     ) -> None:
         self.root = Path(root).resolve()
-        self.read_only = read_only
+        self.autonomy = autonomy or resolve_autonomy(settings, read_only=read_only)
+        # `read_only` stays the authoritative flag for the write tools so the governance
+        # invariant does not depend on the autonomy string being spelled correctly.
+        self.read_only = read_only or self.autonomy == "read_only"
         self._command_runner = command_runner
         self._settings = settings
         #: Paths written or edited this session — used by the caller to prove the
@@ -267,6 +309,12 @@ class SandboxToolset:
         cmd = (command or "").strip()
         if not cmd:
             raise ToolError("command is required.")
+        if self.autonomy == "edit":
+            raise ToolError(
+                "bash is not available at autonomy level 'edit': this step may change files "
+                "but may not run commands. BOSS runs the verification commands itself."
+            )
+        self._assert_not_blocked(cmd)
         limit = int(timeout or _DEFAULT_CMD_TIMEOUT)
         if self._command_runner is not None:
             try:
@@ -279,8 +327,46 @@ class SandboxToolset:
             return _truncate(f"$ {cmd}\n(exit {code})\n{out}", _MAX_CMD_OUTPUT)
         return _truncate(self._run_locally(cmd, limit), _MAX_CMD_OUTPUT)
 
+    def _assert_not_blocked(self, command: str) -> None:
+        """Refuse a command the operator has put out of reach.
+
+        Order matters and is deliberate: BLOCKLIST beats everything including the
+        `full` autonomy level and any allowlist entry, then the denylist, then the
+        sandbox allowlist (applied later, by the runner). There is no configuration
+        that disables the blocklist — that is what makes it different from a denylist.
+        """
+        from .sandbox import looks_like_shell
+
+        if looks_like_shell(command):
+            # Checked here too, not only in the runner: an injected command runner may
+            # have laxer rules, and `rm -rf / && echo ok` must not reach it.
+            raise ToolError(
+                f"{command!r} uses shell syntax and commands run WITHOUT a shell. "
+                "Give one plain command."
+            )
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            raise ToolError(f"could not parse {command!r}: {exc}") from None
+        if not argv:
+            raise ToolError("empty command.")
+        name = _base_executable(argv[0])
+        if name in blocklisted_commands(self._settings):
+            raise ToolError(
+                f"{name!r} is on the agent command blocklist and cannot be run at any "
+                "autonomy level. If this task genuinely needs it, it needs a human."
+            )
+        if name in _csv(getattr(self._settings, "agent_command_denylist", "")):
+            raise ToolError(
+                f"{name!r} is on the agent command denylist for this deployment."
+            )
+
+    def _extra_allowed(self) -> set[str]:
+        return _csv(getattr(self._settings, "agent_command_allowlist", ""))
+
     def _run_locally(self, command: str, timeout: int) -> str:
         from .sandbox import assert_allowed_executable, looks_like_shell
+        from .scheduling import low_priority
 
         if looks_like_shell(command):
             raise ToolError(
@@ -291,14 +377,21 @@ class SandboxToolset:
         argv = shlex.split(command)
         if not argv:
             raise ToolError("empty command.")
-        try:
-            assert_allowed_executable(argv[0], self._settings)
-        except Exception as exc:
-            raise ToolError(str(exc)) from None
+        if _base_executable(argv[0]) not in self._extra_allowed():
+            try:
+                assert_allowed_executable(argv[0], self._settings)
+            except Exception as exc:
+                raise ToolError(str(exc)) from None
         started = time.monotonic()
         try:
+            # YIELD TO THE CONTROL PLANE. The agent's `bash` runs npm/vite/tsc/pytest as a
+            # child of the API process, and those are among the most parallel workloads
+            # there are. Measured on a production deployment before this rule existed:
+            # `/v1/code-tasks?limit=5` went 0.37s -> 47.1s while a code task ran. An
+            # unniced build makes the console unusable; see
+            # tests/test_builds_yield_to_the_control_plane.py.
             proc = subprocess.run(
-                argv, cwd=str(self.root), capture_output=True, text=True,
+                low_priority(argv), cwd=str(self.root), capture_output=True, text=True,
                 timeout=timeout, start_new_session=True,
                 env={**os.environ, "CI": "1"},
             )
@@ -458,6 +551,16 @@ _WRITE_TOOLS = [
 ]
 
 
-def tool_schemas(read_only: bool) -> list[dict]:
-    """The tool schema offered to the model. Review steps never see the write half."""
-    return list(_READ_TOOLS) if read_only else list(_READ_TOOLS) + list(_WRITE_TOOLS)
+def tool_schemas(read_only: bool, autonomy: Optional[str] = None) -> list[dict]:
+    """The tool schema offered to the model.
+
+    The schema IS the permission boundary — a tool the model was never told about is a
+    tool it cannot try to use, which beats refusing the call after the fact. Review steps
+    never see the write half; `edit` sees writes but no `bash`.
+    """
+    level = (autonomy or ("read_only" if read_only else "standard")).lower()
+    if read_only or level == "read_only":
+        return list(_READ_TOOLS)
+    write = [t for t in _WRITE_TOOLS
+             if not (level == "edit" and t["function"]["name"] == "bash")]
+    return list(_READ_TOOLS) + write

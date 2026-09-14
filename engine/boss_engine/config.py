@@ -882,6 +882,49 @@ class Settings(BaseSettings):
     native_agent_max_turns: int = Field(
         default=40, alias="BOSS_NATIVE_AGENT_MAX_TURNS"
     )
+    # LATENCY: a paced slot is held for a whole role invocation, not per model call
+    # (see PacedCodeAgent._paced). The review panel runs its checks concurrently against
+    # a per-provider in-flight cap of 3, so a reviewer that wanders for 40 turns starves
+    # the lane the other reviewers need. The claude_code lane already separates these
+    # (90 build / 16 review); the native lane now does too. Read-only work should be
+    # looking, not building.
+    native_agent_review_max_turns: int = Field(
+        default=12, alias="BOSS_NATIVE_AGENT_REVIEW_MAX_TURNS"
+    )
+    # --- agent-boundary permissions (P0-E / BOSS-411) -------------------
+    # BOSS governs at the WORKFLOW level (decisions, gates, budget) and, until now,
+    # not at all inside the sandbox. Factory ships four autonomy levels plus an
+    # allow/deny/BLOCK list where the blocklist cannot be bypassed even by an explicit
+    # unsafe flag; Warp ships six permission dimensions where the denylist beats
+    # everything. This is BOSS's equivalent, enforced in the tool layer.
+    #
+    #   read_only  — the agent may look and nothing else (review steps get this
+    #                regardless of the setting).
+    #   edit       — file writes, but no commands at all.
+    #   standard   — writes plus allowlisted commands. The default.
+    #   full       — writes plus any command the sandbox allowlist permits.
+    #
+    # The blocklist below is checked at every level including `full`, and there is no
+    # setting that turns it off.
+    agent_autonomy_level: str = Field(
+        default="standard", alias="BOSS_AGENT_AUTONOMY_LEVEL"
+    )
+    #: Extra commands the agent may run without them being in the sandbox allowlist.
+    agent_command_allowlist: str = Field(default="", alias="BOSS_AGENT_COMMAND_ALLOWLIST")
+    #: Commands refused for the agent even when the sandbox allowlist would permit them.
+    #: Denylist beats allowlist.
+    agent_command_denylist: str = Field(default="", alias="BOSS_AGENT_COMMAND_DENYLIST")
+    #: Never runnable, at any autonomy level, by any configuration. These are the verbs
+    #: that end a run badly and irreversibly: history rewrites, force pushes, remote
+    #: mutation, credential exfiltration, and the recursive delete that took 204 tables
+    #: on 2026-09-02. Operators may ADD to this; nothing removes an entry.
+    agent_command_blocklist: str = Field(
+        default="rm,rmdir,dd,mkfs,shutdown,reboot,halt,poweroff,sudo,su,chown,chmod,"
+                "curl,wget,nc,ncat,telnet,ssh,scp,sftp,rsync,kubectl,docker,systemctl,"
+                "crontab,at,useradd,userdel,passwd,history",
+        alias="BOSS_AGENT_COMMAND_BLOCKLIST",
+    )
+
     # Cap on AGENTS.md / CLAUDE.md ingested from the TARGET repo (BOSS-408). Factory caps
     # the equivalent at 80k chars; 32k keeps a small-context local model usable.
     repo_guide_max_chars: int = Field(

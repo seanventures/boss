@@ -1235,8 +1235,10 @@ class NativeCodeAgent:
     def _tools_enabled(self) -> bool:
         return bool(getattr(self.settings, "native_agent_tools_enabled", True))
 
-    def _max_turns(self) -> int:
-        return max(1, int(getattr(self.settings, "native_agent_max_turns", 40) or 40))
+    def _max_turns(self, read_only: bool = False) -> int:
+        attr = "native_agent_review_max_turns" if read_only else "native_agent_max_turns"
+        return max(1, int(getattr(self.settings, attr, 12 if read_only else 40)
+                          or (12 if read_only else 40)))
 
     def _run_tool_loop(
         self, prompt: str, cwd: Path, *, read_only: bool, model: Optional[str],
@@ -1251,13 +1253,17 @@ class NativeCodeAgent:
         from .code_agent_tools import SandboxToolset, tool_schemas
         from .openai_adapter import estimate_cost_usd_micros
 
+        from .code_agent_tools import resolve_autonomy
+
+        autonomy = resolve_autonomy(self.settings, read_only=read_only)
         toolset = SandboxToolset(
             cwd,
             read_only=read_only,
             command_runner=getattr(self, "command_runner", None),
             settings=self.settings,
+            autonomy=autonomy,
         )
-        schemas = tool_schemas(read_only)
+        schemas = tool_schemas(read_only, autonomy=autonomy)
         guide = load_repo_guide(
             cwd, max_chars=int(getattr(self.settings, "repo_guide_max_chars", 32_000)))
         system = (self._TOOL_SYS_REVIEW if read_only else self._TOOL_SYS_EDIT) + _PARALLEL_TOOLS_RULE
@@ -1274,7 +1280,7 @@ class NativeCodeAgent:
         turns = 0
         summary = ""
         tool_calls_made = 0
-        max_turns = self._max_turns()
+        max_turns = self._max_turns(read_only)
         capped = True
 
         for _ in range(max_turns):
@@ -1635,6 +1641,7 @@ def _wrap_paced(agent: "CodeAgent", settings: Settings) -> "CodeAgent":
     return PacedCodeAgent(agent, limiter)
 
 
+
 def make_code_agent(
     settings: Settings,
     engine: Optional[str] = None,
@@ -1711,26 +1718,25 @@ def _bind_lane_credentials(
     return settings
 
 
-def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
-    engine = (engine or settings.code_agent_engine or "claude_code").lower()
-    if engine == "claude_code":
-        return ClaudeCodeAgent(settings)
-    if engine == "azure":
-        # Explicit Azure OpenAI frontier lane — interchangeable with claude_code as the
-        # gate/verifier (VAG). NativeCodeAgent -> OpenAIAdapter routes to the AzureOpenAI
-        # client whenever the AZURE_OPENAI_* creds are present; require them here so a
-        # misrouted `azure` step fails loud instead of silently falling to a non-Azure host.
-        if not (settings.azure_openai_key and settings.azure_openai_endpoint
-                and settings.azure_openai_deployment):
-            raise RuntimeError(
-                "azure engine requires AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT and "
-                "AZURE_OPENAI_DEPLOYMENT to be configured.")
-        agent = NativeCodeAgent(settings)
-        agent.engine = "azure"
-        return agent
-    if engine in ("native", "openai"):
-        return NativeCodeAgent(settings)
-    if engine in _PROVIDER_LANES:
+def _build_azure_agent(settings: Settings) -> CodeAgent:
+    # Explicit Azure OpenAI frontier lane — interchangeable with claude_code as the
+    # gate/verifier (VAG). NativeCodeAgent -> OpenAIAdapter routes to the AzureOpenAI
+    # client whenever the AZURE_OPENAI_* creds are present; require them here so a
+    # misrouted `azure` step fails loud instead of silently falling to a non-Azure host.
+    if not (settings.azure_openai_key and settings.azure_openai_endpoint
+            and settings.azure_openai_deployment):
+        raise RuntimeError(
+            "azure engine requires AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT and "
+            "AZURE_OPENAI_DEPLOYMENT to be configured.")
+    agent = NativeCodeAgent(settings)
+    agent.engine = "azure"
+    return agent
+
+
+def _build_provider_lane_agent(engine: str) -> Callable[[Settings], CodeAgent]:
+    """A NativeCodeAgent bound to one provider's DEDICATED credential pair."""
+
+    def build(settings: Settings) -> CodeAgent:
         key_field, url_field = _PROVIDER_LANES[engine]
         api_key = getattr(settings, key_field)
         if not api_key:
@@ -1747,4 +1753,59 @@ def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeA
         agent = NativeCodeAgent(bound)
         agent.engine = engine
         return agent
-    raise NotImplementedError(f"Unknown code_agent_engine: {engine!r}")
+
+    return build
+
+
+def _register_builtin_harnesses() -> None:
+    """Declare the harnesses BOSS ships with (BOSS-409).
+
+    `verified` is reserved for harnesses a governed code task has actually completed on.
+    Everything registered here has; new adapters start at False and say so.
+    """
+    from .harness_registry import register_harness
+
+    register_harness(
+        "claude_code", ClaudeCodeAgent, kind="cli", verified=True,
+        requires=("CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "claude CLI on PATH"),
+        description="Claude Code headless (`claude -p`) with its own file/bash tools, "
+                    "scoped to the sandbox working tree.",
+    )
+    register_harness(
+        "native", NativeCodeAgent, kind="native", verified=True, aliases=("openai",),
+        requires=("OPENAI_API_KEY", "OPENAI_BASE_URL (optional)"),
+        description="Engine-owned tool-calling agent over any OpenAI-compatible chat API.",
+    )
+    register_harness(
+        "azure", _build_azure_agent, kind="native", verified=True,
+        requires=("AZURE_OPENAI_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"),
+        description="Azure OpenAI lane, used as an independent gate/verifier under VAG.",
+    )
+    for lane, (key_field, url_field) in _PROVIDER_LANES.items():
+        local = lane in ("ollama", "vllm")
+        register_harness(
+            lane, _build_provider_lane_agent(lane), kind="native", verified=True,
+            requires=(key_field.upper(), url_field.upper()),
+            description=("Local/self-hosted OpenAI-compatible endpoint."
+                         if local else
+                         "Direct provider lane on its own dedicated credential pair."),
+        )
+
+
+def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
+    """Resolve a harness by name through the registry (BOSS-409).
+
+    This used to be an if/elif chain, which meant "bring your own coding agent" required
+    editing core. Warp makes the harness a declared field (`harness.type`); so does BOSS
+    now — see `harness_registry.register_harness`.
+    """
+    from .harness_registry import build_harness
+
+    name = (engine or settings.code_agent_engine or "claude_code").lower()
+    return build_harness(name, settings)
+
+
+# Declared last: `_register_builtin_harnesses` and the builders it references are
+# defined above, and `make_code_agent` appears EARLIER in this module than
+# `_build_code_agent` does.
+_register_builtin_harnesses()
