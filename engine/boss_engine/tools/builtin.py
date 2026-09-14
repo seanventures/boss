@@ -3347,8 +3347,11 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             if run is None:
                 return {"ok": False, "error": f"no workflow run {run_id!r} on {pid}"}
             steps = c.execute(
-                _text("SELECT step_id, step_kind, status, attempt, max_attempts, error, "
-                      "       input, output, updated_at "
+                # `last_error`, NOT `error` — workflow_runs has `error` and workflow_step_runs
+                # has `last_error`, and this shipped with the wrong one. Caught in production
+                # by the schema hint added in the same commit, which is the point of it.
+                _text("SELECT step_id, step_kind, status, attempt, max_attempts, "
+                      "       last_error, input, output, updated_at "
                       "  FROM workflow_step_runs WHERE workflow_run_id = :id "
                       " ORDER BY created_at, step_id"),
                 {"id": run_id}).mappings().all()
@@ -3381,7 +3384,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 remedy = {
                     "diagnosis": (
                         f"Step {stopped[0]['step_id']!r} stopped: "
-                        f"{stopped[0].get('error') or 'no error recorded'}"),
+                        f"{stopped[0].get('last_error') or 'no error recorded'}"),
                     "do_this": (
                         "If the cause has since been dealt with, recheck_workflow_run re-tests "
                         "the recorded blocker and re-queues only what can now proceed. If it "
