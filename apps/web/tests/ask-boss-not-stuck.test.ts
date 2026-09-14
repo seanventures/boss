@@ -86,3 +86,60 @@ describe("ask boss does not lock the operator out", () => {
     expect(SRC).toContain("20 * 60_000");
   });
 });
+
+/**
+ * A FAILED ACTION IS THE AGENT'S NEXT TURN, NOT A DEAD END.
+ *
+ * This was the whole "the agent just runs a script" problem, and it was not the model.
+ *
+ * When a proposed action failed, the reason was appended to CLIENT state and the offer was
+ * dropped — so the model was never told. It finished its turn believing it had handed over a
+ * working action, and the next time the operator asked it saw a conversation in which nothing
+ * had gone wrong and proposed the same thing again. Ten times, if asked ten times.
+ *
+ * Reported as: "the Agent stops responding as if everything is good... it is not realizing it
+ * has failed the user query and just gives up like a dumb."
+ */
+describe("a failed action reaches the agent", () => {
+  it("hands the failure back as a new turn", () => {
+    const accept = SRC.slice(SRC.indexOf("const acceptAction = useCallback"));
+    const body = accept.slice(0, accept.indexOf("const confirmPlan"));
+    expect(body).toContain("if (!ok) {");
+    expect(body).toContain("runTurn(fd);");
+    // The VALIDATOR'S OWN WORDS. "step 'edit' needs 'media_artifact_id', which is not set" is
+    // enough to repair the arguments; a summary of it is not.
+    expect(body).toContain("Error: ${reason}");
+    expect(body).toContain("Read that error literally");
+  });
+
+  it("and is told to fix it rather than re-offer it", () => {
+    const accept = SRC.slice(SRC.indexOf("const acceptAction = useCallback"));
+    const body = accept.slice(0, accept.indexOf("const confirmPlan"));
+    // Sliced to one source line each: the instruction is built by string concatenation, so a
+    // phrase spanning a join is absent from the file even though it reaches the model.
+    expect(body).toContain("re-offer the same call");
+    expect(body).toContain("do not ask me to confirm");
+  });
+
+  it("bounded, so a repair loop cannot become the thing it replaces", () => {
+    // An unbounded retry burns budget on an error the agent cannot fix and looks, from the
+    // outside, exactly like the script.
+    expect(SRC).toContain("if (repairs < 2) {");
+    expect(SRC).toContain("has failed twice with the same kind of error");
+    // Any success resets it, so a long conversation is not permanently one strike from
+    // giving up.
+    expect(SRC).toContain("setRepairs(0);");
+  });
+
+  it("the error survives markdown, because an identifier you cannot copy is unactionable", () => {
+    // Assistant messages are markdown-rendered, so "needs 'media_artifact_id'" displayed as
+    // "needs 'mediaartifactid'" — underscores read as emphasis. The operator reported that
+    // exact string, which appears in no schema, no code, and no search.
+    const accept = SRC.slice(SRC.indexOf("const acceptAction = useCallback"));
+    const body = accept.slice(0, accept.indexOf("const confirmPlan"));
+    // The fence is escaped in the source (inside a template literal), so match what is
+    // actually written rather than what it renders to.
+    const failLine = body.slice(body.indexOf("failed:"));
+    expect(failLine.slice(0, 200)).toContain("\\`\\`\\`");
+  });
+});

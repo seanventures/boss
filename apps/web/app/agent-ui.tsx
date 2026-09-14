@@ -325,6 +325,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   //: A turn the operator stopped waiting for. The work itself is a server action and cannot be
   //: killed from here — so this says what is actually true rather than pretending to cancel.
   const [released, setReleased] = useState(false);
+  //: Consecutive failed actions handed back for repair. Reset by any success, so a long
+  //: conversation is not permanently one strike from giving up.
+  const [repairs, setRepairs] = useState(0);
   // HOW LONG, AND WHAT IF IT NEVER ANSWERS.
   // "It says it will monitor and update and I don't see any waiting signal — it just quits and
   // I don't know when it will come back." A spinner with no clock and no end state is why:
@@ -749,7 +752,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         setTrail(Array.isArray(d.tool_calls) ? (d.tool_calls as ToolCall[]) : []);
         refreshThreads();
       } else {
-        setMessages((m) => [...m, { role: "assistant", content: "⚠ " + (r.error ?? "request failed") }]);
+        setMessages((m) => [...m, { role: "assistant", content:
+          "⚠ \n\n```\n" + (r.error ?? "request failed") + "\n```" }]);
       }
     });
   }, [projectId, actor, threadId, sel, roleRef, roleName, refreshThreads]);
@@ -870,9 +874,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       ].filter(Boolean).join("\n").slice(0, 4000);
       const detail = ok
         ? `✓ ${action.label}${body ? `\n\n\`\`\`\n${body}\n\`\`\`` : ""}`
-        : `⚠ ${action.label} failed: ${
+        // IN A CODE FENCE, BECAUSE MARKDOWN EATS IDENTIFIERS.
+        //
+        // Assistant messages are markdown-rendered, so a validator saying
+        // "needs 'media_artifact_id'" displays as "needs 'mediaartifactid'" — the underscores
+        // read as emphasis. The operator reported exactly that string, and an identifier you
+        // cannot copy is an error you cannot act on: it does not appear in the schema, the
+        // code, or any search.
+        : `⚠ ${action.label} failed:\n\n\`\`\`\n${
             payload?.error ?? r.error ?? "unknown error"
-          }${body ? `\n\n\`\`\`\n${body}\n\`\`\`` : ""}`;
+          }${body ? `\n\n${body}` : ""}\n\`\`\``;
       setRanAction(action.id);
       // Report the outcome in the log. A button that changes nothing visible is a button the
       // operator will press twice.
@@ -880,8 +891,47 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // The offer is spent either way: succeeded, or failed and needs a different approach.
       setProposed((list) => list.filter((a) => a.id !== action.id));
       refreshThreads();
+
+      // A FAILED ACTION IS THE AGENT'S NEXT TURN, NOT A DEAD END.
+      //
+      // THIS WAS THE WHOLE "IT JUST RUNS A SCRIPT" PROBLEM. The failure was appended to
+      // CLIENT state and the offer dropped — so the model was never told. It finished the turn
+      // believing it had handed over a working action, and the next time the operator asked it
+      // saw a conversation in which nothing had gone wrong, and proposed the same thing again.
+      // Ten times, if asked ten times. Not the model refusing to adapt: the harness throwing
+      // away the only information it could have adapted to.
+      //
+      // The validator's message is precise and actionable — "step 'edit' needs
+      // 'media_artifact_id', which is not set" is enough to repair the arguments. Handing it
+      // back closes the loop, and a loop that carries the error converges where a script
+      // cannot.
+      if (!ok) {
+        const reason = String(payload?.error ?? r.error ?? "unknown error");
+        setRepairs((n) => n + 1);
+        // BOUNDED. Two attempts, then it stops and says so. An unbounded repair loop burns
+        // budget on an error the agent cannot fix and looks, from outside, exactly like the
+        // script it replaces.
+        if (repairs < 2) {
+          const fd = new FormData();
+          fd.set("message",
+            `The action "${action.label}" FAILED and you have not been told until now.\n\n` +
+            `Tool: ${action.tool}\nError: ${reason}\n\n` +
+            "Read that error literally, fix the arguments, and try again yourself — do not " +
+            "re-offer the same call, do not ask me to confirm, and do not explain the design " +
+            "again. If the error names a missing input, supply it or wire it from a step that " +
+            "produces it. If you genuinely cannot fix it, say in one sentence what is blocking " +
+            "you and what you need from me.");
+          runTurn(fd);
+        } else {
+          setMessages((m) => [...m, { role: "assistant", content:
+            "That has failed twice with the same kind of error, so I have stopped retrying "
+            + "rather than loop. Tell me how you would like to proceed." }]);
+        }
+      } else {
+        setRepairs(0);
+      }
     });
-  }, [projectId, actor, threadId, refreshThreads]);
+  }, [projectId, actor, threadId, refreshThreads, repairs, runTurn]);
 
   const confirmPlan = useCallback(() => {
     const planId = String(pendingPlan?.plan_id ?? pendingPlan?.id ?? "");
