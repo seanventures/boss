@@ -21481,6 +21481,38 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     return {"project_id": project_id, "runs": out}
 
 
+@app.get("/v1/delivery-workflows/{workflow_key}/plan")
+def get_delivery_workflow_plan(
+    workflow_key: str, project_id: str, version: Optional[int] = None
+) -> dict:
+    """What this workflow WILL DO — the plan, not the graph.
+
+    `/spec` returns what the builder edits: ids and bindings. An operator reading it learns
+    that a step called "publish" runs `social_publish`, and still does not learn what that
+    produces, which agent answers for it, or that it will stop and wait for them.
+
+        "Is it possible to see what the workflow will do, something like a workflow step
+         definition? We need to know what kind of results it will bring, any agents
+         associated or any task associated — right now those info are missing."
+
+    Every one of those facts was already known and none were joined up. Shared with the chat
+    agent's `describe_workflow` on purpose: two descriptions of one workflow drift, and the
+    operator is who finds out.
+    """
+    from boss_engine.services.workflow_explain import (
+        WorkflowExplainError,
+        explain_version,
+    )
+
+    with begin(engine) as connection:
+        try:
+            return explain_version(
+                connection, project_id=project_id, workflow_key=workflow_key,
+                version=version)
+        except WorkflowExplainError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+
 @app.get("/v1/delivery-workflows/{workflow_key}/spec")
 def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
     """The steps a workflow currently has, plus what it was forked from.

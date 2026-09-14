@@ -67,6 +67,10 @@ _EXPECTED_TOOLS: set[str] = {
     # turn, and no answer for the operator. This also computes the way OUT of a failed run,
     # because reporting `deadlettered` and stopping is what "it drops the ball" means.
     "describe_workflow_run",
+    # THE PLAN, BEFORE THE RUN. The builder drew four labels and four dropdowns; what each
+    # step does, what it produces, and which agent captains it were all known and none of it
+    # was shown. "I want to see the workflow and its definition, what it will do."
+    "describe_workflow",
     # The whole factory in one read, so an open question does not become six lookups.
     "factory_briefing",
     "create_discovery",
@@ -148,10 +152,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 86, (
+    assert len(reg.names()) == 87, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 53
+    assert len(read) == 54
     assert len(write) == 33
     # the capabilities the user explicitly asked the agent to cover
     for name in (

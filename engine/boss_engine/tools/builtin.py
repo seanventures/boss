@@ -3301,6 +3301,35 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             return _briefing(c, project_id)
 
     @reg.tool(
+        "describe_workflow",
+        "WHAT A WORKFLOW WILL DO, before anyone runs it: every step in order with what it "
+        "does, which agent captains it, where each input comes from, what it produces, and "
+        "which steps stop for approval. Also says what the operator must supply to start it. "
+        "Use this for 'what does this workflow do', 'what will it produce', 'who runs it', "
+        "and ALWAYS before offering to start one — so the operator agrees to a plan rather "
+        "than to a name.",
+        _obj({"workflow_key": {"type": "string"},
+              "version": {"type": "integer",
+                          "description": "omit for the active version"},
+              "project_id": {"type": "string"}},
+             ["workflow_key"]),
+        kind="read",
+    )
+    def describe_workflow(ctx, *, project_id, actor, args):
+        from ..services.workflow_explain import WorkflowExplainError, explain_version
+
+        pid = args.get("project_id") or project_id
+        raw = args.get("version")
+        try:
+            with ctx.begin() as c:
+                return {"ok": True, **explain_version(
+                    c, project_id=pid,
+                    workflow_key=str(args.get("workflow_key") or "").strip(),
+                    version=int(raw) if raw not in (None, "") else None)}
+        except WorkflowExplainError as error:
+            return {"ok": False, "error": str(error)}
+
+    @reg.tool(
         "describe_workflow_run",
         "THE ONE CALL for 'what happened to this workflow run' (wfr_...): its status, the "
         "inputs it was started with, every step with attempts and its error, and — when it "

@@ -257,6 +257,44 @@ type Block = {
   configure?: { field: string; label: string; type: string }[];
 };
 
+/** What a workflow WILL DO — the plan, not the graph. Built by `workflow_explain` and shared
+ *  with the chat agent's `describe_workflow`, so the console and the agent cannot drift into
+ *  describing the same workflow two different ways. */
+type PlanStep = {
+  position: number;
+  id: string;
+  label: string;
+  /** The capability's own sentence. A step called "Document" says nothing on its own. */
+  does: string;
+  capability: string | null;
+  /** The skill or MCP tool this actually executes. */
+  runs: string | null;
+  /** The agent that answers for this step. */
+  agent: string | null;
+  approval: string;
+  approval_is_forced: boolean;
+  approval_note: string;
+  risk_tier: number | null;
+  typical_minutes: number | null;
+  inputs: { name: string; source: string; ready: boolean }[];
+  produces: string[];
+};
+
+type WorkflowPlan = {
+  name: string;
+  version: number | null;
+  published: boolean;
+  summary: string;
+  steps: PlanStep[];
+  you_must_supply: string[];
+  results: string[];
+  agents: string[];
+  gates: number;
+  typical_minutes?: number;
+  can_start?: boolean;
+  blocked_because?: string[];
+};
+
 type WorkflowSpec = {
   definition_id: string;
   workflow_key: string;
@@ -3483,6 +3521,138 @@ function ChangeRecord({ documentId }: { documentId: string }) {
   );
 }
 
+/** WHAT THIS WORKFLOW WILL DO, above the steps that edit it.
+ *
+ *  Reported: "I want to see the workflow and its definition, what it will do, then trigger
+ *  the run… we need to know what kind of results it will bring, any agents associated or any
+ *  task associated — right now those info are missing. I also don't know how to customize a
+ *  specific workflow step."
+ *
+ *  Every fact here already existed: the capability palette holds what a step does, what it
+ *  produces, which agent captains it and what forces a gate; the stored bindings hold where
+ *  each input comes from. Nothing joined them, so the operator's view of a workflow was four
+ *  labels and four dropdowns.
+ *
+ *  Collapsed by default AFTER the first look would be wrong — this is the thing they came to
+ *  read, so it is open, and the step editor below it is what they scroll to.
+ */
+function WorkflowPlanPanel({ plan, onCustomize }: {
+  plan: WorkflowPlan;
+  /** Jump the editor to one step. "How do I customize a specific step" had no answer that
+   *  did not involve counting rows in a second list. */
+  onCustomize: (stepId: string) => void;
+}) {
+  if (!plan.published) {
+    return (
+      <section className="stack-card dw-plan" data-testid="dw-plan">
+        <p className="detail">{plan.summary}</p>
+      </section>
+    );
+  }
+  return (
+    <section className="stack-card dw-plan" data-testid="dw-plan">
+      <header className="dw-plan-head">
+        <h4>What this will do</h4>
+        <span className="detail">
+          v{plan.version}
+          {typeof plan.typical_minutes === "number" && plan.typical_minutes > 0
+            ? ` · ~${plan.typical_minutes} min` : ""}
+        </span>
+      </header>
+
+      {/* The plan in a sentence, for the person who will not read the table. */}
+      <p className="dw-plan-summary" data-testid="dw-plan-summary">{plan.summary}</p>
+
+      {/* THE THREE QUESTIONS, ANSWERED AT THE TOP rather than inferred from the list. */}
+      <dl className="dw-plan-facts">
+        <div>
+          <dt>You supply</dt>
+          <dd data-testid="dw-plan-supply">
+            {plan.you_must_supply.length
+              ? plan.you_must_supply.join(", ")
+              : "nothing — every input comes from a step"}
+          </dd>
+        </div>
+        <div>
+          <dt>It produces</dt>
+          <dd data-testid="dw-plan-results">
+            {plan.results.length ? plan.results.join(", ") : "no recorded output"}
+          </dd>
+        </div>
+        <div>
+          <dt>Agents</dt>
+          <dd data-testid="dw-plan-agents">
+            {plan.agents.length
+              ? plan.agents.map((a) => a.replace(/_/g, " ")).join(", ")
+              : "none assigned"}
+          </dd>
+        </div>
+      </dl>
+
+      {/* A WORKFLOW THAT CANNOT START SHOULD SAY SO HERE, not when the run deadletters 41
+          seconds later with "needs 'media_artifact_id', which is not set". */}
+      {plan.can_start === false && plan.blocked_because?.length ? (
+        <p className="dw-plan-blocked" data-testid="dw-plan-blocked">
+          <strong>This cannot run yet.</strong>{" "}
+          {plan.blocked_because.join("; ")}.
+        </p>
+      ) : null}
+
+      <ol className="dw-plan-steps">
+        {plan.steps.map((step) => (
+          <li key={step.id} className="dw-plan-step"
+              data-gate={step.approval === "manual" || undefined}
+              data-testid={`dw-plan-step-${step.id}`}>
+            <div className="dw-plan-step-head">
+              <span className="dw-plan-num">{step.position}</span>
+              <strong>{step.label}</strong>
+              <span className="dw-plan-approval" data-forced={step.approval_is_forced || undefined}>
+                {step.approval === "manual" ? "stops for you" : "runs automatically"}
+              </span>
+            </div>
+
+            {step.does ? <p className="detail dw-plan-does">{step.does}</p> : null}
+
+            <p className="detail dw-plan-meta">
+              {step.agent ? <>Run by <strong>{step.agent.replace(/_/g, " ")}</strong></> : null}
+              {step.runs ? <> · runs <code>{step.runs}</code></> : null}
+              {typeof step.risk_tier === "number" ? <> · risk {step.risk_tier}</> : null}
+            </p>
+
+            {/* WHY it stops, not just that it does. "Forced" is the difference between a
+                setting the operator can change and one the risk floor decided for them. */}
+            {step.approval === "manual" ? (
+              <p className="detail dw-plan-note">{step.approval_note}</p>
+            ) : null}
+
+            {step.inputs.length ? (
+              <ul className="dw-plan-io">
+                {step.inputs.map((input) => (
+                  <li key={input.name} data-ready={input.ready}>
+                    <code>{input.name}</code> — {input.source}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {step.produces.length ? (
+              <p className="detail dw-plan-produces">
+                Produces: {step.produces.join(", ")}
+              </p>
+            ) : null}
+
+            <button type="button" className="linklike"
+                    onClick={() => onCustomize(step.id)}
+                    data-testid={`dw-plan-customize-${step.id}`}>
+              Customize this step
+            </button>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 /* ── Catalogue ───────────────────────────────────────────────────────────────── */
 
 
@@ -3973,6 +4143,16 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   const [loaded, setLoaded] = useState<WorkflowSpec | null>(null);
   const [loadingSpec, setLoadingSpec] = useState(false);
   const [specError, setSpecError] = useState<string | null>(null);
+  // WHAT IT WILL DO, as opposed to which steps it has.
+  //
+  // The header said "4 steps · written from scratch" and the rows said "Edit the video /
+  // auto". That is the whole of what an operator could learn before starting a run: not what
+  // a step does, not what it produces, not which agent answers for it, not that "auto" on a
+  // tier-3 step is going to stop and wait for them anyway.
+  const [plan, setPlan] = useState<WorkflowPlan | null>(null);
+  //: Which step "Customize this step" sent them to, so the row can say so. Cleared on the
+  //: next selection — a highlight that never goes away stops meaning anything.
+  const [focusStep, setFocusStep] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [importFrom, setImportFrom] = useState("");
@@ -4108,9 +4288,22 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
     // workflow's steps over the ones just imported is exactly the confusion between "the one
     // you are editing" and "the one you are making" that this flow had.
     if (creating) return;
-    if (!targetKey) { setLoaded(null); setDraft([]); return; }
+    if (!targetKey) { setLoaded(null); setDraft([]); setPlan(null); return; }
     let live = true;
     setLoadingSpec(true);
+    // The plan is fetched ALONGSIDE the spec rather than on a click, because "what will this
+    // do" is the question you have while looking at it — making it a second interaction is
+    // how it ends up never being asked.
+    void (async () => {
+      const p = new URLSearchParams({ view: "plan", project_id: projectId, key: targetKey });
+      try {
+        const r = await fetch(`/api/delivery-workflows?${p}`, { cache: "no-store" });
+        const body = (await r.json()) as WorkflowPlan & { error?: string };
+        if (live && r.ok && Array.isArray(body?.steps)) setPlan(body);
+      } catch {
+        /* the plan is an explanation; failing to load one must not break the editor */
+      }
+    })();
     void (async () => {
       const params = new URLSearchParams({
         view: "spec", project_id: projectId, key: targetKey,
@@ -4550,6 +4743,21 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
             yours; saving will publish it.
           </p>
         ) : null}
+        {/* ABOVE THE EDITOR, BECAUSE READING COMES BEFORE CHANGING.
+            The operator's order was explicit: "first I want to see the workflow and its
+            definition, what it will do, THEN trigger the run". */}
+        {!creating && plan ? (
+          <WorkflowPlanPanel
+            plan={plan}
+            onCustomize={(stepId) => {
+              // Scroll the editor to that step and focus it, so "customize this step" lands
+              // on the row rather than on a list the operator has to search.
+              const row = document.querySelector(`[data-step-row="${stepId}"]`);
+              if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+              setFocusStep(stepId);
+            }}
+          />
+        ) : null}
         {loadingSpec && draft.length === 0 ? (
           <p className="detail dw-canvas-empty" data-testid="dw-canvas-loading">
             Reading the current steps…
@@ -4576,6 +4784,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                     onDragEnd={() => setDragging(null)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={() => { if (dragging !== null) move(dragging, index); setDragging(null); }}
+                    // The anchor "Customize this step" scrolls to. Keyed by STEP ID, which is
+                    // what the plan knows — an index would break the moment a row is dragged.
+                    data-step-row={step.id}
+                    data-focused={focusStep === step.id || undefined}
                     data-testid={`dw-draft-${step.id}`}>
                   <span className="dw-draft-grip" aria-hidden>⋮⋮</span>
                   <span className="dw-draft-n">{index + 1}</span>

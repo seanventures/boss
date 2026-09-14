@@ -9559,3 +9559,69 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 }
 
 .agent-stop:hover { opacity: 1; }
+
+/* ── The plan: what a workflow will do, above the editor that changes it ───────
+   The builder showed four labels and four dropdowns. What each step does, what it produces
+   and which agent answers for it were known and never shown. */
+.dw-plan { margin-bottom: 18px; }
+.dw-plan-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  margin-bottom: 8px;
+}
+.dw-plan-head h4 { margin: 0; font-size: 1rem; }
+.dw-plan-summary { margin: 0 0 14px; line-height: 1.55; }
+
+/* The three questions, answered at the top rather than inferred from the list below. */
+.dw-plan-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px; margin: 0 0 16px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.dw-plan-facts dt {
+  font-size: .72rem; letter-spacing: .06em; text-transform: uppercase;
+  opacity: .62; margin-bottom: 3px;
+}
+.dw-plan-facts dd { margin: 0; font-size: .9rem; line-height: 1.4; }
+
+/* A workflow that cannot run should say so HERE, not 41 seconds into a run. */
+.dw-plan-blocked {
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; font-size: .88rem;
+  border: 1px solid color-mix(in srgb, var(--warn, #d98324) 55%, transparent);
+  background: color-mix(in srgb, var(--warn, #d98324) 10%, transparent);
+}
+
+.dw-plan-steps { list-style: none; margin: 0; padding: 0; }
+.dw-plan-step {
+  position: relative; padding: 12px 14px; margin-bottom: 10px;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.dw-plan-step:last-child { margin-bottom: 0; }
+/* A step that stops for a person is a different kind of thing from one that does not. */
+.dw-plan-step[data-gate] { border-left: 3px solid var(--accent, #4f8cff); }
+.dw-plan-step-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dw-plan-num {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none;
+  border-radius: 999px; font-size: .78rem; border: 1px solid var(--line); opacity: .8;
+}
+.dw-plan-approval {
+  margin-left: auto; font-size: .74rem; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); opacity: .8;
+}
+/* Forced by the risk floor, not chosen — the operator must not read it as a setting. */
+.dw-plan-approval[data-forced] {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 60%, transparent); opacity: 1;
+}
+.dw-plan-does { margin: 8px 0 6px; line-height: 1.5; }
+.dw-plan-meta, .dw-plan-note, .dw-plan-produces { margin: 4px 0; font-size: .84rem; }
+.dw-plan-note { opacity: .75; }
+.dw-plan-io { list-style: none; margin: 8px 0 4px; padding: 0; font-size: .84rem; }
+.dw-plan-io li { padding: 2px 0; opacity: .85; }
+/* An input with nowhere to come from is the reason a run will die. Say it on the input. */
+.dw-plan-io li[data-ready="false"] {
+  opacity: 1; color: var(--warn, #d98324); font-weight: 500;
+}
+/* Where "Customize this step" lands, so the jump is visible rather than merely having
+   happened. */
+.dw-draft-step[data-focused] {
+  outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px;
+}

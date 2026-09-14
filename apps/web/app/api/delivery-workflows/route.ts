@@ -32,17 +32,30 @@ function specPath(project: string, key: string): string {
     + `?project_id=${encodeURIComponent(project)}`;
 }
 
+/** `view=plan&key=…` — what the workflow WILL DO, as opposed to which steps it has.
+ *
+ *  `spec` returns the stored graph, which is what the builder edits. It says a step's id and
+ *  its binding and nothing about what the step means: an operator reading it learns that
+ *  "publish" runs `social_publish` and still does not know what that produces, who answers
+ *  for it, or that it will stop and wait for them. This is the same version, joined to the
+ *  capability catalogue, in the words a person decides on. */
+function planPath(project: string, key: string): string {
+  return `/v1/delivery-workflows/${encodeURIComponent(key)}/plan`
+    + `?project_id=${encodeURIComponent(project)}`;
+}
+
 export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const view = params.get("view") ?? "runs";
   const project = params.get("project_id")?.trim() ?? "";
-  if (view === "spec") {
+  if (view === "spec" || view === "plan") {
     const key = params.get("key")?.trim() ?? "";
     if (!project || !key) {
-      return NextResponse.json({ error: "spec needs project_id and key" }, { status: 400 });
+      return NextResponse.json({ error: `${view} needs project_id and key` }, { status: 400 });
     }
     try {
-      const r = await fetch(`${API_URL}${specPath(project, key)}`, {
+      const path = view === "plan" ? planPath(project, key) : specPath(project, key);
+      const r = await fetch(`${API_URL}${path}`, {
         headers: authHeaders({}), cache: "no-store",
       });
       if (!r.ok) {
@@ -56,7 +69,7 @@ export async function GET(req: Request) {
   const build = VIEWS[view];
   if (!build) {
     return NextResponse.json(
-      { error: `unknown view '${view}'. Known: ${Object.keys(VIEWS).join(", ")}, spec` },
+      { error: `unknown view '${view}'. Known: ${Object.keys(VIEWS).join(", ")}, spec, plan` },
       { status: 400 },
     );
   }
