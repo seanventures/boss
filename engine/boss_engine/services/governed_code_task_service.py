@@ -34,7 +34,7 @@ from typing import Optional
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
-from . import design_prompts, plane_sync, verification_target
+from . import design_prompts, plane_sync, review_comments, verification_target
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -723,6 +723,95 @@ def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
     )
 
 
+def _open_operator_comments(engine, run_id: str, project_id: str) -> list:
+    """Line comments a person left on this run that nobody has dealt with yet.
+
+    Read at the repair round rather than at run start: a comment made WHILE the agent was
+    working must reach the next attempt, not the one after it.
+    """
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+    except Exception as exc:  # noqa: BLE001 — a repair must not die reading an optional input
+        logger.warning("code_task.operator_comments_unreadable run=%s %s: %s",
+                       run_id, type(exc).__name__, exc)
+        return []
+    raw = ((row or {}).get("finalize_ctx") or {}).get("review_comments") or []
+    out = []
+    for entry in raw:
+        if (entry or {}).get("status", "open") != "open":
+            continue
+        try:
+            out.append(review_comments.ReviewComment.from_dict(entry))
+        except Exception:  # noqa: BLE001 — one malformed row must not hide the rest
+            continue
+    return out
+
+
+def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, project_id,
+                                run_id: str) -> dict:
+    """Leave the panel's findings ON the pull request, at the lines they are about.
+
+    The review already produced graded, located findings, and until now they lived only in the
+    run's evidence — so the PR carried a paragraph of prose and a human reviewer had to map it
+    back onto the diff themselves. GitHub's review API takes the anchors directly.
+
+    Best effort, always: a review that cannot be posted must never block a pull request that
+    passed its gates. A failure is an event, not an exception.
+    """
+    number = proposal.get("pull_request_number")
+    if not number:
+        return {"posted": False, "reason": "no pull request number"}
+    comments = []
+    for stage, key in (("review_code", "review_summary"),
+                       ("security_check", "security_summary"),
+                       ("consistency_check", "consistency_summary")):
+        comments += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
+    if not comments:
+        return {"posted": False, "reason": "no structured findings"}
+    inline = review_comments.to_github_comments(comments)
+    loose = review_comments.unanchored_body(comments)
+    body = ("BOSS review panel — findings from the independent reviewers.\n\n"
+            + (loose + "\n\n" if loose else "")
+            + "Severity decides the gate; MINOR and NIT are recorded as follow-up work.")
+    try:
+        # COMMENT, never REQUEST_CHANGES: the gate already decided whether this ships, and a
+        # second blocking opinion on the PR would be a second place that decision lives.
+        result = sf.github.create_review(int(number), body=body, event="COMMENT",
+                                         comments=inline or None)
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.review_comments_posted", "boss",
+                       "code_task_run", run_id,
+                       {"pull_request_number": number, "anchored": len(inline),
+                        "unanchored": len(comments) - len(inline)})
+        return {"posted": True, "anchored": len(inline),
+                "unanchored": len(comments) - len(inline),
+                "review_url": getattr(result, "url", None)}
+    except Exception as exc:  # noqa: BLE001 — never block a passing PR on a comment
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.review_comments_failed", "boss",
+                       "code_task_run", run_id,
+                       {"pull_request_number": number,
+                        "error": f"{type(exc).__name__}: {exc}"[:200]})
+        return {"posted": False, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+
+
+def _anchored_findings(summary: str, root, *, stage: str, header: str) -> str:
+    """A review pass as line-anchored instructions, with the code quoted at each place.
+
+    Falls back to the raw summary when nothing parsed. A reviewer that ignores the FINDING
+    contract must still reach the implementer — dropping its words because they were badly
+    formatted would turn a formatting problem into a quality one.
+    """
+    comments = review_comments.parse_findings(summary or "", stage=stage)
+    rendered = review_comments.render_for_implementer(comments, root) if comments else ""
+    if rendered:
+        return f"{header}\n{rendered}"
+    return f"{header}\n" + (summary or "")[:3000]
+
+
 def _targeted_fix_prompt(findings: str, round_i: int) -> str:
     """In-run convergence (review → implementer conversation): hand the panel's CONCRETE
     findings back to the implementer, which resumes its own warm session and fixes only
@@ -825,12 +914,18 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
         "no acceptance criterion requires) is a RECOMMENDATION — list it, but it must NOT drive the "
         "verdict. Refute ONLY for a defect that materially violates the task or a criterion.\n\n"
         + (design_prompts.design_review_clause() + "\n\n" if ui else "")  # APP-2: incoherence in scope for UI
-        + "For EVERY defect you find, emit one line in EXACTLY this form (severity is graded, and "
-        "it is what decides whether the change ships — so grade honestly):\n"
-        "  FINDING: BLOCKER — data loss, security hole, or the feature does not work at all\n"
-        "  FINDING: MAJOR   — an acceptance criterion is materially violated\n"
-        "  FINDING: MINOR   — a real but non-blocking defect (cosmetic, rare edge case)\n"
-        "  FINDING: NIT     — style or preference\n"
+        + "For EVERY defect you find, emit one line in EXACTLY this form. SAY WHERE: give the\n"
+        "file and line the defect is ON, the way you would leave a comment on a pull request.\n"
+        "A reviewer who says only 'error handling is weak' hands the implementer a search\n"
+        "problem on top of a fix, and on a large change it will guess wrong.\n\n"
+        "  FINDING: <SEVERITY> <path>:<line> — <what is wrong there>\n\n"
+        "Severity is graded, and it is what decides whether the change ships — grade honestly:\n"
+        "  FINDING: BLOCKER app/pay.py:88 — data loss, security hole, or the feature does not work\n"
+        "  FINDING: MAJOR   lib/rules.py:14 — an acceptance criterion is materially violated\n"
+        "  FINDING: MINOR   ui/card.tsx:31 — a real but non-blocking defect (cosmetic, rare edge case)\n"
+        "  FINDING: NIT     lib/util.py:7 — style or preference\n"
+        "If a defect genuinely has no single location (something MISSING, or spread across the\n"
+        "change) omit the path and say so in the text — an unanchored finding still counts.\n"
         "List MINOR/NIT findings too — they are recorded and fixed as separate follow-up work, so "
         "you lose nothing by grading accurately. Do NOT inflate a cosmetic issue to MAJOR to force "
         "attention, and do NOT suppress one to let the change through.\n\n"
@@ -846,18 +941,22 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
 _SEVERITY_ORDER = ["nit", "minor", "major", "blocker"]
 
 
-def _parse_findings(summary: str) -> list[dict]:
-    """Extract the reviewer's machine-readable `FINDING: <SEVERITY> — <text>` lines.
+def _parse_findings(summary: str, *, stage: str | None = None) -> list[dict]:
+    """Extract the reviewer's machine-readable FINDING lines, with their locations.
 
     Returns [] when the reviewer emitted none, which the caller MUST treat as "no structured
     signal" and fall back to the binary verdict — an empty list here never means "clean".
+
+    Delegates to `review_comments.parse_findings` so the gate and the pull-request comments are
+    reading the same lines; two parsers for one contract is two chances to disagree about
+    whether a change is safe. `path`/`line` are None for an unanchored finding, and `text` is
+    kept so every existing caller is unaffected.
     """
-    out: list[dict] = []
-    for sev, text in re.findall(
-            r"(?im)^\s*[-*>\s]*FINDING:\s*(BLOCKER|MAJOR|MINOR|NIT)\b[\s—:-]*(.*)$",
-            summary or ""):
-        out.append({"severity": sev.lower(), "text": text.strip()[:300]})
-    return out
+    return [
+        {"severity": c.severity, "text": c.body[:300], "path": c.path, "line": c.line,
+         "end_line": c.end_line, "stage": c.stage}
+        for c in review_comments.parse_findings(summary or "", stage=stage)
+    ]
 
 
 def _review_gate_from_findings(
@@ -3522,12 +3621,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     "FAILING TESTS (the arbiter confirmed these tests are "
                                     "CORRECT — fix the implementation, do NOT touch the "
                                     "tests):\n" + (_tr.stdout or "")[:3000])
+                    # OPERATOR COMMENTS COME FIRST. A person who took the trouble to point at a
+                    # line has said something more specific than any reviewer, and a repair round
+                    # is bounded — what it spends its turns on is decided by this order.
+                    _human = _open_operator_comments(engine, run_id, project_id)
+                    if _human:
+                        finding_bits.insert(0, "OPERATOR REVIEW COMMENTS:\n"
+                                            + review_comments.render_for_implementer(_human, root))
                     if "code_review_passed" in failing:
-                        finding_bits.append(
-                            "ADVERSARIAL REVIEW FINDINGS:\n" + (r3.get("summary") or "")[:3000])
+                        # Anchored, with the source quoted at each line. The implementer used to
+                        # get the reviewer's prose and no location, so a repair round was spent
+                        # re-reading the diff to work out WHERE before it could change anything.
+                        finding_bits.append(_anchored_findings(
+                            r3.get("summary") or "", root, stage="review_code",
+                            header="ADVERSARIAL REVIEW FINDINGS:"))
                     if "consistent" in failing:
-                        finding_bits.append(
-                            "CONSISTENCY FINDINGS:\n" + (r6.get("summary") or "")[:2000])
+                        finding_bits.append(_anchored_findings(
+                            r6.get("summary") or "", root, stage="consistency_check",
+                            header="CONSISTENCY FINDINGS:"))
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.inrun_convergence_round", "boss",
                                    "code_task_run", run_id,
@@ -4028,6 +4139,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                  + (f" — partial work shipped as {rescued}" if rescued else "")),
                            "id": run_id})
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
+
+        # The findings go ON the pull request, at the lines they are about.
+        evidence["review_comments_posted"] = _post_review_comments_to_pr(
+            sf, proposal, evidence, engine, project_id, run_id)
 
         # Bank `opening_pr` before the terminal write erases the clock it was measured
         # by — in its OWN transaction, committed first, never nested inside the one the

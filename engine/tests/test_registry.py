@@ -10,6 +10,10 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # REVIEW IS A CONVERSATION ABOUT A LINE, not a verdict on a run. A reviewer that can only
+    # say "not safe" gives the implementer nothing to act on; these three are how a finding
+    # gets a file and a line, and how a person adds one of their own.
+    "add_review_comment", "list_review_comments", "resolve_review_comment",
     # Rules the WORKFORCE mandates, as opposed to the ones the platform hardcodes. Security
     # concluding in a panel that ports must be checked for public exposure used to change
     # nothing — the conclusion lived in minutes no build ever read. `check_port_exposure` is
@@ -152,11 +156,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 87, (
+    assert len(reg.names()) == 90, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 54
-    assert len(write) == 33
+    assert len(read) == 55
+    assert len(write) == 35
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -354,6 +358,12 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # A REVIEW COMMENT IS A NOTE, NOT AN ACT. Leaving one appends to a run's comment list and
+    # resolving one flips its status; neither starts work, spends a model budget, or changes a
+    # line of code. The implementer reads them at its next repair round. Nothing here is harder
+    # to undo than saying it again.
+    "add_review_comment",
+    "resolve_review_comment",
     "close_orphaned_runs",
     # AUTHORING A PATH IS NOT WALKING IT. Both write a definition and neither starts a run or
     # spends a model budget: a workflow that exists but is not mapped to a class of work changes

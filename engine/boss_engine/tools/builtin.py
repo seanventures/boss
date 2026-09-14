@@ -2085,6 +2085,137 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "applies": "at the next stage boundary"}
 
     @reg.tool(
+        "add_review_comment",
+        "Leave a review comment on ONE line of a code task's change, the way you would on a "
+        "pull request. The implementer gets your words AND the code at that line, so it does "
+        "not have to work out where you meant. Use this instead of steer_code_task whenever "
+        "the problem is somewhere specific — 'the error handling is weak' costs a repair round "
+        "in re-reading; 'pricing/rules.py:14 returns 1.0 for an unknown SKU' does not.",
+        _obj({"run_id": {"type": "string"},
+              "path": {"type": "string", "description": "file the comment is about"},
+              "line": {"type": "integer", "minimum": 1},
+              "body": {"type": "string", "description": "what is wrong here"},
+              "end_line": {"type": "integer", "minimum": 1,
+                           "description": "for a comment about a span"},
+              "severity": {"type": "string", "enum": ["blocker", "major", "minor", "nit"],
+                           "default": "major",
+                           "description": "blocker/major block the gate; minor/nit become "
+                                          "follow-up work"}},
+             ["run_id", "path", "line", "body"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def add_review_comment(ctx, *, project_id, actor, args):
+        import json as _json
+        from ..services.core import make_id
+        from ..services.review_comments import ReviewComment, AUTHOR_HUMAN
+
+        body = (args.get("body") or "").strip()
+        if not body:
+            return {"ok": False, "error": "body is required"}
+        comment = ReviewComment(
+            severity=(args.get("severity") or "major").lower(),
+            body=body[:500],
+            path=(args.get("path") or "").strip() or None,
+            line=int(args["line"]),
+            end_line=int(args["end_line"]) if args.get("end_line") else None,
+            author=actor,
+            author_kind=AUTHOR_HUMAN,
+            stage="operator",
+        )
+        entry = {"id": make_id("rc"), **comment.to_dict()}
+        with ctx.begin() as c:
+            # Same project fence as steering: a comment redirects an agent, so it must not
+            # cross a tenant boundary.
+            row = _code_task_in_project(c, run_id := args["run_id"], project_id)
+            if not row:
+                return {"ok": False, "error": f"no code task run {run_id}"}
+            c.execute(_text(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('review_comments', "
+                "COALESCE(finalize_ctx->'review_comments','[]'::jsonb) || CAST(:e AS JSONB)), "
+                "updated_at=now() WHERE id=:id AND project_id=:p"),
+                {"e": _json.dumps([entry]), "id": run_id, "p": project_id})
+        return {"ok": True, "comment_id": entry["id"], "run_id": run_id,
+                "at": comment.location(),
+                "applies": "at the next repair round; retry_code_task if the run has finished"}
+
+    @reg.tool(
+        "list_review_comments",
+        "Every review comment on a code task — from the panel and from people — with its "
+        "file, line, severity and whether it has been dealt with.",
+        _obj({"run_id": {"type": "string"},
+              "status": {"type": "string", "enum": ["open", "addressed", "dismissed", "all"],
+                         "default": "all"}},
+             ["run_id"]),
+    )
+    def list_review_comments(ctx, *, project_id, actor, args):
+        from ..services.review_comments import parse_findings
+
+        want = (args.get("status") or "all").lower()
+        with ctx.begin() as c:
+            row = _code_task_in_project(c, run_id := args["run_id"], project_id)
+            if not row:
+                return {"ok": False, "error": f"no code task run {run_id}"}
+        fctx = row.get("finalize_ctx") or {}
+        stored = list(fctx.get("review_comments") or [])
+        # The panel's findings live in the run's evidence rather than as stored comments, so
+        # they are parsed here. A reviewer's finding and an operator's comment are the same
+        # kind of thing and an operator should not have to look in two places for them.
+        evidence = (fctx.get("evidence") or {})
+        for stage, key in (("review_code", "review_summary"),
+                           ("security_check", "security_summary"),
+                           ("consistency_check", "consistency_summary")):
+            for c_ in parse_findings(evidence.get(key) or "", stage=stage):
+                stored.append({"id": None, **c_.to_dict()})
+        if want != "all":
+            stored = [c_ for c_ in stored if (c_.get("status") or "open") == want]
+        return {"ok": True, "run_id": run_id, "count": len(stored), "comments": stored}
+
+    @reg.tool(
+        "resolve_review_comment",
+        "Mark a review comment addressed or dismissed. Dismissing records that it was a "
+        "judgement call rather than making it disappear — a comment that vanishes is "
+        "indistinguishable from one nobody read.",
+        _obj({"run_id": {"type": "string"},
+              "comment_id": {"type": "string"},
+              "status": {"type": "string", "enum": ["addressed", "dismissed"]},
+              "note": {"type": "string", "description": "why, for a dismissal"}},
+             ["run_id", "comment_id", "status"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def resolve_review_comment(ctx, *, project_id, actor, args):
+        import json as _json
+
+        status = (args.get("status") or "").lower()
+        if status not in ("addressed", "dismissed"):
+            return {"ok": False, "error": "status must be addressed or dismissed"}
+        with ctx.begin() as c:
+            row = _code_task_in_project(c, run_id := args["run_id"], project_id)
+            if not row:
+                return {"ok": False, "error": f"no code task run {run_id}"}
+            fctx = row.get("finalize_ctx") or {}
+            comments = list(fctx.get("review_comments") or [])
+            target = args["comment_id"]
+            hit = False
+            for entry in comments:
+                if entry.get("id") == target:
+                    entry["status"] = status
+                    entry["resolved_by"] = actor
+                    if args.get("note"):
+                        entry["resolution_note"] = str(args["note"])[:500]
+                    hit = True
+            if not hit:
+                return {"ok": False, "error": f"no review comment {target} on {run_id}"}
+            c.execute(_text(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('review_comments', CAST(:e AS JSONB)), "
+                "updated_at=now() WHERE id=:id AND project_id=:p"),
+                {"e": _json.dumps(comments), "id": run_id, "p": project_id})
+        return {"ok": True, "run_id": run_id, "comment_id": target, "status": status}
+
+    @reg.tool(
         "watch_code_task",
         "LIVE tool-level feed of what the coding agent is doing RIGHT NOW: each file it "
         "reads or edits, lines written so far, and whether it is exploring or editing. Use "
@@ -5354,6 +5485,8 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "retry_code_task",
     "extend_code_task",
     "steer_code_task",
+    "add_review_comment",
+    "resolve_review_comment",
     "cancel_code_task",
     # Correcting where an app is addressed. BOSS diagnosed the same deployment four times
     # and could not act on any of it, because changing a target was not something it could do —
