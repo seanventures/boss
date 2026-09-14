@@ -212,6 +212,14 @@ _DEFAULT_SPEC = (
 #: The v2 screens and the root element each must render. A screen missing from here is one
 #: nobody checks, so this list is the definition of "all the screens" for the checker.
 V2_SCREENS = {
+    # THE PAGE THE OPERATOR ACTUALLY OPENS.
+    #
+    # This map had only /v2/* in it, so `screens` reported 9/9 unrefuted while the console at
+    # `/` was unusable — the exact shape of failure this checker exists to prevent. `/` is the
+    # area-based console and it is what a bookmark, a share link and every "View in …" button
+    # lands on. It has no v2 test id, so the id check is skipped for it and the render, style,
+    # console-error and speed checks still apply.
+    "/": None,
     "/v2": "v2-projects",
     "/v2/hive": "v2-hive",
     "/v2/factory": "v2-workforce",

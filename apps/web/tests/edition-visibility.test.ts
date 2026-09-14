@@ -172,8 +172,14 @@ describe("PaidSurfaceGate presentational honesty", () => {
     const html = renderToStaticMarkup(
       React.createElement(
         PaidSurfaceGate,
-        { editionId: "community", surface: "account_connect" },
-        React.createElement("button", { type: "button" }, "Link Account Connect"),
+        {
+          editionId: "community",
+          surface: "account_connect" as const,
+          // `children` is REQUIRED on PaidSurfaceGate, and a third argument to
+          // createElement does not satisfy a required prop — so this whole block was a
+          // type error while vitest (which does not typecheck) kept it green.
+          children: React.createElement("button", { type: "button" }, "Link Account Connect"),
+        },
       ),
     );
     expect(html).toContain('data-testid="paid-surface-hidden-account_connect"');
@@ -187,8 +193,11 @@ describe("PaidSurfaceGate presentational honesty", () => {
     const html = renderToStaticMarkup(
       React.createElement(
         PaidSurfaceGate,
-        { editionId: "enterprise", surface: "marketplace" },
-        React.createElement("button", { type: "button" }, "Sync hosted catalog"),
+        {
+          editionId: "enterprise",
+          surface: "marketplace" as const,
+          children: React.createElement("button", { type: "button" }, "Sync hosted catalog"),
+        },
       ),
     );
     expect(html).toContain("Sync hosted catalog");
@@ -199,15 +208,13 @@ describe("PaidSurfaceGate presentational honesty", () => {
     const market = renderToStaticMarkup(
       React.createElement(
         PaidSurfaceGate,
-        { editionId: "community", surface: "marketplace" },
-        null,
+        { editionId: "community", surface: "marketplace" as const, children: null },
       ),
     );
     const clusters = renderToStaticMarkup(
       React.createElement(
         PaidSurfaceGate,
-        { editionId: "community", surface: "enterprise_clusters" },
-        null,
+        { editionId: "community", surface: "enterprise_clusters" as const, children: null },
       ),
     );
     expect(market).toContain("paid-surface-hidden-marketplace");

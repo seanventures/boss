@@ -195,8 +195,8 @@ describe("the console's own areas are unaffected", () => {
   it("there is exactly one route loading boundary", () => {
     // A second one in a nested segment would fire on refreshes and replace live content with
     // grey bars while data the operator is reading is still perfectly good.
-    const found = readdirSync(APP, { withFileTypes: true, recursive: true } as never)
-      .filter((e: never) => String((e as { name: string }).name) === "loading.tsx");
+    const found = readdirSync(APP, { withFileTypes: true, recursive: true })
+      .filter((entry) => entry.name === "loading.tsx");
     expect(found.length).toBe(1);
   });
 });

@@ -19,7 +19,10 @@ const UI = codeOnly("app/delivery-workflows-ui.tsx");
 
 const draft = (over: Partial<Parameters<typeof briefFrom>[0]> = {}) => ({
   title: "", directive: "", audience: "", criteria: [""],
-  workflowKey: "", repository: "", links: [], ...over,
+  // `agents` joined NewProjectDraft with the wizard's agents step and this helper was not
+  // updated, so every call here was a type error while vitest (which does not typecheck) went
+  // on passing. Empty means "whatever BOSS seeds", which is what the wizard starts from.
+  workflowKey: "", repository: "", links: [], agents: [], ...over,
 });
 
 describe("the brief the pipeline receives", () => {

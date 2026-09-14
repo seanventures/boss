@@ -107,14 +107,14 @@ describe("v1 Org Chart", () => {
   it("does not print the role twice when it says the same as the name", () => {
     // "Product Manager / Product Manager" and "CTO / CTO" — the same duplication flagged
     // elsewhere on these screens.
-    const out = renderToStaticMarkup(<OrgChartArea chart={chart({
+    const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({
       tree: [{ id: "cto", name: "CTO", role: "cto", depth: 0 } as never],
     })} />);
     expect(out.match(/CTO/g)?.length).toBe(1);
   });
 
   it("still shows a role that adds something", () => {
-    const out = renderToStaticMarkup(<OrgChartArea chart={chart({
+    const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({
       tree: [{ id: "pm", name: "Nova", role: "product_manager", depth: 0 } as never],
     })} />);
     expect(out).toContain("Nova");
@@ -124,7 +124,7 @@ describe("v1 Org Chart", () => {
   it("says the hierarchy is observed rather than declared", () => {
     // BOSS has no reporting line. Presenting a derived shape as a declared one is a lie that
     // looks like a diagram.
-    const out = renderToStaticMarkup(<OrgChartArea chart={chart({ derived_from: "handoffs" })} />);
+    const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({ derived_from: "handoffs" })} />);
     expect(out).toContain("Derived from handoffs");
   });
 

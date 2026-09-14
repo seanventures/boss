@@ -17,11 +17,23 @@ import { installFeedCache } from "./feed-cache";
  * that, which is why the runtime escape hatch exists for the side that can use it.
  */
 const IS_SERVER = typeof window === "undefined";
-export const API_URL = (
-  (IS_SERVER ? process.env.BOSS_API_URL : "") ||
-  process.env.NEXT_PUBLIC_BOSS_API_URL ||
-  ""
-).replace(/\/$/, "");
+
+/**
+ * THE BROWSER TALKS TO ITS OWN ORIGIN. Only the server holds the API's address.
+ *
+ * The browser used to fetch `NEXT_PUBLIC_BOSS_API_URL` directly, which is a different origin,
+ * and the API has no CORS middleware anywhere in the codebase — `OPTIONS /v1/factory/flow`
+ * answers 401 with no `Access-Control-Allow-Origin`. Twenty-one client components fetch through
+ * `lib/*` helpers that catch their own errors and return an empty feed, so those areas rendered
+ * BLANK rather than broken, which reads as "no data yet" and had nobody looking for a cause.
+ *
+ * An empty base makes every `${API_URL}/v1/…` a same-origin path, which `app/v1/[...path]`
+ * proxies with the key attached server-side. The server keeps the absolute address, because it
+ * is the side that can actually reach it.
+ */
+export const API_URL = IS_SERVER
+  ? (process.env.BOSS_API_URL || process.env.NEXT_PUBLIC_BOSS_API_URL || "").replace(/\/$/, "")
+  : "";
 
 /** Say what is wrong, at the point it is wrong.
  *
@@ -36,8 +48,14 @@ export function apiUrlProblem(): string | null {
 }
 export const PROJECT_ID =
   process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
-export const API_KEY =
-  process.env.BOSS_API_KEY ?? process.env.NEXT_PUBLIC_BOSS_API_KEY;
+/** The control-plane key. SERVER ONLY.
+ *
+ * `NEXT_PUBLIC_BOSS_API_KEY` is inlined into the JavaScript bundle at build time, so reading it
+ * in the browser handed every visitor a credential that can write to the control plane. Browser
+ * requests now go through `app/v1/[...path]`, which attaches the key on the server. */
+export const API_KEY = IS_SERVER
+  ? (process.env.BOSS_API_KEY ?? process.env.NEXT_PUBLIC_BOSS_API_KEY)
+  : undefined;
 
 export function resolveProjectId(projectId?: string): string {
   return projectId?.trim() || PROJECT_ID;

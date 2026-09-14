@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { groupRunsIntoApps } from "../app/app-grouping";
+import { groupRunsIntoApps, type GroupableRun } from "../app/app-grouping";
 
 /**
  * ApproveIt appeared three times: the QA-benchmark attempts, a change started as its own task,
  * and its follow-up. Each carried a DIFFERENT identity field, and the old first-match chain
  * picked one per run, so runs of one app never met.
  */
-const run = (id: string, spec: unknown, fctx: Record<string, unknown> = {}) =>
-  ({ id, spec, finalize_ctx: fctx }) as never;
+const run = (
+  id: string,
+  spec: GroupableRun["spec"],
+  fctx: Record<string, unknown> = {},
+): GroupableRun => ({ id, spec, finalize_ctx: fctx });
 
 describe("runs of one app group together", () => {
   it("joins a change to the app whose branch it was built on", () => {

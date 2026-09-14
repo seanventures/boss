@@ -59,7 +59,6 @@ const fixtureRunning = preview({
   id: "prev_fix",
   status: "running",
   mode: "fixture",
-  fixture: true,
   open_url: "https://boss-api.local.sean.network/v1/previews/prev_fix/web/",
 });
 

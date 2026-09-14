@@ -15,6 +15,13 @@ import { resolve } from "node:path";
  */
 
 const UI = readFileSync(resolve(__dirname, "../app/agent-ui.tsx"), "utf8");
+/** The same source with runs of whitespace collapsed.
+ *
+ * The assertion below broke when the call it names was wrapped across lines — the behaviour
+ * was identical and the test still failed, which is the standing hazard of asserting on source
+ * text. Matching against the collapsed form keeps the thing worth pinning (the click passes the
+ * tool and args STRAIGHT through, with no model in between) without pinning the formatting. */
+const UI_FLAT = UI.replace(/\s+/g, " ");
 const ACTIONS = readFileSync(resolve(__dirname, "../app/actions.ts"), "utf8");
 const CSS = readFileSync(resolve(__dirname, "../app/globals.css"), "utf8");
 
@@ -46,7 +53,7 @@ describe("the chat renders offers", () => {
 
 describe("accepting one", () => {
   it("sends the tool and args verbatim", () => {
-    expect(UI).toContain("runAgentActionAction(projectId, actor, action.tool, action.args");
+    expect(UI_FLAT).toContain("runAgentActionAction( projectId, actor, action.tool, action.args");
   });
 
   it("does not route the click back through the model", () => {

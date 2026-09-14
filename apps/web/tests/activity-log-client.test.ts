@@ -68,7 +68,7 @@ test("a failed request reports the failure instead of an empty log", async () =>
   respond = () => ({ ok: false, status: 503, body: {} });
   const log = await fetchActivityLog("boss-dogfood");
   expect(log.items).toEqual([]);
-  expect(String(log.blockedReason ?? log.error ?? "")).toMatch(/503/);
+  expect(String(log.blockedReason ?? "")).toMatch(/503/);
 });
 
 test("a network error is reported, not thrown", async () => {
@@ -76,5 +76,5 @@ test("a network error is reported, not thrown", async () => {
     throw new Error("connection refused");
   }) as typeof fetch;
   const log = await fetchActivityLog("boss-dogfood");
-  expect(String(log.blockedReason ?? log.error ?? "")).toMatch(/connection refused/);
+  expect(String(log.blockedReason ?? "")).toMatch(/connection refused/);
 });
