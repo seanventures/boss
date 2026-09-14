@@ -48,13 +48,35 @@ STATUSES = (STATUS_OPEN, STATUS_ADDRESSED, STATUS_DISMISSED)
 
 #: `FINDING: MAJOR path/to/file.py:42 — text`, with the anchor optional.
 #:
-#: The path is deliberately permissive (anything non-space that contains a dot or a slash) so a
+#: WRITTEN FOR WHAT MODELS ACTUALLY EMIT, not for the contract as stated. Measured against a
+#: real reviewer (deepseek-chat, brownfield fixture): it produced correct, well-anchored
+#: findings as
+#:
+#:     1. **FINDING: MINOR inventory/pricing/rules.py:8** — the tiers are ordered smallest-first
+#:
+#: and the original expression matched NONE of them, because it required the line to begin with
+#: `FINDING:`. Every finding was dropped, the gate fell back to the binary verdict, and the
+#: verdict was SURVIVED — so a graded review became a silent pass. A parser that only accepts
+#: the contract as written is a parser that rejects the reviewers it exists to read.
+#:
+#: The path is deliberately permissive (anything non-space containing a dot or a slash) so a
 #: reviewer naming `src/a.ts:12` and one naming `a.ts:12` both parse. Resolution to a real file
 #: happens later, where the tree is available and a miss can be reported.
+_EMPH = r"(?:\*\*|__|\*|`)*"
 _FINDING_RE = re.compile(
-    r"(?im)^\s*[-*>\s]*FINDING:\s*(?P<sev>BLOCKER|MAJOR|MINOR|NIT)\b"
-    r"(?:[\s:]+(?P<path>[^\s:][^\s]*?[./][^\s:]*?):(?P<line>\d+)(?:-(?P<end>\d+))?)?"
-    r"[\s—:-]*(?P<text>.*)$"
+    r"(?im)^"
+    r"[\s>]*"                          # quoting / indentation
+    r"(?:[-*+]\s*)*"                   # bullet
+    r"(?:\d+[.)]\s*)?"                # "1." / "2)" numbered list
+    + _EMPH +                          # **FINDING
+    r"\s*FINDING\s*:\s*" + _EMPH +
+    r"\s*(?P<sev>BLOCKER|MAJOR|MINOR|NIT)\b" + _EMPH +
+    r"(?:[\s:]+" + _EMPH +
+    r"(?P<path>[^\s:*`][^\s*`]*?[./][^\s:*`]*?):(?P<line>\d+)(?:-(?P<end>\d+))?"
+    + _EMPH + r")?"
+    + _EMPH +
+    r"[\s—–:-]*"
+    r"(?P<text>.*?)$"
 )
 
 
@@ -100,6 +122,19 @@ class ReviewComment:
         return cls(**{k: v for k, v in (raw or {}).items() if k in known})
 
 
+def _clean(text: Optional[str]) -> str:
+    """Drop the markdown a model wraps its prose in, keeping the prose.
+
+    Emphasis markers are stripped; BACKTICKS ARE NOT. A leading backtick is almost always
+    inline code that opens the sentence — "`rate` is wrong" — and eating it turns a precise
+    comment into a broken one on the pull request where people read it.
+    """
+    out = (text or "").strip()
+    out = re.sub(r"^(?:\*\*|__|\*)+", "", out)
+    out = re.sub(r"(?:\*\*|__)+$", "", out)
+    return out.strip(" —–:-").strip()
+
+
 def parse_findings(
     summary: str, *, author: str = "adversarial_reviewer", stage: Optional[str] = None,
 ) -> list[ReviewComment]:
@@ -117,7 +152,7 @@ def parse_findings(
             end = None
         out.append(ReviewComment(
             severity=m.group("sev").lower(),
-            body=(m.group("text") or "").strip()[:500],
+            body=_clean(m.group("text"))[:500],
             path=(m.group("path") or None),
             line=line,
             end_line=end,

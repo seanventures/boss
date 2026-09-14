@@ -723,7 +723,83 @@ def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
     )
 
 
-def _open_operator_comments(engine, run_id: str, project_id: str) -> list:
+def _json_dumps(value) -> str:
+    import json as _json
+
+    return _json.dumps(value)
+
+
+def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict,
+                            *, round_i: int = 0) -> int:
+    """Turn the panel's findings into durable, line-anchored comments AS THE REVIEW HAPPENS.
+
+    They used to exist only as prose in `evidence`, and only became comments when the pull
+    request was opened — which is after every fix round has already run. So the artifact the
+    implementer worked from and the artifact a human later read on the PR were produced by two
+    different code paths from the same text, at different times, and could disagree.
+
+    Recording here makes one set of comments the single source: the repair round reads it, the
+    pull request posts it, and `list_review_comments` shows the same thing to a person.
+
+    Idempotent on (stage, path, line, severity, body): a re-review of the same defect updates
+    nothing rather than stacking a second copy of a comment the implementer has already seen.
+    """
+    fresh: list = []
+    for stage, key in (("review_code", "review_summary"),
+                       ("security_check", "security_summary"),
+                       ("consistency_check", "consistency_summary")):
+        fresh += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
+    if not fresh:
+        return 0
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+            existing = list(((row or {}).get("finalize_ctx") or {}).get("review_comments") or [])
+            seen = {(e.get("stage"), e.get("path"), e.get("line"), e.get("severity"),
+                     (e.get("body") or "")[:120]) for e in existing}
+            added = []
+            for comment in fresh:
+                key_t = (comment.stage, comment.path, comment.line, comment.severity,
+                         comment.body[:120])
+                if key_t in seen:
+                    continue
+                seen.add(key_t)
+                added.append({"id": make_id("rc"), "round": round_i, **comment.to_dict()})
+            if not added:
+                return 0
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('review_comments', "
+                "COALESCE(finalize_ctx->'review_comments','[]'::jsonb) || CAST(:e AS JSONB)), "
+                "updated_at=now() WHERE id=:id AND project_id=:p"),
+                {"e": _json_dumps(added), "id": run_id, "p": project_id})
+            emit_event(c, project_id, "code_task.review_comments_recorded", "boss",
+                       "code_task_run", run_id,
+                       {"added": len(added), "round": round_i,
+                        "anchored": sum(1 for a in added if a.get("path") and a.get("line"))})
+        return len(added)
+    except Exception as exc:  # noqa: BLE001 — a review must not die recording its own output
+        logger.warning("code_task.review_comments_not_recorded run=%s %s: %s",
+                       run_id, type(exc).__name__, exc)
+        return 0
+
+
+def _open_review_comments(engine, run_id: str, project_id: str) -> list:
+    """Every unresolved comment on this run — the panel's and the operator's, in one list.
+
+    Operator comments first: a person who pointed at a line has said something more specific
+    than a reviewer did, and a repair round is bounded.
+    """
+    out = _open_operator_comments(engine, run_id, project_id, include_agents=True)
+    out.sort(key=lambda c: (0 if c.author_kind == review_comments.AUTHOR_HUMAN else 1,
+                            -c.blocking_rank))
+    return out
+
+
+def _open_operator_comments(engine, run_id: str, project_id: str,
+                            *, include_agents: bool = False) -> list:
     """Line comments a person left on this run that nobody has dealt with yet.
 
     Read at the repair round rather than at run start: a comment made WHILE the agent was
@@ -743,9 +819,30 @@ def _open_operator_comments(engine, run_id: str, project_id: str) -> list:
     for entry in raw:
         if (entry or {}).get("status", "open") != "open":
             continue
+        if (not include_agents
+                and (entry or {}).get("author_kind") != review_comments.AUTHOR_HUMAN):
+            continue
         try:
             out.append(review_comments.ReviewComment.from_dict(entry))
         except Exception:  # noqa: BLE001 — one malformed row must not hide the rest
+            continue
+    return out
+
+
+def _all_review_comments(engine, run_id: str, project_id: str) -> list:
+    """Every comment on this run, whatever its status."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for entry in (((row or {}).get("finalize_ctx") or {}).get("review_comments") or []):
+        try:
+            out.append(review_comments.ReviewComment.from_dict(entry))
+        except Exception:  # noqa: BLE001
             continue
     return out
 
@@ -764,11 +861,15 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
     number = proposal.get("pull_request_number")
     if not number:
         return {"posted": False, "reason": "no pull request number"}
-    comments = []
-    for stage, key in (("review_code", "review_summary"),
-                       ("security_check", "security_summary"),
-                       ("consistency_check", "consistency_summary")):
-        comments += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
+    # The stored set, recorded when the review ran — including comments the implementer has
+    # since addressed, because a pull request that shows only what is still broken hides the
+    # conversation that got it there.
+    comments = _all_review_comments(engine, run_id, project_id)
+    if not comments:
+        for stage, key in (("review_code", "review_summary"),
+                           ("security_check", "security_summary"),
+                           ("consistency_check", "consistency_summary")):
+            comments += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
     if not comments:
         return {"posted": False, "reason": "no structured findings"}
     inline = review_comments.to_github_comments(comments)
@@ -3550,6 +3651,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 c, run_id=run_id, project_id=project_id, task_id=task_id, job_id=job_id,
                 evidence=evidence, gates=gates)
 
+        # Materialise the panel's findings as comments NOW — before any fix round runs — so the
+        # implementer, the pull request and list_review_comments all read one recorded set
+        # rather than three renderings of the same prose at three different moments. Placed
+        # after `evidence` is assembled, for the reason the comment inside it already gives.
+        _record_review_comments(engine, run_id, project_id, evidence)
+
         # ADVISORY first pass (web build, review=False): a failing quality check is SURFACED
         # (advisory_failing_gates → shown in the UI) but must NOT block. Record it and FALL THROUGH
         # to the PR-open path below so there's always a result to iterate on. (The earlier bug set
@@ -3621,21 +3728,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     "FAILING TESTS (the arbiter confirmed these tests are "
                                     "CORRECT — fix the implementation, do NOT touch the "
                                     "tests):\n" + (_tr.stdout or "")[:3000])
-                    # OPERATOR COMMENTS COME FIRST. A person who took the trouble to point at a
-                    # line has said something more specific than any reviewer, and a repair round
-                    # is bounded — what it spends its turns on is decided by this order.
-                    _human = _open_operator_comments(engine, run_id, project_id)
-                    if _human:
-                        finding_bits.insert(0, "OPERATOR REVIEW COMMENTS:\n"
-                                            + review_comments.render_for_implementer(_human, root))
-                    if "code_review_passed" in failing:
-                        # Anchored, with the source quoted at each line. The implementer used to
-                        # get the reviewer's prose and no location, so a repair round was spent
-                        # re-reading the diff to work out WHERE before it could change anything.
+                    # THE REVIEW COMMENTS, as recorded when the review ran. One stored set is
+                    # read here, posted on the pull request and shown by list_review_comments,
+                    # so the implementer and a human are looking at the same thing. Operator
+                    # comments sort first: a person who pointed at a line has said something
+                    # more specific than a reviewer did, and a repair round is bounded.
+                    _open = _open_review_comments(engine, run_id, project_id)
+                    if _open:
+                        finding_bits.insert(0, "REVIEW COMMENTS ON THIS CHANGE:\n"
+                                            + review_comments.render_for_implementer(_open, root))
+                    elif "code_review_passed" in failing:
+                        # Nothing was recorded — a reviewer that emitted no parseable finding
+                        # must still reach the implementer rather than be silenced.
                         finding_bits.append(_anchored_findings(
                             r3.get("summary") or "", root, stage="review_code",
                             header="ADVERSARIAL REVIEW FINDINGS:"))
-                    if "consistent" in failing:
+                    if "consistent" in failing and not _open:
                         finding_bits.append(_anchored_findings(
                             r6.get("summary") or "", root, stage="consistency_check",
                             header="CONSISTENCY FINDINGS:"))
@@ -3650,11 +3758,30 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                         stage="implement")
                         a_fix, m_fix = _route("implement")
+                        # A ROUND THAT CHANGES NOTHING IS NOT A ROUND OF PROGRESS.
+                        #
+                        # Measured on a live loop (deepseek implementing, Claude reviewing): one
+                        # fix round in two read the anchored comment, called two tools, edited
+                        # NO file and returned a confident summary. The convergence budget is
+                        # bounded, so a silent no-op spends a third of it and the next round
+                        # starts from the same code with the same findings. Nothing in the run
+                        # said so — the phase looked identical to one that worked.
+                        _before = {fc.path: fc.content for fc in sandbox.diff()}
                         rfix = a_fix.run_role(
                             _targeted_fix_prompt("\n\n".join(finding_bits), round_i), root,
                             model=m_fix, resume_session_id=impl_session_id)
                         impl_session_id = rfix.get("session_id") or impl_session_id
                         cost += int(rfix.get("cost_usd_micros") or 0)
+                        if {fc.path: fc.content for fc in sandbox.diff()} == _before:
+                            logger.warning(
+                                "code_task.fix_round_changed_nothing run=%s round=%s", run_id,
+                                round_i)
+                            with _transaction(engine) as c:
+                                emit_event(c, project_id, "code_task.fix_round_noop", "boss",
+                                           "code_task_run", run_id,
+                                           {"round": round_i, "of": inrun_max,
+                                            "failing_gates": failing,
+                                            "cost_usd_micros": int(rfix.get("cost_usd_micros") or 0)})
                         r2 = {**r2, "summary": (rfix.get("summary") or r2.get("summary", ""))}
                     # Re-verify against the oracle. `nothing_broke` is the same full-suite run
                     # (regressions_ok = panel["full"]), so one execution refreshes both gates.
@@ -3695,6 +3822,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             rr.get("summary", ""), verdict,
                             getattr(settings, "code_review_block_severity", "major"))
                         deferred_findings = _deferred
+                        # Materialise the panel's findings as comments NOW, before any fix
+                        # round runs, so the implementer and the pull request read the
+                        # same artifact instead of two renderings of the same prose.
+                        _record_review_comments(engine, run_id, project_id, evidence)
+                        _record_review_comments(engine, run_id, project_id, evidence)
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
                         with _transaction(engine) as c:
@@ -3805,6 +3937,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             rr.get("summary", ""), verdict,
                             getattr(settings, "code_review_block_severity", "major"))
                         deferred_findings = _deferred
+                        # Materialise the panel's findings as comments NOW, before any fix
+                        # round runs, so the implementer and the pull request read the
+                        # same artifact instead of two renderings of the same prose.
+                        _record_review_comments(engine, run_id, project_id, evidence)
                         gates["code_review_passed"] = _rev_pass
                         evidence["review_summary"] = (rr.get("summary") or "")[:4000]
                         evidence["adversarial_verdict"] = verdict

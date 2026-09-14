@@ -193,3 +193,147 @@ def test_a_comment_survives_a_round_trip_through_storage() -> None:
     original = rc.ReviewComment(severity="major", body="x", path="a.py", line=3,
                                 author="ceo", author_kind=rc.AUTHOR_HUMAN)
     assert rc.ReviewComment.from_dict({**original.to_dict(), "id": "rc_1"}) == original
+
+
+# --- what models actually emit -------------------------------------------------
+#
+# Every case below is real reviewer output, or the shape of it. The first one was captured
+# from deepseek-chat reviewing the brownfield bake-off fixture, and the parser as originally
+# written matched NONE of it: the expression required the line to start with `FINDING:`, and
+# the model wrote a numbered, bolded list. All findings were dropped, the gate fell back to the
+# binary verdict, and the verdict was SURVIVED — a graded review became a silent pass.
+#
+# A parser that only accepts the contract as written is a parser that rejects the reviewers it
+# exists to read.
+
+REAL_REVIEWER_OUTPUT = """### Findings:
+
+1. **FINDING: MINOR inventory/pricing/rules.py:8** — The `BULK_TIERS` are ordered from smallest
+to largest discount thresholds (10, 50, 100).
+
+2. **FINDING: MINOR inventory/pricing/rules.py:10** — The `applicable_rate` function does not
+handle negative or zero quantities explicitly.
+
+### Verdict:
+**VERDICT: SURVIVED** — The change satisfies the task and criteria.
+"""
+
+
+def test_the_output_a_real_model_produced_is_parsed() -> None:
+    found = rc.parse_findings(REAL_REVIEWER_OUTPUT)
+    assert len(found) == 2, "captured from a live reviewer; the parser must read it"
+    assert all(c.anchored for c in found)
+    assert [c.line for c in found] == [8, 10]
+    assert all(c.path == "inventory/pricing/rules.py" for c in found)
+    assert found[0].body.startswith("The")
+    assert "**" not in found[0].body and "FINDING" not in found[0].body
+
+
+@pytest.mark.parametrize(
+    "line,severity,path,lineno",
+    [
+        ("1. **FINDING: MINOR a/b.py:8** — text", "minor", "a/b.py", 8),
+        ("2) FINDING: MAJOR x.ts:3 — text", "major", "x.ts", 3),
+        ("- **FINDING: BLOCKER** `src/x.ts:12` — text", "blocker", "src/x.ts", 12),
+        ("  > FINDING: NIT lib/u.go:44 - text", "nit", "lib/u.go", 44),
+        ("* __FINDING: MAJOR app/pay.py:88-91__ – text", "major", "app/pay.py", 88),
+        ("FINDING : MINOR a.py:1 — spaced colon", "minor", "a.py", 1),
+    ],
+)
+def test_the_shapes_models_write_in(line: str, severity: str, path: str, lineno: int) -> None:
+    [c] = rc.parse_findings(line)
+    assert (c.severity, c.path, c.line) == (severity, path, lineno)
+    assert c.body == "text" or "spaced colon" in c.body
+
+
+def test_markdown_never_leaks_into_the_comment_body() -> None:
+    """The body is shown to the implementer and posted on the pull request. Emphasis markers
+    that arrived with the finding are formatting, not content."""
+    [c] = rc.parse_findings("1. **FINDING: MAJOR a.py:1** — `rate` is wrong**")
+    assert c.body == "`rate` is wrong"
+
+
+def test_a_bolded_verdict_line_is_not_read_as_a_finding() -> None:
+    assert rc.parse_findings("**VERDICT: SURVIVED** — all good") == []
+
+
+def test_a_fix_round_that_changes_nothing_is_reported() -> None:
+    """Measured on a live loop (deepseek implementing, Claude Opus reviewing): one fix round in
+    two read the anchored comment, called two tools, edited NO file, and returned a confident
+    summary. The convergence budget is bounded, so a silent no-op spends a third of it and the
+    next round starts from the same code with the same findings — and nothing in the run said
+    so, because the phase looked identical to one that worked."""
+    import inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = inspect.getsource(g)
+    assert "code_task.fix_round_noop" in src, "a no-op fix round must emit an event"
+    assert "fix_round_changed_nothing" in src, "and log it"
+    # Compared against the sandbox diff rather than the agent's self-report, because the
+    # self-report is exactly what was wrong in the measured case.
+    assert "_before = {fc.path: fc.content for fc in sandbox.diff()}" in src
+
+
+# --- the comments exist BEFORE the implementer is asked to fix anything --------
+#
+# They used to be produced twice from the same prose: once rendered into the repair prompt,
+# and once again — much later — when the pull request was opened. Two code paths, two moments,
+# one source text, and nothing keeping them in agreement. The review now records comments as it
+# runs, and the repair round, the pull request and `list_review_comments` all read that one set.
+
+def test_the_panel_records_its_comments_when_the_review_runs() -> None:
+    import inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = inspect.getsource(g)
+    # Recorded at every point a review gate resolves, not only at the end of the run.
+    assert src.count("_record_review_comments(engine, run_id, project_id, evidence)") >= 3
+    assert "code_task.review_comments_recorded" in src
+
+
+def test_the_repair_round_reads_the_recorded_set() -> None:
+    import inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = inspect.getsource(g)
+    assert "_open = _open_review_comments(engine, run_id, project_id)" in src
+    assert "REVIEW COMMENTS ON THIS CHANGE:" in src
+    # And an unparseable reviewer is still not silenced.
+    assert "must still reach the implementer rather than be silenced" in src
+
+
+def test_the_pull_request_posts_the_same_recorded_set() -> None:
+    import inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = inspect.getsource(g)
+    assert "_all_review_comments(engine, run_id, project_id)" in src
+
+
+def test_recording_is_idempotent_on_the_same_finding() -> None:
+    """A re-review of the same defect must not stack a second copy of a comment the
+    implementer has already been shown."""
+    import inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = inspect.getsource(g._record_review_comments)
+    assert "seen" in src and "continue" in src
+    assert "stage" in src and "path" in src and "severity" in src
+
+
+def test_operator_comments_sort_ahead_of_the_panels() -> None:
+    ordered = sorted(
+        [rc.ReviewComment(severity="blocker", body="panel", path="a.py", line=1),
+         rc.ReviewComment(severity="nit", body="person", path="b.py", line=2,
+                          author_kind=rc.AUTHOR_HUMAN)],
+        key=lambda c: (0 if c.author_kind == rc.AUTHOR_HUMAN else 1, -c.blocking_rank),
+    )
+    assert ordered[0].body == "person", (
+        "a person who pointed at a line outranks a reviewer, even a blocker: the repair round "
+        "is bounded and they asked for this specifically"
+    )
