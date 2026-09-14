@@ -30,8 +30,8 @@ Branch `ai/codex/p0-native-coding-agent`. Plane epic **BOSS-406**.
 | # | Item | Plane | Status | Evidence |
 |---|---|---|---|---|
 | P0-1 | Public artifact: repo flip, SECURITY.md, root community kit, BOSS-300 licensing | — | ⛔ | Blocked on a product + legal decision, not code. Out of scope for this branch. |
-| P0-2 | CI green: missing make target, Python 3.9→3.11, engine unlinted | BOSS-412 | ✅ | Target added; Python pinned; real-bug ruff gate over `engine/ apps/` green. Found 4 live `NameError`s. |
-| P0-2b | `make lint` passes | BOSS-418 | ◐ | **Python half green** (ruff.toml + 14 unused imports + 1 dead assertion). **TS half still red**: 24 pre-existing `tsc` errors in `apps/web/tests`, confirmed pre-existing by stashing the branch. No web files touched here. |
+| P0-2 | CI green: missing make target, Python 3.9→3.11, engine unlinted | BOSS-412 | ✅ | Target added; Python pinned; real-bug gate over `engine/ apps/`. Found 4 live `NameError`s. |
+| P0-2b | `make lint` passes | BOSS-418 | ✅ | **Green, both halves, rc=0.** Python: ruff.toml + 14 unused imports. TypeScript: all 24 `tsc` errors were test fixtures drifted from their types while vitest (no typecheck) kept passing. |
 | P0-3a | Engine-owned tool-calling coding agent | BOSS-407 | ✅ | `code_agent_tools.py`; 39 tests incl. batching + turn-cap latency guards |
 | P0-3b | Harness adapter registry | BOSS-409 | ✅ | `harness_registry.py`; 21 tests, full parity with the old `if/elif` |
 | P0-4a | `AGENTS.md` / `CLAUDE.md` ingestion | BOSS-408 | ✅ | `load_repo_guide()`; 5 tests |
@@ -45,6 +45,11 @@ Branch `ai/codex/p0-native-coding-agent`. Plane epic **BOSS-406**.
 | P0-I | Brownfield multi-file bake-off task | BOSS-415 | ✅ | 14-file fixture with decoys, staged deterministically; its own suite verified green; 11 tests |
 | — | OpenAPI route drift (197 routes) | BOSS-416 | ◻ | ~6,300-line generated diff; own PR |
 | — | Router self-correction paths were dead | BOSS-417 | ✅ | 6 tests |
+| — | Console feeds CORS-blocked — 21 areas silently empty | BOSS-420 | ✅ | Same-origin proxy; API key off the wire. 10 tests. |
+| — | Screen checker never covered `/` | BOSS-421 | ✅ | 9/9 green while the console was unusable. 4 tests. |
+| — | Console 5–10s TTFB on every area | BOSS-422 | ◻ | Root cause is the documented `shows()` trade |
+| — | 42 buttons with no accessible name | BOSS-423 | ◻ | Plus fonts not matching the console's own spec |
+| — | `github` area has no v2 destination | BOSS-424 | ◻ | Product decision; left failing on purpose |
 | — | Advisory mode ships a regression | BOSS-419 | ◻ | Found while writing P0-7 tests. Recorded as a **strict xfail**, not fixed: adding a blocking condition changes delivery behaviour. |
 
 **Regression budget.** The coding pipeline has had significant latency work
@@ -664,3 +669,91 @@ because a gap analysis that quietly revises itself is not evidence of anything.
 | "CI is green" (after fixing the missing make target) | Two independent breakages. The `Lint` step *above* the one I fixed was already failing, and its TypeScript half still is. |
 | P0-7: "the differentiators ship switched off" | `code_gate_never_block=True` is a **considered autonomy default** with dissent recorded, re-queued as a follow-up task and reversible — documented at length in `resolve_gate_failure_action`. The defect was `GOVERNED_CODING_PIPELINE.md` promising a gate that fails closed. The doc was fixed; the default was not touched. |
 | P0-5: "ship Docker-per-code-task as the **default**" | Shipped opt-in. A new isolation mechanism that silently becomes the default is exactly how delivery timelines break. It needs one live run on a real repository first. |
+
+---
+
+## 13. Console findings (2026-09-14)
+
+Reported symptom: *"Application error: a client-side exception has occurred"* on one deep link.
+It was not that link — **every** console URL behaved the same way, including `?area=overview`.
+
+### 13.1 The client could never reach the control plane
+
+Twenty-one client components fetch `${API_URL}/v1/…` through `lib/*` helpers. In a browser that
+is cross-origin, and **the API has no CORS middleware anywhere in the repository** — zero matches
+for `CORSMiddleware`, `allow_origins` or `Access-Control-Allow-Origin`. The preflight says it
+plainly:
+
+```
+OPTIONS /v1/factory/flow  →  401, no access-control-allow-origin
+```
+
+Reproduced on every area checked — overview, delivery_workflows, code_tasks, decisions,
+discovery, agent:
+
+```
+Access to fetch at 'https://boss-api.../v1/factory/flow?project_id=boss-dogfood'
+from origin 'https://boss...' has been blocked by CORS policy
+```
+
+**Why nobody found it:** the helpers catch their own errors and return an empty feed. Those areas
+render *blank*, not broken — which reads as "no data yet". A failure that looks like an absence
+of data is the most expensive kind, because it never prompts anyone to look.
+
+`app/api/preview-logs/route.ts` had already diagnosed exactly this, for one endpoint, in as many
+words: *"the browser cannot reach the API at all in this deployment"*. There were **27**
+hand-written route handlers solving it one endpoint at a time. `app/v1/[...path]` is the general
+case, so a new client feed now needs no new handler.
+
+It also takes the key off the wire: `API_KEY` fell back to `NEXT_PUBLIC_BOSS_API_KEY`, which Next
+inlines into the bundle at **build** time — every visitor was handed a credential that can write
+to the control plane. The key is attached on the server now, and the browser sends none.
+
+### 13.2 The screen checker was green while the console was unusable
+
+`V2_SCREENS` listed only `/v2/*`. Run as shipped against the broken deployment:
+
+```
+9 screens checked · broken: 0 · suspect: 0 · unrefuted: 9
+```
+
+Pointed at `/` — the page a bookmark, a share link and every "View in …" button actually land on:
+
+```
+BROKEN  /
+        42 button(s) with no accessible name — unusable and undescribable
+        9784ms to first byte, budget 3000ms
+```
+
+This is the same failure shape as BOSS-417: a check that passes for a reason unrelated to whether
+the thing works. `/` is in the default sweep now, and a test stops any *other* screen opting out
+of its identity assertion.
+
+### 13.3 What is still wrong, and why I did not change it
+
+| Finding | Plane | Why untouched |
+|---|---|---|
+| 5–10s TTFB on every area | BOSS-422 | Root cause is `page.tsx:554` `shows = () => true`, a **deliberate** revert (`877e13c3`) so a rail click does no server work. The comment records the operator complaint that drove it. Hydrating the ~8.7 MB tree froze a Chrome renderer for >45s in testing — the likely mechanism behind the intermittent client-side exception. Changing it is a product call. |
+| 42 nameless buttons; fonts not matching the design spec | BOSS-423 | Neither is a crash; both are real. |
+| `github` area has no v2 destination | BOSS-424 | `console_v2_parity.yaml` exists so a fold from 31 areas to 9 cannot be mistaken for a deletion. Inventing an entry is the thing it guards against. Left failing. |
+
+**A middle option for BOSS-422 worth considering:** keep every area in the DOM so a rail click
+still costs nothing, but stop shipping every area's *data* in the first payload. The ~950 KB
+Discovery brief and 431 KB Shepherd feed are what make the tree expensive to hydrate — not the
+markup.
+
+### 13.4 Test pass, final
+
+| Suite | Result |
+|---|---|
+| Engine | 3,792 passed · 1 xfailed (BOSS-419) · 1 pre-existing failure (BOSS-424) |
+| Web (`vitest`) | **2,103 passed · 0 failed** · 1 skipped |
+| `make lint` | **rc=0** — green both halves for the first time |
+| `ruff` real-bug gate (`engine/ apps/`) | green |
+| MCP server (stdio + HTTP) | initialize, tools/list, tools/call, `-32601` on unknown method; 54 read tools with no `DATABASE_URL`, write tools correctly hidden; Mission Control serves |
+| Agent toolset live | 12/12 |
+| Container substrate live | 9/9 — egress blocked, non-root, host FS invisible, nice=19, 68ms/cmd |
+
+One correction from this pass: I first flagged MCP returning a *result* for an unknown tool as a
+bug. It is not — MCP reports tool errors as `result` + `isError`, and reserves JSON-RPC errors for
+protocol failures, which the server does correctly. My assertion was wrong, not the server.
