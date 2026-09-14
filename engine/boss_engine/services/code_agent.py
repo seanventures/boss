@@ -296,6 +296,44 @@ def _as_text(v) -> str:
     return "" if v is None else str(v)
 
 
+#: Files a repository uses to tell an agent how to work in it, most-specific first.
+#: AGENTS.md is the cross-tool convention (Factory, Codex, Cursor); CLAUDE.md is read for
+#: compatibility so a repo already set up for Claude Code needs no second file.
+REPO_GUIDE_FILENAMES = ("AGENTS.md", "agents.md", "Agents.md", "CLAUDE.md", "Claude.md")
+
+
+def load_repo_guide(cwd, *, max_chars: int = 32_000) -> Optional[str]:
+    """Read the target repository's agent instructions from its working tree.
+
+    `RepoContext.repo_guide` was declared and injected into the prompt for months but
+    never populated - the prompt branch could not fire. Reading it from the checked-out
+    tree (rather than at RepoContext construction, which happens before the clone) makes
+    it correct for the branch actually being worked on.
+
+    Returns None when the repo has no such file; that is the common case, not an error.
+    """
+    if cwd is None:
+        return None
+    root = Path(cwd)
+    for name in REPO_GUIDE_FILENAMES:
+        f = root / name
+        try:
+            if not f.is_file():
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        # One file is the contract. Sending both AGENTS.md and CLAUDE.md would usually
+        # state the same rules twice and burn context doing it.
+        out = "--- " + name + " ---\n" + text
+        if len(out) > max_chars:
+            out = out[:max_chars] + "\n...[truncated: repo guide exceeds the configured cap]"
+        return out
+    return None
+
+
 @dataclass
 class CodeTaskSpec:
     task_id: str
@@ -547,7 +585,14 @@ class ClaudeCodeAgent:
                       cwd: Optional[Path] = None) -> str:
         criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria) or "- (none specified)"
         tests = "\n".join(f"- {c}" for c in spec.test_commands) or "- (none specified)"
-        guide = f"\n\nREPO GUIDE:\n{repo.repo_guide}\n" if repo.repo_guide else ""
+        # BOSS-408: an explicitly supplied guide wins; otherwise read it from the
+        # working tree so the field is populated instead of permanently None.
+        guide_text = repo.repo_guide or load_repo_guide(
+            cwd, max_chars=int(getattr(self.settings, "repo_guide_max_chars", 32_000)))
+        guide = (
+            "\n\nREPO GUIDE (the repository's own instructions - follow them):\n"
+            + guide_text + "\n"
+        ) if guide_text else ""
         # Hand the agent a relevance-ranked map of the repo instead of making it discover the
         # codebase with Read/ls/cat on every run. Bounded (a focused pack, not the whole tree)
         # so it orients the agent rather than flooding the context it re-sends each turn.
@@ -1025,6 +1070,31 @@ DIFF_REVIEW_SYSTEM_PROMPT = (
 )
 
 
+class _ToolsUnsupported(Exception):
+    """The endpoint cannot do function calling; use the legacy single-shot path."""
+
+
+_TOOLS_UNSUPPORTED_MARKERS = ("tools", "tool_calls", "function calling", "function_call")
+_TOOLS_UNSUPPORTED_SHAPES = (
+    "400", "invalid", "unsupported", "not support", "unrecognized", "unknown parameter",
+)
+#: A transient failure must NEVER be read as a capability gap - a rate limit that
+#: permanently downgraded the lane would be a silent quality regression, which is exactly
+#: the failure mode BOSS refuses everywhere else.
+_TRANSIENT_MARKERS = (
+    "rate limit", "429", "timeout", "timed out", "connection", "502", "503", "504",
+    "overloaded", "temporarily",
+)
+
+
+def _looks_like_tools_unsupported(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if any(w in text for w in _TRANSIENT_MARKERS):
+        return False
+    return (any(s in text for s in _TOOLS_UNSUPPORTED_SHAPES)
+            and any(m in text for m in _TOOLS_UNSUPPORTED_MARKERS))
+
+
 class NativeCodeAgent:
     """Model-agnostic code agent on the raw chat API (OpenAI or Azure, via OpenAIAdapter).
 
@@ -1144,10 +1214,170 @@ class NativeCodeAgent:
             written.append(path)
         return written
 
+    # --- tool-calling loop (BOSS-407) ------------------------------------
+    _TOOL_SYS_EDIT = (
+        "You are a senior software engineer working in a checked-out git repository.\n"
+        "Use your tools to find the relevant code, read it, and make the smallest correct "
+        "change. Prefer edit_file over write_file for files that already exist. Run the "
+        "test/build commands with bash and iterate until they pass.\n"
+        "Do NOT create branches, commit, or push - BOSS handles git, the PR and the gate.\n"
+        "When you are done, reply with a short summary of WHAT you changed and WHY, and "
+        "make no further tool calls."
+    )
+    _TOOL_SYS_REVIEW = (
+        "You are an expert reviewer working in a checked-out git repository.\n"
+        "Use your read-only tools to investigate. You cannot change files, and you must "
+        "not ask to - report what you find.\n"
+        "When you are done, reply with your findings, including any verdict line the task "
+        "asks for, and make no further tool calls."
+    )
+
+    def _tools_enabled(self) -> bool:
+        return bool(getattr(self.settings, "native_agent_tools_enabled", True))
+
+    def _max_turns(self) -> int:
+        return max(1, int(getattr(self.settings, "native_agent_max_turns", 40) or 40))
+
+    def _run_tool_loop(
+        self, prompt: str, cwd: Path, *, read_only: bool, model: Optional[str],
+    ) -> dict:
+        """Drive a real multi-turn tool-calling conversation against the sandbox.
+
+        One `run_role` call is one AGENT SESSION, not one completion - that is the whole
+        point of this method. The governed pipeline calls `run_role` once per step, so
+        before this existed the native lane got exactly ONE model turn per step while the
+        claude_code lane got up to 90.
+        """
+        from .code_agent_tools import SandboxToolset, tool_schemas
+        from .openai_adapter import estimate_cost_usd_micros
+
+        toolset = SandboxToolset(
+            cwd,
+            read_only=read_only,
+            command_runner=getattr(self, "command_runner", None),
+            settings=self.settings,
+        )
+        schemas = tool_schemas(read_only)
+        guide = load_repo_guide(
+            cwd, max_chars=int(getattr(self.settings, "repo_guide_max_chars", 32_000)))
+        system = (self._TOOL_SYS_REVIEW if read_only else self._TOOL_SYS_EDIT) + _PARALLEL_TOOLS_RULE
+        if guide:
+            system += "\n\nREPO GUIDE (the repository's own instructions - follow them):\n" + guide
+        messages: list[dict] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": (
+                f"{prompt}\n\n{self._repo_context(cwd, task=prompt, model=model)}")},
+        ]
+
+        total_cost = 0
+        usage_last: dict = {}
+        turns = 0
+        summary = ""
+        tool_calls_made = 0
+        max_turns = self._max_turns()
+        capped = True
+
+        for _ in range(max_turns):
+            turns += 1
+            started = time.monotonic()
+            try:
+                msg, usage = self._llm.create_chat_completion(
+                    messages,
+                    tools=schemas,
+                    model_override=model or None,
+                    redact=getattr(self, "redact", False),
+                )
+            except Exception as exc:
+                record_llm_call(engine_name=self.engine, usage={"model": model or ""},
+                                latency_ms=int((time.monotonic() - started) * 1000),
+                                ok=False, error=str(exc))
+                # An endpoint without function calling must degrade VISIBLY and only on the
+                # FIRST turn. A half-toolled conversation is worse than a clean single-shot
+                # one, and a silent downgrade is the failure mode BOSS refuses elsewhere.
+                if turns == 1 and _looks_like_tools_unsupported(exc):
+                    _log.warning(
+                        "native agent: endpoint rejected tool calling (%s) - falling back to "
+                        "the legacy single-shot path for this step. Set "
+                        "BOSS_NATIVE_AGENT_TOOLS_ENABLED=false to make that the default.",
+                        type(exc).__name__)
+                    raise _ToolsUnsupported() from exc
+                raise
+            cost = estimate_cost_usd_micros(usage)
+            total_cost += int(cost or 0)
+            usage_last = usage or usage_last
+            record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost,
+                            latency_ms=int((time.monotonic() - started) * 1000), turns=1)
+
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                summary = _as_text(msg.get("content")).strip() or summary
+                capped = False
+                break
+
+            messages.append(msg.get("raw") or {
+                "role": "assistant",
+                "content": msg.get("content"),
+                "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"], "arguments": c["arguments"]}}
+                    for c in calls
+                ],
+            })
+            for call in calls:
+                tool_calls_made += 1
+                try:
+                    args = json.loads(call.get("arguments") or "{}")
+                    if not isinstance(args, dict):
+                        args = {}
+                except Exception:
+                    args = {}
+                outcome = toolset.call(call.get("name") or "", args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": outcome.text,
+                })
+
+        if capped:
+            # The turn cap is a real outcome, not a crash: BOSS re-runs the tests itself
+            # and the gate decides. Say so in the summary so the evidence trail shows WHY
+            # the step stopped where it did.
+            summary = (summary + " ") if summary else ""
+            summary += (f"[boss] stopped at the {max_turns}-turn cap for the native lane; "
+                        "the work done so far is in the diff.")
+            _log.warning("native agent hit the %s-turn cap (read_only=%s)", max_turns, read_only)
+
+        if not summary:
+            summary = f"(no summary; {tool_calls_made} tool call(s) made)"
+        return {
+            "summary": summary.strip(),
+            "usage": usage_last,
+            "cost_usd_micros": total_cost,
+            "turns": turns,
+            "model": usage_last.get("model") or model,
+            "tool_calls": tool_calls_made,
+            "files_touched": sorted(set(toolset.written_paths)),
+        }
+
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store
     ) -> dict:
+        if self._tools_enabled():
+            try:
+                return self._run_tool_loop(prompt, cwd, read_only=read_only, model=model)
+            except _ToolsUnsupported:
+                pass  # fall through to the legacy path; already logged at WARNING
+        return self._run_single_shot(prompt, cwd, read_only=read_only, model=model)
+
+    def _run_single_shot(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+    ) -> dict:
+        """Legacy path: one completion, whole-file JSON writes, no tools.
+
+        Kept for endpoints without function calling. It is a floor, not the default -
+        see `_run_tool_loop` for why.
+        """
         from .openai_adapter import estimate_cost_usd_micros
 
         system = self._REVIEW_SYS if read_only else self._EDIT_SYS
@@ -1185,6 +1415,8 @@ class NativeCodeAgent:
     ) -> CodeAgentResult:
         if sandbox.path is None:
             raise RuntimeError("Sandbox must be provisioned before running the agent.")
+        # BOSS-407: the tool loop's `bash` runs through the sandbox's own runner.
+        self.command_runner = lambda cmd, timeout=None: sandbox.run(cmd, timeout=timeout)
         criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria) or "- (none)"
         tline = "\n".join(f"- {c}" for c in spec.test_commands) or "- (none)"
         base = (f"TASK: {spec.title}\n\n{spec.instructions}\n\nACCEPTANCE CRITERIA:\n{criteria}\n\n"

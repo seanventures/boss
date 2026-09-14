@@ -119,6 +119,43 @@ def _looks_like_shell(command: str) -> bool:
 _DRAIN_SECONDS = 10
 
 
+def looks_like_shell(command: str) -> bool:
+    """Public alias — the engine-native agent's tool layer applies the same rule."""
+    return _looks_like_shell(command)
+
+
+def assert_allowed_executable(executable: str, settings) -> None:
+    """Validate one executable name against the sandbox allowlist.
+
+    Module-level so the coding agent's `bash` tool and `EphemeralSandbox.run`
+    share ONE allowlist. A second copy of this rule is a second place for it to
+    drift, and the drift would not be visible until something ran that should
+    not have.
+    """
+    candidate = executable[2:] if executable.startswith("./") else executable
+    if "/" in candidate or "\\" in candidate or candidate.startswith(".."):
+        raise SandboxError(
+            "Sandbox commands must use allowlisted executable names or repo-local "
+            "wrappers (./mvnw, ./gradlew), not arbitrary paths."
+        )
+    allowed = {
+        item.strip()
+        for item in settings.sandbox_validation_allowed_commands.split(",")
+        if item.strip()
+    }
+    if candidate not in allowed:
+        if candidate in _SHELL_BUILTINS or _looks_like_shell(executable):
+            raise SandboxError(
+                f"{executable!r} is shell syntax, and sandbox commands run WITHOUT a "
+                "shell — the first word is executed directly, so operators like "
+                "[ ] && || | ; > cannot work. Give one plain command "
+                "(e.g. 'npm run verify') and put any conditional logic inside a script "
+                "the repo already has.")
+        raise SandboxError(
+            f"Executable is not allowlisted: {executable}. Allowed: "
+            f"{', '.join(sorted(allowed)) or '(none configured)'}.")
+
+
 def _kill_process_group(proc) -> None:
     """Kill the command AND anything it started.
 
@@ -566,39 +603,7 @@ class EphemeralSandbox:
         return completed.stdout if raw else completed.stdout
 
     def _assert_allowed_executable(self, executable: str) -> None:
-        # Repo-local build wrappers are the norm for Java/Gradle/Maven projects
-        # (./mvnw, ./gradlew). Allow a single leading "./" and validate the
-        # basename against the allowlist; still reject absolute paths, parent
-        # traversal, and nested paths.
-        candidate = executable[2:] if executable.startswith("./") else executable
-        if "/" in candidate or "\\" in candidate or candidate.startswith(".."):
-            raise SandboxError(
-                "Sandbox commands must use allowlisted executable names or repo-local "
-                "wrappers (./mvnw, ./gradlew), not arbitrary paths."
-            )
-        allowed = {
-            item.strip()
-            for item in self.settings.sandbox_validation_allowed_commands.split(",")
-            if item.strip()
-        }
-        if candidate not in allowed:
-            # SAY WHAT IS ACTUALLY WRONG.
-            #
-            # A build died with `Executable is not allowlisted: [`, which tells an operator
-            # nothing. `[` is the shell's `test` builtin: the command was written as shell
-            # ("[ -d node_modules ] && npm ci"), and sandbox.run does shlex.split +
-            # subprocess.run WITHOUT a shell, so the first WORD became the executable. The
-            # allowlist was not the problem and neither was `[`.
-            if candidate in _SHELL_BUILTINS or _looks_like_shell(executable):
-                raise SandboxError(
-                    f"{executable!r} is shell syntax, and sandbox commands run WITHOUT a "
-                    "shell — the first word is executed directly, so operators like "
-                    "[ ] && || | ; > cannot work. Give one plain command "
-                    "(e.g. 'npm run verify') and put any conditional logic inside a script "
-                    "the repo already has.")
-            raise SandboxError(
-                f"Executable is not allowlisted: {executable}. Allowed: "
-                f"{', '.join(sorted(allowed)) or '(none configured)'}.")
+        assert_allowed_executable(executable, self.settings)
 
     def _truncate(self, output: str | bytes) -> str:
         if isinstance(output, bytes):

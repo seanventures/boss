@@ -53,7 +53,12 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:  # imported lazily at runtime (see _observe) to keep the
+    # playwright-dependent module off the import path for callers that never
+    # drive a browser. The annotation still needs the name to resolve.
+    from .console_screen_check import ScreenObservation
 
 from .console_test_agent import Baseline, Control, Request
 

@@ -37,7 +37,8 @@ jobs:
           version: 9.15.0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          # Must match Makefile:29 (asserts >= 3.11) and engine/pyproject.toml.
+          python-version: "3.11"
       - name: Install node dependencies
         run: pnpm install
       - name: Install python dependencies
@@ -47,7 +48,20 @@ jobs:
           .venv/bin/pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
       - name: Lint
         run: make lint
-      - name: OpenAPI route parity
-        run: make openapi-validate
+      - name: Engine lint (real-bug subset)
+        # `make lint` runs ruff over apps/api and apps/worker only, leaving the 195k-LOC
+        # engine/ tree unchecked. This subset is undefined names, broken f-strings and
+        # syntax errors — latent NameErrors, not style. It found three live ones
+        # (BOSS-412): mutation_gate could not run a single mutant, sandboxed_command
+        # skills raised on every run, two router self-correction paths were dead, and
+        # POST /v1/orgs raised NameError so new-org onboarding 500'd.
+        run: .venv/bin/python -m ruff check engine/ apps/ --select E9,F63,F7,F82
+
+      # OpenAPI route parity is NOT a gate yet: 197 implemented routes are absent from
+      # api/openapi.yaml (BOSS-416). `make openapi-validate` runs the check locally and
+      # scripts/sync_openapi_from_routes.py generates the missing operations — a ~6,300
+      # line diff that needs its own review, not a silent auto-commit in this workflow.
+      # The step this replaces called a Makefile target that never existed, so every push
+      # and PR to main failed here.
       - name: Test
         run: make test

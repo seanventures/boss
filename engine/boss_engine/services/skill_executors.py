@@ -595,6 +595,7 @@ def execute_sandboxed_command(
             f"{skill_key} needs {', '.join(missing)}.")
 
     command = build_sandbox_command(str(config.get("command") or ""), inputs)
+    from .core import make_id
     from .sandbox_provider import make_sandbox_provider
 
     sandbox = make_sandbox_provider(context.settings).acquire(

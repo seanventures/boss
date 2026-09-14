@@ -866,6 +866,27 @@ class Settings(BaseSettings):
     # How many relevance-ranked files are pre-packed into the coding prompt. The agent
     # otherwise rediscovers the repo every stage (~27 exploration tool-calls vs 16 edits,
     # measured). 0 disables the pack and restores pure self-exploration.
+    # --- engine-native coding agent (P0-A / BOSS-407) -------------------
+    # The native lane used to be ONE completion returning whole-file rewrites. That is
+    # fine for a greenfield single-file task and wrong for a repository: the model could
+    # not read a file it was not handed, could not search, and rewrote files it had seen
+    # only part of. With tools it explores like the claude_code lane does. Set to false
+    # to fall back to the legacy single-shot JSON path (e.g. an endpoint with no
+    # function-calling support) — BOSS also falls back automatically and says so.
+    native_agent_tools_enabled: bool = Field(
+        default=True, alias="BOSS_NATIVE_AGENT_TOOLS_ENABLED"
+    )
+    # Turn cap for the native lane. Deliberately below the claude_code cap of 90: a cheap
+    # model that has not converged in 40 turns is looping, and the VAG economics depend on
+    # the cheap lane staying cheap. Each turn is one metered model call.
+    native_agent_max_turns: int = Field(
+        default=40, alias="BOSS_NATIVE_AGENT_MAX_TURNS"
+    )
+    # Cap on AGENTS.md / CLAUDE.md ingested from the TARGET repo (BOSS-408). Factory caps
+    # the equivalent at 80k chars; 32k keeps a small-context local model usable.
+    repo_guide_max_chars: int = Field(
+        default=32_000, alias="BOSS_REPO_GUIDE_MAX_CHARS"
+    )
     code_agent_context_files: int = Field(
         default=14, alias="BOSS_CODE_AGENT_CONTEXT_FILES")
     # Hard wall-clock deadline for the whole review panel AND for a single read-only review

@@ -1538,6 +1538,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if redact_external:
                 a.redact = True
             agents[engine_name] = a
+        # BOSS-407: give the native lane's `bash` tool the SAME runner BOSS uses for
+        # verification, so an agent-run command gets the sandbox's tool caches, the
+        # repo-local node_modules/.bin on PATH and the process-group kill — not a second,
+        # subtly different execution path. Attached per call because the sandbox is
+        # provisioned after this closure is defined; it is idempotent.
+        if sandbox is not None and callable(getattr(sandbox, "run", None)):
+            a.command_runner = (
+                lambda cmd, timeout=None, _sb=sandbox: _sb.run(cmd, timeout=timeout)
+            )
         return a
 
     # BOSS-280: auto-lite mode enforced — at orange/red budget state, class-routed BUILD

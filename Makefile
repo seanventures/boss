@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard go-test test-go test-go-dispatcher test-v1-lock
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-validate openapi-live-qa-parity metatron onboard go-test test-go test-go-dispatcher test-v1-lock
 
 install: install-node install-python
 
@@ -333,6 +333,9 @@ endif
 
 public-flip-check:
 	$(PYTHON_BOOTSTRAP) scripts/check_public_flip.py
+
+openapi-validate: install-python
+	$(PYTHON) scripts/validate_openapi_route_parity.py
 
 openapi-live-qa-parity: install-python
 	PYTHONPATH=.:engine $(PYTHON) scripts/validate_openapi_route_parity.py \

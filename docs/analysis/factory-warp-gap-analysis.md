@@ -1,6 +1,10 @@
 # BOSS vs Factory.ai vs Warp — P0 gap analysis for the OSS MVP
 
-**Date:** 2026-09-13 · **Status:** for review, nothing implemented
+**Date:** 2026-09-13 · **Revised:** 2026-09-14 (revalidated; Phase 0 implemented — see §10)
+**Status:** P0-2, P0-3a and P0-4a implemented on branch `ai/codex/p0-native-coding-agent`; the rest planned
+**Scope decision (2026-09-14):** the v1 execution substrate is a **local container**. Firecracker/microVM
+is out of scope for the OSS MVP and is no longer treated as a gap — only as a claim that must stay frozen.
+**Plane:** epic BOSS-406, children BOSS-407…BOSS-417
 **BOSS baseline:** this repository, `main` @ `00c18aa4` (`v0.14.0-643`), read from code — not from docs, which overstate maturity in several places noted below.
 **Competitor baseline:** `docs.factory.ai` (~45 pages, full sitemap crawl) and `docs.warp.dev` (~53 pages), fetched 2026-09-13. Source URLs inline.
 **Companion:** [`emergent-gap-analysis.md`](./emergent-gap-analysis.md) — same method, different competitor (Emergent, a consumer app factory). That analysis is still valid but aims at a different buyer; see §2.
@@ -202,6 +206,15 @@ The Makefile target is `openapi-live-qa-parity`. Step 3 of every push and PR bui
 
 **Gap — this is the single most important item in this document.**
 
+> **Correction (2026-09-14).** An earlier draft said quality "collapses" without the Claude CLI.
+> That was too strong and it obscured the real shape. BOSS's *orchestration* is genuinely
+> model-agnostic and is what the 46-run VAG study measured: BOSS re-runs the tests itself, the
+> tester is not the coder, and failed verification loops back to `implement`. None of that
+> depends on Anthropic, and DeepSeek-V3 as implementer scored 3/5 — equal to frontier-solo, at
+> −24% cost. What is *not* model-agnostic is the per-stage agent: the pipeline calls `run_role`
+> exclusively (never `NativeCodeAgent.run`, which is dead on the governed path), so one step was
+> **one completion** on the native lane against **up to 90 tool-using turns** on the Claude lane.
+
 `config.py` defaults `code_agent_engine` to `claude_code`. That lane shells out to the proprietary Claude Code CLI with a Max-plan OAuth token (`code_agent.py:526-677`). Two problems: it is a dependency an OSS user may not have, and `claude_cli_adapter.py:13-16` says in our own words that it is *"a prototype/dogfooding convenience, not a production inference path."*
 
 The fallback, `NativeCodeAgent`, is not an agent. It packs a lexically-ranked slice of the repo into a prompt and asks for `{"files":[{"path","content"}]}` — **whole-file rewrites** — then loops at most four times against test output (`code_agent.py:1039`, `:1135`, `:1197`). There is no read tool, no grep, no bash, no incremental edit, no exploration. On any repo larger than a toy it will rewrite files it has only partially seen.
@@ -209,6 +222,14 @@ The fallback, `NativeCodeAgent`, is not an agent. It packs a lexically-ranked sl
 There is also **no Anthropic API lane at all** — no `anthropic` dependency anywhere in the tree — and no Gemini lane. Lanes are: `claude_code` (CLI), `native`/`openai`, `azure`, `openrouter`, `groq`, `deepseek`, `ollama`, `vllm`.
 
 **What the competitors do.** Both made the same strategic call BOSS did — *be the control plane, rent the agent* — but they executed it properly. Warp makes the harness a **first-class configured field**: every factory agent declares `harness.type: oz | claude | codex`, and they recognise 15+ third-party CLI agents. Factory owns a real droid and exposes it everywhere identically.
+
+**Why the bake-off could not see it.** `evals/bakeoff/tasks.json` says it plainly: *"Deterministic,
+stdlib-only Python tasks so pass/fail measures the model+harness, not the environment."* All five
+tasks are **"Create `<newfile>.py` with a function…"** — slugify, token_bucket, csv_report, md_toc,
+interval_merge. Greenfield, single file, nothing to navigate. On that shape a whole-file JSON write
+is the *natural* output and having no grep/read tools costs exactly zero. The suite measures the one
+task shape where the defect is invisible. That is a coverage gap in the eval (BOSS-415), not an error
+in the study.
 
 **Why P0.** This is the (b) case in the P0 test. An evaluator with an OpenAI key and no Claude Max subscription gets output strictly worse than running `aider` for free.
 
@@ -244,7 +265,15 @@ We already know what this costs: `boss_prod_wipe_2026_09_02` — agent sandboxes
 
 **Why P0.** This is the (c) case. We are about to publish software whose core instruction is *"point this at your repository and let it run commands."* Container-level isolation is the floor, not a differentiator.
 
-**Shape of the fix.** Do not unfreeze Firecracker for v1 — the honesty gate is correct. Ship **Docker-per-code-task** as the default Community substrate: the `sandbox-host` `ContainerBackend` (`sandbox_agent.py:96-258`) already exists and is real code. Add an egress allowlist. Keep local subprocess as an opt-in fast path for trusted repos.
+**Shape of the fix (decided 2026-09-14).** **Firecracker/microVM is out of scope for the OSS MVP.**
+It is not a gap to close, it is a claim to keep frozen (`BOSS_MICROVM_CLAIMS_FROZEN` stays `true`) and
+a substrate to stop maintaining on the critical path. The v1 execution substrate is a **local
+container**: ship **Docker-per-code-task** as the Community default using the `sandbox-host`
+`ContainerBackend` (`sandbox_agent.py:96-258`), which already exists and is real code. Add an egress
+allowlist. Keep the local subprocess as an opt-in fast path for trusted repos only.
+
+This also simplifies P0-6: the permission model and the container boundary are then one story
+(what the agent may run, and where) rather than two.
 
 ---
 
@@ -406,3 +435,136 @@ Track B item 4 is the only one that cannot be compressed, and everything in Trac
 - **Specifically unverified:** Warp's max run duration, concurrency limits, per-model credit multipliers, and `credentialStrategy: EXECUTOR|CREATOR` semantics; Factory's audit-log retention, SIEM export, and whether the hierarchical user/org memory described in their engineering blog is a shipped feature (it does not appear in current reference docs). Warp's Terminal-Bench / SWE-bench figures are press-sourced, not from their docs. Both vendors' benchmark leaderboards are self-published.
 - **Warp Factories is Early Access and gated.** Its real-world maturity is unproven; the 800k-developer number is terminal users, not factory users. The window is genuinely open — but it is open for them too, and they are shipping weekly.
 - **Effort sizes in §4 are shape, not estimates.** Nothing here has been costed against the actual codebase.
+
+---
+
+## 10. Phase 0 — what shipped (2026-09-14)
+
+Branch `ai/codex/p0-native-coding-agent`. Plane epic **BOSS-406**.
+
+### 10.1 P0-A — the native lane is now an agent (BOSS-407)
+
+`NativeCodeAgent.run_role` was one chat completion returning whole-file JSON. It is now a real
+multi-turn tool-calling loop. **One `run_role` call is one agent session, not one completion** —
+which matters because the governed pipeline calls `run_role` once per step.
+
+New: [`engine/boss_engine/services/code_agent_tools.py`](../../engine/boss_engine/services/code_agent_tools.py)
+
+| Tool | Available in review steps? |
+|---|---|
+| `read_file` (line-numbered, windowed) | yes |
+| `list_dir`, `glob`, `grep` | yes |
+| `edit_file` (exact string replace) | **no** |
+| `write_file` | **no** |
+| `bash` | **no** |
+
+Design decisions worth reviewing:
+
+- **Confinement is the invariant.** Every path resolves and must land inside the sandbox root.
+  Absolute paths, `..`, `~` and escaping symlinks are refused with a message the model can act on.
+- **"The reviewer cannot edit" is now a property of the tool schema**, not a sentence in a prompt.
+  Read-only steps are never offered the write half, and the toolset refuses them a second time at
+  the call boundary.
+- **One allowlist.** `bash` shares `EphemeralSandbox`'s executable allowlist and no-shell rule —
+  `assert_allowed_executable` was lifted to module level in `sandbox.py` so there is exactly one
+  copy of that rule. In the pipeline, `bash` is routed through the sandbox's own runner so an
+  agent-run command gets the same tool caches, `node_modules/.bin` PATH and process-group kill
+  that verification commands get.
+- **A refused tool call is the next turn, not a dead end.** Errors come back as tool results.
+- **Degradation is visible and first-turn-only.** An endpoint without function calling falls back
+  to the legacy single-shot path with a `WARNING`; a rate limit, timeout or 5xx is explicitly *not*
+  read as a capability gap, so a transient failure can never silently and permanently downgrade the
+  lane. `BOSS_NATIVE_AGENT_TOOLS_ENABLED=false` makes the legacy path the default.
+- **Bounded.** `BOSS_NATIVE_AGENT_MAX_TURNS` defaults to 40 — deliberately below the Claude lane's
+  90, because a cheap model that has not converged in 40 turns is looping and the VAG economics
+  depend on the cheap lane staying cheap. Hitting the cap is recorded in the summary, not hidden.
+- Cost accounting is per turn via `record_llm_call`, so the `llm_calls` ledger and the
+  $/verified-outcome maths stay honest.
+
+### 10.2 P0-B — `AGENTS.md` is no longer dead code (BOSS-408)
+
+`RepoContext.repo_guide` was declared, injected into the prompt, and never populated. `load_repo_guide()`
+now reads `AGENTS.md` (or `CLAUDE.md`, for repos already set up for Claude Code) **from the checked-out
+working tree**, so it reflects the branch actually being worked on rather than a value that would have
+had to exist before the clone. An explicitly supplied `repo_guide` still wins. Capped by
+`BOSS_REPO_GUIDE_MAX_CHARS` (32k; Factory caps the equivalent at 80k). Both lanes use it.
+
+### 10.3 P0-F — two CI breakages, one fixed; a new gate found four live bugs (BOSS-412)
+
+**CI was broken in two independent places, not one.** I claimed "CI is green" before checking the
+step above the one I fixed; it is not, yet.
+
+- `make openapi-validate` now exists. Every push and PR to `main` had been failing at a step that
+  called a target that was never in the Makefile.
+- CI Python is `3.11`, matching `Makefile:29` and `engine/pyproject.toml`. It was pinned to `3.9`.
+- **New gate:** `ruff check engine/ --select E9,F63,F7,F82` — undefined names, broken f-strings,
+  syntax errors. `make lint` covers `apps/api` and `apps/worker` only, so 195k LOC had no check at
+  all. It found **three live `NameError`s in value position**:
+
+| Bug | Consequence |
+|---|---|
+| `mutation_gate.py` — `low_priority` never imported | The deterministic mutation engine could not run a **single mutant**. It was already unwired from the pipeline; it was also broken. |
+| `skill_executors.py` — `make_id` never imported | Every `sandboxed_command` skill run raised. |
+| `intent_router.py` ×2 — `self.agent` does not exist, `actor` not a parameter | Two router self-correction paths were dead. See §10.4. |
+| `apps/api/app/main.py:5077` — bare `project_id` in `onboard_org_endpoint` | **`POST /v1/orgs` raised `NameError`** — new-org onboarding returned 500. The first thing an OSS evaluator does. |
+
+The gate therefore runs over `engine/ apps/`, not just `engine/`.
+
+Two annotation-only findings (`specpack`, `console_driver`) were also fixed; neither could crash at
+runtime because both modules use `from __future__ import annotations`.
+
+**Not done (1): `make lint` still fails.** The `Lint` step *above* the one I fixed was already red
+with 39 pre-existing findings — 24 × E402, 14 × F401, 1 × F841, concentrated in
+`apps/api/tests/conftest.py` (22) and `apps/api/app/main.py` (10). The E402s are largely deliberate
+late imports in a 24,796-line module, so the fix is a per-file-ignore decision rather than a blind
+reorder. **CI is not green until these are cleared.** Tracked as **BOSS-418**.
+
+**Not done (2):** OpenAPI route parity is not yet a CI gate. 197 implemented routes are missing from
+`api/openapi.yaml`, in violation of the repo's own API-first rule. `sync_openapi_from_routes.py`
+generates them but produces a ~6,300-line diff against a 49k-line document — that needs its own PR.
+Tracked as **BOSS-416**.
+
+### 10.4 Found while fixing CI: two dead quality features (BOSS-417)
+
+`IntentRouter._answer` contains a **grounding re-ask** (a role answered without reading the project
+record → make it answer again from the record) and an **action-claim reconcile** (the reply claims a
+change no tool made → make it actually call the tool). Both called `self.agent.chat(...)`.
+`IntentRouter` has no `agent` attribute. Both sat inside `except Exception: … = None`.
+
+So both raised `AttributeError` on **every turn since they were written**, were swallowed, and the
+features simply never ran. The bare except is why that went unnoticed — which is the precise failure
+mode `AGENTS.md` forbids ("every failure must be visible").
+
+Fixed: the agent object is `self._answer_agent()` (already the convention at four other call sites in
+the same file), `actor` is threaded through `_answer` and its three call sites, and both failures now
+log at `WARNING`.
+
+### 10.5 Tests
+
+`engine/tests/test_the_native_lane_can_actually_explore_a_repo.py` (35) and
+`engine/tests/test_the_grounding_reask_actually_runs.py` (6) — 41 new tests, all passing.
+108 adjacent existing tests (sandbox, agent env, turn capture, timeouts, branch handling, router)
+re-run green.
+
+The two tests that matter most are named for the invariants they hold:
+`test_a_review_step_is_never_handed_a_way_to_write` and `test_a_path_outside_the_repo_is_refused`.
+
+> **A trap worth knowing.** `Settings` sets `extra="ignore"` and does not set `populate_by_name`,
+> so `Settings(native_agent_max_turns=3)` is **silently dropped** and you get the default. Tests must
+> construct by alias (`BOSS_NATIVE_AGENT_MAX_TURNS=3`). Two tests initially passed for the wrong
+> reason because of this.
+
+### 10.6 Still open from P0 — next in order
+
+| # | Item | Plane |
+|---|---|---|
+| P0-C | Harness adapter registry (`claude_code`/`codex`/`opencode`/`aider` declared, not a hardcoded `if/elif`) | BOSS-409 |
+| P0-D | Container-per-code-task as the default substrate + egress allowlist | BOSS-410 |
+| P0-E | Autonomy levels + allow/deny/blocklist at the agent boundary | BOSS-411 |
+| P0-G | Honest Community defaults (panel ≥ 2, gate blocks) | BOSS-413 |
+| P0-H | Streaming turns + headless `boss code … -o json` | BOSS-414 |
+| P0-I | Brownfield multi-file bake-off task to put a number on §10.1 | BOSS-415 |
+
+**Recommended next:** BOSS-415 before BOSS-409. The tool loop is built and tested, but its value on a
+real repository is currently an argument, not a measurement — and the bake-off harness that would
+settle it already exists.

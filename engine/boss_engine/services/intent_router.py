@@ -1445,7 +1445,7 @@ class IntentRouter:
             # must not swallow every message: a user has to be able to ask things).
             if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
                     latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
-                return self._answer(connection, project_id, messages, external_ref=external_ref,
+                return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
                                 thread_id=thread_id,
                                 role=role)
@@ -1515,7 +1515,7 @@ class IntentRouter:
         # from the tool-calling agent. The agent is the same one that answers every question in
         # this console today; if a model is configured at all, it is available.
         if self.settings.openai_api_key or self.settings.azure_openai_key:
-            return self._answer(connection, project_id, messages, external_ref=external_ref,
+            return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
                                 thread_id=thread_id,
                                 role=role)
@@ -1526,7 +1526,7 @@ class IntentRouter:
             # DISCUSS BY DEFAULT: an unclassified message is a question / discussion, NOT a build
             # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
             # every greeting, question, or test string). Work starts only on an explicit intent.
-            return self._answer(connection, project_id, messages, external_ref=external_ref,
+            return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
                                 thread_id=thread_id,
                                 role=role)
@@ -1594,7 +1594,11 @@ class IntentRouter:
         )
 
     def _answer(self, connection, project_id: str, messages: list,
-                *, external_ref: Optional[str] = None,
+                #: BOSS-417: the grounding re-ask below calls the answer agent as the
+                #: operator. `actor` was referenced here but never a parameter, so the
+                #: whole path raised and was swallowed. It is threaded through now.
+                *, actor: str = "user",
+                external_ref: Optional[str] = None,
                 role: Optional[str] = None,
                 #: "discuss" puts the agent's head in a different place — see
                 #: `_discussion_brief`. Anything else is the operating agent it has always been.
@@ -2100,7 +2104,7 @@ class IntentRouter:
                         c.get("tool") == "recall_role_experience" for c in tool_calls
                     ):
                         try:
-                            reread = _with_transient_retry(lambda: self.agent.chat(
+                            reread = _with_transient_retry(lambda: self._answer_agent().chat(
                                 project_id=project_id, actor=actor,
                                 message=(
                                     f"You answered as {role} without calling "
@@ -2114,7 +2118,13 @@ class IntentRouter:
                                 history=[{"role": "assistant", "content": reply}],
                                 system=system, allow_writes=False, max_steps=4,
                             ))
-                        except Exception:  # noqa: BLE001 — the first answer still stands
+                        except Exception as exc:  # noqa: BLE001 — the first answer still stands
+                            # Visible, not silent: this block referenced a `self.agent`
+                            # that never existed, so it failed on EVERY turn and the
+                            # grounding re-ask simply never happened. A bare `reread =
+                            # None` is why that went unnoticed for so long.
+                            _log.warning("grounding re-ask failed (%s): %s",
+                                         type(exc).__name__, exc)
                             reread = None
                         for step in (getattr(reread, "trace", None) or []):
                             tool_calls.append({"tool": step.get("tool"),
@@ -2325,7 +2335,7 @@ class IntentRouter:
                     if (reply and not actions and not _looking_only
                             and _ACTION_CLAIM.search(reply)):
                         try:
-                            again = _with_transient_retry(lambda: self.agent.chat(
+                            again = _with_transient_retry(lambda: self._answer_agent().chat(
                                 project_id=project_id, actor=actor,
                                 message=(
                                     "You just told the operator you had made a change, and no "
@@ -2337,7 +2347,11 @@ class IntentRouter:
                                 history=[{"role": "assistant", "content": reply}],
                                 system=system, allow_writes=True, max_steps=4,
                             ))
-                        except Exception:  # noqa: BLE001 — the first answer still stands
+                        except Exception as exc:  # noqa: BLE001 — the first answer still stands
+                            # Same dead `self.agent` reference as the grounding re-ask
+                            # above: this action-claim reconciler never ran either.
+                            _log.warning("action-claim reconcile failed (%s): %s",
+                                         type(exc).__name__, exc)
                             again = None
                         for step in (getattr(again, "trace", None) or []):
                             result = step.get("result") or {}

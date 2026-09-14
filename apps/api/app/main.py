@@ -5074,7 +5074,7 @@ def onboard_org_endpoint(payload: dict):
             ),
             # ONE welcome task per project, ever. A random key here meant re-running org
             # setup handed the operator another copy of the same onboarding card.
-            dedupe_key=stable_dedupe_key("welcome", project_id),
+            dedupe_key=stable_dedupe_key("welcome", result["project_id"]),
             priority="p3",
             risk_tier=0,
             data_boundary="internal",

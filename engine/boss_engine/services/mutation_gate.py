@@ -194,6 +194,9 @@ def _run_tests(workdir: str, test_command, timeout: int) -> bool:
     as a failing suite (which, for a mutant, means the mutant was killed — the outcome we want)."""
     import shlex
     import subprocess
+
+    from .scheduling import low_priority
+
     cmd = test_command if isinstance(test_command, list) else shlex.split(test_command)
     try:
         # Mutation testing re-runs the project's whole suite once per mutant, in the API's
