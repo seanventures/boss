@@ -188,6 +188,25 @@ def get_skill(connection: Connection, project_id: str, skill_key: str) -> Option
     return _row(row) if row else None
 
 
+def _shadows_a_builtin(connection: Connection, project_id: str, skill_key: str) -> bool:
+    """Would authoring this key hide a skill BOSS ships?
+
+    Asked of the entitlements catalogue rather than project_skills: a shipped skill needs no
+    row there to exist, which is the same mistake `_skill_exists` was first written with.
+    """
+    try:
+        from ..config import get_settings
+        from .entitlements import EntitlementBrokerService
+
+        catalogue = EntitlementBrokerService(get_settings()).list_skills(
+            project_id, connection=connection)
+        return any(str(item.get("id")) == skill_key for item in catalogue)
+    except Exception:  # noqa: BLE001
+        # A catalogue that cannot be read must not block authoring — the collision is rare and
+        # the refusal would be unexplainable.
+        return False
+
+
 def save_skill(
     connection: Connection,
     *,
@@ -214,6 +233,24 @@ def save_skill(
     behaviour = str(behaviour_kind or "").strip().lower()
     if behaviour not in BEHAVIOURS:
         raise SkillDefinitionError(f"behaviour_kind must be one of: {', '.join(BEHAVIOURS)}.")
+
+    # AN AUTHORED SKILL MAY NOT TAKE A BUILT-IN'S NAME.
+    #
+    # `get_skill` reads skill_definitions and is consulted first everywhere, so a project skill
+    # sharing a key with one BOSS ships makes the built-in UNREACHABLE — and silently. A real
+    # case: an authored `publish_youtube` (tier 3, untrusted, pointing at an MCP server that
+    # did not exist) shadowed the shipped one, so every workflow naming publish_youtube failed
+    # validation with "only a reviewed skill can be given that much reach" — about a skill that
+    # IS reviewed and ships with the product. It cost two debugging passes and looked, from the
+    # outside, like the agent being unable to create a workflow.
+    #
+    # Refused at authoring time, where the operator can pick another name, rather than
+    # discovered later as an unexplainable refusal.
+    if _shadows_a_builtin(connection, project_id, key):
+        raise SkillDefinitionError(
+            f"{key!r} is the name of a skill BOSS already ships. Pick another key — an "
+            "authored skill with a built-in's name hides the built-in everywhere, and nothing "
+            "downstream can tell which one it was supposed to run.")
     tier = int(risk_tier)
     if not 0 <= tier <= 3:
         raise SkillDefinitionError("risk_tier must be between 0 and 3.")

@@ -723,8 +723,20 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     "type": "array",
                     "description": "in order: [{id, capability, skill?, captain?, approval?}]. "
                                    "`approval` is 'manual' or 'auto' — a capability at or above "
-                                   "the risk floor is forced manual whatever you ask for.",
+                                   "the risk floor is forced manual whatever you ask for. You "
+                                   "do NOT wire inputs: a step's required input is connected "
+                                   "to the nearest earlier step that produces it.",
                     "items": {"type": "object"},
+                },
+                "inputs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "What the OPERATOR supplies when starting a run, e.g. "
+                                   "['media_artifact_id', 'title']. Needed only for inputs no "
+                                   "step produces — typically the first step's. Anything "
+                                   "neither produced upstream nor listed here is refused, "
+                                   "because a workflow that publishes and then dies on a "
+                                   "missing value is worse than one that will not publish.",
                 },
                 "project_id": {"type": "string"},
             },
@@ -996,15 +1008,44 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj({"project_id": {"type": "string"}}),
     )
     def list_skills(ctx, *, project_id, actor, args):
+        # EVERYTHING THIS PROJECT CAN RUN, not only what it wrote.
+        #
+        # This returned `skill_definitions` alone, so the agent's view of the world was the
+        # handful of skills an operator had authored — and every skill BOSS SHIPS was invisible
+        # to it. Asked to build a video workflow it reported "no such skill: video.bookend"
+        # about a skill sitting in the catalogue with an executor behind it, then designed
+        # around the gap. An agent that cannot see a capability cannot use it, and will
+        # confidently tell the operator it does not exist.
         skills = services_module("skill_definitions")
         pid = args.get("project_id") or project_id
+        keep = ("skill_key", "label", "summary", "behaviour_kind", "inputs",
+                "produces", "risk_tier", "trusted", "enabled", "requires_approval")
         with ctx.begin() as c:
-            return {"skills": [
-                {k: v for k, v in s.items()
-                 if k in ("skill_key", "label", "summary", "behaviour_kind", "inputs",
-                          "produces", "risk_tier", "trusted", "enabled", "requires_approval")}
+            authored = [
+                {k: v for k, v in s.items() if k in keep}
                 for s in skills.list_skills(c, pid)
-            ]}
+            ]
+            shipped: list[dict[str, Any]] = []
+            try:
+                from ..config import get_settings
+                from .._compat import services_module as _svc
+
+                broker = _svc("entitlements").EntitlementBrokerService(get_settings())
+                for item in broker.list_skills(pid, connection=c):
+                    shipped.append({
+                        "skill_key": item.get("id"),
+                        "label": item.get("id"),
+                        "summary": item.get("description"),
+                        "behaviour_kind": item.get("kind"),
+                        "risk_tier": item.get("risk_tier"),
+                        "enabled": item.get("enabled", True),
+                        "trusted": bool((item.get("provenance") or {}).get("trusted")),
+                        "ships_with_boss": True,
+                    })
+            except Exception:  # noqa: BLE001 — authored skills are still worth returning
+                pass
+        return {"skills": authored + shipped,
+                "authored": len(authored), "ships_with_boss": len(shipped)}
 
     @reg.tool(
         "start_workflow",
@@ -2561,6 +2602,10 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
         if raw.get("skill") or capability == "custom":
             entry["binding"] = {"custom_step": str(raw.get("skill") or "").strip().lower(),
                                 "inputs": raw.get("input") or {}}
+            # The binding names the step, not the capability — but the capability is where
+            # `required_inputs` and `produces` are declared, so the wiring pass needs it. Held
+            # under a leading underscore and stripped before the spec is published.
+            entry["_capability"] = capability
         else:
             entry["binding"] = {"capability": capability, "inputs": raw.get("input") or {}}
         if raw.get("captain"):
@@ -2574,7 +2619,62 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     # the agent wrote and the spec the builder draws are byte-comparable.
     for index, entry in enumerate(built[:-1]):
         entry["next"] = [built[index + 1]["id"]]
+
+    # AND THE DATA FLOW, FOR THE SAME REASON THE CHAIN IS.
+    #
+    # A step declares required inputs; `video_edit` needs `media_artifact_id`. Nothing wired
+    # them, so a described sequence published as "step 'bookend' needs 'media_artifact_id',
+    # which is not set" — and the model, told only that, had no way to know the answer was a
+    # reference to the step above rather than a value it should invent. It looped.
+    #
+    # Asking a model to emit {"from_step": "import", "field": "media_artifact_id"} is asking it
+    # to get data flow right in JSON, which is the same class of thing as getting `next` right,
+    # and it is exactly as mechanical: an input is satisfied by the NEAREST EARLIER STEP that
+    # produces a field of that name, and otherwise by the run's own input.
+    # What the OPERATOR supplies when they start this workflow. Declared, never guessed: see
+    # `_wire_inputs`.
+    declared = {str(x).strip() for x in (args.get("inputs") or []) if str(x).strip()}
+    _wire_inputs(built, declared)
+    for entry in built:
+        entry.pop("_capability", None)
     return {"entry_step": built[0]["id"], "steps": built}
+
+
+def _wire_inputs(built: list[dict[str, Any]], declared: set[str]) -> None:
+    """Point each step's unset required inputs at whatever upstream produces them."""
+    caps = services_module("workflow_capabilities")
+    palette = {x["key"]: x for x in caps.palette()}
+
+    produced_by: dict[str, str] = {}
+    for entry in built:
+        binding = entry.get("binding") or {}
+        # A custom step still names its capability, and that is where `produces` is declared —
+        # so this works for a skill-bound step exactly as for a standard one.
+        cap = palette.get(str(binding.get("capability") or entry.get("_capability") or ""))
+        inputs = dict(binding.get("inputs") or {})
+        for name in (cap or {}).get("required_inputs", ()) if cap else ():
+            if inputs.get(name) not in (None, ""):
+                continue
+            source = produced_by.get(name)
+            if source:
+                inputs[name] = {"from_step": source, "field": name}
+            elif name in declared:
+                # The operator supplies it when they start the workflow. The first step of a
+                # chain has no upstream by definition, so this is its only truthful wiring.
+                inputs[name] = {"from_input": name}
+            # OTHERWISE LEFT UNSET, DELIBERATELY.
+            #
+            # Wiring every unmatched input `from_input` would satisfy the validator and produce
+            # a workflow that publishes cleanly and dies at run time on a value nobody supplies
+            # — `run_id`, say, which is PRODUCED by a build step and is not something an
+            # operator types. A spec the validator accepts but the runtime reads differently is
+            # the worst outcome available here; refusing with "needs 'run_id', which is not
+            # set" names the real design error.
+        if inputs:
+            binding["inputs"] = inputs
+            entry["binding"] = binding
+        for field in ((cap or {}).get("produces", ()) if cap else ()):
+            produced_by[field] = str(entry["id"])
 
 
 def _ensure_steps_for_skills(connection, project_id: str, spec: dict, actor: str) -> list[str]:

@@ -1267,3 +1267,96 @@ def test_the_agent_is_told_to_act_once_confirmed_and_not_to_re_offer():
     # Sliced to one source line: the sentence is built by string concatenation, so any phrase
     # spanning a join is absent from the file even though it is present in the prompt.
     assert "runs past 120 " in src
+
+
+def test_a_described_sequence_gets_its_data_flow_wired():
+    """`next` was built for the model; the inputs were not, and that was the last loop.
+
+    A step declares required inputs — `video_edit` needs `media_artifact_id`. Nothing wired
+    them, so a perfectly good sequence published as "step 'bookend' needs 'media_artifact_id',
+    which is not set", and the model told only that had no way to know the answer was a
+    REFERENCE to the step above rather than a value to invent.
+
+    It is exactly as mechanical as the `next` chain: an input is satisfied by the nearest
+    earlier step producing a field of that name, and otherwise by the run's own input.
+    """
+    from boss_engine.tools.builtin import _spec_from_steps
+
+    spec = _spec_from_steps([
+        {"id": "import", "capability": "video_edit", "skill": "drive.import_video"},
+        {"id": "bookend", "capability": "video_edit", "skill": "video.bookend"},
+        {"id": "approve", "capability": "ux_review", "approval": "manual"},
+        {"id": "publish", "capability": "social_publish", "skill": "publish_youtube",
+         "approval": "manual"},
+    ], {"inputs": ["media_artifact_id", "title"]})
+    by_id = {s["id"]: s for s in spec["steps"]}
+
+    # The FIRST step has no upstream, so it reads from the run — the truthful wiring.
+    assert by_id["import"]["binding"]["inputs"]["media_artifact_id"] == {
+        "from_input": "media_artifact_id"}
+    # Every later one reads what the step above produced.
+    assert by_id["bookend"]["binding"]["inputs"]["media_artifact_id"] == {
+        "from_step": "import", "field": "media_artifact_id"}
+    # Including across a gate that produces nothing: `approve` is skipped as a source, so
+    # publish still reaches back to the last step that actually made a video.
+    assert by_id["publish"]["binding"]["inputs"]["media_artifact_id"] == {
+        "from_step": "bookend", "field": "media_artifact_id"}
+    # And the scratch field used to carry the capability through is not published.
+    assert all("_capability" not in s for s in spec["steps"])
+
+
+def test_publishing_takes_the_artifact_an_edit_produces():
+    """A name mismatch is a broken chain that validates.
+
+    `social_publish` required `media` while `video_edit` produces `media_artifact_id`, so the
+    publish step wired to the RUN's input instead of to the video that had just been edited —
+    a workflow that publishes the wrong file and passes every check.
+    """
+    from boss_engine.services.workflow_capabilities import CAPABILITIES
+
+    edit = CAPABILITIES["video_edit"]
+    publish = CAPABILITIES["social_publish"]
+    assert "media_artifact_id" in edit.produces
+    assert "media_artifact_id" in publish.required_inputs
+    assert "media" not in publish.required_inputs
+
+
+def test_the_agent_can_see_the_skills_boss_ships():
+    """An agent that cannot see a capability will tell the operator it does not exist.
+
+    `list_skills` returned skill_definitions alone — what an operator had AUTHORED — so every
+    shipped skill was invisible. Asked to build a video workflow it reported "no such skill:
+    video.bookend" about a skill sitting in the catalogue with an executor behind it.
+    """
+    src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
+    block = src[src.index("def list_skills(ctx"):]
+    block = block[:block.index("@reg.tool")]
+    assert "EntitlementBrokerService" in block
+    assert '"ships_with_boss": True' in block
+    # Authored skills are still returned if the catalogue read fails — a partial answer beats
+    # none, and the authored ones are the ones an operator is most likely asking about.
+    assert "except Exception:" in block
+
+
+def test_an_input_no_step_produces_must_be_declared_or_the_draft_is_refused():
+    """Wiring every unmatched input `from_input` would be the worst outcome available.
+
+    It satisfies the validator and produces a workflow that publishes cleanly and then dies at
+    run time on a value nobody supplies — `run_id`, say, which is PRODUCED by a build step and
+    is not something an operator types. Refusing names the real design error instead.
+    """
+    from boss_engine.services.workflows import validate_workflow_spec
+    from boss_engine.tools.builtin import _spec_from_steps
+
+    # `preview` needs run_id, nothing produces it, and it was not declared.
+    undeclared = _spec_from_steps([{"capability": "preview"}], {})
+    try:
+        validate_workflow_spec(undeclared)
+    except Exception as error:
+        assert "run_id" in str(error)
+    else:
+        raise AssertionError("a step needing an input nothing produces must be refused")
+
+    # Declared, it wires from the run and publishes.
+    declared = _spec_from_steps([{"capability": "preview"}], {"inputs": ["run_id"]})
+    assert declared["steps"][0]["binding"]["inputs"]["run_id"] == {"from_input": "run_id"}

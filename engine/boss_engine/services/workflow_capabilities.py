@@ -291,8 +291,15 @@ CAPABILITIES: dict[str, Capability] = {
             # IRREVERSIBLE AND PUBLIC. You cannot un-publish something people have already
             # seen, so this sits at the tier that forces a person to agree first.
             risk_tier=3,
-            required_inputs=("media", "title"),
-            optional_inputs=("description", "tags", "visibility", "thumbnail", "schedule_at"),
+            # `media_artifact_id`, NOT `media`. The name has to match what an editing step
+            # PRODUCES, or the chain cannot be wired: a spec builder connects an input to the
+            # nearest upstream step producing a field of the same name, and `media` vs
+            # `media_artifact_id` meant the publish step read from the run's input instead of
+            # from the video that was just edited. The skill's own input_schema already called
+            # it media_artifact_id; this was the odd one out.
+            required_inputs=("media_artifact_id", "title"),
+            optional_inputs=("description", "tags", "visibility", "thumbnail", "schedule_at",
+                             "made_for_kids"),
             produces=("post_url", "post_id"),
             typical_minutes=5,
             is_async=True,

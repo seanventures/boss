@@ -116,7 +116,10 @@ def test_publishing_belongs_to_the_media_publisher_and_forces_an_approval():
     assert publish.tool is None
     # The inputs are platform-agnostic on purpose, so a second platform is a new binding
     # rather than a new capability.
-    assert "media" in publish.required_inputs and "title" in publish.required_inputs
+    # `media_artifact_id`, matching what an editing step PRODUCES — a publish step requiring
+    # `media` wired to the run's input instead of to the video just edited.
+    assert "media_artifact_id" in publish.required_inputs
+    assert "title" in publish.required_inputs
     assert "post_url" in publish.produces
 
 
