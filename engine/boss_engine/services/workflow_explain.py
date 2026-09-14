@@ -149,6 +149,12 @@ def explain_version(
             runs = (own.get("mcp_tool_name") or own.get("skill_id") or step_key)
         elif spec_of.get("skills"):
             runs = ", ".join(spec_of["skills"])
+        else:
+            # FALL BACK TO THE CAPABILITY, rather than to nothing. Most built-in capabilities
+            # declare no skill — they ARE the unit of work — so "runs" came back empty for
+            # every step of a normal workflow and the field silently disappeared. Naming the
+            # capability is the honest answer to "what does this actually execute".
+            runs = cap_key
 
         produces = list(own.get("produces") or spec_of.get("produces") or [])
         results.extend(produces)

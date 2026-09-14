@@ -72,6 +72,19 @@ def test_every_step_says_what_it_does(engine):
         assert step["label"]
 
 
+def test_every_step_names_what_it_actually_executes(engine):
+    """Most built-in capabilities declare no skill — they ARE the unit of work.
+
+    `runs` fell through to empty for every step of a normal workflow, so the field vanished
+    from the panel and "what does this actually execute" had no answer on screen.
+    """
+    pid = get_settings().default_project_id
+    _seed(engine, pid)
+    plan = _plan(engine, pid)
+    assert all(s["runs"] for s in plan["steps"]), \
+        [s for s in plan["steps"] if not s["runs"]]
+
+
 def test_each_step_names_the_agent_that_answers_for_it(engine):
     """"any agents associated" — the captain was decided by the capability and never shown."""
     pid = get_settings().default_project_id
