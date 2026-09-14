@@ -971,6 +971,12 @@ def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
     return []
 
 
+def _carry_open_comments(fctx_prev: dict) -> list:
+    """The unresolved review comments from the previous attempt, for the next one."""
+    return [c for c in (fctx_prev.get("review_comments") or [])
+            if isinstance(c, dict) and (c.get("status") or "open") == "open"]
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -1139,6 +1145,17 @@ def retry_code_task(
                           **({"workflow_version_id": workflow_version_id}
                              if workflow_version_id else {}),
                           "feedback_history": history,
+                          # UNRESOLVED REVIEW COMMENTS FOLLOW THE WORK, NOT THE ATTEMPT.
+                          #
+                          # Comments are stored per run, and a retry mints a NEW run — so a
+                          # comment left on a finished attempt reached nothing, and the run
+                          # that would have acted on it started without it. That is the only
+                          # moment a person leaves one: they read the PR, they point at a
+                          # line, they press retry. Addressed and dismissed comments stay
+                          # behind; carrying those forward would re-litigate decisions the
+                          # last attempt already made.
+                          **({"review_comments": _carry_open_comments(fctx_prev)}
+                             if _carry_open_comments(fctx_prev) else {}),
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.
                           **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),

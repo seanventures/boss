@@ -337,3 +337,50 @@ def test_operator_comments_sort_ahead_of_the_panels() -> None:
         "a person who pointed at a line outranks a reviewer, even a blocker: the repair round "
         "is bounded and they asked for this specifically"
     )
+
+
+# --- a comment has to survive the retry it was written for --------------------
+#
+# Comments are stored per run and a retry mints a NEW run, so a comment left on a finished
+# attempt reached nothing — and the attempt that would have acted on it started without it.
+# That is the only moment a person leaves one: they read the PR, they point at a line, they
+# press retry.
+
+def test_open_comments_follow_the_work_into_the_next_attempt() -> None:
+    from boss_engine.services.code_task_service import _carry_open_comments
+
+    carried = _carry_open_comments({"review_comments": [
+        {"id": "rc_1", "status": "open", "body": "still wrong"},
+        {"id": "rc_4", "body": "no status means open"},
+    ]})
+    assert [c["id"] for c in carried] == ["rc_1", "rc_4"]
+
+
+def test_settled_comments_are_left_behind() -> None:
+    """Carrying an addressed or dismissed comment forward would re-litigate a decision the
+    last attempt already made, and spend a bounded repair round doing it."""
+    from boss_engine.services.code_task_service import _carry_open_comments
+
+    carried = _carry_open_comments({"review_comments": [
+        {"id": "rc_2", "status": "addressed", "body": "fixed"},
+        {"id": "rc_3", "status": "dismissed", "body": "wontfix"},
+    ]})
+    assert carried == []
+
+
+def test_a_run_with_no_comments_carries_nothing() -> None:
+    from boss_engine.services.code_task_service import _carry_open_comments
+
+    assert _carry_open_comments({}) == []
+    assert _carry_open_comments({"review_comments": []}) == []
+
+
+def test_the_retry_writes_them_onto_the_new_run() -> None:
+    import inspect
+
+    from boss_engine.services import code_task_service as cts
+
+    src = inspect.getsource(cts.retry_code_task)
+    assert '"review_comments": _carry_open_comments(fctx_prev)' in src, (
+        "a retry must seed the new run with the comments the operator left on the last one"
+    )
