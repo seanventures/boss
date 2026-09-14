@@ -2637,7 +2637,29 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     _wire_inputs(built, declared)
     for entry in built:
         entry.pop("_capability", None)
-    return {"entry_step": built[0]["id"], "steps": built}
+
+    # WHAT THE OPERATOR MUST SUPPLY, WRITTEN DOWN — otherwise the start form is blank.
+    #
+    # `inputs` was used to decide wiring and then dropped, so a published version carried
+    # `input_schema: {}` while its steps referenced `from_input`. The bindings resolved and
+    # the workflow was startable only by a caller that already knew the two field names; the
+    # console's start form, which renders FROM the schema, had nothing to draw.
+    #
+    # Found by the Program Manager agent reading its own published spec back out of the
+    # database rather than trusting the tool's success reply — which is the check that was
+    # missing from every earlier attempt.
+    #
+    # Taken from what the wiring actually BOUND, not from what was asked for: an input the
+    # model listed but no step consumes is not something to put on a form.
+    required: dict[str, Any] = {}
+    for entry in built:
+        for value in ((entry.get("binding") or {}).get("inputs") or {}).values():
+            if isinstance(value, dict) and value.get("from_input"):
+                required[str(value["from_input"])] = "string"
+    spec: dict[str, Any] = {"entry_step": built[0]["id"], "steps": built}
+    if required:
+        spec["input_schema"] = required
+    return spec
 
 
 def _wire_inputs(built: list[dict[str, Any]], declared: set[str]) -> None:
@@ -3902,18 +3924,19 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
             # The workforce is checked FIRST because that is what a named agent is. A panel
             # seat is the fallback, so asking about one still works.
             row = c.execute(
-                _text("SELECT role_key, display_name AS title, "
-                      "       NULL::text AS lens, 1 AS risk_tier "
+                _text("SELECT role_key, display_name AS title, spec, "
+                      "       COALESCE(autonomy_level, 1) AS risk_tier "
                       "  FROM roles WHERE project_id = :p "
                       "   AND (lower(role_key) = lower(:w) OR lower(display_name) = lower(:w)) "
                       " LIMIT 1"),
                 {"p": pid, "w": wanted}).mappings().first()
             if row is None:
                 row = c.execute(
-                    _text("SELECT role_key, title, lens, risk_tier FROM meeting_roles "
-                          "WHERE project_id = :p "
-                          "AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w)) "
-                          "LIMIT 1"),
+                    _text("SELECT role_key, title, "
+                          "       jsonb_build_object('lens', lens) AS spec, risk_tier "
+                          "  FROM meeting_roles WHERE project_id = :p "
+                          "   AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w)) "
+                          " LIMIT 1"),
                     {"p": pid, "w": wanted}).mappings().first()
             if row is None:
                 # NAME WHAT EXISTS. "No role X" sends the reader hunting for a typo; the list
@@ -3934,14 +3957,51 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                       "JOIN agent_definitions d ON d.active_version_id = v.id "
                       "WHERE d.project_id = :p AND lower(v.role_key) = lower(:k) LIMIT 1"),
                 {"p": pid, "k": row["role_key"]}).mappings().first()
-        out = {"role_key": row["role_key"], "title": row["title"], "lens": row["lens"],
-               "risk_tier": row["risk_tier"], "has_agent_definition": version is not None}
+        # THE SPEC *IS* THE DEFINITION, AND THIS USED TO THROW IT AWAY.
+        #
+        # Every workforce role carries a full spec — mission, boundaries, decision rights,
+        # comms contract — installed from the pack into `roles.spec`. The old code selected
+        # `NULL AS lens` and reported `has_agent_definition: false` unless someone had
+        # separately published an `agent_versions` row, which on this project nobody has for
+        # any role. So a Program Manager with a thirty-line remit introduced itself by saying
+        # it had no definition and no lens and could not argue from anything real.
+        #
+        # An `agent_definitions` row is an EXTENSION of a role, not the thing that brings it
+        # into being. A role is defined when it has a spec, and it always does.
+        spec = row["spec"] if isinstance(row["spec"], dict) else {}
+        boundaries = spec.get("boundaries") or {}
+        permissions = spec.get("permissions") or {}
+        out = {
+            "role_key": row["role_key"],
+            "title": row["title"],
+            # The mission is what a workforce role argues from; `lens` is the panel-seat word
+            # for the same thing. Either way the agent needs ONE field to answer from.
+            "lens": spec.get("lens") or spec.get("mission"),
+            "mission": spec.get("mission"),
+            "risk_tier": row["risk_tier"],
+            "primary_outcomes": spec.get("primary_outcomes") or [],
+            "must": boundaries.get("must") or [],
+            "must_not": boundaries.get("must_not") or [],
+            "decision_rights": spec.get("decision_rights") or {},
+            "comms_contract": spec.get("comms_contract") or {},
+            "skills": permissions.get("allowed_skills") or [],
+            "forbidden_skills": permissions.get("forbidden_skills") or [],
+            "has_agent_definition": True,
+            "definition_source": "spec",
+            # Say it in the payload, because the model reads this before it answers and will
+            # otherwise report the absence of an optional extension as a defect in itself.
+            "note": "This role is fully defined by the spec above. Answer AS this role, from "
+                    "its mission and boundaries. Do not tell the operator the role is "
+                    "undefined or lacks a lens — it is not and does not.",
+        }
         if version is not None:
+            # A published version OVERRIDES the pack: it is what an operator edited by hand.
             out.update({
                 "rules": version["rules"] or [],
-                "skills": version["requested_skills"] or [],
+                "skills": version["requested_skills"] or out["skills"],
                 "integrations": version["requested_integrations"] or [],
                 "prompts": version["prompts"] or {},
+                "definition_source": "agent_version",
             })
         return out
 

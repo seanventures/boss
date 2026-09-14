@@ -101,3 +101,45 @@ def test_but_not_a_captain_the_workforce_does_not_have():
         validate_workflow_spec(_steps({"id": "tell", "capability": "notify",
                                        "input": {"message": "x"}, "captain": "nobody"}))
     assert "not a role this workforce has" in str(caught.value)
+
+
+def test_a_declared_input_reaches_the_start_form():
+    """`inputs` decided the wiring and was then thrown away.
+
+    A published version carried `input_schema: {}` while its own steps referenced
+    `from_input`, so the two values an operator had to supply were recorded nowhere. The
+    bindings still resolved, which is why this survived: the workflow was startable by any
+    caller that already knew the field names, and unstartable from the console's form, which
+    renders FROM the schema and had nothing to draw.
+
+    Found by the Program Manager agent reading its published spec back out of the database
+    instead of trusting draft_workflow's success reply.
+    """
+    spec = _spec_from_steps(
+        [{"capability": "video_edit"}, {"capability": "social_publish"}],
+        {"inputs": ["media_artifact_id", "title"]},
+    )
+    # Declared, so the form has something to render.
+    assert "media_artifact_id" in spec["input_schema"]
+    assert "title" in spec["input_schema"]
+    # And it survives the validator, which used to default the field to {}.
+    assert validate_workflow_spec(spec)["input_schema"]["title"] == "string"
+
+
+def test_an_input_no_step_consumes_is_not_put_on_the_form():
+    """The schema comes from what the wiring BOUND, not from what the model listed.
+
+    A model that lists a spare input should not produce a form field for a value the run
+    will ignore — the operator would fill it in and wonder why nothing used it.
+    """
+    spec = _spec_from_steps(
+        [{"capability": "video_edit"}, {"capability": "social_publish"}],
+        {"inputs": ["media_artifact_id", "title", "unused_extra"]},
+    )
+    assert "unused_extra" not in spec.get("input_schema", {})
+
+
+def test_a_workflow_that_needs_nothing_declares_nothing():
+    """`media_artifact_id` comes from the step above it, so it is not the operator's to give."""
+    spec = _spec_from_steps([{"capability": "notify"}], {})
+    assert "input_schema" not in spec or spec["input_schema"] == {}

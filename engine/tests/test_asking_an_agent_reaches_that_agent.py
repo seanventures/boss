@@ -100,6 +100,46 @@ class TestTheToolsThatMakeItReal:
         assert "agent_versions" in body
         assert "requested_skills" in body
 
+    def test_a_role_is_defined_by_its_spec_not_by_an_optional_extension(self):
+        """The second half of "there is no Program Manager role defined on this project".
+
+        Naming the role fixed the first half; the agent then said it had "no agent definition
+        and no lens" and "nothing to argue from" — while sitting on a spec with a mission,
+        two boundary lists, decision rights and a comms contract. `roles.spec` was selected
+        as `NULL::text AS lens` and discarded, and `has_agent_definition` reported on an
+        `agent_versions` row that no role on any project has.
+
+        An agent_version EXTENDS a role. The spec BRINGS IT INTO BEING.
+        """
+        import inspect
+
+        body = inspect.getsource(_tools()["describe_role"].handler)
+        # The spec is read, not nulled out.
+        assert "NULL::text AS lens" not in body
+        assert "spec" in body
+        # And the substance of it reaches the model, so "answer as this role" has a source.
+        for field in ("mission", "primary_outcomes", "decision_rights", "comms_contract"):
+            assert field in body, f"describe_role drops {field}"
+        # The mission doubles as the lens for a workforce role, which has no panel seat.
+        assert 'spec.get("lens") or spec.get("mission")' in body
+
+    def test_describe_role_does_not_invite_the_agent_to_plead_undefined(self):
+        """`has_agent_definition: false` was read out to the OPERATOR as a defect.
+
+        A model handed a false-looking flag explains it. The flag was about an optional
+        extension, but the sentence it produced — "I have no panel positions here and nothing
+        in the record to agree or disagree with" — reads to a customer as a broken product.
+        """
+        import inspect
+
+        body = inspect.getsource(_tools()["describe_role"].handler)
+        assert '"has_agent_definition": True' in body
+        # Which of the two sources answered is still reported — truthfully, but as provenance
+        # rather than as an absence.
+        assert '"definition_source": "spec"' in body
+        assert '"definition_source": "agent_version"' in body
+        assert "Do not tell the operator the role is" in body
+
 
 class TestTheEndpointAndTheServiceAgree:
     """The regression this suite did not catch, and the reason it did not.
