@@ -1781,6 +1781,24 @@ def _register_builtin_harnesses() -> None:
         requires=("AZURE_OPENAI_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"),
         description="Azure OpenAI lane, used as an independent gate/verifier under VAG.",
     )
+    # CLI harnesses: declared as specs, not written as classes. NONE is verified — a spec
+    # taken from a CLI's documentation is a hypothesis until a governed task completes on it.
+    from .cli_harness import BUILTIN_CLI_HARNESSES, GenericCliCodeAgent, load_specs
+
+    def _cli_builder(harness_name: str):
+        def build(settings: Settings) -> CodeAgent:
+            spec = load_specs(settings).get(harness_name)
+            if spec is None:  # pragma: no cover - only if an override deletes a built-in
+                raise RuntimeError(f"no CLI harness spec for {harness_name!r}")
+            return GenericCliCodeAgent(settings, spec)
+        return build
+
+    for cli_name, cli_spec in BUILTIN_CLI_HARNESSES.items():
+        register_harness(
+            cli_name, _cli_builder(cli_name), kind="cli", verified=cli_spec.verified,
+            requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),
+            description=cli_spec.description,
+        )
     for lane, (key_field, url_field) in _PROVIDER_LANES.items():
         local = lane in ("ollama", "vllm")
         register_harness(

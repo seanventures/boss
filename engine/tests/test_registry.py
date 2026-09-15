@@ -10,6 +10,10 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # PROVIDER AGNOSTICISM YOU CAN CHECK. Config says what was asked for; the llm_calls
+    # ledger says what happened, and only the second one is evidence. `list_harnesses` says
+    # which of them a governed task has actually completed on — wired is not proven.
+    "provider_audit", "list_harnesses",
     # REVIEW IS A CONVERSATION ABOUT A LINE, not a verdict on a run. A reviewer that can only
     # say "not safe" gives the implementer nothing to act on; these three are how a finding
     # gets a file and a line, and how a person adds one of their own.
@@ -156,10 +160,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 90, (
+    assert len(reg.names()) == 92, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 55
+    assert len(read) == 57
     assert len(write) == 35
     # the capabilities the user explicitly asked the agent to cover
     for name in (

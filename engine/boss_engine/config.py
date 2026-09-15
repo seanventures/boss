@@ -137,6 +137,29 @@ class Settings(BaseSettings):
     investigation_api_url: str = Field(default="", alias="BOSS_INVESTIGATION_API_URL")
     claude_cli_timeout: int = Field(default=240, alias="BOSS_CLAUDE_CLI_TIMEOUT")
 
+    # --- one switch for the whole installation (provider agnosticism) ---------
+    #
+    # "BOSS is not coupled to any one model" used to require setting SIX values in THREE
+    # vocabularies — BOSS_LLM_ENGINE and BOSS_CHAT_LLM_ENGINE speak `claude_cli`, the coding
+    # lanes speak harness names like `claude_code`/`openrouter`, and the strong/low-cost pair
+    # speak a third — and then gave no way to check the result. An operator who missed one was
+    # indistinguishable from one who set them all.
+    #
+    # This is that switch. Set it to a harness name and EVERY surface follows: the coding
+    # pipeline, its reviewers, the strong/low-cost routes, the BOSS agent chat, meetings and
+    # discovery. Leave it empty and nothing changes — the per-surface settings keep working
+    # exactly as before, because an installation that already tuned them should not be
+    # silently re-pointed by an upgrade.
+    #
+    # Verify it with `provider_audit`: config says what was asked for, the llm_calls ledger
+    # says what actually happened, and only the second one is evidence.
+    provider_lock: str = Field(default="", alias="BOSS_PROVIDER_LOCK")
+    #: Per-harness overrides for the CLI specs, as JSON. These flags are a hypothesis until
+    #: someone runs the binary, so an operator who finds the real ones must be able to fix
+    #: them without waiting for a release:
+    #:   {"codex": {"args": ["exec"], "read_only_args": ["--read-only"]}}
+    cli_harnesses_json: str = Field(default="", alias="BOSS_CLI_HARNESSES_JSON")
+
     @model_validator(mode="after")
     def _azure_satisfies_openai_credential(self):
         # When Azure OpenAI is configured, treat the OpenAI source as
@@ -148,6 +171,59 @@ class Settings(BaseSettings):
         # mark the credential present so intake routes to the real-model path.
         if (self.llm_engine or "").lower() == "claude_cli" and not self.openai_api_key:
             self.openai_api_key = "claude-cli-proxy"
+        return self
+
+    #: harness name -> the dedicated (api-key field, base-url field) the chat surfaces need
+    #: bound to reach it. Chat/meetings/discovery all go through OpenAIAdapter, which reads
+    #: openai_api_key/openai_base_url, so a lock onto a direct-provider lane has to bind them
+    #: or those surfaces would keep calling whatever OPENAI_* happened to be set.
+    _LOCK_OPENAI_COMPATIBLE = {
+        "openrouter": ("openrouter_api_key", "openrouter_base_url"),
+        "groq": ("groq_api_key", "groq_base_url"),
+        "deepseek": ("deepseek_api_key", "deepseek_base_url"),
+        "ollama": ("ollama_api_key", "ollama_base_url"),
+        "vllm": ("vllm_api_key", "vllm_base_url"),
+    }
+    #: harness names that are a CLI BOSS shells out to rather than an API it calls.
+    _LOCK_CLI = {"claude_code": "claude_cli", "codex": "codex", "cursor": "cursor"}
+
+    @model_validator(mode="after")
+    def _apply_provider_lock(self):
+        """Point every surface at one provider, or leave everything alone."""
+        lock = (self.provider_lock or "").strip().lower()
+        if not lock:
+            return self
+        # Coding pipeline: the lanes all speak harness names, so the lock IS the value.
+        self.code_agent_engine = lock
+        self.code_review_engine = lock
+        self.code_agent_strong_engine = lock
+        self.code_agent_low_cost_engine = lock
+        if lock in self._LOCK_CLI:
+            # A CLI harness has no API for the chat surfaces to call. claude_cli has an
+            # adapter; the others do not yet, so chat stays on the OpenAI-compatible path
+            # rather than pretending a backend exists — and says so through the audit.
+            chat = self._LOCK_CLI[lock]
+            if chat == "claude_cli":
+                self.llm_engine = "claude_cli"
+                self.chat_llm_engine = "claude_cli"
+            return self
+        # Everything else is an OpenAI-compatible endpoint: take chat off the Claude path and
+        # bind the credentials that endpoint actually needs.
+        self.llm_engine = lock
+        self.chat_llm_engine = lock
+        pair = self._LOCK_OPENAI_COMPATIBLE.get(lock)
+        if pair:
+            key_field, url_field = pair
+            key, url = getattr(self, key_field, None), getattr(self, url_field, None)
+            if key:
+                self.openai_api_key = key
+            if url:
+                self.openai_base_url = url
+            # A lock onto a lane whose Azure credentials are also present would silently
+            # dispatch to Azure inside OpenAIAdapter, which takes precedence.
+            self.azure_openai_key = None
+            self.azure_openai_endpoint = None
+            self.azure_openai_deployment = None
         return self
 
     anthropic_api_key: Optional[str] = Field(

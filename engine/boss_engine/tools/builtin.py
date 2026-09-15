@@ -2085,6 +2085,50 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "applies": "at the next stage boundary"}
 
     @reg.tool(
+        "provider_audit",
+        "Which model providers this project ACTUALLY called, from the llm_calls ledger "
+        "rather than from configuration. Reports transport (the endpoint BOSS called) and "
+        "vendor (who trained the weights) separately, because routing Claude through "
+        "OpenRouter still sends your prompt to Anthropic. Pass `expect` to get a yes/no: "
+        "'did anything reach a provider other than this one?'",
+        _obj({"since_hours": {"type": "integer", "minimum": 1,
+                              "description": "only calls in the last N hours"},
+              "run_id": {"type": "string", "description": "scope to one code task run"},
+              "expect": {"type": "string",
+                         "description": "the only provider that should appear, e.g. 'openai'"},
+              "dimension": {"type": "string", "enum": ["vendor", "transport"],
+                            "default": "vendor",
+                            "description": "vendor = whose model; transport = whose endpoint"}},
+             []),
+    )
+    def provider_audit(ctx, *, project_id, actor, args):
+        from ..services.provider_audit import audit_project
+
+        with ctx.begin() as c:
+            return audit_project(
+                c, project_id,
+                since_hours=args.get("since_hours"),
+                run_id=args.get("run_id"),
+                expect=args.get("expect"),
+                dimension=(args.get("dimension") or "vendor"),
+            )
+
+    @reg.tool(
+        "list_harnesses",
+        "Every coding harness BOSS can drive — API lanes and CLI agents — with what each "
+        "needs and whether a governed code task has actually completed on it. `verified: "
+        "false` means wired but unproven, not broken.",
+        _obj({}, []),
+    )
+    def list_harnesses(ctx, *, project_id, actor, args):
+        from ..services.harness_registry import available_harnesses
+
+        harnesses = available_harnesses()
+        return {"ok": True, "count": len(harnesses), "harnesses": harnesses,
+                "verified": [h["name"] for h in harnesses if h["verified"]],
+                "unverified": [h["name"] for h in harnesses if not h["verified"]]}
+
+    @reg.tool(
         "add_review_comment",
         "Leave a review comment on ONE line of a code task's change, the way you would on a "
         "pull request. The implementer gets your words AND the code at that line, so it does "
