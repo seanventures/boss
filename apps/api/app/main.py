@@ -14789,6 +14789,50 @@ def setup_model_providers() -> dict:
     return {"providers": provider_catalogue()}
 
 
+@app.get("/v1/setup/coding-agents")
+def setup_coding_agents() -> dict:
+    """Which coding-agent CLIs this machine has, and what each still needs.
+
+    A subscription is not a key. A Codex or Cursor plan is an OAuth session held by that CLI,
+    so there is nothing for an operator to paste and a form asking them to would be asking for
+    a credential that does not exist. BOSS looks for the CLI they already use instead.
+    """
+    from .services.setup_service import list_coding_agents
+
+    agents = list_coding_agents(get_settings())
+    return {"agents": agents,
+            "ready": [a["name"] for a in agents if a["ready"]],
+            "not_ready": [{"name": a["name"], "next_step": a["next_step"]}
+                          for a in agents if not a["ready"]]}
+
+
+@app.post("/v1/setup/coding-agents/connect", status_code=201)
+def setup_connect_coding_agent(payload: dict) -> dict:
+    """Import a subscription the operator already has, after proving it answers.
+
+    Same order as the model-key route and for the same reason: a CLI reports "logged in" from
+    a token on disk, which says somebody signed in once — not that the session still works or
+    the plan is active. One real turn turns that into evidence.
+    """
+    from .services.setup_service import SetupError, connect_coding_agent
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "setup")
+    provider = str(payload.get("provider") or "").strip().lower()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+    with begin() as connection:
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        try:
+            return connect_coding_agent(connection, get_settings(), project_id, provider,
+                                        actor=actor, prove=bool(payload.get("prove", True)))
+        except SetupError as exc:
+            # 422, not 500: the operator can fix every one of these, and the message says how.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/v1/setup/model", status_code=201)
 def setup_model_endpoint(payload: dict) -> dict:
     """Prove a model key works, then store it and register the source.

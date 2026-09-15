@@ -2085,6 +2085,50 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "applies": "at the next stage boundary"}
 
     @reg.tool(
+        "detect_coding_agents",
+        "Which coding-agent CLIs (Codex, Cursor, Aider, Claude Code) are installed on this "
+        "machine and signed in. A subscription has no credential to paste — the CLI holds its "
+        "own OAuth session — so this is how BOSS finds one. Reports the exact next command "
+        "for anything not ready yet.",
+        _obj({}, []),
+    )
+    def detect_coding_agents(ctx, *, project_id, actor, args):
+        from ..services.setup_service import list_coding_agents
+
+        agents = list_coding_agents(ctx.settings)
+        return {"ok": True, "agents": agents,
+                "ready": [a["name"] for a in agents if a["ready"]],
+                "not_ready": [{"name": a["name"], "next_step": a["next_step"]}
+                              for a in agents if not a["ready"]]}
+
+    @reg.tool(
+        "connect_coding_agent",
+        "Import a coding-agent subscription the operator already has (e.g. Codex via their "
+        "ChatGPT login) into BOSS: confirm the CLI is signed in, make it complete one real "
+        "turn, and record the entitlement. Refuses rather than half-succeeds — signed in is "
+        "not the same as working.",
+        _obj({"provider": {"type": "string",
+                           "description": "codex | cursor | aider"},
+              "prove": {"type": "boolean", "default": True,
+                        "description": "run one real turn before recording it (recommended)"}},
+             ["provider"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def connect_coding_agent(ctx, *, project_id, actor, args):
+        from ..services.setup_service import SetupError, connect_coding_agent as _connect
+
+        with ctx.begin() as c:
+            try:
+                return _connect(c, ctx.settings, project_id,
+                                str(args.get("provider") or "").strip().lower(),
+                                actor=actor, prove=bool(args.get("prove", True)))
+            except SetupError as exc:
+                # The next step IS the answer here, so it travels as a result an agent can
+                # read and act on rather than an exception that loses it.
+                return {"ok": False, "error": str(exc)}
+
+    @reg.tool(
         "provider_audit",
         "Which model providers this project ACTUALLY called, from the llm_calls ledger "
         "rather than from configuration. Reports transport (the endpoint BOSS called) and "
@@ -5529,6 +5573,11 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "retry_code_task",
     "extend_code_task",
     "steer_code_task",
+    # "CONNECT MY CODEX SUBSCRIPTION" IS A SENTENCE SOMEBODY SAYS. Importing an agent the
+    # operator already pays for is setup, and setup is the part they are most likely to ask
+    # for in words rather than go looking for a page. It stores no credential, proves the
+    # session in a read-only sandbox, and records an entitlement row.
+    "connect_coding_agent",
     "add_review_comment",
     "resolve_review_comment",
     "cancel_code_task",

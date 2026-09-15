@@ -155,6 +155,139 @@ def verify_model_key(
                 "error": f"could not reach {url_base}: {error.reason}"}
 
 
+from pathlib import Path as pathlib_Path
+
+
+def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
+    """Every CLI coding agent BOSS can drive, and whether this machine can use it yet."""
+    from .cli_harness import detect_all
+
+    return detect_all(settings)
+
+
+def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> dict[str, Any]:
+    """Make the agent complete one real turn before calling it connected.
+
+    The same rule as `verify_model_key`, for a thing that has no key to check. A subscription
+    CLI reports "logged in" from a token on disk, which says the operator signed in once — not
+    that the session still works, that the plan is active, or that this machine can reach the
+    model. One trivial turn costs nothing against a subscription and turns "signed in" into
+    "working".
+
+    Run in an empty directory with the read-only sandbox where the CLI has one, so proving
+    the connection can never edit anything.
+    """
+    import subprocess
+    import tempfile
+
+    from .cli_harness import CliHarnessUnavailable, GenericCliCodeAgent, load_specs
+
+    spec = load_specs(settings).get(provider)
+    if spec is None:
+        raise SetupError(f"no CLI coding agent called {provider!r}.")
+    agent = GenericCliCodeAgent(settings, spec)
+    read_only = spec.supports_read_only()
+    with tempfile.TemporaryDirectory(prefix="boss-agent-probe-") as work:
+        try:
+            out = agent.run_role(
+                "Reply with exactly: BOSS_OK. Do not create or modify any file.",
+                pathlib_Path(work), read_only=read_only,
+            )
+        except CliHarnessUnavailable as exc:
+            return {"ok": False, "error": str(exc)}
+        except subprocess.SubprocessError as exc:  # noqa: PERF203 - narrow, reported not raised
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    text_out = (out.get("summary") or "")
+    ok = out.get("exit_code") == 0
+    return {
+        "ok": ok,
+        "exit_code": out.get("exit_code"),
+        "read_only_probe": read_only,
+        "replied": text_out[:200],
+        "error": None if ok else (text_out[:300] or "the agent exited non-zero"),
+    }
+
+
+def connect_coding_agent(
+    connection: Connection, settings: Settings, project_id: str, provider: str, *,
+    actor: str = "setup", prove: bool = True,
+) -> dict[str, Any]:
+    """Import a coding-agent subscription the customer already has, into BOSS.
+
+    There is nothing to paste. A Codex or Cursor subscription is an OAuth session held by that
+    CLI, so the only honest way to "configure" one is to find the CLI, confirm it is signed in,
+    prove it answers, and record the entitlement. Anything else is asking the operator to
+    transcribe a credential that does not exist.
+
+    Refuses rather than half-succeeds: not installed and signed-out are different problems with
+    different next steps, and both are more useful than a stored setting that fails at build
+    time an hour later.
+    """
+    from .cli_harness import detect, load_specs
+
+    spec = load_specs(settings).get(provider)
+    if spec is None:
+        raise SetupError(
+            f"no CLI coding agent called {provider!r}. Known: "
+            f"{', '.join(sorted(load_specs(settings)))}.")
+    found = detect(spec)
+    if not found["installed"]:
+        raise SetupError(
+            f"the {provider} CLI is not installed on this machine. "
+            f"{found['next_step']}")
+    if found["authenticated"] is False:
+        raise SetupError(
+            f"the {provider} CLI is installed but not signed in. {found['next_step']} "
+            f"(BOSS never sees the credential — the CLI holds its own session.)")
+
+    proof = {"ok": True, "skipped": True} if not prove else prove_coding_agent(settings, provider)
+    if not proof.get("ok"):
+        raise SetupError(
+            f"the {provider} CLI is signed in but could not complete a turn: "
+            f"{proof.get('error')}. Signed in is not the same as working — check the "
+            f"subscription is active on this account.")
+
+    record: dict[str, Any] = {"connected": True, "entitlement_recorded": False}
+    if spec.entitlement_source_id:
+        from .entitlements import EntitlementBrokerService
+
+        payload = {
+            "project_id": project_id,
+            "provider": spec.entitlement_provider or provider,
+            "source_id": spec.entitlement_source_id,
+            "source_kind": "official_cli",
+            "entitlement_kind": "subscription",
+            "owner_type": "operator",
+            "owner_id": actor,
+            # A subscription seat is the operator's own. Saying so is what stops it being
+            # handed to multi-tenant work it is not licensed for.
+            "multi_tenant_allowed": False,
+            "auth_method": "official_cli_oauth",
+            "connection_status": "connected",
+            "connection_ref": f"{spec.binary}:{found.get('version') or 'unknown'}",
+            "cost_mode": "subscription",
+            "runtime_supported": True,
+            "observed_capacity": {"credential_present": True},
+            "notes": f"Imported from the local {spec.binary} CLI. "
+                     f"{found.get('auth_detail') or ''}".strip(),
+        }
+        try:
+            EntitlementBrokerService(settings).upsert_source(
+                connection, payload, actor=actor)
+            record["entitlement_recorded"] = True
+        except Exception as exc:  # noqa: BLE001 - the agent works either way; say what failed
+            record["entitlement_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return {
+        "ok": True,
+        "provider": provider,
+        "detected": found,
+        "proof": proof,
+        "harness": provider,
+        "use_it_with": f"BOSS_PROVIDER_LOCK={provider}",
+        **record,
+    }
+
+
 def _last4(value: str) -> str:
     """Enough to tell two credentials apart, never enough to use one."""
     text_value = str(value or "").strip()

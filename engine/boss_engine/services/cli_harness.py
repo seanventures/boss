@@ -46,9 +46,18 @@ class CliHarnessSpec:
     binary: str
     #: Argv before the prompt. `{model}` is substituted when a model is supplied.
     args: tuple[str, ...] = ()
+    #: Extra argv for a WRITE step (implement/repair).
+    write_args: tuple[str, ...] = ()
     #: Extra argv for a READ-ONLY step (review/security). Empty means the harness has no
     #: read-only mode, and BOSS refuses to use it for one rather than letting a reviewer edit.
     read_only_args: tuple[str, ...] = ()
+    #: Flag that writes the agent's FINAL message to a file, e.g. "--output-last-message".
+    #: Worth using where it exists: the review gate parses FINDING/VERDICT lines out of the
+    #: summary, and stdout for these CLIs also carries the diff and a token count, so the
+    #: final message on its own is both smaller and less ambiguous.
+    final_message_flag: str = ""
+    #: Regex with one group capturing total tokens from stdout, for the ledger.
+    token_pattern: str = ""
     #: How the prompt reaches the process. argv is simplest; stdin survives a huge prompt.
     prompt_via: str = "argv"
     #: Flag that selects a model, e.g. "--model". Empty means the CLI has no such flag.
@@ -61,6 +70,22 @@ class CliHarnessSpec:
     description: str = ""
     #: Env the CLI needs to find its own credentials, on top of the agent env allow-list.
     env_passthrough: tuple[str, ...] = ()
+    # --- how BOSS discovers this agent on a customer's machine -----------------
+    #: Prints the version. Proves the binary runs, not merely that a file exists.
+    version_args: tuple[str, ...] = ("--version",)
+    #: Asks the CLI whether it is signed in, e.g. ("login", "status").
+    auth_check_args: tuple[str, ...] = ()
+    #: Matched against that command's output. Empty means the CLI has no login of its own
+    #: (it reads an API key from the environment), so being installed is all there is to check.
+    auth_ok_pattern: str = ""
+    #: What to tell the operator to run when it is installed but not signed in. This is the
+    #: whole value of detection: a specific next command instead of "not configured".
+    signin_hint: str = ""
+    #: The entitlement source this CLI satisfies, so connecting it records governance state
+    #: rather than only flipping a setting.
+    entitlement_source_id: str = ""
+    #: Provider the entitlement belongs to.
+    entitlement_provider: str = ""
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
@@ -70,41 +95,67 @@ class CliHarnessSpec:
 #: documentation is a hypothesis until a governed task completes on it, and presenting an
 #: untested adapter as ready is how a registry stops meaning anything.
 BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
+    # VERIFIED AGAINST codex-cli 0.154.0, not taken from documentation. `codex exec` is the
+    # non-interactive mode; `--sandbox` is a real flag with a real read-only value, which is
+    # what lets Codex hold "the reviewer cannot edit". Smoke-tested: edits a file in place in
+    # ~22s on a ChatGPT-subscription login with no API key.
     "codex": CliHarnessSpec(
         name="codex",
         binary="codex",
-        args=("exec", "--skip-git-repo-check"),
-        # `codex exec` is the headless mode. There is no documented read-only switch, so a
-        # review step must not run on it — see `supports_read_only`.
-        read_only_args=(),
+        args=("exec", "--skip-git-repo-check", "--color", "never"),
+        write_args=("--sandbox", "workspace-write"),
+        read_only_args=("--sandbox", "read-only"),
         prompt_via="argv",
         model_flag="--model",
+        final_message_flag="--output-last-message",
+        token_pattern=r"tokens used\s+([\d,]+)",
         verified=False,
         description="OpenAI Codex CLI (`codex exec`). Authorised by the Codex CLI's own "
-                    "login, not an API key — see the openai_codex_chatgpt entitlement.",
+                    "login — a ChatGPT subscription, not an API key.",
         env_passthrough=("CODEX_HOME", "OPENAI_API_KEY"),
+        version_args=("--version",),
+        auth_check_args=("login", "status"),
+        auth_ok_pattern=r"(?i)logged\s+in",
+        signin_hint="codex login",
+        entitlement_source_id="openai_codex_chatgpt",
+        entitlement_provider="openai",
     ),
     "cursor": CliHarnessSpec(
         name="cursor",
         binary="cursor-agent",
         args=("-p",),
+        write_args=(),
         read_only_args=(),
         prompt_via="argv",
         model_flag="--model",
         verified=False,
         description="Cursor CLI agent in print mode. Authorised by Cursor's own login.",
         env_passthrough=("CURSOR_API_KEY",),
+        version_args=("--version",),
+        # UNVERIFIED: taken from Cursor's docs, not from the binary. Correct it with
+        # BOSS_CLI_HARNESSES_JSON if the real subcommand differs.
+        auth_check_args=("status",),
+        auth_ok_pattern=r"(?i)logged\s+in|authenticated",
+        signin_hint="cursor-agent login",
+        entitlement_source_id="cursor_subscription",
+        entitlement_provider="cursor",
     ),
     "aider": CliHarnessSpec(
         name="aider",
         binary="aider",
         args=("--yes-always", "--no-auto-commit", "--message"),
+        write_args=(),
         read_only_args=(),
         prompt_via="argv",
         model_flag="--model",
         verified=False,
         description="Aider, non-interactive single message.",
         env_passthrough=("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"),
+        version_args=("--version",),
+        # No login of its own: aider reads an API key from the environment, so installed is
+        # the whole check and there is nothing to sign in to.
+        auth_check_args=(),
+        signin_hint="set OPENAI_API_KEY or ANTHROPIC_API_KEY in the environment",
     ),
 }
 
@@ -145,6 +196,74 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
     return specs
 
 
+def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20) -> tuple[int, str]:
+    """Run a short informational command. Never raises: a probe that explodes tells the
+    operator less than one that reports what happened."""
+    try:
+        proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout,
+                              env={**os.environ, "CI": "1"})
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout}s"
+    except OSError as exc:
+        return 127, str(exc)
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+
+
+def detect(spec: CliHarnessSpec) -> dict:
+    """Is this coding agent installed on THIS machine, and is it signed in?
+
+    Detection is the difference between a product and a set of instructions. BOSS cannot ask a
+    customer to hand over a subscription credential — a Codex or Cursor login is an OAuth
+    session held by that CLI, and there is nothing to paste. What BOSS can do is look for the
+    CLI the customer already uses, confirm it is signed in, and record the entitlement.
+
+    Never raises. "Not installed" and "installed but signed out" are answers, and each has a
+    different next step — which is the whole point of asking.
+    """
+    import re as _re
+
+    found = shutil.which(spec.binary)
+    result = {
+        "name": spec.name,
+        "binary": spec.binary,
+        "installed": bool(found),
+        "path": found or None,
+        "version": None,
+        "authenticated": None,
+        "auth_detail": None,
+        "ready": False,
+        "signin_hint": spec.signin_hint,
+        "verified_harness": spec.verified,
+        "next_step": None,
+    }
+    if not found:
+        result["next_step"] = f"install the {spec.name} CLI, then sign in with: {spec.signin_hint}"
+        return result
+    code, out = _run_probe(found, spec.version_args)
+    if code == 0 and out:
+        result["version"] = out.splitlines()[0][:120]
+    if not spec.auth_check_args:
+        # No login of its own — installed is the whole check.
+        result["authenticated"] = None
+        result["ready"] = True
+        result["next_step"] = None
+        return result
+    code, out = _run_probe(found, spec.auth_check_args)
+    detail = out.splitlines()[0][:200] if out else ""
+    result["auth_detail"] = detail or None
+    signed_in = bool(spec.auth_ok_pattern) and bool(_re.search(spec.auth_ok_pattern, out or ""))
+    result["authenticated"] = signed_in
+    result["ready"] = signed_in
+    if not signed_in:
+        result["next_step"] = f"sign in with: {spec.signin_hint}"
+    return result
+
+
+def detect_all(settings) -> list[dict]:
+    """Every CLI coding agent BOSS knows about, and what each needs to become usable."""
+    return [detect(spec) for spec in load_specs(settings).values()]
+
+
 class CliHarnessUnavailable(RuntimeError):
     """The binary is not installed, or the step needs something the CLI cannot do."""
 
@@ -183,8 +302,11 @@ class GenericCliCodeAgent:
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:
         argv = [self._resolve_binary(), *self.spec.args]
-        if read_only:
-            argv += list(self.spec.read_only_args)
+        # Mode-specific argv rather than one list: codex takes `--sandbox read-only` vs
+        # `--sandbox workspace-write` on the SAME flag, so appending a read-only suffix to a
+        # list that already carried the write value would leave two copies and let argument
+        # order decide whether a reviewer can edit the code it is reviewing.
+        argv += list(self.spec.read_only_args if read_only else self.spec.write_args)
         if model and self.spec.model_flag:
             argv += [self.spec.model_flag, model]
         if self.spec.prompt_via == "argv":
@@ -207,7 +329,17 @@ class GenericCliCodeAgent:
                 f"BOSS_CODE_REVIEW_ENGINE to a harness that can (any API lane), or give this "
                 f"one read_only_args via BOSS_CLI_HARNESSES_JSON."
             )
+        import re as _re
+        import tempfile
+
         argv = self._argv(prompt, read_only=read_only, model=model)
+        final_path = None
+        if self.spec.final_message_flag:
+            fd, final_path = tempfile.mkstemp(prefix="boss-cli-final-", suffix=".txt")
+            os.close(fd)
+            # Inserted before the prompt, which `_argv` appended last.
+            insert_at = len(argv) - 1 if self.spec.prompt_via == "argv" else len(argv)
+            argv[insert_at:insert_at] = [self.spec.final_message_flag, final_path]
         timeout = self.spec.review_timeout if read_only else self.spec.timeout
         started = time.monotonic()
         try:
@@ -226,12 +358,33 @@ class GenericCliCodeAgent:
                 f"{self.spec.name} did not finish within {timeout}s") from None
         ms = int((time.monotonic() - started) * 1000)
         ok = proc.returncode == 0
-        summary = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+        summary = ""
+        if final_path:
+            try:
+                summary = Path(final_path).read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                summary = ""
+            finally:
+                try:
+                    os.unlink(final_path)
+                except OSError:
+                    pass
+        # Falling back to stdout matters: a CLI that failed before writing its final message
+        # still said WHY on stdout, and losing that leaves the operator a bare exit code.
+        summary = summary or (proc.stdout or "").strip() or (proc.stderr or "").strip()
+        tokens = 0
+        if self.spec.token_pattern:
+            hit = _re.search(self.spec.token_pattern, proc.stdout or "")
+            if hit:
+                try:
+                    tokens = int(hit.group(1).replace(",", ""))
+                except ValueError:
+                    tokens = 0
         record_llm_call(
             engine_name=self.engine,
             # Cost is NOT invented: a subscription CLI does not report per-call spend, and a
             # guessed number would corrupt the ledger BOSS answers cost questions from.
-            usage={"model": model or self.spec.name},
+            usage={"model": model or self.spec.name, "total_tokens": tokens},
             cost_usd_micros=0, latency_ms=ms, turns=1, ok=ok,
             error=None if ok else (proc.stderr or "")[:400],
         )

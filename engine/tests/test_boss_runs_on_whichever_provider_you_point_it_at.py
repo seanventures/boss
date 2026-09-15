@@ -162,9 +162,38 @@ def test_a_cli_with_no_read_only_mode_is_refused_for_a_review() -> None:
         GenericCliCodeAgent,
     )
 
-    agent = GenericCliCodeAgent(Settings(), BUILTIN_CLI_HARNESSES["codex"])
+    # aider, not codex: codex-cli 0.154.0 DOES have `--sandbox read-only`, which is one of
+    # the guesses first contact with the binary corrected. Using it here would both assert the
+    # wrong thing and spend the operator's subscription — a unit test must never make a paid
+    # call, and this one took 22s doing exactly that before it was changed.
+    assert BUILTIN_CLI_HARNESSES["aider"].supports_read_only() is False
+    agent = GenericCliCodeAgent(Settings(), BUILTIN_CLI_HARNESSES["aider"])
     with pytest.raises(CliHarnessUnavailable, match="read-only"):
         agent.run_role("review this", __import__("pathlib").Path("."), read_only=True)
+
+
+def test_codex_can_hold_the_reviewer_cannot_edit_invariant() -> None:
+    """Verified against codex-cli 0.154.0: `--sandbox read-only` is a real value on a real
+    flag, so Codex can run a review step without being able to change what it reviews."""
+    from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES
+
+    codex = BUILTIN_CLI_HARNESSES["codex"]
+    assert codex.supports_read_only()
+    assert codex.read_only_args == ("--sandbox", "read-only")
+    assert codex.write_args == ("--sandbox", "workspace-write")
+
+
+def test_no_unit_test_spends_the_operators_subscription() -> None:
+    """A test that invokes a signed-in CLI costs real quota and takes tens of seconds. The
+    refusal paths must trip BEFORE any process starts."""
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    src = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
+    refusal = src.index("has no read-only mode")
+    launch = src.index("subprocess.run")
+    assert refusal < launch, "the read-only refusal must come before the process launch"
 
 
 def test_an_operator_can_correct_the_flags_without_a_release() -> None:
@@ -200,3 +229,102 @@ def test_a_cli_harness_never_invents_a_cost() -> None:
 def test_every_harness_still_declares_what_it_needs() -> None:
     for h in available_harnesses():
         assert h["requires"] and h["description"], h["name"]
+
+
+# --- a customer connects their own subscription -------------------------------
+#
+# The point the operator made that produced this: hand-editing a spec and running a script
+# proves nothing about what a CUSTOMER can do. A subscription has no credential to paste —
+# a Codex or Cursor plan is an OAuth session the CLI holds — so a form asking for one would
+# be asking for something that does not exist. BOSS finds the CLI they already use.
+
+def test_detection_reports_what_is_missing_and_the_command_that_fixes_it() -> None:
+    """"Not configured" sends somebody to search. A next command does not."""
+    from boss_engine.services.cli_harness import CliHarnessSpec, detect
+
+    found = detect(CliHarnessSpec(
+        name="nope", binary="definitely-not-installed-xyz", signin_hint="nope login"))
+    assert found["installed"] is False and found["ready"] is False
+    assert "install" in found["next_step"] and "nope login" in found["next_step"]
+
+
+def test_detection_never_raises_because_both_answers_are_useful() -> None:
+    """Not installed and installed-but-signed-out are different problems with different next
+    steps. A probe that throws collapses them into 'error'."""
+    from boss_engine.services.cli_harness import CliHarnessSpec, detect
+
+    assert detect(CliHarnessSpec(name="x", binary="no-such-binary-zzz"))["installed"] is False
+
+
+def test_a_cli_with_no_login_of_its_own_is_ready_once_installed() -> None:
+    """aider reads an API key from the environment; there is nothing to sign in to, and
+    reporting it as 'not authenticated' forever would be a permanent false negative."""
+    from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES
+
+    assert BUILTIN_CLI_HARNESSES["aider"].auth_check_args == ()
+
+
+def test_the_subscription_agents_know_how_to_be_signed_in() -> None:
+    from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES as B
+
+    assert B["codex"].signin_hint == "codex login"
+    assert B["codex"].auth_check_args == ("login", "status")
+    assert B["codex"].entitlement_source_id == "openai_codex_chatgpt"
+
+
+def test_connecting_uses_boss_own_oauth_vocabulary() -> None:
+    """BOSS already names these; a ninth spelling would make the broker treat a real OAuth
+    subscription as an unrecognised one."""
+    import inspect
+
+    from boss_engine.services import setup_service
+    from boss_engine.services.entitlements import EntitlementBrokerService
+
+    src = inspect.getsource(setup_service.connect_coding_agent)
+    assert '"official_cli_oauth"' in src
+    assert "official_cli_oauth" in EntitlementBrokerService.OFFICIAL_OAUTH_METHODS
+
+
+def test_a_subscription_seat_is_not_offered_to_multi_tenant_work() -> None:
+    """It is the operator's own seat, and the provider's terms say so."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    assert '"multi_tenant_allowed": False' in inspect.getsource(
+        setup_service.connect_coding_agent)
+
+
+def test_connect_refuses_rather_than_half_succeeding() -> None:
+    """Signed in is not the same as working: a CLI reports 'logged in' from a token on disk,
+    which says somebody signed in once — not that the session still works or the plan is
+    active. The same rule verify_model_key already applies to an API key."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    src = inspect.getsource(setup_service.connect_coding_agent)
+    assert "is not installed on this machine" in src
+    assert "installed but not signed in" in src
+    assert "could not complete a turn" in src
+
+
+def test_the_proof_turn_cannot_edit_anything() -> None:
+    """Proving a connection must not be able to change the customer's code."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    src = inspect.getsource(setup_service.prove_coding_agent)
+    assert "read_only=read_only" in src and "supports_read_only()" in src
+
+
+def test_boss_never_stores_a_subscription_credential() -> None:
+    """There is nothing to store. If this ever grows a secret_ref the claim above is false."""
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    src = inspect.getsource(setup_service.connect_coding_agent)
+    assert "credential_secret_ref_id" not in src
+    assert "api_key" not in src

@@ -10,6 +10,11 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # A SUBSCRIPTION HAS NOTHING TO PASTE. A Codex or Cursor plan is an OAuth session the CLI
+    # holds, so BOSS finds the CLI the customer already uses, proves it answers, and records
+    # the entitlement — rather than asking an operator to transcribe a credential that does
+    # not exist.
+    "detect_coding_agents", "connect_coding_agent",
     # PROVIDER AGNOSTICISM YOU CAN CHECK. Config says what was asked for; the llm_calls
     # ledger says what happened, and only the second one is evidence. `list_harnesses` says
     # which of them a governed task has actually completed on — wired is not proven.
@@ -160,11 +165,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 92, (
+    assert len(reg.names()) == 94, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 57
-    assert len(write) == 35
+    assert len(read) == 58
+    assert len(write) == 36
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -362,6 +367,10 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # CONNECTING A SUBSCRIPTION READS. It probes a CLI the operator already installed, makes
+    # it answer once in a read-only sandbox, and records an entitlement row. It stores no
+    # credential (there is none to store) and changes no code.
+    "connect_coding_agent",
     # A REVIEW COMMENT IS A NOTE, NOT AN ACT. Leaving one appends to a run's comment list and
     # resolving one flips its status; neither starts work, spends a model budget, or changes a
     # line of code. The implementer reads them at its next repair round. Nothing here is harder
