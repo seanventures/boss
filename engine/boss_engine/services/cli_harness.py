@@ -102,6 +102,14 @@ class CliHarnessSpec:
     token_login_args: tuple[str, ...] = ()
     #: How the operator mints the travelling token on their own machine.
     token_hint: str = ""
+    #: The CLI's own credential file on a signed-in machine, when minting the travelling token
+    #: means reading one. Set only where the CLI has no `setup-token` equivalent: claude-code
+    #: prints a token on demand, codex does not — so for codex the file IS the route, and the
+    #: operator would otherwise be told to open it and copy a live credential by hand.
+    #: Named here so the helper script, the console and the docs cannot disagree about it.
+    token_source_file: str = ""
+    #: Field to read out of that file. Searched at any depth, since these files nest.
+    token_source_field: str = "access_token"
     #: The entitlement source this CLI satisfies, so connecting it records governance state
     #: rather than only flipping a setting.
     entitlement_source_id: str = ""
@@ -141,8 +149,11 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         install_hint="npm install -g @openai/codex",
         token_env="CODEX_ACCESS_TOKEN",
         token_login_args=("login", "--with-access-token"),
-        token_hint="on a machine where you are signed in, export the access token and set "
-                   "CODEX_ACCESS_TOKEN on the BOSS install",
+        token_hint="on a machine where you are signed in, run "
+                   "scripts/store_subscription_token.py codex — it reads the token from the "
+                   "Codex CLI's own credential file and stores it, so nobody has to handle it",
+        token_source_file="~/.codex/auth.json",
+        token_source_field="access_token",
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",

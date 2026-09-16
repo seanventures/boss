@@ -154,26 +154,42 @@ The bridge is the **headless token the CLI mints for exactly this**:
 Both CLIs ship in the BOSS image. The image carries binaries and **no credentials**; the
 deployment supplies the token.
 
-Store it through the secret store — **no filesystem access to the deployment required**, which
-matters because the operator setting this up generally cannot edit `.env` on the box:
+Store it with the helper script. It reads the token from the CLI's own credential file and
+posts it straight to the secret store, so the token never passes through a terminal, a
+clipboard or a shell history, and **no filesystem access to the deployment is required** — which
+matters, because the operator setting this up generally cannot edit `.env` on the box:
 
 ```bash
-OPS=$(cat ~/.config/boss/ops-token)
-curl -X POST -H "X-Ops-Token: $OPS" -H 'Content-Type: application/json' \
-     -d '{"key":"CODEX_ACCESS_TOKEN","value":"<token>"}' \
-     "$OPS_BASE_URL/secret"
+export OPS_BASE_URL=http://your-ops-host:8099
+python3 scripts/store_subscription_token.py codex --dry-run   # prove it first
+python3 scripts/store_subscription_token.py codex
 ```
 
-On first use BOSS runs `codex login --with-access-token`, piping the token on **stdin** — never
-argv, which is visible in `ps` to every process on the box. A rejected token logs the exit status
-and nothing else, because the CLI's own error can quote back what it was given.
+It prints the token's length and destination, never the token. `--dry-run` finds the credential
+and reports its shape without sending anything, so you can confirm the file is where the script
+expects before anything leaves the machine.
+
+It reads the ops token from `~/.config/boss/ops-token` by default; pass `--ops-token-file` for
+another path.
+
+**Then redeploy.** The secret store feeds the app's environment at deploy time, and
+`_resolve_token` checks the environment first. A running process does not pick up a secret
+stored underneath it.
+
+Verify it took:
+
+```bash
+curl -H "x-boss-api-key: ${BOSS_API_KEY:?set this to the deployment API key}" \
+     "${BOSS_API:?set this to the deployment base URL}/v1/setup/coding-agents"
+```
 
 **Known rough edge.** `claude setup-token` is a first-class command; Codex has no equivalent, so
-its step is "open a JSON file and copy a field" — a manual credential handling step in the middle
-of an otherwise automated flow, and the one place this design asks a human to touch a live token.
-The fix is for `connect_coding_agent` to read it and write it to the secret store itself, so the
-token goes machine-to-machine and is never on a clipboard. Not built. **Recommend deciding on
-this before the doc goes to customers** — it is the weakest point in the flow.
+something has to read its credential file. The script above is that something, and it exists
+because the instruction it replaced — "open the JSON file and copy the `access_token` field" —
+failed the first time a human ran it: the placeholder was pasted verbatim, the store answered
+`{"stored": true}`, and the deployment held a seven-character string that would have surfaced
+hours later as a build failure. The script is a fix, not the fix. The real one is
+`connect_coding_agent` doing this itself so the console button covers the remote case too.
 
 > **Cursor cannot be used on a hosted BOSS today.** It has no documented token route, so it only
 > works where its login lives. Using it properly needs a different plan — parked deliberately,
