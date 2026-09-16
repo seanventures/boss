@@ -148,3 +148,46 @@ def test_a_working_credential_reports_signed_in(agent, monkeypatch) -> None:
     )
 
     assert agent._authorise_from_file()["authorised"] is True
+
+
+# --- the console's Connect button, on a server ------------------------------
+
+
+def test_connect_tries_the_stored_credential_before_refusing() -> None:
+    """On a server the CLI is NEVER signed in by hand — nobody can open a browser there.
+
+    So "not signed in" is the starting state, not a verdict. Refusing on it made the console's
+    Connect button permanently unusable on exactly the deployments it exists for, and told the
+    operator to run `codex login` on a machine they cannot log into. Measured: the deployed API
+    answered "installed but not signed in" while a valid credential sat in its environment.
+
+    Checked structurally, because the alternative — mocking detect and ensure_authorised, then
+    asserting the mock ran — tests the mocks. What matters is the ORDER of two real statements:
+    the restore attempt has to come before the refusal.
+    """
+    import inspect
+
+    from boss_engine.services.setup_service import connect_coding_agent
+
+    source = inspect.getsource(connect_coding_agent)
+    restore_at = source.find("ensure_authorised")
+    refuse_at = source.find("installed but not signed in")
+
+    assert restore_at != -1, "connect never tries the stored credential"
+    assert restore_at < refuse_at, (
+        "connect refuses before trying the stored credential, so a server can never connect")
+
+
+def test_a_run_authorises_a_file_route_harness_too(monkeypatch, tmp_path) -> None:
+    """The guard keyed off token_env, which codex no longer has.
+
+    Left as it was, a harness on the file route would never restore its credential before a
+    build, and every run would fail as "not signed in" on a deployment that had the credential.
+    """
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    source = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
+    assert "auth_file_secret" in source, (
+        "run_role still gates authorisation on token_env alone, so the file route never runs")

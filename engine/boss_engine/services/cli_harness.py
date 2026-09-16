@@ -588,9 +588,11 @@ class GenericCliCodeAgent:
         import re as _re
         import tempfile
 
-        # Sign in from the stored token if this deployment has one and the CLI is not already
-        # signed in. Cheap after the first call: `detect` short-circuits on "already signed in".
-        if self.spec.token_env and not getattr(self, "_auth_checked", False):
+        # Sign in from the stored credential if this deployment has one and the CLI is not
+        # already signed in — a token for some CLIs, the CLI's own auth file for others.
+        # Cheap after the first call: `detect` short-circuits on "already signed in".
+        if ((self.spec.token_env or self.spec.auth_file_secret)
+                and not getattr(self, "_auth_checked", False)):
             self._auth_checked = True
             self._auth_state = self.ensure_authorised()
         argv = self._argv(prompt, read_only=read_only, model=model)

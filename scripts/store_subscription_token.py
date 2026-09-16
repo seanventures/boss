@@ -74,13 +74,18 @@ def read_whole_file(auth_file: Path) -> str:
         raise SystemExit(
             f"{auth_file} does not exist — sign in on this machine first, then re-run.")
     content = auth_file.read_text()
-    if auth_file.suffix == ".json":
-        try:
-            json.loads(content)
-        except json.JSONDecodeError as exc:
-            # The file holds a live credential, so the parser's excerpt must not travel.
-            raise SystemExit(f"{auth_file} is not valid JSON (line {exc.lineno})") from None
-    return content
+    if auth_file.suffix != ".json":
+        return content
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        # The file holds a live credential, so the parser's excerpt must not travel.
+        raise SystemExit(f"{auth_file} is not valid JSON (line {exc.lineno})") from None
+    # ONE LINE. A secret store that renders into a .env cannot hold a newline and says so:
+    # `{"error": "value must be a single-line string"}`, HTTP 400. Pretty-printed JSON is the
+    # normal shape for these files, so sending the file verbatim fails for most operators.
+    # Re-serialising compactly changes the bytes and not the meaning — the CLI parses JSON.
+    return json.dumps(parsed, separators=(",", ":"))
 
 
 def read_token(auth_file: Path, field: str) -> str:

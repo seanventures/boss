@@ -223,7 +223,7 @@ def connect_coding_agent(
     different next steps, and both are more useful than a stored setting that fails at build
     time an hour later.
     """
-    from .cli_harness import detect, load_specs
+    from .cli_harness import GenericCliCodeAgent, detect, load_specs
 
     spec = load_specs(settings).get(provider)
     if spec is None:
@@ -236,9 +236,17 @@ def connect_coding_agent(
             f"the {provider} CLI is not installed on this machine. "
             f"{found['next_step']}")
     if found["authenticated"] is False:
-        raise SetupError(
-            f"the {provider} CLI is installed but not signed in. {found['next_step']} "
-            f"(BOSS never sees the credential — the CLI holds its own session.)")
+        # TRY THE STORED CREDENTIAL BEFORE REFUSING. On a server the CLI is never signed in
+        # by hand — nobody can open a browser there — so "not signed in" is the expected
+        # starting state, not a verdict. Refusing here made the console's Connect button
+        # permanently unusable on exactly the deployments it exists for, while telling the
+        # operator to run `codex login` on a machine they cannot log into.
+        restored = GenericCliCodeAgent(settings, spec).ensure_authorised()
+        if not restored.get("authorised"):
+            raise SetupError(
+                f"the {provider} CLI is installed but not signed in. {found['next_step']} "
+                f"({restored.get('reason') or 'no stored credential for this install'})")
+        found = detect(spec)
 
     proof = {"ok": True, "skipped": True} if not prove else prove_coding_agent(settings, provider)
     if not proof.get("ok"):

@@ -91,8 +91,26 @@ def test_codex_sends_the_whole_file_not_one_field(mod, tmp_path, capsys) -> None
     printed = capsys.readouterr().out
     assert "CODEX_AUTH_JSON" in printed, printed
     assert "whole auth.json" in printed, printed
-    assert f"{len(json.dumps(doc))} chars" in printed, printed
+    compact = json.dumps(doc, separators=(",", ":"))
+    assert f"{len(compact)} chars" in printed, printed
     assert "real-token-value" not in printed, "the script printed the credential"
+
+
+def test_the_credential_is_sent_as_a_single_line(mod, tmp_path) -> None:
+    """The secret store refuses a newline, and these files are normally pretty-printed.
+
+    Measured: POSTing a two-line value returns HTTP 400
+    `{"error": "value must be a single-line string"}`, while 4000 characters on one line is
+    accepted. So sending the file verbatim fails for most operators. Re-serialising compactly
+    changes the bytes and not the meaning, because the CLI parses JSON.
+    """
+    pretty = tmp_path / "auth.json"
+    pretty.write_text(json.dumps({"tokens": {"access_token": "v"}}, indent=2))
+
+    content = mod.read_whole_file(pretty)
+
+    assert "\n" not in content
+    assert json.loads(content) == {"tokens": {"access_token": "v"}}
 
 
 def test_a_credential_file_that_is_not_json_is_refused(mod, tmp_path) -> None:
