@@ -372,6 +372,67 @@ class GenericCliCodeAgent:
             argv.append(prompt)
         return argv
 
+    def ensure_authorised(self) -> dict:
+        """Sign the CLI in from a stored token, when it is not signed in already.
+
+        A subscription is authorised on the operator's laptop; the pipeline runs in a
+        container. The bridge is the token the CLI itself mints for headless use — which is
+        how claude_code has always worked here (CLAUDE_CODE_OAUTH_TOKEN), and which codex
+        accepts on stdin via `codex login --with-access-token`.
+
+        The token is read from the deployment's secret store, never from a file this code
+        writes and never from an argument: argv is visible in `ps` to every process on the
+        box, so it is piped in. Nothing about the value is logged, including its length.
+        """
+        if not self.spec.token_env or not self.spec.token_login_args:
+            return {"authorised": None, "reason": "this CLI has no token route"}
+        found = detect(self.spec)
+        if not found["installed"]:
+            return {"authorised": False, "reason": "not installed"}
+        if found["authenticated"]:
+            return {"authorised": True, "reason": "already signed in"}
+        token = self._resolve_token()
+        if not token:
+            return {"authorised": False,
+                    "reason": f"no {self.spec.token_env} available to this install"}
+        try:
+            proc = subprocess.run(
+                [self._resolve_binary(), *self.spec.token_login_args],
+                input=token, capture_output=True, text=True, timeout=60,
+                env=self._env(),
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            return {"authorised": False, "reason": f"{type(exc).__name__}"}
+        if proc.returncode != 0:
+            # The CLI's own message can echo the token back; only the status is safe to keep.
+            _log.warning("%s token login failed with exit %s", self.spec.name, proc.returncode)
+            return {"authorised": False, "reason": f"token rejected (exit {proc.returncode})"}
+        _log.info("%s authorised from %s", self.spec.name, self.spec.token_env)
+        return {"authorised": True, "reason": "signed in from the stored token"}
+
+    def _resolve_token(self) -> Optional[str]:
+        """The travelling token: the environment first, then the deployment's secret store.
+
+        Environment first because that is what an operator sets while working something out,
+        and a store that silently overrode it would make debugging impossible.
+        """
+        direct = os.environ.get(self.spec.token_env)
+        if direct:
+            return direct.strip() or None
+        try:
+            from .secret_backends import backend_for, default_secret_backend
+
+            # `default_secret_backend` names the best store this installation actually has —
+            # a managed one, a vault, or the local fallback — so the harness does not have to
+            # know which, and a deployment that changes store keeps working.
+            value = backend_for(default_secret_backend(self.settings), self.settings).get(
+                self.spec.token_env)
+        except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
+            _log.info("no stored %s for %s (%s)", self.spec.token_env, self.spec.name,
+                      type(exc).__name__)
+            return None
+        return (value or "").strip() or None
+
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  **_ignored) -> dict:
@@ -391,6 +452,11 @@ class GenericCliCodeAgent:
         import re as _re
         import tempfile
 
+        # Sign in from the stored token if this deployment has one and the CLI is not already
+        # signed in. Cheap after the first call: `detect` short-circuits on "already signed in".
+        if self.spec.token_env and not getattr(self, "_auth_checked", False):
+            self._auth_checked = True
+            self._auth_state = self.ensure_authorised()
         argv = self._argv(prompt, read_only=read_only, model=model)
         final_path = None
         if self.spec.final_message_flag:

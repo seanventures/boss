@@ -406,3 +406,72 @@ def test_a_container_is_not_told_to_open_a_browser() -> None:
 
     src = inspect.getsource(cli_harness._is_interactive_host)
     assert "/.dockerenv" in src and "KUBERNETES_SERVICE_HOST" in src
+
+
+# --- the token that carries a subscription to a server ------------------------
+
+def test_a_cli_with_no_token_route_says_so_rather_than_trying() -> None:
+    from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES, GenericCliCodeAgent
+
+    agent = GenericCliCodeAgent(Settings(), BUILTIN_CLI_HARNESSES["cursor"])
+    state = agent.ensure_authorised()
+    assert state["authorised"] is None and "no token route" in state["reason"]
+
+
+def test_an_uninstalled_cli_is_not_a_token_problem() -> None:
+    """Different causes need different next steps; collapsing them into "failed" is how an
+    operator ends up re-minting a token that was never the problem."""
+    from boss_engine.services.cli_harness import CliHarnessSpec, GenericCliCodeAgent
+
+    agent = GenericCliCodeAgent(Settings(), CliHarnessSpec(
+        name="nope", binary="definitely-not-installed-xyz",
+        token_env="NOPE_TOKEN", token_login_args=("login", "--with-access-token")))
+    assert agent.ensure_authorised()["reason"] == "not installed"
+
+
+def test_the_token_is_piped_not_passed_as_an_argument() -> None:
+    """argv is visible in `ps` to every process on the box. A subscription credential must
+    never appear there."""
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    src = inspect.getsource(cli_harness.GenericCliCodeAgent.ensure_authorised)
+    assert "input=token" in src, "the token must arrive on stdin"
+    # The argv is the binary and the spec's flags, and nothing else. Asserted literally
+    # rather than by searching the slice for "token" — `token_login_args` contains that
+    # word, which made the first version of this test pass judgement on its own variable
+    # names instead of on where the secret goes.
+    assert "[self._resolve_binary(), *self.spec.token_login_args]" in src
+
+
+def test_a_rejected_token_is_never_echoed_into_the_log() -> None:
+    """The CLI's own failure message can quote what it was given."""
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    src = inspect.getsource(cli_harness.GenericCliCodeAgent.ensure_authorised)
+    assert "only the status is safe to keep" in src
+    assert "proc.stderr" not in src
+
+
+def test_the_environment_wins_over_the_stored_secret() -> None:
+    """What an operator exports while debugging must not be silently overridden by a store."""
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    src = inspect.getsource(cli_harness.GenericCliCodeAgent._resolve_token)
+    assert src.index("os.environ.get") < src.index("backend_for")
+
+
+def test_signing_in_is_attempted_once_per_agent_not_per_call() -> None:
+    """detect() shells out twice; doing that before every stage would add it to every step
+    of the pipeline."""
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    src = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
+    assert "_auth_checked" in src
