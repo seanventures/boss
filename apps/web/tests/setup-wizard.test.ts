@@ -84,12 +84,19 @@ describe("connecting a model", () => {
 });
 
 describe("the route does not become a way to reach any endpoint", () => {
-  it("the two steps are named server-side", () => {
+  it("every step is named server-side", () => {
     // Taking a path from the client would let this reach any API endpoint with the console's
-    // credentials.
+    // credentials. The INVARIANT is that each step maps to a literal path here — not the
+    // wording of the rejection, which this used to pin and which broke the moment a third
+    // step was added (connecting a coding-agent subscription) without weakening anything.
     expect(ROUTE).toContain('step === "github" ? "/v1/github/easy-connect"');
     expect(ROUTE).toContain('step === "model" ? "/v1/setup/model"');
-    expect(ROUTE).toContain("step must be 'github' or 'model'");
+    expect(ROUTE).toContain('step === "coding-agent" ? "/v1/setup/coding-agents/connect"');
+    // An unknown step is refused rather than forwarded.
+    expect(ROUTE).toMatch(/if \(!path\) \{/);
+    expect(ROUTE).toContain("step must be");
+    // And no path is ever built from the request body.
+    expect(ROUTE).not.toMatch(/\$\{API_URL\}\$\{body\./);
   });
 
   it("and the token is posted, never put in a query string", () => {

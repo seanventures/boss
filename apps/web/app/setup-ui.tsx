@@ -35,6 +35,14 @@ type Provider = {
   base_url?: string; example_model?: string; key_url?: string; note?: string;
 };
 
+/** What `/v1/setup/coding-agents` reports about one CLI on THIS machine. No credential
+ *  appears in it, because a subscription does not have one to report. */
+type CodingAgent = {
+  name: string; binary: string; installed: boolean; version: string | null;
+  authenticated: boolean | null; auth_detail: string | null; ready: boolean;
+  next_step: string | null;
+};
+
 async function call<T>(body: Record<string, unknown>): Promise<{ ok: boolean; data?: T; error?: string }> {
   try {
     const r = await fetch("/api/setup", {
@@ -301,9 +309,43 @@ function ModelStep({ projectId, actor, providers, onDone }: {
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [agents, setAgents] = useState<CodingAgent[] | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   const chosen = providers.find((p) => p.provider === provider);
   const subscription = chosen?.kind === "subscription";
+
+  // ASK THE MACHINE, DO NOT ASK THE OPERATOR. A subscription is an OAuth session the CLI
+  // holds; there is no credential to type, so the only honest question is whether the CLI is
+  // here and signed in — and BOSS can answer that itself.
+  useEffect(() => {
+    if (!subscription) { setAgents(null); return; }
+    (async () => {
+      try {
+        const r = await fetch("/api/setup?view=coding-agents", { cache: "no-store" });
+        if (r.ok) setAgents(((await r.json()).agents ?? []) as CodingAgent[]);
+      } catch { setAgents(null); }   // fall back to the manual instructions below
+    })();
+  }, [subscription, provider]);
+
+  const detected = agents?.find((a) => a.name === provider) ?? null;
+
+  const connectAgent = useCallback(async () => {
+    if (connecting) return;
+    setConnecting(true); setResult(null);
+    const r = await call<Record<string, unknown>>({
+      step: "coding-agent",
+      payload: { project_id: projectId, actor, provider, prove: true },
+    });
+    setConnecting(false);
+    setResult(r.ok
+      ? { ok: true, text: `Connected. ${provider} answered a test turn, and the entitlement `
+                          + `is recorded. Use it with BOSS_PROVIDER_LOCK=${provider}.` }
+      // The API answers 422 with the next command for every fixable case, so show it verbatim
+      // rather than "could not connect".
+      : { ok: false, text: r.error ?? "could not connect" });
+    if (r.ok) onDone();
+  }, [connecting, projectId, actor, provider, onDone]);
 
   const save = useCallback(async () => {
     if (busy) return;
@@ -386,7 +428,38 @@ function ModelStep({ projectId, actor, providers, onDone }: {
           from a reference the caller already has — it performs no login and no token exchange,
           so pointing the wizard at it would produce a green tick with nothing authorised.
           What genuinely works is the headless token the CLI mints for exactly this purpose. */}
-      {subscription ? (
+      {subscription && detected ? (
+        <div className="detail" data-testid="setup-model-agent-detected">
+          <p>
+            {chosen?.note} There is nothing to paste: the CLI holds its own login, and BOSS
+            runs it on this machine.
+          </p>
+          <p data-testid="setup-agent-state">
+            <b>{detected.binary}</b>{" "}
+            {detected.installed
+              ? <>found{detected.version ? ` — ${detected.version}` : ""}.{" "}
+                  {detected.authenticated === false
+                    ? <>Not signed in.</>
+                    : <>{detected.auth_detail ?? "Signed in."}</>}</>
+              : <>not installed on this machine.</>}
+          </p>
+          {detected.ready ? (
+            <button className="button" disabled={connecting}
+                    data-testid="setup-agent-connect" onClick={() => void connectAgent()}>
+              {connecting ? "Checking it answers…" : `Connect ${chosen?.label ?? provider}`}
+            </button>
+          ) : (
+            // The next COMMAND, not "not configured" — which sends somebody to search.
+            <p data-testid="setup-agent-next-step">
+              To use it here: <code>{detected.next_step}</code>
+            </p>
+          )}
+          <p className="hint">
+            Connecting proves it works before recording anything: BOSS makes the agent complete
+            one turn in its read-only sandbox. Signed in is not the same as working.
+          </p>
+        </div>
+      ) : subscription ? (
         <div className="detail" data-testid="setup-model-subscription">
           <p>
             {chosen?.note} There is no browser login here and BOSS does not hold a live session

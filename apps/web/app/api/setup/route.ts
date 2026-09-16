@@ -18,6 +18,11 @@ export async function GET(req: Request) {
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const path = view === "providers"
     ? "/v1/setup/model-providers"
+    // Which coding-agent CLIs this machine already has, and what each still needs. There is
+    // no credential in this answer and none is asked for: a subscription is an OAuth session
+    // the CLI holds, so detection is the whole of it.
+    : view === "coding-agents"
+    ? "/v1/setup/coding-agents"
     : `/v1/setup/status?project_id=${encodeURIComponent(projectId)}`;
   try {
     const r = await fetch(`${API_URL}${path}`, {
@@ -47,9 +52,11 @@ export async function POST(req: Request) {
   // route cannot be used to reach an arbitrary API endpoint with the console's credentials.
   const path = step === "github" ? "/v1/github/easy-connect"
              : step === "model" ? "/v1/setup/model"
+             : step === "coding-agent" ? "/v1/setup/coding-agents/connect"
              : "";
   if (!path) {
-    return NextResponse.json({ error: "step must be 'github' or 'model'" }, { status: 400 });
+    return NextResponse.json(
+      { error: "step must be 'github', 'model' or 'coding-agent'" }, { status: 400 });
   }
   try {
     const r = await fetch(`${API_URL}${path}`, {

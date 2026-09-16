@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+
+/**
+ * A subscription is not a key.
+ *
+ * The wizard used to tell an operator to go and mint a headless token themselves and paste it
+ * back — and for anything that was not Claude Code it said, honestly, that BOSS had no step
+ * for it at all. That was true when the only way in was a credential.
+ *
+ * It is not true any more. A Codex or Cursor plan is an OAuth session the CLI already holds,
+ * so BOSS can look for the CLI on the machine, read whether it is signed in, and prove it
+ * answers — without a credential ever existing to paste. The wizard asks the machine instead
+ * of the operator.
+ *
+ * The earlier comment in this file is worth keeping in mind: a previous version promised a
+ * "connection session" that did nothing, producing a green tick over nothing. Hence the
+ * insistence below that connecting PROVES before it records.
+ */
+
+const UI = readFileSync(new URL("../app/setup-ui.tsx", import.meta.url), "utf8");
+const ROUTE = readFileSync(new URL("../app/api/setup/route.ts", import.meta.url), "utf8");
+
+describe("the wizard asks the machine", () => {
+  it("looks for the CLI instead of asking for a credential", () => {
+    expect(UI).toContain('"/api/setup?view=coding-agents"');
+    expect(UI).toContain("ASK THE MACHINE, DO NOT ASK THE OPERATOR");
+  });
+
+  it("only does that for a subscription provider", () => {
+    // An API-key provider has a key to type; detection would be noise.
+    expect(UI).toMatch(/if \(!subscription\) \{ setAgents\(null\); return; \}/);
+  });
+
+  it("offers a Connect button once the CLI is signed in", () => {
+    expect(UI).toContain('data-testid="setup-agent-connect"');
+    expect(UI).toContain('step: "coding-agent"');
+  });
+
+  it("shows the next COMMAND when it is not ready", () => {
+    // "Not configured" sends somebody to search. A command does not.
+    expect(UI).toContain('data-testid="setup-agent-next-step"');
+    expect(UI).toContain("detected.next_step");
+  });
+
+  it("reports what it found, so the operator can see why", () => {
+    expect(UI).toContain('data-testid="setup-agent-state"');
+    expect(UI).toContain("detected.version");
+    expect(UI).toContain("detected.auth_detail");
+  });
+});
+
+describe("it does not repeat the green-tick-over-nothing mistake", () => {
+  it("says the connection is proved, not merely recorded", () => {
+    expect(UI).toContain("one turn in its read-only sandbox");
+    expect(UI).toContain("Signed in is not the same as working");
+  });
+
+  it("asks the server to prove it", () => {
+    expect(UI).toContain("prove: true");
+  });
+
+  it("keeps the manual instructions for anything undetected", () => {
+    // Detection can fail (no CLI, an unreachable API). Falling back to the old text beats
+    // showing nothing, and beats implying a connection that does not exist.
+    expect(UI).toContain('data-testid="setup-model-subscription"');
+    expect(UI).toContain("subscription && detected");
+  });
+});
+
+describe("the route", () => {
+  it("reaches both coding-agent endpoints", () => {
+    expect(ROUTE).toContain('"/v1/setup/coding-agents"');
+    expect(ROUTE).toContain('"/v1/setup/coding-agents/connect"');
+  });
+
+  it("still names its upstreams rather than taking a path from the client", () => {
+    // Otherwise this route is a way to reach any API endpoint with the console's credentials.
+    expect(ROUTE).toContain('step === "coding-agent" ? "/v1/setup/coding-agents/connect"');
+    expect(ROUTE).not.toMatch(/\$\{API_URL\}\$\{body\./);
+  });
+});
