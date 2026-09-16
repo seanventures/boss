@@ -31,7 +31,12 @@ FROM python-base AS api
 # because a developer machine has git and node, which is exactly why nobody noticed.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
-    && npm install -g @anthropic-ai/claude-code \
+    # Both coding CLIs, for the same reason git is here: a harness the control plane cannot
+    # start is a harness that accepts work and never performs it. claude-code authorises from
+    # CLAUDE_CODE_OAUTH_TOKEN; codex from CODEX_ACCESS_TOKEN via `codex login
+    # --with-access-token`. Neither ships a credential — the image has the binary, the
+    # deployment supplies the token.
+    && npm install -g @anthropic-ai/claude-code @openai/codex \
     && npm cache clean --force \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

@@ -87,6 +87,21 @@ class CliHarnessSpec:
     install_hint: str = ""
     #: Where the operator can read the CLI's own docs, for the cases neither command covers.
     docs_url: str = ""
+    # --- how a subscription reaches a SERVER -----------------------------------
+    #
+    # Detection finds a CLI on the machine BOSS is running on. That is the whole answer for a
+    # self-hosted install, and no answer at all for a deployed one: the operator's login is on
+    # their laptop and the pipeline runs in a container. Measured — the deployed API reported
+    # `codex installed=False` while the same check on the laptop said ready.
+    #
+    # So a subscription that can be used remotely is one whose CLI accepts a token: claude-code
+    # reads CLAUDE_CODE_OAUTH_TOKEN, codex takes `codex login --with-access-token` on stdin.
+    # A CLI with neither can only ever be used where its login lives.
+    token_env: str = ""
+    #: argv that authorises the CLI from that token, read on stdin.
+    token_login_args: tuple[str, ...] = ()
+    #: How the operator mints the travelling token on their own machine.
+    token_hint: str = ""
     #: The entitlement source this CLI satisfies, so connecting it records governance state
     #: rather than only flipping a setting.
     entitlement_source_id: str = ""
@@ -124,6 +139,10 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         auth_ok_pattern=r"(?i)logged\s+in",
         signin_hint="codex login",
         install_hint="npm install -g @openai/codex",
+        token_env="CODEX_ACCESS_TOKEN",
+        token_login_args=("login", "--with-access-token"),
+        token_hint="on a machine where you are signed in, export the access token and set "
+                   "CODEX_ACCESS_TOKEN on the BOSS install",
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
@@ -250,6 +269,14 @@ def detect(spec: CliHarnessSpec) -> dict:
         "verified_harness": spec.verified,
         "next_step": None,
     }
+    result["token_env"] = spec.token_env
+    result["token_hint"] = spec.token_hint
+    result["token_present"] = bool(spec.token_env and os.environ.get(spec.token_env))
+    # CAN THIS SUBSCRIPTION BE USED FROM A SERVER AT ALL? Detection answers "is the CLI here";
+    # this answers "could it be, on a machine the operator does not sit at". A CLI with no
+    # token route can only ever be used where its login lives, and saying so is the difference
+    # between an operator configuring a deployment and one wondering why it stays empty.
+    result["portable"] = bool(spec.token_env)
     if not found:
         result["next_step"] = (spec.install_hint or f"install the {spec.name} CLI")
         return result
@@ -269,8 +296,26 @@ def detect(spec: CliHarnessSpec) -> dict:
     result["authenticated"] = signed_in
     result["ready"] = signed_in
     if not signed_in:
-        result["next_step"] = f"sign in with: {spec.signin_hint}"
+        # A token already set and still not signed in means the token is the thing to fix,
+        # not the browser login — different problem, different command.
+        result["next_step"] = (
+            f"set {spec.token_env} on this install ({spec.token_hint})"
+            if spec.token_env and not result["token_present"] and not _is_interactive_host()
+            else f"sign in with: {spec.signin_hint}")
     return result
+
+
+def _is_interactive_host() -> bool:
+    """Is BOSS running somewhere a person could open a browser to sign a CLI in?
+
+    A container has no browser and nobody sitting at it, so telling its operator to "run
+    codex login" is advice they cannot take. Imperfect by nature — it reads the same signals
+    every tool does — and wrong in the safe direction: a false "server" offers the token
+    route, which also works on a laptop.
+    """
+    return not (os.environ.get("CI")
+                or os.path.exists("/.dockerenv")
+                or os.environ.get("KUBERNETES_SERVICE_HOST"))
 
 
 def detect_all(settings) -> list[dict]:

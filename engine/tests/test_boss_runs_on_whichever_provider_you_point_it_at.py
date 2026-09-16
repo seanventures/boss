@@ -339,3 +339,70 @@ def test_boss_never_stores_a_subscription_credential() -> None:
     src = inspect.getsource(setup_service.connect_coding_agent)
     assert "credential_secret_ref_id" not in src
     assert "api_key" not in src
+
+
+# --- a subscription on a laptop, a pipeline in a container --------------------
+#
+# Detection answers "is the CLI on the machine BOSS is running on". For a self-hosted install
+# that is the whole answer. For a deployed one it is no answer at all: the operator's login is
+# on their laptop and the pipeline runs in a container. Measured on the real deployment — the
+# goldeneye API reported `codex installed=False` while the same check on the laptop said ready,
+# which is correct and useless at the same time.
+#
+# So what matters for a shipped product is whether the subscription can TRAVEL.
+
+def test_a_subscription_says_whether_it_can_reach_a_server() -> None:
+    from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES as B
+
+    # codex takes a token on stdin, so a deployment can authorise itself.
+    assert B["codex"].token_env == "CODEX_ACCESS_TOKEN"
+    assert B["codex"].token_login_args == ("login", "--with-access-token")
+    # cursor has no documented token route, so it can only be used where its login lives.
+    assert B["cursor"].token_env == ""
+
+
+def test_detection_reports_portability_not_just_presence() -> None:
+    from boss_engine.config import Settings
+    from boss_engine.services.cli_harness import detect_all
+
+    by_name = {d["name"]: d for d in detect_all(Settings())}
+    assert by_name["codex"]["portable"] is True
+    assert by_name["cursor"]["portable"] is False
+
+
+def test_both_coding_clis_are_in_the_image() -> None:
+    """A harness the control plane cannot START is a harness that accepts work and never
+    performs it — the same failure that left runs queued for weeks when git was missing."""
+    from pathlib import Path
+
+    dockerfile = Path("Dockerfile")
+    if not dockerfile.exists():  # pragma: no cover - engine installed standalone
+        pytest.skip("Dockerfile not in this checkout")
+    text = dockerfile.read_text()
+    assert "@anthropic-ai/claude-code" in text
+    assert "@openai/codex" in text
+
+
+def test_the_image_ships_no_credential() -> None:
+    """The image carries the binary; the deployment supplies the token."""
+    from pathlib import Path
+
+    dockerfile = Path("Dockerfile")
+    if not dockerfile.exists():  # pragma: no cover
+        pytest.skip("Dockerfile not in this checkout")
+    text = dockerfile.read_text()
+    for secret in ("CODEX_ACCESS_TOKEN=", "CLAUDE_CODE_OAUTH_TOKEN=", "sk-"):
+        assert secret not in text
+
+
+def test_a_container_is_not_told_to_open_a_browser() -> None:
+    """"Run codex login" is advice a container's operator cannot take."""
+    from boss_engine.services.cli_harness import _is_interactive_host
+
+    assert isinstance(_is_interactive_host(), bool)
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    src = inspect.getsource(cli_harness._is_interactive_host)
+    assert "/.dockerenv" in src and "KUBERNETES_SERVICE_HOST" in src
