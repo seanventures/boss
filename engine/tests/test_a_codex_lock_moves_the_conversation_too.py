@@ -98,3 +98,70 @@ def test_both_cli_brains_share_one_prompt(provider) -> None:
     assert CodexCliAdapter._build_prompt is CliChatBrain._build_prompt
     assert ClaudeCliAdapter._build_prompt is CliChatBrain._build_prompt
     assert CodexCliAdapter.create_chat_completion is CliChatBrain.create_chat_completion
+
+
+# --- usage accounting -------------------------------------------------------
+#
+# Captured from codex-cli, not invented: one real `turn.completed` event. A unit test must
+# never shell out to the CLI — that spends the operator's subscription on every CI run.
+
+_TURN = (
+    '{"type": "item.completed", "item": {"text": "pong"}}\n'
+    '{"type": "turn.completed", "usage": {"input_tokens": 16243, '
+    '"cached_input_tokens": 11520, "cache_write_input_tokens": 0, '
+    '"output_tokens": 5, "reasoning_output_tokens": 0}}\n'
+)
+
+
+def _usage_for(stdout: str) -> dict:
+    return CodexCliAdapter(Settings())._usage({"stdout": stdout})
+
+
+def test_cached_input_is_not_priced_as_new_input() -> None:
+    """Folding cache reads into prompt_tokens makes cache savings invisible-to-negative.
+
+    The Claude path had to be corrected for exactly this (BOSS-280). Codex reports the whole
+    prompt in `input_tokens` with the cached part as a subset, so new input is the difference.
+    """
+    usage = _usage_for(_TURN)
+
+    assert usage["cache_read_tokens"] == 11520
+    assert usage["prompt_tokens"] == 16243 - 11520
+    assert usage["total_tokens"] == 16243 + 5
+
+
+def test_reasoning_tokens_are_counted_as_output() -> None:
+    """They are billed as output; a field of their own would be priced by nothing."""
+    stdout = _TURN.replace('"reasoning_output_tokens": 0', '"reasoning_output_tokens": 640')
+
+    assert _usage_for(stdout)["completion_tokens"] == 645
+
+
+def test_a_turn_that_reports_nothing_does_not_crash_or_invent() -> None:
+    """A backend that appears free would quietly corrupt every cost comparison BOSS makes."""
+    usage = _usage_for("not json at all\n")
+
+    assert usage["total_tokens"] == 0
+    assert usage["model"] == "codex-cli"
+
+
+def test_the_last_turn_wins_when_a_run_reports_several() -> None:
+    stdout = _TURN + _TURN.replace('"output_tokens": 5', '"output_tokens": 99')
+
+    assert _usage_for(stdout)["completion_tokens"] == 99
+
+
+def test_no_unit_test_here_spends_the_subscription(monkeypatch) -> None:
+    """The fixture above is captured output. If this file ever shells out, CI pays for it.
+
+    Checked by making the CLI unrunnable rather than by grepping this file for suspicious
+    words: a text search flagged its own assertion that two classes SHARE one method, which
+    reads `create_chat_completion` without calling anything. A test that judges its own source
+    fails on the wrong things and passes on cleverly-worded ones.
+    """
+    def explode(*_a, **_k):  # pragma: no cover - the point is that it is never reached
+        raise AssertionError("a unit test tried to run a real CLI")
+
+    monkeypatch.setattr("subprocess.run", explode)
+
+    assert _usage_for(_TURN)["total_tokens"] > 0

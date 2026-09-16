@@ -14,18 +14,18 @@ shared with the Claude path and lives in `CliChatBrain`. Only three things are C
     path had to grow a size test for this, because a long conversation plus ~90 tool schemas
     exceeds Linux's 128 KiB cap on a single argv entry and dies as "Argument list too long".
     Codex avoids the cliff entirely rather than straddling it.
-  * the final message comes from `--output-last-message`, not stdout. Stdout also carries the
-    reasoning trace and a token summary, so parsing it would mean separating the answer from
-    the narration on every turn.
+  * the final message comes from `--output-last-message`, not stdout. With `--json` stdout is
+    a JSONL event stream, which is where the turn's token usage lives — measured, not assumed:
+    `turn.completed` carries input, cached-input, cache-write, output and reasoning counts.
   * `--sandbox read-only` and `--ignore-user-config`, so a brain that is supposed to be pure
     reasoning cannot edit the filesystem and does not inherit the operator's own Codex
     configuration. This is the same intent as the Claude path's `--disallowedTools`.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
-import re
 import subprocess
 import tempfile
 from typing import Optional
@@ -35,9 +35,6 @@ from .claude_cli_adapter import CliChatBrain
 from .scheduling import low_priority
 
 _log = logging.getLogger(__name__)
-
-#: `codex exec` prints a running total; the last one is the turn's usage.
-_TOKENS = re.compile(r"tokens used[:\s]+([\d,]+)", re.I)
 
 
 class CodexCliAdapter(CliChatBrain):
@@ -55,8 +52,8 @@ class CodexCliAdapter(CliChatBrain):
 
     def _invoke(self, prompt: str) -> dict:
         timeout = int(getattr(self.settings, "codex_cli_timeout", 240) or 240)
-        # The final message goes to a file rather than being parsed out of stdout, which also
-        # carries the reasoning trace and the token line.
+        # The final message goes to a file rather than being dug out of stdout, which under
+        # --json is an event stream rather than an answer.
         handle, last_message = tempfile.mkstemp(prefix="codex-final-", suffix=".txt")
         os.close(handle)
         cmd = [
@@ -70,6 +67,10 @@ class CodexCliAdapter(CliChatBrain):
             # Pure reasoning. BOSS executes tools; this process must not touch the disk.
             "--sandbox", "read-only",
             "--output-last-message", last_message,
+            # Events as JSONL, purely for the usage on `turn.completed`. Without it a turn
+            # reports no tokens at all, and a backend that appears to cost nothing quietly
+            # corrupts every cost comparison BOSS makes between providers.
+            "--json",
         ]
         model = self.model_override or (getattr(self.settings, "codex_cli_model", "") or "")
         if model:
@@ -108,23 +109,47 @@ class CodexCliAdapter(CliChatBrain):
             raise RuntimeError("codex CLI produced no final message")
         return {"result": result, "stdout": proc.stdout or "", "session_id": self._session_default}
 
-    def _usage(self, data: dict) -> dict:
-        """Best effort, and honest when it fails.
+    @staticmethod
+    def _turn_usage(stdout: str) -> dict:
+        """Usage off the last `turn.completed` event in the JSONL stream."""
+        usage: dict = {}
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{") or "turn.completed" not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event.get("usage"), dict):
+                usage = event["usage"]
+        return usage
 
-        Codex reports a single running total, with no split between input, output and cache.
-        Inventing a split would put fabricated numbers into the cost ledger, so the total goes
-        to `total_tokens` and the fields BOSS cannot know stay zero.
+    def _usage(self, data: dict) -> dict:
+        """Codex's own numbers, mapped onto the split BOSS prices against.
+
+        `input_tokens` is the whole prompt and `cached_input_tokens` is the part of it that was
+        served from cache, so genuinely-new input is the difference. Folding them together
+        would price cache reads as full-price input and make cache savings invisible — the
+        same mistake the Claude path had to be corrected for (BOSS-280).
+
+        Reasoning tokens are billed as output, so they belong in `completion_tokens` rather
+        than in a field of their own that nothing prices.
         """
-        found = _TOKENS.findall(data.get("stdout") or "")
-        total = int(found[-1].replace(",", "")) if found else 0
+        usage = self._turn_usage(data.get("stdout") or "")
+        cache_read = int(usage.get("cached_input_tokens") or 0)
+        cache_write = int(usage.get("cache_write_input_tokens") or 0)
+        prompt = max(int(usage.get("input_tokens") or 0) - cache_read, 0)
+        completion = (int(usage.get("output_tokens") or 0)
+                      + int(usage.get("reasoning_output_tokens") or 0))
         return {
             "model": (self.model_override
                       or (getattr(self.settings, "codex_cli_model", "") or "") or "codex-cli"),
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_write_tokens": 0,
-            "total_tokens": total,
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "total_tokens": prompt + cache_read + cache_write + completion,
         }
 
 
