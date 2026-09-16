@@ -160,6 +160,26 @@ def test_every_provider_lock_value_the_doc_lists_is_accepted(doc: str) -> None:
     assert listed <= known, f"the doc offers locks that do nothing: {sorted(listed - known)}"
 
 
+def test_every_internal_link_lands_on_a_real_heading() -> None:
+    """The doc routes readers by link; a dead one drops them back into hunting.
+
+    This page is organised as "find your situation, follow that one section", which only works
+    if the chooser's links resolve. A heading reworded without its links updated is silently
+    worse than no links at all.
+    """
+    broken = []
+    for path in _present():
+        text = path.read_text()
+        slugs = {
+            re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-")
+            for h in re.findall(r"^#{1,6}\s+(.*)$", text, re.M)
+        }
+        for target in re.findall(r"\]\(#([a-z0-9_-]+)\)", text):
+            if target not in slugs:
+                broken.append(f"{path.name}: #{target}")
+    assert not broken, f"links pointing at headings that do not exist: {broken}"
+
+
 def test_the_doc_points_at_a_helper_script_that_exists(doc: str) -> None:
     for script in re.findall(r"(scripts/[a-z_]+\.py)", doc):
         assert (REPO / script).is_file(), f"the doc tells the customer to run a missing {script}"

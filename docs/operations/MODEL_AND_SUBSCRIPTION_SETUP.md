@@ -1,230 +1,306 @@
-# Connecting a model to BOSS
+# Setting up a model for BOSS
 
-**Status:** for review. Describes what is in `main` today, and says plainly where
-something is unproven.
+BOSS does not ship with a model. You connect one, and BOSS runs on whatever you connect.
 
-BOSS runs on whichever provider you point it at. There are three ways a model reaches it, and
-they are genuinely different — not three spellings of the same thing:
+This page is task-first: find your situation in the table below, go to that one section, and
+follow it start to finish. Each path is complete on its own — you should never need to assemble
+steps from two places. Reference material is at the end for when you want it.
 
-| | What it is | Where it works | What BOSS stores |
-|---|---|---|---|
-| **API key** | A key you buy and paste | Anywhere | The key, in a secret store |
-| **Subscription (local)** | A CLI you are signed into | Only where that login lives | Nothing |
-| **Subscription (remote)** | The headless token that CLI mints | Anywhere | The token, in a secret store |
+## Which path is yours?
 
-The distinction that catches people: **a Codex or Claude subscription is an OAuth session the
-CLI holds on your machine.** There is no credential to paste, so a form asking for one is asking
-for something that does not exist. BOSS finds the CLI instead — which works beautifully on a
-laptop and not at all on a server, because your login is not on the server. That is what the
-third row exists for.
+| What you have | Where BOSS runs | Follow |
+|---|---|---|
+| An **API key** (OpenRouter, OpenAI, Anthropic, or any OpenAI-compatible endpoint) | Anywhere | [Path A](#path-a--connect-an-api-key) |
+| A **Claude or Codex subscription** | On the same machine where you ran `claude login` / `codex login` | [Path B](#path-b--connect-a-subscription-on-your-own-machine) |
+| A **Claude or Codex subscription** | On a server, container, or anywhere that is not your laptop | [Path C](#path-c--connect-a-subscription-to-boss-on-a-server) |
+| Nothing yet, and you want to try BOSS for free | Anywhere with a GPU or a local model | [Path A](#path-a--connect-an-api-key), lane `ollama` |
+
+You can do more than one. Many installations run an API key for the cheap lanes and a
+subscription for the expensive ones.
+
+**Why the subscription paths differ.** A Claude or Codex subscription is not a key — it is an
+OAuth session the CLI holds on the machine where you signed in. There is nothing to paste, so
+BOSS looks for the CLI instead. That works perfectly where your login lives (Path B) and not at
+all anywhere else (Path C), which needs a token that can travel.
 
 ---
 
-## 1. API keys
+## Path A — connect an API key
 
-The providers BOSS ships a catalogue entry for. Every one of them is verified before it is
-stored: BOSS spends one token proving the key works, because a wizard that stores a key and
-reports success has only verified that you can type.
+### What you need
+
+- An API key from one of the providers below.
+- The BOSS console, or the API and your `BOSS_API_KEY`.
 
 | Provider | Base URL | Example model | Get a key |
 |---|---|---|---|
 | OpenRouter | `https://openrouter.ai/api/v1` | `anthropic/claude-sonnet-4.5` | <https://openrouter.ai/keys> |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` | <https://platform.openai.com/api-keys> |
 | Anthropic | `https://api.anthropic.com/v1` | `claude-sonnet-4-5` | <https://console.anthropic.com/settings/keys> |
-| Anything OpenAI-compatible | you supply | you supply | — |
+| Custom | whatever you supply | whatever you supply | your own endpoint |
 
-**Console:** Setup → Model → pick a provider → paste key → *Verify and save*.
+### Steps
 
-**API:**
+**In the console:** Setup → Model → choose a provider → paste the key → **Verify and save**.
+
+**Or with the API:**
 
 ```bash
-curl -X POST "$BOSS_API/v1/setup/model" \
-  -H "x-boss-api-key: $BOSS_API_KEY" -H 'Content-Type: application/json' -d '{
+curl -X POST "${BOSS_API:?your BOSS base URL}/v1/setup/model" \
+  -H "x-boss-api-key: ${BOSS_API_KEY:?your BOSS API key}" \
+  -H 'Content-Type: application/json' -d '{
   "project_id": "boss-dogfood", "actor": "ceo",
-  "provider": "openrouter", "api_key": "sk-or-…", "model": "anthropic/claude-sonnet-4.5"
+  "provider": "openrouter", "api_key": "sk-or-your-key-here",
+  "model": "anthropic/claude-sonnet-4.5"
 }'
 ```
 
-It verifies **before** it stores, then records the key as a `SecretRef` and registers the
-entitlement source. Storing first and verifying afterwards leaves a broken key recorded as
-configured, and the operator finds out an hour later when a build fails — by which point the key
-is the last thing anyone suspects. A rejected key says *which* kind of wrong: a bad key, a model
-your account cannot reach, or a rate limit — rather than "setup failed".
+BOSS verifies the key with one real call **before** storing it, then records it as a `SecretRef`
+and registers the entitlement source. You are done — there is no separate storage step.
 
-Post a **subscription** provider here and you get a 409 that redirects rather than a generic
-rejection: a subscription is authorised through its own login, so the wizard says where that
-flow lives instead of showing a key box that would be refused on submit.
-
-Discover what this build supports rather than trusting this table:
+### Verify
 
 ```bash
-curl -H "x-boss-api-key: $BOSS_API_KEY" "$BOSS_API/v1/setup/model-providers"
+curl -H "x-boss-api-key: ${BOSS_API_KEY:?your BOSS API key}" \
+     "${BOSS_API:?your BOSS base URL}/v1/setup/model-providers"
 ```
 
-### Direct provider lanes
+### If it fails
 
-These are separate credential pairs so a cheap lane can never bill the platform-managed
-`OPENAI_*` key. Set the pair and the lane is available:
-
-| Lane | Key | Base URL (default) |
+| Status | What BOSS tells you | What to do |
 |---|---|---|
-| `openrouter` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` — `https://openrouter.ai/api/v1` |
-| `groq` | `GROQ_API_KEY` | `GROQ_BASE_URL` — `https://api.groq.com/openai/v1` |
-| `deepseek` | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` — `https://api.deepseek.com/v1` |
-| `ollama` | none needed | `OLLAMA_BASE_URL` — `http://localhost:11434/v1` |
-| `vllm` | none needed | `VLLM_BASE_URL` — **required**, e.g. `http://gpubox:8000/v1` |
-| `azure` | `AZURE_OPENAI_KEY` | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` |
+| 401 | that key was rejected — check it was copied whole | Re-copy the key; they are long and easy to truncate. |
+| 403 | the key is valid but not allowed to use that model | Your account cannot reach that model. Try the example model above. |
+| 404 | no model called *X* at *URL* — check the model name | The model name or base URL is wrong. |
+| 429 | the key works; the provider is rate-limiting right now | Wait and retry. |
+| 0 | could not reach *URL* | Network or base URL problem, not a key problem. |
+| 409 | …is a subscription, not an API key | You picked `claude_code`, `codex` or `cursor`. Go to Path B or C. |
 
-`ollama` and `vllm` are the local/self-hosted lanes and need no cloud credential at all — the
-OpenAI client refuses an empty API key, so BOSS supplies a placeholder the server ignores.
-Local inference is $0, so zero-price the models or cost accounting will invent a bill:
-
-```bash
-BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'
-```
-
-DeepSeek's first-party API is China-hosted. Fine for evals; think about it before customer code
-goes through it.
+Nothing is stored in any of these cases, so you can simply retry.
 
 ---
 
-## 2. Subscriptions, on the machine you are sitting at
+## Path B — connect a subscription on your own machine
 
-For a **self-hosted BOSS running where you are signed in** — a laptop, a dev box, a container
-you `exec` into and sign in.
+Use this when BOSS runs where you are signed in — your laptop, a dev box, or a container you
+`exec` into and log in from.
 
-### Codex
+### What you need
+
+| Subscription | Install | Sign in |
+|---|---|---|
+| Codex (ChatGPT plan) | `npm install -g @openai/codex` | `codex login` |
+| Claude Code | `npm install -g @anthropic-ai/claude-code` | `claude login` |
 
 ```bash
 npm install -g @openai/codex
-codex login                      # browser, ChatGPT account
+codex login
 ```
 
-Then in the console: Setup → Model → **Codex subscription** → *Connect*.
+### Steps
 
-BOSS checks the binary, reads whether it is signed in, and **makes it complete one real turn in
-its read-only sandbox** before recording anything. Signed in is not the same as working: a CLI
-reports "logged in" from a token on disk, which says somebody signed in once — not that the
-session still works or that the plan is active.
+**In the console:** Setup → Model → **Codex subscription** → **Connect**.
 
-Equivalent without the console:
+**Or from the command line:**
 
 ```bash
 boss-engine call detect_coding_agents --args '{}'
 boss-engine call connect_coding_agent --args '{"provider":"codex"}'
 ```
 
-or `GET /v1/setup/coding-agents` and `POST /v1/setup/coding-agents/connect`.
+BOSS checks the binary runs, asks the CLI whether it is signed in, and then **makes it complete
+one real turn in a read-only sandbox** before recording anything. This is deliberate: a CLI
+reports "logged in" from a token on disk, which tells you somebody signed in once — not that
+the session still works or that the plan is active.
 
-### Claude Code
+BOSS stores **no credential** on this path. The CLI keeps its own session; BOSS records only an
+entitlement row noting that the subscription exists and is owner-only.
+
+### Verify
 
 ```bash
-npm install -g @anthropic-ai/claude-code
-claude login
+boss-engine call detect_coding_agents --args '{}'
 ```
 
-Claude is currently wired through an environment variable rather than detection (see §3), so the
-console still asks you to mint a token. **That asymmetry is not deliberate** — Claude predates
-the detection path and has not been moved onto it. Worth closing.
+You want your provider listed with `"ready": true`.
 
-### What BOSS stores
+### If it fails
 
-Nothing. The CLI holds its own session; BOSS shells out to it and records an entitlement row
-saying the subscription exists, is owner-only, and is not licensed for multi-tenant work.
+Read the `next_step` field — it is written to be the command you run next.
+
+| `next_step` | What it means |
+|---|---|
+| `npm install -g @openai/codex` | The CLI is not on `PATH` **for the user BOSS runs as**, which is often a different user than yours. |
+| `sign in with: codex login` | Installed, not signed in — or signed in as a different OS user. |
+| `set CODEX_ACCESS_TOKEN on this install (…)` | BOSS decided this machine has no browser to sign in from. You want Path C. |
+
+The response also carries `"installed"`, `"authenticated"` and `"version"` per agent, so you can
+see which of the three stages failed rather than inferring it.
 
 ---
 
-## 3. Subscriptions, on a server
+## Path C — connect a subscription to BOSS on a server
 
-**This is the case that matters for a shipped product**, and the one that is easy to get wrong.
+Your subscription is authorised on your laptop; BOSS is somewhere else. Detection will correctly
+report `installed: false` on the server, because the CLI genuinely is not there.
 
-Your subscription is authorised on your laptop. The pipeline runs in a container. Detection
-correctly reports `installed: false` there, because the CLI genuinely is not on that machine.
-Measured on a live deployment: the hosted API said `codex installed=False` while the same check
-on the laptop said ready. Both were right.
+The bridge is a **travelling token** — a headless credential the CLI mints, which you put
+somewhere the server can read.
 
-The bridge is the **headless token the CLI mints for exactly this**:
+### Step 1 — check your CLI can mint one
 
-| CLI | Mint it | BOSS reads |
+| Subscription | Can it travel? | How the token is minted |
 |---|---|---|
-| Claude Code | `claude setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
-| Codex | read the access token from the signed-in machine's `~/.codex/auth.json` | `CODEX_ACCESS_TOKEN` |
-| Cursor | **no token route** | — |
+| Claude Code | Yes | `claude setup-token` prints one |
+| Codex | Yes | read from the Codex CLI's own credential file (the script in Step 3 does this) |
+| Cursor | **No** | No token route exists. Cursor only works on Path B. |
 
-Both CLIs ship in the BOSS image. The image carries binaries and **no credentials**; the
-deployment supplies the token.
+Both CLIs ship inside the BOSS image, so you install nothing on the server. The image carries
+binaries and no credentials; you supply the token.
 
-Store it with the helper script. It reads the token from the CLI's own credential file and
-posts it straight to the secret store, so the token never passes through a terminal, a
-clipboard or a shell history, and **no filesystem access to the deployment is required** — which
-matters, because the operator setting this up generally cannot edit `.env` on the box:
+To check programmatically rather than by table, each agent reports a `portable` field — `true`
+means it has a token route and can be used from a server at all:
 
 ```bash
-export OPS_BASE_URL=http://your-ops-host:8099
-python3 scripts/store_subscription_token.py codex --dry-run   # prove it first
+curl -H "x-boss-api-key: ${BOSS_API_KEY:?your BOSS API key}" \
+     "${BOSS_API:?your BOSS base URL}/v1/setup/coding-agents"
+```
+
+### Step 2 — choose where the token will live
+
+This is the decision the rest of the path depends on. All four options work; they differ in what
+you must already run and what rotating the token later costs you.
+
+| Option | Choose it when | You configure on BOSS | Rotating the token later |
+|---|---|---|---|
+| **1. Environment variable** | You can set env vars on the deployment and want the fewest moving parts | nothing | Set the new value and **restart** |
+| **2. Secret-store service (HTTP)** | You already run one, or cannot edit files on the box at all | `BOSS_PLATFORM_SECRET_STORE_URL` + a store token | Just write the new value — no restart |
+| **3. Vault / OpenBao** | You already run Vault | `BOSS_VAULT_ADDR` + `BOSS_VAULT_TOKEN` | Just write the new value — no restart |
+| **4. Local encrypted vault** | One box, no external secret service, and you want the token off the environment | `BOSS_KMS_MASTER_KEY` | Just write the new value — no restart |
+
+BOSS looks for the token in the environment **first**, then in the secret backend. So Option 1
+always wins if the variable is set — which is useful while you are working something out, and a
+trap if you forget you set it.
+
+> **The one thing to get right for Options 2–4.** BOSS uses a *single* secret backend: the first
+> one of `platform_secret_store → vault → local_vault → database` that is configured and
+> answering. It does not search all of them. If you configure a secret-store service **and**
+> Vault, BOSS reads the secret-store service, and a token you put in Vault will not be found.
+> Put the token in the backend BOSS will actually select, and confirm with the check in Step 5.
+
+### Step 3 — put the token there
+
+#### Option 1 — environment variable
+
+Set `CODEX_ACCESS_TOKEN` (or `CLAUDE_CODE_OAUTH_TOKEN`) however your deployment sets environment
+variables — `docker run -e`, a compose file, a Kubernetes secret, a systemd unit, your platform's
+config UI. For Claude:
+
+```bash
+claude setup-token     # prints the token; put it in your deployment's environment
+```
+
+For Codex, get the value with the helper script's dry run, which reports the token without
+printing it, then set that variable through your deployment's normal mechanism:
+
+```bash
+python3 scripts/store_subscription_token.py codex --dry-run
+```
+
+Then restart BOSS.
+
+#### Option 2 — secret-store service over HTTP
+
+Run this **on the machine where you are signed in**. It reads the token from the CLI's own
+credential file and posts it straight to the store, so it never passes through your terminal,
+clipboard or shell history:
+
+```bash
+export OPS_BASE_URL=http://127.0.0.1:8099
+python3 scripts/store_subscription_token.py codex --dry-run   # confirm first, sends nothing
 python3 scripts/store_subscription_token.py codex
 ```
 
-It prints the token's length and destination, never the token. `--dry-run` finds the credential
-and reports its shape without sending anything, so you can confirm the file is where the script
-expects before anything leaves the machine.
+It prints the token's length and destination, never the token itself. It reads the store's own
+auth token from `~/.config/boss/ops-token`; use `--ops-token-file` for another path.
 
-It reads the ops token from `~/.config/boss/ops-token` by default; pass `--ops-token-file` for
-another path.
+For Claude Code, `claude setup-token` prints the token and you write it to the same store under
+the key `CLAUDE_CODE_OAUTH_TOKEN`.
 
-**Then redeploy.** The secret store feeds the app's environment at deploy time, and
-`_resolve_token` checks the environment first. A running process does not pick up a secret
-stored underneath it.
+#### Option 3 — Vault / OpenBao
 
-Verify it took:
+Write the token to your Vault KV mount under the key `CODEX_ACCESS_TOKEN`, using your normal
+Vault tooling and policies.
+
+#### Option 4 — local encrypted vault
+
+The token is encrypted with AES-256-GCM into files under `BOSS_SECRETS_DIR`. Set a master key
+first, or BOSS generates one and stores it in the same database as the secrets — which survives
+redeploys but means anyone with the database has both halves.
+
+### Step 4 — tell BOSS where to look
+
+Skip this for Option 1; the environment needs no configuration.
+
+| Option | Set on the BOSS install |
+|---|---|
+| 2 | `BOSS_PLATFORM_SECRET_STORE_URL`, plus `BOSS_PLATFORM_SECRET_STORE_TOKEN_FILE` (preferred) or `BOSS_PLATFORM_SECRET_STORE_TOKEN` |
+| 3 | `BOSS_VAULT_ADDR`, `BOSS_VAULT_TOKEN`, optionally `BOSS_VAULT_KV_MOUNT` and `BOSS_VAULT_NAMESPACE` |
+| 4 | `BOSS_KMS_MASTER_KEY` (or `BOSS_KMS_MASTER_KEY_FILE`), optionally `BOSS_SECRETS_DIR` |
+
+Prefer the `_FILE` variants where they exist. A token in a file is not in the process
+environment, where anything that dumps env — a crash reporter, a subprocess, a log line — would
+carry it along.
+
+Restart BOSS after changing any of these, since they are read at startup.
+
+### Step 5 — verify
 
 ```bash
-curl -H "x-boss-api-key: ${BOSS_API_KEY:?set this to the deployment API key}" \
-     "${BOSS_API:?set this to the deployment base URL}/v1/setup/coding-agents"
+curl -H "x-boss-api-key: ${BOSS_API_KEY:?your BOSS API key}" \
+     "${BOSS_API:?your BOSS base URL}/v1/setup/coding-agents"
 ```
 
-**Known rough edge.** `claude setup-token` is a first-class command; Codex has no equivalent, so
-something has to read its credential file. The script above is that something, and it exists
-because the instruction it replaced — "open the JSON file and copy the `access_token` field" —
-failed the first time a human ran it: the placeholder was pasted verbatim, the store answered
-`{"stored": true}`, and the deployment held a seven-character string that would have surfaced
-hours later as a build failure. The script is a fix, not the fix. The real one is
-`connect_coding_agent` doing this itself so the console button covers the remote case too.
+On the first run that needs it, BOSS authorises the CLI from the stored token by piping it on
+**stdin** — never argv, which is visible in `ps` to every process on the box.
 
-> **Cursor cannot be used on a hosted BOSS today.** It has no documented token route, so it only
-> works where its login lives. Using it properly needs a different plan — parked deliberately,
-> not overlooked.
+### If it fails
+
+| What you see | What it means |
+|---|---|
+| `no CODEX_ACCESS_TOKEN available to this install` | BOSS found nothing in the environment or in the selected backend. Re-check Step 2's warning about which backend gets selected. |
+| `token rejected (exit N)` | A value was found and the CLI refused it: expired, or not actually a token. Mint it again. BOSS deliberately logs only the exit status, because the CLI's own error can echo the token back. |
+| `platform secret store is not configured` | `BOSS_PLATFORM_SECRET_STORE_URL` and its token are not both set — see Step 4. |
+| The store accepted your write but BOSS still cannot see it | Either the value is wrong (a store will happily accept a placeholder and report success) or BOSS is selecting a different backend. |
 
 ---
 
-## 4. Pointing everything at one provider
+## Optional — make every surface use one provider
+
+By default the coding pipeline, its reviewers, and the chat surfaces can each be pointed
+separately. One setting points them together:
 
 ```bash
 BOSS_PROVIDER_LOCK=codex        # or openrouter, groq, deepseek, ollama, vllm, claude_code, cursor
 ```
 
-Before this it took six settings in three vocabularies, and an operator who missed one was
-indistinguishable from one who set them all. Leave it unset and nothing changes — an
-installation that already tuned its per-surface settings is not re-pointed by an upgrade.
+Leave it unset and nothing changes.
 
-**How far the lock reaches depends on whether the provider has an API:**
+**How far it reaches depends on whether the provider has an API:**
 
-| Lock | Coding pipeline + reviewers + strong/low-cost lanes | Agent chat, meetings, discovery |
+| Lock | Coding pipeline, reviewers, strong/low-cost lanes | Agent chat, meetings, discovery |
 |---|---|---|
-| `openrouter`, `groq`, `deepseek`, `ollama`, `vllm` | moved | moved — credentials rebound to that lane |
-| `claude_code` | moved | moved (`claude_cli`) |
+| `openrouter`, `groq`, `deepseek`, `ollama`, `vllm` | moved | moved, credentials rebound |
+| `claude_code` | moved | moved |
 | `codex`, `cursor` | moved | **not moved** |
 
-That last row is the one to read carefully. Codex and Cursor are CLIs BOSS shells out to, not
-APIs it can call, and only `claude_code` has a chat adapter. So a `codex` lock moves the whole
-coding pipeline onto Codex and leaves chat/meetings/discovery on whatever `OPENAI_*` is
-configured. **That is a real remaining coupling** — the pipeline is provider-agnostic, the chat
-surfaces are not yet, for Codex specifically. It is visible rather than hidden: the audit below
-will show the other vendor's calls.
+Codex and Cursor are CLIs BOSS shells out to rather than APIs it can call, and only Claude Code
+has a chat adapter today. So a `codex` lock puts the whole coding pipeline on Codex and leaves
+chat, meetings and discovery on whatever `OPENAI_*` credentials are configured.
 
-### Proving it
+### Checking what actually happened
 
-Config says what was asked for. The ledger says what happened.
+Configuration says what you asked for; the ledger says what ran.
 
 ```bash
 boss-engine call provider_audit --args '{"expect":"openai","dimension":"vendor"}'
@@ -232,110 +308,93 @@ boss-engine call list_harnesses --args '{}'
 ```
 
 ```
-transport=openrouter  vendor=anthropic  calls=1   ← Claude via OpenRouter still reached Anthropic
+transport=openrouter  vendor=anthropic  calls=1
 transport=openrouter  vendor=deepseek   calls=2
 claim "every model is openai" -> VIOLATED by ['anthropic', 'deepseek']
 ```
 
-**Transport and vendor are different questions.** Routing `anthropic/claude-opus-4.5` through
-OpenRouter means the endpoint was OpenRouter and the weights were Anthropic's — your prompt
-still reached Anthropic. A report that collapsed the two would let someone claim "no Anthropic"
-while sending Anthropic every token.
+`transport` is the endpoint BOSS called; `vendor` is who trained the weights. Routing
+`anthropic/claude-opus-4.5` through OpenRouter means the endpoint was OpenRouter and your prompt
+still reached Anthropic. Ask for `dimension: vendor` when the question is whose model saw your
+code, and `transport` when it is whose endpoint you called.
 
 ---
 
-## 5. Where secrets live
+## Reference — direct provider lanes
 
-BOSS does not grow its own vault. It uses the best store the installation actually has, trying
-the most protected first and falling back until one answers:
+Beyond the four catalogue providers in Path A, these lanes take their own credentials, so a cheap
+lane can never bill your main key.
 
-| Backend | Configure with | Notes |
+| Lane | Key | Base URL |
 |---|---|---|
-| `platform_secret_store` | `BOSS_PLATFORM_SECRET_STORE_URL` + `_TOKEN` or `_TOKEN_FILE` | An ops API speaking the four verbs below |
-| `vault` | `BOSS_VAULT_ADDR` + `BOSS_VAULT_TOKEN` (`VAULT_*` also read) | HashiCorp Vault / OpenBao; `BOSS_VAULT_KV_MOUNT`, `BOSS_VAULT_NAMESPACE` |
-| `local_vault` | `BOSS_KMS_MASTER_KEY` (or `_FILE`), `BOSS_SECRETS_DIR` | AES-256-GCM files on disk |
-| `database` | nothing | Last resort |
-| `environment`, `file` | — | Explicit refs only |
+| `openrouter` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL`, default `https://openrouter.ai/api/v1` |
+| `groq` | `GROQ_API_KEY` | `GROQ_BASE_URL`, default `https://api.groq.com/openai/v1` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL`, default `https://api.deepseek.com/v1` |
+| `ollama` | none needed | `OLLAMA_BASE_URL`, default `http://localhost:11434/v1` |
+| `vllm` | none needed | `VLLM_BASE_URL`, **required** |
+| `azure` | `AZURE_OPENAI_KEY` | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` |
 
-Prefer `_TOKEN_FILE` over `_TOKEN`: a token in a file is not in the process environment, where
-anything that dumps env — a crash reporter, a subprocess, a log line — carries it along.
+`ollama` and `vllm` need no cloud credential. Local inference is free, so zero-price the models
+or cost accounting will invent a bill:
 
-`database` is last deliberately and is **not a good place for a token**. It is there because a
-wizard that refuses to complete is worse than one that completes and can be improved, and
-because the alternative an operator falls back to is a plaintext env var anyway. When no master
-key is configured, the local vault generates one and stores it in the same database as the
-secrets — durable, not readable by casual inspection, but anyone with the database has both
-halves. Set `BOSS_KMS_MASTER_KEY` to separate them.
+```bash
+BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'
+```
 
-Postgres holds **pointers**, never values: a `SecretRef` names a backend and a key.
+DeepSeek's first-party API is China-hosted. Fine for evaluation; consider it before customer code
+goes through it.
 
-> **Fixed while writing this doc.** `platform_secret_store` is the first backend the fallback
-> chain tries, but it read settings fields that were never defined — and `Settings` ignores
-> unknown env vars — so it raised "not configured" no matter what the operator configured, and
-> every installation silently fell through to a lesser store. The three settings above now
-> exist, with tests pinning that the backend can be selected. A backend nothing can select is
-> not a backend.
+## Reference — secret backends
 
-### Open question — the secret service as its own thing
+| Backend | Configure with |
+|---|---|
+| `platform_secret_store` | `BOSS_PLATFORM_SECRET_STORE_URL` + `BOSS_PLATFORM_SECRET_STORE_TOKEN_FILE` or `_TOKEN` |
+| `vault` | `BOSS_VAULT_ADDR` + `BOSS_VAULT_TOKEN` (`VAULT_ADDR` / `VAULT_TOKEN` also read) |
+| `local_vault` | `BOSS_KMS_MASTER_KEY` or `BOSS_KMS_MASTER_KEY_FILE`, `BOSS_SECRETS_DIR` |
+| `database` | nothing — the fallback |
+| `environment`, `file` | explicit references only |
 
-Proposal: ship the secret service as open source so a customer runs it in their own
-container, and BOSS has no file, config or database holding a secret.
+BOSS selects the first of `platform_secret_store → vault → local_vault → database` that is
+configured and healthy. Postgres stores **pointers**, never values: a `SecretRef` names a backend
+and a key.
 
-**The seam already exists and is load-bearing.** `PlatformSecretStoreBackend` speaks a four-verb
-HTTP contract, authenticated by an `X-Ops-Token` header:
+`database` is last on purpose and is not a good place for a token. It exists so that setup can
+always complete on an installation that has nothing else configured, because the alternative
+people fall back to is a plaintext environment variable anyway.
+
+### Running the secret store yourself
+
+The `platform_secret_store` backend speaks a small HTTP contract, authenticated with an
+`X-Ops-Token` header:
 
 | Verb | Meaning |
 |---|---|
 | `GET /secrets` | list keys, values withheld |
-| `GET /secret?key=` | one value |
+| `GET /secret?key=` | read one value |
 | `POST /secret` | `{"key": ..., "value": ...}` |
 | `DELETE /secret?key=` | remove one |
 
-Any service implementing those four verbs drops in with **no change to BOSS** — this is already
-how the reference deployment works. It would also let `database` be removed from the fallback
-chain rather than defended.
+Any service implementing those four verbs works with BOSS unmodified, so you can run your own
+container and keep every credential inside your infrastructure. If you are evaluating this,
+three things are worth deciding up front: how callers are authorised (BOSS sends one token per
+application, which is all-or-nothing), how you back the store up, and that the store should
+**not** be reachable from the coding sandbox — that environment is deny-by-default precisely so
+a sandboxed process cannot reach credentials.
 
-Worth deciding at the same time:
+## Status
 
-- **What authorises a caller?** Today it is a single ops token per app, all-or-nothing. Per-project
-  scoping is what would make one service safe for several BOSS tenants.
-- **Does it need to be reachable from the sandbox?** It currently is not, and that is a feature.
-  The coding agent's environment is a deny-by-default allow-list precisely so a sandboxed process
-  cannot reach credentials. On 2026-09-02 an agent's test run inherited a production
-  `DATABASE_URL` and cleared 204 tables; that is the failure mode this guards.
-- **Where do subscription tokens fit?** They are not API keys. They expire, they are minted per
-  machine, and re-minting is a routine operation rather than an incident — so the service needs
-  a story for rotation that does not involve a human noticing a pipeline has started failing.
-- **Does it mirror?** The current store is backed up and mirrored off-site. A customer-run
-  container that loses its volume loses every credential BOSS holds.
-
-## 6. Status, honestly
+Honest state of each path, so you know what has been proven rather than merely built.
 
 | Path | State |
 |---|---|
-| API keys — openrouter, openai, anthropic, custom | Working; verified before storing |
-| Direct lanes — groq, deepseek, ollama, vllm, azure | Working |
-| Subscription on a local install (Codex) | Working — detected, proved with a real turn, entitlement recorded |
-| Subscription on a local install (Claude) | Works, but via env var rather than detection |
-| Subscription on a server (token) | Implemented; **not yet proven end to end** |
-| Codex token export | Manual — no `setup-token` equivalent; see §3 |
-| `BOSS_PROVIDER_LOCK` — coding pipeline | Working; proven on OpenRouter/DeepSeek with zero Anthropic calls |
-| `BOSS_PROVIDER_LOCK` — chat surfaces under `codex` | **Not moved.** Real remaining coupling (§4) |
-| `platform_secret_store` | Fixed in this change; previously unselectable |
-| Cursor | Registered, unverified, hosted-BOSS blocked |
+| Path A, all providers and lanes | Working; keys verified before they are stored |
+| Path B, Codex | Working — detected, proved with a real turn, entitlement recorded |
+| Path B, Claude Code | Works, but configured by environment variable rather than detection |
+| Path C, Option 1 (environment variable) | Implemented; **not yet proven end to end** |
+| Path C, Options 2–4 (secret backends) | Implemented; **not yet proven end to end**. Option 2 also needs a build that has `BOSS_PLATFORM_SECRET_STORE_URL` — before it was added, that backend could not be selected and BOSS silently used the next one down |
+| `BOSS_PROVIDER_LOCK`, coding pipeline | Working; proven on OpenRouter and DeepSeek with zero Anthropic calls |
+| `BOSS_PROVIDER_LOCK`, chat under a `codex` lock | Does not move — see the table above |
+| Cursor | Path B only |
 
-The `codex` harness is registered `verified: false` and stays that way until a full governed code
-task completes on it — build, independent review, gate, PR. Wired is not proven, and a registry
-that says otherwise stops meaning anything. `boss-engine call list_harnesses --args '{}'` reports
-the current split rather than asking you to trust this table.
-
-### What to decide
-
-1. **Is the open-source secret service the right shape?** The four-verb contract in §5 already
-   exists and already works; the open questions are multi-tenant scoping, rotation, and mirroring
-   — not the protocol.
-2. **Does Codex's manual token step ship as-is?** It is the only point where a human handles a
-   live credential. Automating it is small.
-3. **Do the chat surfaces need to follow the lock for CLI providers?** Today "provider agnostic"
-   is true of the coding pipeline and not of agent chat under a Codex lock. Either build the
-   adapter or say plainly that CLI subscriptions govern code and not conversation.
+`list_harnesses` reports `verified: false` for any harness where a full governed code task has
+not yet completed — build, independent review, gate, PR. Wired is not proven.
