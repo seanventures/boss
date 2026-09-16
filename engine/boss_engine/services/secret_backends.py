@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -197,6 +198,151 @@ class PlatformSecretStoreBackend:
         except SecretUnavailable as exc:
             return {"ok": False, "kind": self.kind, "error": str(exc)}
 
+
+
+class InfisicalBackend:
+    """Infisical over its HTTP API, authenticated as a machine identity.
+
+    Added because it is what the operator's own platform already runs, so an installation can
+    keep its secrets in the store it has rather than in the store BOSS would otherwise fall
+    back to — Postgres, which this module says plainly is not a good place for a token.
+
+    Two things about Infisical shape this class:
+
+    * Auth is an exchange, not a header. A Client ID and Client Secret are POSTed to
+      `/api/v1/auth/universal-auth/login` and come back as an access token that expires — two
+      hours by default. So the token is cached and re-fetched before it lapses; sending a
+      stale one would surface as an authentication failure in the middle of unrelated work.
+    * A secret is addressed by (project, environment, path, name), not by name alone. The
+      first three come from configuration and the last from the caller, so `SecretRef` keys
+      keep working unchanged.
+    """
+
+    kind = "infisical"
+
+    #: Refresh this long before the token actually expires, so a call that starts just under
+    #: the wire does not finish just over it.
+    _EXPIRY_MARGIN_SECONDS = 120
+
+    def __init__(self, base_url: str, client_id: str, client_secret: str, project_id: str,
+                 environment: str = "prod", secret_path: str = "/", timeout: int = 15):
+        self._base = base_url.rstrip("/")
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._project = project_id
+        self._environment = environment or "prod"
+        self._path = secret_path or "/"
+        self._timeout = timeout
+        self._token = ""
+        self._token_expires_at = 0.0
+
+    # ---------------------------------------------------------------- transport
+    def _request(self, method: str, url: str, *, payload: Optional[dict] = None,
+                 token: Optional[str] = None) -> Any:
+        headers = {"Accept": "application/json"}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(
+            url, method=method,
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                body = resp.read().decode() or "{}"
+        except urllib.error.HTTPError as exc:
+            # The status is safe to surface; the body can echo the request, and the request
+            # carried either the client secret or the secret value itself.
+            raise SecretUnavailable(
+                f"infisical returned {exc.code} for {method} {urllib.parse.urlsplit(url).path}"
+            ) from None
+        except Exception as exc:  # noqa: BLE001
+            raise SecretUnavailable(
+                f"infisical unreachable: {type(exc).__name__}") from None
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return {}
+
+    def _access_token(self) -> str:
+        if self._token and time.time() < self._token_expires_at:
+            return self._token
+        data = self._request(
+            "POST", f"{self._base}/api/v1/auth/universal-auth/login",
+            payload={"clientId": self._client_id, "clientSecret": self._client_secret})
+        token = (data or {}).get("accessToken") or ""
+        if not token:
+            raise SecretUnavailable("infisical did not return an access token")
+        ttl = float((data or {}).get("expiresIn") or 0) or 7200.0
+        self._token = token
+        self._token_expires_at = time.time() + max(ttl - self._EXPIRY_MARGIN_SECONDS, 30.0)
+        return token
+
+    def _secret_url(self, key: str = "") -> str:
+        base = f"{self._base}/api/v4/secrets"
+        return f"{base}/{urllib.parse.quote(key, safe='')}" if key else base
+
+    def _scope(self) -> dict:
+        return {"projectId": self._project, "environment": self._environment,
+                "secretPath": self._path}
+
+    def _query(self) -> str:
+        return urllib.parse.urlencode(self._scope())
+
+    # ---------------------------------------------------------------- contract
+    def get(self, key: str) -> str:
+        data = self._request("GET", f"{self._secret_url(key)}?{self._query()}",
+                             token=self._access_token())
+        secret = (data or {}).get("secret") or data or {}
+        value = secret.get("secretValue") if isinstance(secret, dict) else None
+        if not value:
+            raise SecretUnavailable(f"{key} is not present in infisical")
+        return value
+
+    def put(self, key: str, value: str) -> None:
+        token = self._access_token()
+        payload = {**self._scope(), "secretValue": value}
+        try:
+            self._request("POST", self._secret_url(key), payload=payload, token=token)
+        except SecretUnavailable:
+            # Already there. Infisical separates create from update, so an upsert is two calls
+            # and the second one is not an error path — a rotated credential takes this branch
+            # every single time.
+            self._request("PATCH", self._secret_url(key), payload=payload, token=token)
+
+    def list_keys(self) -> list[str]:
+        data = self._request("GET", f"{self._secret_url()}?{self._query()}",
+                             token=self._access_token())
+        secrets = (data or {}).get("secrets") or []
+        return sorted(s.get("secretKey") or s.get("secretName") or ""
+                      for s in secrets if isinstance(s, dict))
+
+    def delete(self, key: str) -> None:
+        self._request("DELETE", self._secret_url(key), payload=self._scope(),
+                      token=self._access_token())
+
+    def health(self) -> dict[str, Any]:
+        try:
+            keys = self.list_keys()
+            return {"ok": True, "kind": self.kind, "writable": True, "keys": len(keys),
+                    "environment": self._environment, "path": self._path}
+        except SecretUnavailable as exc:
+            return {"ok": False, "kind": self.kind, "error": str(exc)}
+
+
+def _infisical_secret(settings: Settings) -> str:
+    """The machine identity's client secret, from settings or a file. Never a data channel."""
+    value = (getattr(settings, "infisical_client_secret", "") or "").strip()
+    if value:
+        return value
+    path = (getattr(settings, "infisical_client_secret_file", "") or "").strip()
+    if path:
+        expanded = os.path.expanduser(path)
+        if os.path.isfile(expanded):
+            with open(expanded, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+    return ""
 
 
 def _platform_token(settings: Settings) -> str:
@@ -614,6 +760,19 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
                 "vault backend requires BOSS_VAULT_ADDR and BOSS_VAULT_TOKEN"
             )
         return VaultKvBackend(addr, token, mount=str(mount), namespace=str(namespace))
+    if normalised == "infisical":
+        base = (getattr(settings, "infisical_url", "") or "").strip()
+        client_id = (getattr(settings, "infisical_client_id", "") or "").strip()
+        project = (getattr(settings, "infisical_project_id", "") or "").strip()
+        client_secret = _infisical_secret(settings)
+        if not (base and client_id and client_secret and project):
+            raise SecretUnavailable(
+                "infisical is not configured (BOSS_INFISICAL_URL, BOSS_INFISICAL_CLIENT_ID, "
+                "BOSS_INFISICAL_CLIENT_SECRET or _FILE, BOSS_INFISICAL_PROJECT_ID)")
+        return InfisicalBackend(
+            base, client_id, client_secret, project,
+            environment=(getattr(settings, "infisical_environment", "") or "prod"),
+            secret_path=(getattr(settings, "infisical_secret_path", "") or "/"))
     if normalised == "platform_secret_store":
         base = (getattr(settings, "platform_secret_store_url", "") or "").strip()
         token = _platform_token(settings)
@@ -626,7 +785,7 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
 
 
 #: Tried in order when nobody has said where a secret should go. Most protected first.
-_BACKEND_PREFERENCE = ("platform_secret_store", "vault", "local_vault", "database")
+_BACKEND_PREFERENCE = ("infisical", "platform_secret_store", "vault", "local_vault", "database")
 
 
 def default_secret_backend(settings: Settings) -> str:

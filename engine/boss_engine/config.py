@@ -454,6 +454,19 @@ class Settings(BaseSettings):
     # settings. Without them `backend_for("platform_secret_store")` read an attribute that
     # did not exist, raised SecretUnavailable, and every installation silently fell through
     # to a lesser store. A backend nothing can select is not a backend.
+    # Infisical, first in the fallback chain. A machine identity rather than a static token:
+    # the client id/secret are exchanged for a short-lived access token, so the one long-lived
+    # credential BOSS holds is the client secret — prefer the _FILE form to keep it out of the
+    # process environment.
+    infisical_url: str = Field(default="", alias="BOSS_INFISICAL_URL")
+    infisical_client_id: str = Field(default="", alias="BOSS_INFISICAL_CLIENT_ID")
+    infisical_client_secret: str = Field(default="", alias="BOSS_INFISICAL_CLIENT_SECRET")
+    infisical_client_secret_file: str = Field(
+        default="", alias="BOSS_INFISICAL_CLIENT_SECRET_FILE"
+    )
+    infisical_project_id: str = Field(default="", alias="BOSS_INFISICAL_PROJECT_ID")
+    infisical_environment: str = Field(default="prod", alias="BOSS_INFISICAL_ENVIRONMENT")
+    infisical_secret_path: str = Field(default="/", alias="BOSS_INFISICAL_SECRET_PATH")
     platform_secret_store_url: str = Field(
         default="", alias="BOSS_PLATFORM_SECRET_STORE_URL"
     )
