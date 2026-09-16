@@ -288,11 +288,16 @@ class InfisicalBackend:
         return token
 
     def _secret_url(self, key: str = "") -> str:
-        base = f"{self._base}/api/v4/secrets"
+        # v3 `raw`, because that is what the software serves. The published API reference
+        # documents a v4 surface with `projectId`; a real instance answers 404 for every v4
+        # secrets path and 200 for these. Verified by probing a running container, which is the
+        # only source that cannot be out of date.
+        base = f"{self._base}/api/v3/secrets/raw"
         return f"{base}/{urllib.parse.quote(key, safe='')}" if key else base
 
     def _scope(self) -> dict:
-        return {"projectId": self._project, "environment": self._environment,
+        #: `workspaceId`, not `projectId` — the v3 name for the same thing.
+        return {"workspaceId": self._project, "environment": self._environment,
                 "secretPath": self._path}
 
     def _query(self) -> str:

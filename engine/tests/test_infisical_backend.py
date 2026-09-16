@@ -39,7 +39,7 @@ class FakeInfisical:
             self.logins += 1
             return _Response({"accessToken": f"tok-{self.logins}",
                               "expiresIn": self.expires_in})
-        name = url.split("/api/v4/secrets/")[-1].split("?")[0] if "/api/v4/secrets/" in url else ""
+        name = url.split("/api/v3/secrets/raw/")[-1].split("?")[0] if "/api/v3/secrets/raw/" in url else ""
         if method == "GET" and name:
             if name not in self.secrets:
                 raise _http_error(url, 404, '{"message": "not found"}')
@@ -173,12 +173,17 @@ def test_delete_and_list(server) -> None:
 
 
 def test_the_scope_travels_on_every_call(server) -> None:
-    """A secret is addressed by project+environment+path, not by name alone."""
+    """A secret is addressed by workspace+environment+path, not by name alone.
+
+    `workspaceId` rather than `projectId`: the published reference documents a v4 surface that
+    a real instance answers 404 for. These paths and field names were read off a running
+    container, not off the docs.
+    """
     backend = _backend(environment="staging", secret_path="/boss")
     backend.put("K", "v")
 
-    _, url, payload = [c for c in server.calls if c[0] == "POST"][-1]
-    assert payload["projectId"] == "proj"
+    _, _url, payload = [c for c in server.calls if c[0] == "POST"][-1]
+    assert payload["workspaceId"] == "proj"
     assert payload["environment"] == "staging"
     assert payload["secretPath"] == "/boss"
 
@@ -280,7 +285,7 @@ def test_a_bootstrap_token_is_used_without_an_exchange(server) -> None:
 
     assert backend.get("CODEX_AUTH_JSON") == "{}"
     assert server.logins == 0, "it should not have tried to log in"
-    sent = [c for c in server.calls if "/api/v4/secrets/" in c[1]][0]
+    sent = [c for c in server.calls if "/api/v3/secrets/raw/" in c[1]][0]
     assert sent[0] == "GET"
 
 
@@ -311,3 +316,19 @@ def test_half_a_machine_identity_is_not_configured(monkeypatch) -> None:
 
     with pytest.raises(SecretUnavailable):
         backend_for("infisical", Settings())
+
+
+def test_it_calls_the_api_version_the_software_actually_serves() -> None:
+    """Pinned because the published reference disagrees with the shipped product.
+
+    infisical/infisical:latest-postgres answers 404 for every `/api/v4/secrets` path and 200
+    for `/api/v3/secrets/raw`. Probed against a running container — the only source that cannot
+    be out of date — so if a future image moves to v4 this fails loudly rather than at a
+    customer's first write.
+    """
+    backend = InfisicalBackend("https://infisical.example", "", "", "proj", token="t")
+
+    assert backend._secret_url() == "https://infisical.example/api/v3/secrets/raw"
+    assert backend._secret_url("K").endswith("/api/v3/secrets/raw/K")
+    assert "workspaceId" in backend._scope()
+    assert "projectId" not in backend._scope()

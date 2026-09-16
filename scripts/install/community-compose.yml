@@ -14,7 +14,10 @@ services:
       POSTGRES_USER: boss
       POSTGRES_PASSWORD: ${BOSS_DB_PASSWORD:-boss}
     ports:
-      - "${BOSS_POSTGRES_PORT:-5432}:5432"
+      # Loopback, not 0.0.0.0: nothing outside this machine needs the database, and api and
+      # worker reach it as `db:5432` on the compose network regardless. Override the port when
+      # 5432 is already taken — on a developer machine it usually is.
+      - "127.0.0.1:${BOSS_POSTGRES_PORT:-5432}:5432"
     volumes:
       - boss_community_pg:/var/lib/postgresql/data
       # Creates the `infisical` database on first init, so the optional secret store shares
@@ -64,7 +67,8 @@ services:
       AUTH_SECRET: ${INFISICAL_AUTH_SECRET:?generate with scripts/install/gen_infisical_keys.sh}
       SITE_URL: ${INFISICAL_SITE_URL:-http://localhost:8080}
     ports:
-      - "${INFISICAL_PORT:-8080}:8080"
+      # Loopback for the same reason. The operator needs the UI; the internet does not.
+      - "127.0.0.1:${INFISICAL_PORT:-8080}:8080"
 
   api:
     build:

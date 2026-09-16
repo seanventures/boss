@@ -301,10 +301,14 @@ database fallback. Opt-in — plain `docker compose up` is unchanged.
 ```bash
 sh scripts/install/gen_infisical_keys.sh .env
 docker compose -f scripts/install/community-compose.yml --profile secrets up -d
+sh scripts/install/bootstrap_infisical.sh .env
 ```
 
-Then point BOSS at it with `BOSS_INFISICAL_URL`, `BOSS_INFISICAL_PROJECT_ID`, and either
-`BOSS_INFISICAL_TOKEN` or `BOSS_INFISICAL_CLIENT_ID` + `BOSS_INFISICAL_CLIENT_SECRET`.
+The third command provisions Infisical and writes `BOSS_INFISICAL_URL`, `BOSS_INFISICAL_TOKEN`
+and `BOSS_INFISICAL_PROJECT_ID` into your `.env`. Restart BOSS and it stores secrets there.
+
+To use an Infisical you already run, skip the bundling and set those three yourself —
+`BOSS_INFISICAL_CLIENT_ID` + `BOSS_INFISICAL_CLIENT_SECRET` work in place of the token.
 
 Back up the `.env` those keys are written to: `INFISICAL_ENCRYPTION_KEY` is the only way to read
 what Infisical stores. If the default ports clash on your machine, set `BOSS_POSTGRES_PORT` and
