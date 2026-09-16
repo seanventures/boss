@@ -11,6 +11,12 @@ Pick your row. Follow that section. Ignore the rest.
 Most of this can be done from the console: **Setup → Model**. The commands below do the same
 thing for anyone scripting it.
 
+Where the commands run:
+
+- `curl …` — anywhere that can reach your BOSS API.
+- `boss-engine …` — where the engine is installed (`pip install boss-engine`).
+- `python3 scripts/…` — from a clone of the BOSS repository.
+
 If you use the commands, set these two first:
 
 ```bash
@@ -121,12 +127,8 @@ Storing a secret does not put it in front of the running process. Pick the row t
 your deployment gets its configuration.
 
 **Your platform writes stored secrets into the app's environment at deploy time.** This is the
-common case. Render the key and recreate the containers:
-
-```bash
-python3 ops.py render CODEX_AUTH_JSON --recreate api worker
-```
-
+common case. Apply `CODEX_AUTH_JSON` to the app using whatever your platform provides for that
+— a deploy, a config sync, a "restart with new secrets" action — then recreate the containers.
 Nothing else to configure. Skip to Step 3.
 
 **You set environment variables by hand.** Set `CODEX_AUTH_JSON` in the deployment's

@@ -183,3 +183,31 @@ def test_every_internal_link_lands_on_a_real_heading() -> None:
 def test_the_doc_points_at_a_helper_script_that_exists(doc: str) -> None:
     for script in re.findall(r"(scripts/[a-z_]+\.py)", doc):
         assert (REPO / script).is_file(), f"the doc tells the customer to run a missing {script}"
+
+
+def test_every_file_a_command_runs_exists_in_this_repo() -> None:
+    """A customer doc may only invoke files a customer actually has.
+
+    `python3 ops.py render …` shipped in Path C. `ops.py` is an operator's local deploy helper
+    that lives outside this repository — it exists on one laptop and on no customer's machine.
+    The reader followed the page, could not find the file, and was right to stop.
+
+    The earlier check only looked at paths spelled `scripts/*.py`, so a bare filename walked
+    straight past it. This one takes the argument of any python invocation, whatever it looks
+    like, and insists the repository contains it.
+    """
+    offenders = []
+    for path in _present():
+        text = path.read_text()
+        for line, body in shell_blocks(text):
+            for raw in body.splitlines():
+                command = raw.strip()
+                if not command.startswith(("python3 ", "python ")):
+                    continue
+                argument = command.split()[1]
+                if argument.startswith("-"):      # python3 -c "…" runs no file
+                    continue
+                if not (REPO / argument).is_file():
+                    offenders.append(f"{path.name}:{line}: {argument}")
+    assert not offenders, (
+        "commands that run a file this repository does not contain:\n" + "\n".join(offenders))
