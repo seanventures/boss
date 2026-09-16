@@ -1,6 +1,6 @@
 # Connecting a model to BOSS
 
-**Status:** for review (Sean + Param). Describes what is in `main` today, and says plainly where
+**Status:** for review. Describes what is in `main` today, and says plainly where
 something is unproven.
 
 BOSS runs on whichever provider you point it at. There are three ways a model reaches it, and
@@ -140,8 +140,8 @@ saying the subscription exists, is owner-only, and is not licensed for multi-ten
 
 Your subscription is authorised on your laptop. The pipeline runs in a container. Detection
 correctly reports `installed: false` there, because the CLI genuinely is not on that machine.
-Measured on the live deployment: the goldeneye API said `codex installed=False` while the same
-check on the laptop said ready. Both were right.
+Measured on a live deployment: the hosted API said `codex installed=False` while the same check
+on the laptop said ready. Both were right.
 
 The bridge is the **headless token the CLI mints for exactly this**:
 
@@ -260,9 +260,9 @@ Postgres holds **pointers**, never values: a `SecretRef` names a backend and a k
 > exist, with tests pinning that the backend can be selected. A backend nothing can select is
 > not a backend.
 
-### Open question for Sean — the secret service as its own thing
+### Open question — the secret service as its own thing
 
-Sean's proposal: ship the secret service as open source so a customer runs it in their own
+Proposal: ship the secret service as open source so a customer runs it in their own
 container, and BOSS has no file, config or database holding a secret.
 
 **The seam already exists and is load-bearing.** `PlatformSecretStoreBackend` speaks a four-verb
@@ -276,7 +276,7 @@ HTTP contract, authenticated by an `X-Ops-Token` header:
 | `DELETE /secret?key=` | remove one |
 
 Any service implementing those four verbs drops in with **no change to BOSS** — this is already
-how the goldeneye deployment works. It would also let `database` be removed from the fallback
+how the reference deployment works. It would also let `database` be removed from the fallback
 chain rather than defended.
 
 Worth deciding at the same time:
@@ -313,7 +313,7 @@ task completes on it — build, independent review, gate, PR. Wired is not prove
 that says otherwise stops meaning anything. `boss-engine call list_harnesses --args '{}'` reports
 the current split rather than asking you to trust this table.
 
-### What to decide with Sean
+### What to decide
 
 1. **Is the open-source secret service the right shape?** The four-verb contract in §5 already
    exists and already works; the open questions are multi-tenant scoping, rotation, and mirroring
