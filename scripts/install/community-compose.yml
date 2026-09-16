@@ -50,6 +50,11 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Subscription credentials, so an operator who puts one in .env actually gets it.
+      # Without these the value sits in .env, compose never passes it in, and the container
+      # reports "not signed in" while the operator is looking at the credential they just set.
+      CODEX_AUTH_JSON: ${CODEX_AUTH_JSON:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_BOOTSTRAP_SEED_API_ENABLED: "false"
       # Community: no Account Connect required
@@ -90,6 +95,11 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Subscription credentials, so an operator who puts one in .env actually gets it.
+      # Without these the value sits in .env, compose never passes it in, and the container
+      # reports "not signed in" while the operator is looking at the credential they just set.
+      CODEX_AUTH_JSON: ${CODEX_AUTH_JSON:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts

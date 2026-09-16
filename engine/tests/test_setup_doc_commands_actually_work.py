@@ -211,3 +211,23 @@ def test_every_file_a_command_runs_exists_in_this_repo() -> None:
                     offenders.append(f"{path.name}:{line}: {argument}")
     assert not offenders, (
         "commands that run a file this repository does not contain:\n" + "\n".join(offenders))
+
+
+def test_no_command_points_at_a_path_the_doc_never_locates() -> None:
+    """`/path/to/your/.env` is the same defect as `<token>`, wearing different syntax.
+
+    Both look like something to substitute; only one leaves the reader able to. The doc shipped
+    `--write-env /path/to/your/.env` without ever saying which file that is, and the reader's
+    first question was "where is the .env file?" — which the page could not answer.
+
+    A path in a command must either exist, or the surrounding prose must say how to find it. A
+    stand-in spelled /path/to/ is proof it does neither.
+    """
+    offenders = []
+    for path in _present():
+        for line, body in shell_blocks(path.read_text()):
+            for marker in re.findall(r"/path/to/\S*", body):
+                offenders.append(f"{path.name}:{line}: {marker}")
+    assert not offenders, (
+        "paths the reader cannot resolve; name the real location instead:\n"
+        + "\n".join(offenders))

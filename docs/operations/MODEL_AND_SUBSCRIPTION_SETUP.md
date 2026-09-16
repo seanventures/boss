@@ -112,13 +112,23 @@ Both CLIs are already in the BOSS image. You supply only the credential.
 Run these on the machine where you are signed in. Nothing is printed but the size.
 Pick **one**.
 
-**A — write it into the deployment's env file.** Simplest, and works anywhere:
+**A — write it into the deployment's env file.** Simplest, when you can reach that file.
+
+Which file: the one BOSS already reads for its other settings.
+
+| How BOSS runs | The file |
+|---|---|
+| Docker Compose | `.env` beside your compose file (the same one holding `BOSS_API_KEY`) |
+| From a clone | `.env` in the repository root |
+| Kubernetes | no env file — use a Secret, or route B |
 
 ```bash
-python3 scripts/store_subscription_token.py codex --write-env /path/to/your/.env
+python3 scripts/store_subscription_token.py codex --write-env .env
 ```
 
 Restart BOSS. **You are done — skip to Step 3.**
+
+If you cannot reach the machine's filesystem, use route B.
 
 **B — send it to an HTTP secret store:**
 
