@@ -199,13 +199,14 @@ class Settings(BaseSettings):
         self.code_agent_strong_engine = lock
         self.code_agent_low_cost_engine = lock
         if lock in self._LOCK_CLI:
-            # A CLI harness has no API for the chat surfaces to call. claude_cli has an
-            # adapter; the others do not yet, so chat stays on the OpenAI-compatible path
-            # rather than pretending a backend exists — and says so through the audit.
+            # A CLI harness has no API for the chat surfaces to call, so each needs an adapter
+            # that shells out to it. claude_code and codex have one; cursor does not, so a
+            # cursor lock leaves chat on the OpenAI-compatible path rather than pretending a
+            # backend exists — and says so through the audit.
             chat = self._LOCK_CLI[lock]
-            if chat == "claude_cli":
-                self.llm_engine = "claude_cli"
-                self.chat_llm_engine = "claude_cli"
+            if chat in ("claude_cli", "codex"):
+                self.llm_engine = chat
+                self.chat_llm_engine = chat
             return self
         # Everything else is an OpenAI-compatible endpoint: take chat off the Claude path and
         # bind the credentials that endpoint actually needs.
@@ -465,6 +466,12 @@ class Settings(BaseSettings):
     platform_secret_store_token_file: str = Field(
         default="", alias="BOSS_PLATFORM_SECRET_STORE_TOKEN_FILE"
     )
+    # Codex as a chat backend, mirroring the claude_cli_* settings above it. Separate from the
+    # coding harness's own model choice: raising the brain an operator talks to should not be a
+    # decision about the cost of every build.
+    codex_cli_path: str = Field(default="", alias="BOSS_CODEX_CLI_PATH")
+    codex_cli_model: str = Field(default="", alias="BOSS_CODEX_CLI_MODEL")
+    codex_cli_timeout: int = Field(default=240, alias="BOSS_CODEX_CLI_TIMEOUT")
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
     openai_codex_oauth_enabled: bool = Field(

@@ -76,127 +76,38 @@ def _first_json_object(text: str) -> Optional[dict]:
     return None
 
 
-class ClaudeCliAdapter:
+class CliChatBrain:
+    """The half of a CLI chat backend that has nothing to do with WHICH CLI it is.
+
+    Rendering a conversation and our tool schemas into a prompt, insisting on one JSON object
+    back, and reshaping that into the `(message, usage)` pair the OpenAI adapter returns is
+    identical for every coding CLI. Three things differ: the binary, its argv, and where it
+    reports token usage.
+
+    Splitting it here is what makes a second subscription a subclass instead of a fork. The
+    prompt especially is load-bearing and hard-won — it carries the fix for a model that
+    reached for its own toolbelt instead of emitting JSON, a bug that only appeared once the
+    registry crossed ~53 tools — and a copied prompt would drift from this one silently, in
+    the direction of that bug.
+
+    A subclass implements `_invoke` (prompt in, a dict carrying "result" out) and `_usage`.
+    """
+
+    #: What `create_text_response` calls the session when the CLI does not name one.
+    _session_default = "cli"
+
+    def _invoke(self, prompt: str) -> dict:  # pragma: no cover - subclass responsibility
+        raise NotImplementedError
+
+    def _usage(self, data: dict) -> dict:  # pragma: no cover - subclass responsibility
+        raise NotImplementedError
+
     def __init__(self, settings: Settings, *, model: Optional[str] = None):
         self.settings = settings
         #: Per-consumer model override. The chat agent runs on Opus while the coding pipeline
         #: keeps its own choice — one setting for both would make raising the chat's brain a
         #: decision about every build's cost.
         self.model_override = model or None
-
-    # ---------------------------------------------------------------- cli
-    def _claude_bin(self) -> str:
-        configured = getattr(self.settings, "claude_cli_path", None) or "claude"
-        if configured == "claude":
-            local = Path.home() / ".local" / "bin" / "claude"
-            if local.exists():
-                return str(local)
-        return configured
-
-    def _scratch_dir(self) -> str:
-        # run in an empty dir so the CLI doesn't load a project's CLAUDE.md
-        d = (self.settings.repo_root / ".local-logs" / "claude-scratch").resolve()
-        d.mkdir(parents=True, exist_ok=True)
-        return str(d)
-
-    # Claude Code's built-in tools — explicitly DENIED so Claude is a pure
-    # reasoning brain: BOSS, not Claude, controls all data access and actions.
-    # (An empty --allowedTools does NOT disable server tools like WebSearch.)
-    _BLOCKED_TOOLS = (
-        "WebSearch,WebFetch,Bash,BashOutput,KillShell,Edit,MultiEdit,Write,Read,"
-        "Glob,Grep,Task,NotebookEdit,TodoWrite,SlashCommand,ExitPlanMode"
-    )
-
-    def _invoke(self, prompt: str) -> dict:
-        timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
-        # A LONG CONVERSATION IS NOT AN ARGUMENT. Linux caps a single argv entry at
-        # MAX_ARG_STRLEN (128 KiB), and this prompt is the whole conversation plus ~48 tool
-        # schemas — so a thread that had been going a while died with
-        # `OSError: [Errno 7] Argument list too long: 'nice'`, which reached the operator as "I
-        # could not answer that". The prompt goes on stdin once it is large; small ones keep the
-        # argv form so nothing changes for the common case.
-        via_stdin = len(prompt.encode("utf-8", "ignore")) > 96_000
-        cmd = [
-            self._claude_bin(),
-            *(("-p",) if via_stdin else ("-p", prompt)),
-            "--output-format", "json",
-            # NOT 2. A TURN SPENT REACHING FOR A BLOCKED TOOL WAS FATAL.
-            #
-            # BOSS drives the loop and this process is meant to be pure reasoning, so Claude
-            # Code's own tools are denied. But denying them does not stop the model from
-            # TRYING: it burns a turn, gets refused, and with a 2-turn ceiling the run ends at
-            # `stop_reason: tool_use` and exits 1 — which surfaced as "I could not answer
-            # that" for every tool-using question in the console.
-            #
-            # It was latent and count-sensitive: 52 registered tools answered fine and the
-            # 53rd tipped it over, so it would have looked like whichever tool was added last
-            # broke the console. Leave room to recover from one stray attempt.
-            "--max-turns", "6",
-            "--disallowedTools", self._BLOCKED_TOOLS,  # pure completion, no tool use
-        ]
-        model = self.model_override or getattr(self.settings, "claude_cli_model", None)
-        if model:
-            cmd += ["--model", model]
-        try:
-            # Mostly network wait, but it is still a node process in the API's container and
-            # nothing here is latency-critical. See services/scheduling.py.
-            proc = subprocess.run(
-                low_priority(cmd),
-                input=(prompt if via_stdin else None),
-                stdin=(None if via_stdin else subprocess.DEVNULL),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=self._scratch_dir(),
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"claude CLI timed out after {timeout}s") from exc
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"claude CLI exited {proc.returncode}: {(proc.stderr or proc.stdout or '')[:300]}"
-            )
-        try:
-            data = json.loads(proc.stdout)
-        except Exception as exc:
-            raise RuntimeError(f"claude CLI returned non-JSON: {proc.stdout[:300]}") from exc
-        if data.get("is_error"):
-            raise RuntimeError(f"claude CLI error: {data.get('result') or data.get('subtype')}")
-        return data
-
-    def _usage(self, data: dict) -> dict:
-        u = data.get("usage") or {}
-        # Cache tokens tracked SEPARATELY (BOSS-280 P1): folding them into prompt_tokens
-        # priced cache reads as full-price input on the estimate path, making cache savings
-        # invisible-to-negative. prompt_tokens = genuinely new input only.
-        prompt_tokens = int(u.get("input_tokens") or 0)
-        cache_read = int(u.get("cache_read_input_tokens") or 0)
-        cache_write = int(u.get("cache_creation_input_tokens") or 0)
-        completion = int(u.get("output_tokens") or 0)
-        model_usage = data.get("modelUsage") or {}
-        # primary (non-haiku helper) model name, else configured/default
-        primary = None
-        for name in model_usage:
-            if "haiku" not in name:
-                primary = name
-                break
-        primary = (primary or (next(iter(model_usage), None)) or self.model_override
-                   or getattr(self.settings, "claude_cli_model", None) or "claude-cli")
-        cost = data.get("total_cost_usd")
-        usage = {
-            "model": primary,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion,
-            "cache_read_tokens": cache_read,
-            "cache_write_tokens": cache_write,
-            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
-        }
-        if cost is not None:
-            usage["cost_usd_micros"] = int(round(float(cost) * 1_000_000))
-        return usage
 
     # ---------------------------------------------------------------- prompt
     def _render_tools(self, tools: list[dict]) -> str:
@@ -365,7 +276,128 @@ class ClaudeCliAdapter:
     ) -> Tuple[str, str, dict]:
         full = (f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
         data = self._invoke(full)
-        return data.get("session_id", "claude-cli"), (data.get("result") or ""), self._usage(data)
+        return (data.get("session_id", self._session_default),
+                (data.get("result") or ""), self._usage(data))
+
+class ClaudeCliAdapter(CliChatBrain):
+    """Claude Code (`claude -p`) as a raw completion backend."""
+
+    _session_default = "claude-cli"
+
+    # ---------------------------------------------------------------- cli
+    def _claude_bin(self) -> str:
+        configured = getattr(self.settings, "claude_cli_path", None) or "claude"
+        if configured == "claude":
+            local = Path.home() / ".local" / "bin" / "claude"
+            if local.exists():
+                return str(local)
+        return configured
+
+    def _scratch_dir(self) -> str:
+        # run in an empty dir so the CLI doesn't load a project's CLAUDE.md
+        d = (self.settings.repo_root / ".local-logs" / "claude-scratch").resolve()
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d)
+
+    # Claude Code's built-in tools — explicitly DENIED so Claude is a pure
+    # reasoning brain: BOSS, not Claude, controls all data access and actions.
+    # (An empty --allowedTools does NOT disable server tools like WebSearch.)
+    _BLOCKED_TOOLS = (
+        "WebSearch,WebFetch,Bash,BashOutput,KillShell,Edit,MultiEdit,Write,Read,"
+        "Glob,Grep,Task,NotebookEdit,TodoWrite,SlashCommand,ExitPlanMode"
+    )
+
+    def _invoke(self, prompt: str) -> dict:
+        timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
+        # A LONG CONVERSATION IS NOT AN ARGUMENT. Linux caps a single argv entry at
+        # MAX_ARG_STRLEN (128 KiB), and this prompt is the whole conversation plus ~48 tool
+        # schemas — so a thread that had been going a while died with
+        # `OSError: [Errno 7] Argument list too long: 'nice'`, which reached the operator as "I
+        # could not answer that". The prompt goes on stdin once it is large; small ones keep the
+        # argv form so nothing changes for the common case.
+        via_stdin = len(prompt.encode("utf-8", "ignore")) > 96_000
+        cmd = [
+            self._claude_bin(),
+            *(("-p",) if via_stdin else ("-p", prompt)),
+            "--output-format", "json",
+            # NOT 2. A TURN SPENT REACHING FOR A BLOCKED TOOL WAS FATAL.
+            #
+            # BOSS drives the loop and this process is meant to be pure reasoning, so Claude
+            # Code's own tools are denied. But denying them does not stop the model from
+            # TRYING: it burns a turn, gets refused, and with a 2-turn ceiling the run ends at
+            # `stop_reason: tool_use` and exits 1 — which surfaced as "I could not answer
+            # that" for every tool-using question in the console.
+            #
+            # It was latent and count-sensitive: 52 registered tools answered fine and the
+            # 53rd tipped it over, so it would have looked like whichever tool was added last
+            # broke the console. Leave room to recover from one stray attempt.
+            "--max-turns", "6",
+            "--disallowedTools", self._BLOCKED_TOOLS,  # pure completion, no tool use
+        ]
+        model = self.model_override or getattr(self.settings, "claude_cli_model", None)
+        if model:
+            cmd += ["--model", model]
+        try:
+            # Mostly network wait, but it is still a node process in the API's container and
+            # nothing here is latency-critical. See services/scheduling.py.
+            proc = subprocess.run(
+                low_priority(cmd),
+                input=(prompt if via_stdin else None),
+                stdin=(None if via_stdin else subprocess.DEVNULL),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=self._scratch_dir(),
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"claude CLI timed out after {timeout}s") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude CLI exited {proc.returncode}: {(proc.stderr or proc.stdout or '')[:300]}"
+            )
+        try:
+            data = json.loads(proc.stdout)
+        except Exception as exc:
+            raise RuntimeError(f"claude CLI returned non-JSON: {proc.stdout[:300]}") from exc
+        if data.get("is_error"):
+            raise RuntimeError(f"claude CLI error: {data.get('result') or data.get('subtype')}")
+        return data
+
+    def _usage(self, data: dict) -> dict:
+        u = data.get("usage") or {}
+        # Cache tokens tracked SEPARATELY (BOSS-280 P1): folding them into prompt_tokens
+        # priced cache reads as full-price input on the estimate path, making cache savings
+        # invisible-to-negative. prompt_tokens = genuinely new input only.
+        prompt_tokens = int(u.get("input_tokens") or 0)
+        cache_read = int(u.get("cache_read_input_tokens") or 0)
+        cache_write = int(u.get("cache_creation_input_tokens") or 0)
+        completion = int(u.get("output_tokens") or 0)
+        model_usage = data.get("modelUsage") or {}
+        # primary (non-haiku helper) model name, else configured/default
+        primary = None
+        for name in model_usage:
+            if "haiku" not in name:
+                primary = name
+                break
+        primary = (primary or (next(iter(model_usage), None)) or self.model_override
+                   or getattr(self.settings, "claude_cli_model", None) or "claude-cli")
+        cost = data.get("total_cost_usd")
+        usage = {
+            "model": primary,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
+        }
+        if cost is not None:
+            usage["cost_usd_micros"] = int(round(float(cost) * 1_000_000))
+        return usage
+
 
 
 class FallingBackAdapter:
@@ -420,12 +452,16 @@ class FallingBackAdapter:
 
 
 def make_chat_adapter(settings: Settings):
-    """Pick the completion backend. claude_cli → Claude Code CLI on the Max plan;
-    otherwise the OpenAI/Azure adapter."""
+    """Pick the completion backend: a subscription CLI, else the OpenAI/Azure adapter."""
     from .openai_adapter import OpenAIAdapter
 
-    if (getattr(settings, "llm_engine", "auto") or "auto").lower() == "claude_cli":
+    engine = (getattr(settings, "llm_engine", "auto") or "auto").lower()
+    if engine == "claude_cli":
         return ClaudeCliAdapter(settings)
+    if engine == "codex":
+        from .codex_cli_adapter import CodexCliAdapter
+
+        return CodexCliAdapter(settings)
     return OpenAIAdapter(settings)
 
 
@@ -442,10 +478,17 @@ def make_agent_chat_adapter(settings: Settings):
     engine = (getattr(settings, "chat_llm_engine", "") or "").strip().lower()
     if not engine:
         return make_chat_adapter(settings)          # inherit — local dev, CI
+    model = (getattr(settings, "chat_model", "") or "").strip() or None
+    if engine == "codex":
+        # Codex reached the coding pipeline long before it could answer a question, so a
+        # `codex` lock moved builds and left chat on whatever OPENAI_* was configured. An
+        # operator who sets one lock believes they have moved everything.
+        from .codex_cli_adapter import make_codex_chat_adapter
+
+        return make_codex_chat_adapter(settings, model=model)
     if engine != "claude_cli":
         return OpenAIAdapter(settings)
     return FallingBackAdapter(
-        ClaudeCliAdapter(settings, model=(getattr(settings, "chat_model", "") or "").strip()
-                         or None),
+        ClaudeCliAdapter(settings, model=model),
         OpenAIAdapter(settings),
     )

@@ -292,11 +292,14 @@ Leave it unset and nothing changes.
 |---|---|---|
 | `openrouter`, `groq`, `deepseek`, `ollama`, `vllm` | moved | moved, credentials rebound |
 | `claude_code` | moved | moved |
-| `codex`, `cursor` | moved | **not moved** |
+| `codex` | moved | moved |
+| `cursor` | moved | **not moved** |
 
-Codex and Cursor are CLIs BOSS shells out to rather than APIs it can call, and only Claude Code
-has a chat adapter today. So a `codex` lock puts the whole coding pipeline on Codex and leaves
-chat, meetings and discovery on whatever `OPENAI_*` credentials are configured.
+Cursor is a CLI BOSS shells out to rather than an API it can call, and unlike Claude Code and
+Codex it has no chat adapter. So a `cursor` lock puts the coding pipeline on Cursor and leaves
+chat, meetings and discovery on whatever was already configured. The lock does not claim
+otherwise — it will not name a backend nothing can build — and `provider_audit` below is what
+shows you the other vendor still answering.
 
 ### Checking what actually happened
 
@@ -393,7 +396,7 @@ Honest state of each path, so you know what has been proven rather than merely b
 | Path C, Option 1 (environment variable) | Implemented; **not yet proven end to end** |
 | Path C, Options 2–4 (secret backends) | Implemented; **not yet proven end to end**. Option 2 also needs a build that has `BOSS_PLATFORM_SECRET_STORE_URL` — before it was added, that backend could not be selected and BOSS silently used the next one down |
 | `BOSS_PROVIDER_LOCK`, coding pipeline | Working; proven on OpenRouter and DeepSeek with zero Anthropic calls |
-| `BOSS_PROVIDER_LOCK`, chat under a `codex` lock | Does not move — see the table above |
+| `BOSS_PROVIDER_LOCK`, chat under a `codex` lock | Moves — Codex serves chat, meetings and discovery through its own adapter |
 | Cursor | Path B only |
 
 `list_harnesses` reports `verified: false` for any harness where a full governed code task has
