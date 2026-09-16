@@ -147,40 +147,56 @@ report `installed: false` on the server, because the CLI genuinely is not there.
 The bridge is a **travelling token** — a headless credential the CLI mints, which you put
 somewhere the server can read.
 
-### Step 1 — check your CLI can mint one
+### Step 1 — check what your CLI can send to a server
 
-| Subscription | Can it travel? | How the token is minted |
+The two subscriptions travel differently, and the difference is not cosmetic:
+
+| Subscription | Can it reach a server? | What travels |
 |---|---|---|
-| Claude Code | Yes | `claude setup-token` prints one |
-| Codex | Yes | read from the Codex CLI's own credential file (the script in Step 3 does this) |
-| Cursor | **No** | No token route exists. Cursor only works on Path B. |
+| Claude Code | Yes | a **token** it mints: `claude setup-token` |
+| Codex | Yes | its **whole credential file**, `~/.codex/auth.json` |
+| Cursor | **No** | nothing — it only works on Path B |
+
+> **Why Codex sends a file.** `codex login --with-access-token` looks like the answer and is
+> not. Measured against codex-cli 0.154.0 on a real ChatGPT plan, it rejects every field the
+> auth file holds — `access_token` and `id_token` with *"agent identity JWT payload is not
+> valid JSON"*, `refresh_token` with *"not valid base64url"*. The token is a perfectly good
+> JWT; that flag wants a different credential type, one a consumer plan never mints. Worse,
+> simply having `CODEX_ACCESS_TOKEN` set makes `codex login status` **error**, so detection
+> breaks rather than degrades. Restoring the file produces *"Logged in using ChatGPT"*.
+>
+> If you followed an earlier version of this page and set `CODEX_ACCESS_TOKEN`, **unset it** —
+> it actively breaks Codex detection.
 
 Both CLIs ship inside the BOSS image, so you install nothing on the server. The image carries
-binaries and no credentials; you supply the token.
+binaries and no credentials; you supply the credential.
 
-To check programmatically rather than by table, each agent reports a `portable` field — `true`
-means it has a token route and can be used from a server at all:
+To check programmatically rather than by table, each agent reports `portable` — `true` means it
+has some route to a server — plus `credential_kind`, which is `file` or `token`:
 
 ```bash
 curl -H "x-boss-api-key: ${BOSS_API_KEY:?your BOSS API key}" \
      "${BOSS_API:?your BOSS base URL}/v1/setup/coding-agents"
 ```
 
-### Step 2 — choose where the token will live
+### Step 2 — choose where the credential will live
 
 This is the decision the rest of the path depends on. All four options work; they differ in what
 you must already run and what rotating the token later costs you.
 
-| Option | Choose it when | You configure on BOSS | Rotating the token later |
+| Option | Choose it when | You configure on BOSS | Rotating it later |
 |---|---|---|---|
 | **1. Environment variable** | You can set env vars on the deployment and want the fewest moving parts | nothing | Set the new value and **restart** |
 | **2. Secret-store service (HTTP)** | You already run one, or cannot edit files on the box at all | `BOSS_PLATFORM_SECRET_STORE_URL` + a store token | Just write the new value — no restart |
 | **3. Vault / OpenBao** | You already run Vault | `BOSS_VAULT_ADDR` + `BOSS_VAULT_TOKEN` | Just write the new value — no restart |
 | **4. Local encrypted vault** | One box, no external secret service, and you want the token off the environment | `BOSS_KMS_MASTER_KEY` | Just write the new value — no restart |
 
-BOSS looks for the token in the environment **first**, then in the secret backend. So Option 1
-always wins if the variable is set — which is useful while you are working something out, and a
-trap if you forget you set it.
+The variable to set is **`CODEX_AUTH_JSON`** (the contents of `~/.codex/auth.json`) or
+**`CLAUDE_CODE_OAUTH_TOKEN`** (the minted token).
+
+BOSS looks in the environment **first**, then in the secret backend. So Option 1 always wins if
+the variable is set — useful while you are working something out, and a trap if you forget you
+set it.
 
 > **The one thing to get right for Options 2–4.** BOSS uses a *single* secret backend: the first
 > one of `platform_secret_store → vault → local_vault → database` that is configured and
@@ -192,16 +208,15 @@ trap if you forget you set it.
 
 #### Option 1 — environment variable
 
-Set `CODEX_ACCESS_TOKEN` (or `CLAUDE_CODE_OAUTH_TOKEN`) however your deployment sets environment
-variables — `docker run -e`, a compose file, a Kubernetes secret, a systemd unit, your platform's
-config UI. For Claude:
+For Claude Code, mint the token and set it however your deployment sets environment variables —
+`docker run -e`, a compose file, a Kubernetes secret, a systemd unit, your platform's config UI:
 
 ```bash
-claude setup-token     # prints the token; put it in your deployment's environment
+claude setup-token     # prints the token; set it as CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-For Codex, get the value with the helper script's dry run, which reports the token without
-printing it, then set that variable through your deployment's normal mechanism:
+For Codex, the value is the whole contents of `~/.codex/auth.json`, set as `CODEX_AUTH_JSON`.
+Check what would be sent, without sending or printing it:
 
 ```bash
 python3 scripts/store_subscription_token.py codex --dry-run
@@ -211,9 +226,8 @@ Then restart BOSS.
 
 #### Option 2 — secret-store service over HTTP
 
-Run this **on the machine where you are signed in**. It reads the token from the CLI's own
-credential file and posts it straight to the store, so it never passes through your terminal,
-clipboard or shell history:
+Run this **on the machine where you are signed in**. It reads the credential and posts it
+straight to the store, so it never passes through your terminal, clipboard or shell history:
 
 ```bash
 export OPS_BASE_URL=http://127.0.0.1:8099
@@ -221,16 +235,20 @@ python3 scripts/store_subscription_token.py codex --dry-run   # confirm first, s
 python3 scripts/store_subscription_token.py codex
 ```
 
-It prints the token's length and destination, never the token itself. It reads the store's own
-auth token from `~/.config/boss/ops-token`; use `--ops-token-file` for another path.
+Note the `export` — a variable set without it is visible to `echo` but is not passed to the
+script, which will tell you so rather than failing obscurely.
+
+It prints the credential's size and destination, never its contents, and refuses a file that is
+not valid JSON. It reads the store's own auth token from `~/.config/boss/ops-token`; use
+`--ops-token-file` for another path.
 
 For Claude Code, `claude setup-token` prints the token and you write it to the same store under
 the key `CLAUDE_CODE_OAUTH_TOKEN`.
 
 #### Option 3 — Vault / OpenBao
 
-Write the token to your Vault KV mount under the key `CODEX_ACCESS_TOKEN`, using your normal
-Vault tooling and policies.
+Write the credential to your Vault KV mount under the key `CODEX_AUTH_JSON` (or
+`CLAUDE_CODE_OAUTH_TOKEN`), using your normal Vault tooling and policies.
 
 #### Option 4 — local encrypted vault
 
@@ -261,14 +279,20 @@ curl -H "x-boss-api-key: ${BOSS_API_KEY:?your BOSS API key}" \
      "${BOSS_API:?your BOSS base URL}/v1/setup/coding-agents"
 ```
 
-On the first run that needs it, BOSS authorises the CLI from the stored token by piping it on
+On the first run that needs it, BOSS restores the credential file into the CLI's home with
+owner-only permissions (`0600`, in a `0700` directory, written atomically), then **asks the CLI
+whether it is actually signed in**. Writing a file is not evidence of a login: a restored
+credential can be expired or from another account. For the token route, the token is piped on
 **stdin** — never argv, which is visible in `ps` to every process on the box.
 
 ### If it fails
 
 | What you see | What it means |
 |---|---|
-| `no CODEX_ACCESS_TOKEN available to this install` | BOSS found nothing in the environment or in the selected backend. Re-check Step 2's warning about which backend gets selected. |
+| `no CODEX_AUTH_JSON available to this install` | BOSS found nothing in the environment or in the selected backend. Re-check Step 2's warning about which backend gets selected. |
+| `agent identity JWT payload is not valid JSON` | `CODEX_ACCESS_TOKEN` is set somewhere. Unset it — Codex reads that variable itself and this error is what it does with a ChatGPT token. |
+| `the stored credential file did not sign codex in (…)` | The file was restored and the CLI still says no: usually expired. Re-run the script from a machine where `codex login status` says you are signed in. |
+| `the stored CODEX_AUTH_JSON is not valid JSON` | The stored value is truncated or mangled. Re-run the script. |
 | `token rejected (exit N)` | A value was found and the CLI refused it: expired, or not actually a token. Mint it again. BOSS deliberately logs only the exit status, because the CLI's own error can echo the token back. |
 | `platform secret store is not configured` | `BOSS_PLATFORM_SECRET_STORE_URL` and its token are not both set — see Step 4. |
 | The store accepted your write but BOSS still cannot see it | Either the value is wrong (a store will happily accept a placeholder and report success) or BOSS is selecting a different backend. |
@@ -393,7 +417,7 @@ Honest state of each path, so you know what has been proven rather than merely b
 | Path A, all providers and lanes | Working; keys verified before they are stored |
 | Path B, Codex | Working — detected, proved with a real turn, entitlement recorded |
 | Path B, Claude Code | Works, but configured by environment variable rather than detection |
-| Path C, Option 1 (environment variable) | Implemented; **not yet proven end to end** |
+| Path C, Option 1 (environment variable) | Implemented; credential-file route measured against codex-cli 0.154.0 |
 | Path C, Options 2–4 (secret backends) | Implemented; **not yet proven end to end**. Option 2 also needs a build that has `BOSS_PLATFORM_SECRET_STORE_URL` — before it was added, that backend could not be selected and BOSS silently used the next one down |
 | `BOSS_PROVIDER_LOCK`, coding pipeline | Working; proven on OpenRouter and DeepSeek with zero Anthropic calls |
 | `BOSS_PROVIDER_LOCK`, chat under a `codex` lock | Moves — Codex serves chat, meetings and discovery through its own adapter |

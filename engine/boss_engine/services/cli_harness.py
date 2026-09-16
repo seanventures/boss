@@ -110,6 +110,31 @@ class CliHarnessSpec:
     token_env: str = ""
     #: argv that authorises the CLI from that token, read on stdin.
     token_login_args: tuple[str, ...] = ()
+    # --- the credential FILE route ---------------------------------------------
+    #
+    # Measured against codex-cli 0.154.0, because the token route above does NOT work for a
+    # ChatGPT subscription and the documentation does not say so. Every field the CLI's own
+    # auth file holds was rejected by `codex login --with-access-token`:
+    #
+    #   access_token   -> agent identity JWT payload is not valid JSON
+    #   id_token       -> agent identity JWT payload is not valid JSON
+    #   refresh_token  -> agent identity JWT payload is not valid base64url
+    #
+    # The token is a perfectly good JWT with proper OAuth claims; that flag simply wants a
+    # different credential type — an agent identity JWT — which a consumer plan never mints.
+    # Worse, merely having CODEX_ACCESS_TOKEN in the environment makes `codex login status`
+    # ERROR rather than report a status, so the token route does not degrade, it breaks.
+    #
+    # What does work, verified: place the CLI's own auth file in its home and it reports
+    # "Logged in using ChatGPT". So the thing that travels is the FILE, not a field from it.
+    #: Secret key (and env var) holding the CONTENTS of the CLI's credential file.
+    auth_file_secret: str = ""
+    #: Env var by which the CLI is told where its home directory is.
+    home_env: str = ""
+    #: Where that home is when the env var is unset.
+    default_home: str = ""
+    #: The credential file's name inside that home.
+    auth_file_name: str = ""
     #: How the operator mints the travelling token on their own machine.
     token_hint: str = ""
     #: The CLI's own credential file on a signed-in machine, when minting the travelling token
@@ -157,13 +182,17 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         auth_ok_pattern=r"(?i)logged\s+in",
         signin_hint="codex login",
         install_hint="npm install -g @openai/codex",
-        token_env="CODEX_ACCESS_TOKEN",
-        token_login_args=("login", "--with-access-token"),
+        # NOT token_env. `--with-access-token` rejects every field a ChatGPT subscription
+        # holds, and setting CODEX_ACCESS_TOKEN makes `codex login status` error outright —
+        # see the note on `auth_file_secret`. The file is the route that works.
+        auth_file_secret="CODEX_AUTH_JSON",
+        home_env="CODEX_HOME",
+        default_home="~/.codex",
+        auth_file_name="auth.json",
         token_hint="on a machine where you are signed in, run "
-                   "scripts/store_subscription_token.py codex — it reads the token from the "
-                   "Codex CLI's own credential file and stores it, so nobody has to handle it",
+                   "scripts/store_subscription_token.py codex — it stores the Codex CLI's own "
+                   "credential file so nobody has to handle a credential by hand",
         token_source_file="~/.codex/auth.json",
-        token_source_field="access_token",
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
@@ -290,14 +319,21 @@ def detect(spec: CliHarnessSpec) -> dict:
         "verified_harness": spec.verified,
         "next_step": None,
     }
-    result["token_env"] = spec.token_env
+    # The name of whatever this CLI needs to reach a server: a token for some, the CLI's own
+    # credential file for others. One field so a caller does not have to know which route the
+    # harness uses in order to say what is missing.
+    credential = spec.token_env or spec.auth_file_secret
+    result["token_env"] = credential
+    result["credential_env"] = credential
+    result["credential_kind"] = ("file" if spec.auth_file_secret else
+                                 ("token" if spec.token_env else ""))
     result["token_hint"] = spec.token_hint
-    result["token_present"] = bool(spec.token_env and os.environ.get(spec.token_env))
+    result["token_present"] = bool(credential and os.environ.get(credential))
     # CAN THIS SUBSCRIPTION BE USED FROM A SERVER AT ALL? Detection answers "is the CLI here";
     # this answers "could it be, on a machine the operator does not sit at". A CLI with no
     # token route can only ever be used where its login lives, and saying so is the difference
     # between an operator configuring a deployment and one wondering why it stays empty.
-    result["portable"] = bool(spec.token_env)
+    result["portable"] = bool(spec.token_env or spec.auth_file_secret)
     if not found:
         result["next_step"] = (spec.install_hint or f"install the {spec.name} CLI")
         return result
@@ -324,8 +360,8 @@ def detect(spec: CliHarnessSpec) -> dict:
         # A token already set and still not signed in means the token is the thing to fix,
         # not the browser login — different problem, different command.
         result["next_step"] = (
-            f"set {spec.token_env} on this install ({spec.token_hint})"
-            if spec.token_env and not result["token_present"] and not _is_interactive_host()
+            f"set {credential} on this install ({spec.token_hint})"
+            if credential and not result["token_present"] and not _is_interactive_host()
             else f"sign in with: {spec.signin_hint}")
     return result
 
@@ -409,13 +445,16 @@ class GenericCliCodeAgent:
         writes and never from an argument: argv is visible in `ps` to every process on the
         box, so it is piped in. Nothing about the value is logged, including its length.
         """
-        if not self.spec.token_env or not self.spec.token_login_args:
+        has_file_route = bool(self.spec.auth_file_secret and self.spec.auth_file_name)
+        if not has_file_route and (not self.spec.token_env or not self.spec.token_login_args):
             return {"authorised": None, "reason": "this CLI has no token route"}
         found = detect(self.spec)
         if not found["installed"]:
             return {"authorised": False, "reason": "not installed"}
         if found["authenticated"]:
             return {"authorised": True, "reason": "already signed in"}
+        if has_file_route:
+            return self._authorise_from_file()
         token = self._resolve_token()
         if not token:
             return {"authorised": False,
@@ -434,6 +473,78 @@ class GenericCliCodeAgent:
             return {"authorised": False, "reason": f"token rejected (exit {proc.returncode})"}
         _log.info("%s authorised from %s", self.spec.name, self.spec.token_env)
         return {"authorised": True, "reason": "signed in from the stored token"}
+
+    def cli_home(self) -> str:
+        """Where this CLI keeps its own state, honouring its home env var when set."""
+        configured = os.environ.get(self.spec.home_env, "") if self.spec.home_env else ""
+        return os.path.expanduser(configured or self.spec.default_home or "~")
+
+    def _write_auth_file(self, content: str) -> str:
+        """Place the credential file with an owner-only mode, atomically.
+
+        Created 0600 BEFORE anything is written to it — opening 0644 and chmod-ing afterwards
+        leaves a window in which any process on the box can read a live session. The rename is
+        atomic so a concurrent run never observes a half-written credential.
+        """
+        home = self.cli_home()
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        final = os.path.join(home, self.spec.auth_file_name)
+        tmp = f"{final}.boss-tmp"
+        handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.replace(tmp, final)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return final
+
+    def _authorise_from_file(self) -> dict:
+        """Sign the CLI in by restoring its own credential file from the secret store."""
+        content = self._resolve_secret(self.spec.auth_file_secret)
+        if not content:
+            return {"authorised": False,
+                    "reason": f"no {self.spec.auth_file_secret} available to this install"}
+        if self.spec.auth_file_name.endswith(".json"):
+            try:
+                json.loads(content)
+            except json.JSONDecodeError:
+                # Say it is malformed, never what it contained.
+                return {"authorised": False,
+                        "reason": f"the stored {self.spec.auth_file_secret} is not valid JSON"}
+        try:
+            self._write_auth_file(content)
+        except OSError as exc:
+            return {"authorised": False, "reason": f"could not write the credential file: "
+                                                   f"{type(exc).__name__}"}
+        # ASK THE CLI, do not assume. A restored file can be expired or from another account,
+        # and "we wrote a file" is not evidence that anybody is signed in.
+        after = detect(self.spec)
+        if after["authenticated"]:
+            _log.info("%s authorised from the stored %s",
+                      self.spec.name, self.spec.auth_file_name)
+            return {"authorised": True, "reason": "signed in from the stored credential file"}
+        return {"authorised": False,
+                "reason": f"the stored credential file did not sign {self.spec.name} in "
+                          f"({after.get('auth_detail') or 'no detail'})"}
+
+    def _resolve_secret(self, name: str) -> Optional[str]:
+        """A stored value: the environment first, then the deployment's secret store."""
+        direct = os.environ.get(name)
+        if direct:
+            return direct.strip() or None
+        try:
+            from .secret_backends import backend_for, default_secret_backend
+
+            value = backend_for(default_secret_backend(self.settings), self.settings).get(name)
+        except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
+            _log.info("no stored %s for %s (%s)", name, self.spec.name, type(exc).__name__)
+            return None
+        return (value or "").strip() or None
 
     def _resolve_token(self) -> Optional[str]:
         """The travelling token: the environment first, then the deployment's secret store.

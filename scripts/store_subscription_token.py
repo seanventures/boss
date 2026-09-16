@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Move a coding-CLI subscription token to a BOSS deployment without a human touching it.
+"""Move a coding-CLI subscription to a BOSS deployment without a human touching a credential.
 
 WHY THIS EXISTS. Detection finds a CLI on the machine BOSS runs on, which answers the whole
 question for a self-hosted install and none of it for a deployed one: the operator's login is
-on their laptop, the pipeline runs in a container. The bridge is the travelling token the CLI
-mints — and for codex, minting it means reading the CLI's own credential file, because codex
-has no `claude setup-token` equivalent.
+on their laptop, the pipeline runs in a container.
 
-The documented alternative was "open the JSON file and copy the access_token field", and it
-failed the first time a human ran it: the placeholder `<token>` was pasted verbatim, the secret
-store answered `{"stored": true}`, and the deployment was left holding a seven-character string
-that would have surfaced as an authentication failure in a build, hours later and far from its
-cause. A store that cannot tell a credential from a placeholder needs a caller that can.
+WHAT TRAVELS depends on the CLI, and the spec decides — this script is never told:
 
-So: the token goes file -> HTTP, never through a terminal, a clipboard or a shell history. The
-only things printed are its length and where it went.
+  * claude-code mints a headless token (`claude setup-token`), so the TOKEN travels.
+  * codex has no such thing. `codex login --with-access-token` rejects every field its auth
+    file holds, because it wants an agent identity JWT and a consumer ChatGPT plan never mints
+    one; setting CODEX_ACCESS_TOKEN makes `codex login status` error outright. Restoring the
+    CLI's own auth FILE makes it report "Logged in using ChatGPT", so the file travels.
 
-    python3 scripts/store_subscription_token.py codex --store-url http://ops.example:8099
-    python3 scripts/store_subscription_token.py codex --dry-run     # prove it before sending
+Either way the credential goes file -> HTTP, never through a terminal, a clipboard or a shell
+history, and the only things printed are its size and where it went. The instruction this
+replaced was "open the JSON file and copy the access_token field", which failed on its first
+human run: the doc's placeholder went in verbatim, the store answered {"stored": true}, and the
+deployment held a seven-character string. A store that cannot tell a credential from a
+placeholder needs a caller that can.
+
+    python3 scripts/store_subscription_token.py codex --dry-run     # prove it, send nothing
+    python3 scripts/store_subscription_token.py codex --store-url http://127.0.0.1:8099
 """
 from __future__ import annotations
 
@@ -57,6 +61,26 @@ def find_field(node: Any, name: str) -> Optional[str]:
             if found:
                 return found
     return None
+
+
+def read_whole_file(auth_file: Path) -> str:
+    """The CLI's entire credential file, which is what actually authorises it.
+
+    Codex rejects every individual field with `--with-access-token` — it wants an agent
+    identity JWT, which a consumer ChatGPT plan never mints. Restoring the file itself makes
+    the CLI report "Logged in using ChatGPT". So the file travels, not a field from it.
+    """
+    if not auth_file.is_file():
+        raise SystemExit(
+            f"{auth_file} does not exist — sign in on this machine first, then re-run.")
+    content = auth_file.read_text()
+    if auth_file.suffix == ".json":
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as exc:
+            # The file holds a live credential, so the parser's excerpt must not travel.
+            raise SystemExit(f"{auth_file} is not valid JSON (line {exc.lineno})") from None
+    return content
 
 
 def read_token(auth_file: Path, field: str) -> str:
@@ -103,7 +127,7 @@ def resolve_ops_token(explicit: str, token_file: str) -> str:
 
 def main(argv: Optional[list[str]] = None) -> int:
     tokenable = {name: spec for name, spec in BUILTIN_CLI_HARNESSES.items()
-                 if spec.token_source_file}
+                 if spec.token_source_file and (spec.token_env or spec.auth_file_secret)}
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("provider", choices=sorted(tokenable),
                         help="which subscription CLI to take the token from")
@@ -119,7 +143,16 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     spec = tokenable[args.provider]
     auth_file = Path(os.path.expanduser(args.auth_file or spec.token_source_file))
-    token = read_token(auth_file, args.field or spec.token_source_field)
+    # Which of the two routes this CLI actually supports. Codex takes the whole file; claude
+    # takes a minted token. The spec decides, so this script never has to be told.
+    if spec.auth_file_secret:
+        key = spec.auth_file_secret
+        token = read_whole_file(auth_file)
+        what = f"the whole {auth_file.name}"
+    else:
+        key = spec.token_env
+        token = read_token(auth_file, args.field or spec.token_source_field)
+        what = f"the {args.field or spec.token_source_field} field"
 
     # A placeholder reaching the store is the failure this script exists to prevent, so it is
     # checked here too rather than trusted to never happen again.
@@ -127,7 +160,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         raise SystemExit(f"{auth_file} contains the placeholder {token!r}, not a credential")
 
     if args.dry_run:
-        print(f"would store {spec.token_env} ({len(token)} chars) from {auth_file}")
+        print(f"would store {key} ({len(token)} chars) — {what} from {auth_file}")
         print(f"             -> {args.store_url or '<--store-url not set>'}/secret")
         return 0
     if not args.store_url:
@@ -141,10 +174,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             "but is not passed to this script.")
 
     ops_token = resolve_ops_token(args.ops_token, args.ops_token_file)
-    result = store(args.store_url, ops_token, spec.token_env, token)
+    result = store(args.store_url, ops_token, key, token)
     if not result.get("ok", True):
         raise SystemExit(f"secret store reported failure: {result}")
-    print(f"stored {spec.token_env} ({len(token)} chars) from {auth_file}")
+    print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
     print("redeploy for it to reach the running process — the store feeds the app's "
           "environment at deploy time.")
     return 0

@@ -352,13 +352,22 @@ def test_boss_never_stores_a_subscription_credential() -> None:
 # So what matters for a shipped product is whether the subscription can TRAVEL.
 
 def test_a_subscription_says_whether_it_can_reach_a_server() -> None:
+    """Portability is about having ANY route to a server, not specifically a token.
+
+    This test used to assert codex took a token on stdin, which is what
+    `codex login --with-access-token` looks like it should mean. Measured against codex-cli
+    0.154.0 with a real ChatGPT plan, that flag rejects access_token, id_token and
+    refresh_token alike — it wants an agent identity JWT, which a consumer plan never mints —
+    and CODEX_ACCESS_TOKEN in the environment makes `codex login status` error outright.
+    Restoring the CLI's own auth file signs it in. So codex is portable by FILE.
+    """
     from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES as B
 
-    # codex takes a token on stdin, so a deployment can authorise itself.
-    assert B["codex"].token_env == "CODEX_ACCESS_TOKEN"
-    assert B["codex"].token_login_args == ("login", "--with-access-token")
-    # cursor has no documented token route, so it can only be used where its login lives.
+    assert B["codex"].auth_file_secret == "CODEX_AUTH_JSON"
+    assert not B["codex"].token_env, "the token route was measured not to work for codex"
+    # cursor has neither route, so it can only be used where its login lives.
     assert B["cursor"].token_env == ""
+    assert B["cursor"].auth_file_secret == ""
 
 
 def test_detection_reports_portability_not_just_presence() -> None:

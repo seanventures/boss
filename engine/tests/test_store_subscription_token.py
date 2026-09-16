@@ -75,23 +75,36 @@ def test_a_corrupt_file_does_not_quote_its_contents_back(mod, tmp_path) -> None:
     assert "super-secret-value" not in str(exc.value)
 
 
-def test_the_placeholder_that_caused_this_is_refused(mod, tmp_path, capsys) -> None:
-    """THE regression, checked at the last point before the value leaves the machine."""
-    path = _auth_file(tmp_path, {"access_token": "<token>"})
-    with pytest.raises(SystemExit) as exc:
-        mod.main(["codex", "--auth-file", str(path), "--dry-run"])
-    assert "placeholder" in str(exc.value)
+def test_codex_sends_the_whole_file_not_one_field(mod, tmp_path, capsys) -> None:
+    """The field route cannot work for Codex, so the script must not offer it one.
 
-
-def test_a_dry_run_sends_nothing_and_shows_nothing(mod, tmp_path, capsys) -> None:
-    path = _auth_file(tmp_path, {"tokens": {"access_token": "real-token-value"}})
+    `codex login --with-access-token` rejects access_token, id_token and refresh_token alike —
+    it wants an agent identity JWT, which a consumer ChatGPT plan never mints. Restoring the
+    file makes the CLI report "Logged in using ChatGPT". Storing a field would put a value in
+    the deployment that cannot authorise anything, and report success doing it.
+    """
+    doc = {"tokens": {"access_token": "real-token-value"}, "last_refresh": "2026-09-16"}
+    path = _auth_file(tmp_path, doc)
 
     assert mod.main(["codex", "--auth-file", str(path), "--dry-run"]) == 0
 
     printed = capsys.readouterr().out
+    assert "CODEX_AUTH_JSON" in printed, printed
+    assert "whole auth.json" in printed, printed
+    assert f"{len(json.dumps(doc))} chars" in printed, printed
     assert "real-token-value" not in printed, "the script printed the credential"
-    assert "16 chars" in printed, printed
-    assert "CODEX_ACCESS_TOKEN" in printed
+
+
+def test_a_credential_file_that_is_not_json_is_refused(mod, tmp_path) -> None:
+    """Restoring a malformed file would leave the CLI signed out and the store reporting fine."""
+    path = tmp_path / "auth.json"
+    path.write_text('{"tokens": {"access_token": "super-secret-value" ')
+
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["codex", "--auth-file", str(path), "--dry-run"])
+
+    assert "not valid JSON" in str(exc.value)
+    assert "super-secret-value" not in str(exc.value)
 
 
 def test_a_real_run_without_a_destination_refuses_early(mod, tmp_path) -> None:
