@@ -2,6 +2,9 @@
 
 Pick your row. Follow that section. Ignore the rest.
 
+No BOSS yet? [Run it locally](LOCAL_SETUP.md) first — that takes about ten minutes, and
+then come back here.
+
 | You have | BOSS runs | Go to |
 |---|---|---|
 | An API key | anywhere | [A — API key](#a--api-key) |

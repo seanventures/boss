@@ -33,9 +33,22 @@ if grep -qs '^BOSS_INFISICAL_TOKEN=' "$ENV_FILE"; then
   exit 0
 fi
 
-# A password BOSS does not choose for you and does not keep. The admin account exists so a
-# human can log into the UI; BOSS itself authenticates as the machine identity below.
-ADMIN_PASSWORD="${INFISICAL_ADMIN_PASSWORD:-$(openssl rand -base64 24)}"
+# Generated if you did not supply one, and WRITTEN DOWN. The first version withheld it and
+# said "reset it in the UI" — but a bundled instance has no SMTP, so password reset cannot
+# send mail and the admin account was simply unreachable. Nobody could log in, ever.
+#
+# Keeping it out of the file protected nothing either: that same file holds the instance
+# admin identity token, which grants more than the password does.
+# Read from the ENV FILE as well as the environment. Taking it only from the environment
+# meant a value the operator had written into the file they were told to configure was
+# ignored, a different password was generated, and the file ended up holding two conflicting
+# INFISICAL_ADMIN_PASSWORD lines — one that worked and one that did not, with nothing saying
+# which. The file wins nothing here: it is simply consulted before generating.
+ADMIN_PASSWORD="${INFISICAL_ADMIN_PASSWORD:-}"
+if [ -z "$ADMIN_PASSWORD" ]; then
+  ADMIN_PASSWORD="$(grep -s '^INFISICAL_ADMIN_PASSWORD=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
+fi
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(openssl rand -base64 24)}"
 
 echo "waiting for Infisical at $URL ..." >&2
 i=0
@@ -81,6 +94,8 @@ umask 077
 {
   echo "BOSS_INFISICAL_URL=$BOSS_URL"
   echo "BOSS_INFISICAL_TOKEN=$TOKEN"
+  grep -qs '^INFISICAL_ADMIN_EMAIL=' "$ENV_FILE" || echo "INFISICAL_ADMIN_EMAIL=$ADMIN_EMAIL"
+  grep -qs '^INFISICAL_ADMIN_PASSWORD=' "$ENV_FILE" || echo "INFISICAL_ADMIN_PASSWORD=$ADMIN_PASSWORD"
 } >> "$ENV_FILE"
 
 PROJECT_ID="$(curl -fsS -m 30 -X POST "$URL/api/v2/workspace" \
@@ -99,5 +114,7 @@ echo "BOSS_INFISICAL_PROJECT_ID=$PROJECT_ID" >> "$ENV_FILE"
 echo "done. $ENV_FILE now points BOSS at Infisical."
 echo "  url     $BOSS_URL   (BOSS reaches it here; you use $URL)"
 echo "  project $PROJECT_ID"
-echo "admin login: $ADMIN_EMAIL (password was generated and not stored — reset it in the UI)"
+echo "admin login at $URL"
+echo "  email    $ADMIN_EMAIL"
+echo "  password in $ENV_FILE as INFISICAL_ADMIN_PASSWORD"
 echo "restart BOSS so it picks up the new settings."

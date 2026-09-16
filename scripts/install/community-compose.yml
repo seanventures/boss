@@ -1,7 +1,8 @@
 # BOSS Community — self-contained local stack for the one-line installer.
 # Postgres + API + worker + Mission Control. No Cloud / Account Connect required.
 #
-# Used by: install.sh  (or: docker compose -f scripts/install/community-compose.yml --env-file .env up -d)
+# Used by: packages/create-boss  (node packages/create-boss/index.js), or by hand —
+# see docs/operations/LOCAL_SETUP.md. `install.sh` was referenced here and never existed.
 
 name: boss-community
 

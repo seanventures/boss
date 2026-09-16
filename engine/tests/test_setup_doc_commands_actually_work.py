@@ -40,6 +40,7 @@ DOC = REPO / "docs" / "operations" / "MODEL_AND_SUBSCRIPTION_SETUP.md"
 #: that names tools, routes and settings. Add a page here when it starts carrying commands.
 CUSTOMER_FACING = (
     DOC,
+    REPO / "docs" / "operations" / "LOCAL_SETUP.md",
     REPO / "docs" / "operations" / "DESIGN_PARTNER_ONBOARDING.md",
     REPO / "README.md",
     REPO / "engine" / "README.md",
