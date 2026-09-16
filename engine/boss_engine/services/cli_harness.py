@@ -78,6 +78,16 @@ class CliHarnessSpec:
     #: Matched against that command's output. Empty means the CLI has no login of its own
     #: (it reads an API key from the environment), so being installed is all there is to check.
     auth_ok_pattern: str = ""
+    #: Checked FIRST, and it wins. A positive pattern is almost always a substring of the
+    #: sentence that denies it — `codex login status` answers "Not logged in", which matches
+    #: `logged\s+in` perfectly. Measured on the deployment: a signed-out Codex reported
+    #: `authenticated: true, auth_detail: "Not logged in", ready: true`, which would have sent
+    #: real work to a CLI that could not do it and made the failure look like the model's.
+    #: The default covers how these CLIs actually phrase a denial, so a new spec inherits the
+    #: guard rather than the trap.
+    auth_fail_pattern: str = (
+        r"(?i)\bnot\s+(?:logged\s+in|signed\s+in|authenticated|authorized|authorised)\b"
+        r"|\blogged\s+out\b|\bplease\s+(?:log|sign)\s*in\b")
     #: What to tell the operator to run when it is installed but not signed in. This is the
     #: whole value of detection: a specific next command instead of "not configured".
     signin_hint: str = ""
@@ -303,7 +313,11 @@ def detect(spec: CliHarnessSpec) -> dict:
     code, out = _run_probe(found, spec.auth_check_args)
     detail = out.splitlines()[0][:200] if out else ""
     result["auth_detail"] = detail or None
-    signed_in = bool(spec.auth_ok_pattern) and bool(_re.search(spec.auth_ok_pattern, out or ""))
+    # The denial is checked first and wins outright: "Not logged in" contains "logged in", so
+    # a positive-only test reports a signed-out CLI as ready.
+    denied = bool(spec.auth_fail_pattern) and bool(_re.search(spec.auth_fail_pattern, out or ""))
+    signed_in = (not denied and bool(spec.auth_ok_pattern)
+                 and bool(_re.search(spec.auth_ok_pattern, out or "")))
     result["authenticated"] = signed_in
     result["ready"] = signed_in
     if not signed_in:
