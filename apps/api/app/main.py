@@ -14806,6 +14806,35 @@ def setup_coding_agents() -> dict:
                           for a in agents if not a["ready"]]}
 
 
+@app.post("/v1/setup/coding-agents/credential", status_code=201)
+def setup_store_coding_agent_credential(payload: dict) -> dict:
+    """Hand BOSS a subscription's credential and let it choose where that lives.
+
+    Removes the step customers were being asked to perform for us. Before this, a subscription
+    on a server meant getting the credential into the process yourself: an env file you may not
+    be able to reach, or a secret store you may not run, followed by a redeploy — none of which
+    is BOSS's business to make somebody's problem. `default_secret_backend` already knows the
+    best store this installation has, down to Postgres when it has nothing else, so the honest
+    interface is "give it to BOSS" and the rest is an implementation detail.
+    """
+    from .services.setup_service import SetupError, store_coding_agent_credential
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "setup")
+    provider = str(payload.get("provider") or "").strip().lower()
+    credential = str(payload.get("credential") or "")
+    if not project_id or not provider:
+        raise HTTPException(status_code=400, detail="project_id and provider are required")
+    with begin() as connection:
+        require_project_actor(connection, project_id, actor, "entitlement_manage")
+        try:
+            return store_coding_agent_credential(
+                connection, get_settings(), project_id, provider, credential, actor=actor)
+        except SetupError as exc:
+            # 422: the operator can fix every one of these, and the message says how.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/v1/setup/coding-agents/connect", status_code=201)
 def setup_connect_coding_agent(payload: dict) -> dict:
     """Import a subscription the operator already has, after proving it answers.

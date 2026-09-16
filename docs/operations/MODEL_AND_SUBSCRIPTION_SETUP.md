@@ -141,72 +141,27 @@ Both CLIs are already in the BOSS image. You supply only the credential.
 
 Do **not** set `CODEX_ACCESS_TOKEN`. Codex reads that variable itself and errors on it.
 
-#### Step 1 — put the credential where BOSS runs
+#### Step 1 — give BOSS the credential
 
-Run these on the machine where you are signed in. Nothing is printed but the size.
-Pick **one**.
-
-**A — write it into the deployment's env file.** Simplest, when you can reach that file.
-
-Which file: the one BOSS already reads for its other settings.
-
-| How BOSS runs | The file |
-|---|---|
-| Docker Compose | `.env` beside your compose file (the same one holding `BOSS_API_KEY`) |
-| From a clone | `.env` in the repository root |
-| Kubernetes | no env file — use a Secret, or route B |
-
-Run from the root of your BOSS clone. `.env` is then the repository's own file; pass a full
-path instead if the file you need is elsewhere (`--write-env /srv/boss/.env`):
+Run on the machine where you are signed in. It reads `~/.codex/auth.json` and hands it to BOSS,
+which stores it wherever this installation keeps secrets — a managed store, a vault, its own
+encrypted files, or its database. You need no secret store of your own.
 
 ```bash
-python3 scripts/store_subscription_token.py codex --write-env .env
-```
-
-Restart BOSS. **You are done — skip to Step 3.**
-
-If you cannot reach the machine's filesystem, use route B.
-
-**B — send it to an HTTP secret store:**
-
-```bash
-export OPS_BASE_URL=http://127.0.0.1:8099   # your secret store's address
-python3 scripts/store_subscription_token.py codex --dry-run
+python3 scripts/store_subscription_token.py codex --dry-run   # confirm; sends nothing
 python3 scripts/store_subscription_token.py codex
 ```
 
-The `export` matters — without it the script cannot see the variable.
+It prints the credential's size and destination, never its contents. Nothing to restart.
 
-Storing it is not enough on its own; continue to Step 2.
+It needs `BOSS_API` and `BOSS_API_KEY` from the top of this page, and calls
+`POST {BOSS_API}/v1/setup/coding-agents/credential` — use that directly if you would rather not
+run the script. BOSS replies with which store it used (`database` when you run none of your
+own).
 
-Add `--dry-run` to either to see what would be sent without sending it.
+#### Step 2 — connect
 
-#### Step 2 — make BOSS read it (route B only)
-
-A stored secret is not yet in front of the running process. Pick **one**.
-
-**B1 — have your platform put it in the app's environment.** If your deployment already
-applies stored secrets at deploy time, trigger that (a deploy, a config sync, a restart), then
-recreate the containers. Nothing to configure on BOSS.
-
-**B2 — have BOSS read the store directly**, so the credential never enters the environment.
-Set these on BOSS, then restart:
-
-| Your store | Set on BOSS |
-|---|---|
-| HTTP secret service | `BOSS_PLATFORM_SECRET_STORE_URL` + `BOSS_PLATFORM_SECRET_STORE_TOKEN_FILE` |
-| Vault / OpenBao | `BOSS_VAULT_ADDR` + `BOSS_VAULT_TOKEN` |
-| Encrypted local files | `BOSS_KMS_MASTER_KEY` |
-
-BOSS reads **one** store — the first of those that answers — so put the credential in that one.
-
-#### Step 3 — connect
-
-If Step 2 did not already recreate the containers, restart BOSS first.
-
-**Console:** Setup → Model → Codex subscription → **Connect**.
-
-**Or with the API:**
+**Console:** Setup → Model → Codex subscription → **Connect**. Or:
 
 ```bash
 curl -X POST "${BOSS_API:?}/v1/setup/coding-agents/connect" \
@@ -230,10 +185,30 @@ Success looks like this — BOSS runs a real Codex turn before saying yes:
 
 | Message | Fix |
 |---|---|
-| `no CODEX_AUTH_JSON available to this install` | Not in the environment or in the store BOSS selected. Check Step 2. |
-| `agent identity JWT payload is not valid JSON` | `CODEX_ACCESS_TOKEN` is set. Unset it. |
+| `no CODEX_AUTH_JSON available to this install` | Step 1 did not reach this BOSS. Check `BOSS_API` points at the same deployment. |
+| `agent identity JWT payload is not valid JSON` | `CODEX_ACCESS_TOKEN` is set somewhere. Unset it. |
 | `the stored credential file did not sign codex in` | Expired. Re-run Step 1 from a machine where `codex login status` says you are signed in. |
-| `not valid JSON` | Stored value is truncated. Re-run Step 1. |
+| `the codex credential is not valid JSON` | Your `~/.codex/auth.json` is unreadable. Sign in again. |
+
+#### Advanced — keep the credential out of BOSS's hands
+
+Only if your policy requires it. Both replace Step 1 and need you to own delivery.
+
+Write it into the env file BOSS reads (`.env` beside your compose file, or in a clone's root),
+then restart BOSS:
+
+```bash
+python3 scripts/store_subscription_token.py codex --write-env .env
+```
+
+Or send it to your own secret store, then point BOSS at that store with
+`BOSS_PLATFORM_SECRET_STORE_URL`, `BOSS_VAULT_ADDR` or `BOSS_KMS_MASTER_KEY` and restart:
+
+```bash
+python3 scripts/store_subscription_token.py codex --store-url "${OPS_BASE_URL:?your store}"
+```
+
+BOSS reads **one** store — the first of those that answers — so put it in that one.
 
 ### Claude Code on a server
 
@@ -245,27 +220,28 @@ Claude mints a token for exactly this, so there is no file to move.
 claude setup-token
 ```
 
-**Step 2 — set it on the deployment** as `CLAUDE_CODE_OAUTH_TOKEN`, by whichever route suits
-you. Both are the same routes Codex uses above:
-
-- the env file BOSS reads (`.env` beside your compose file, or in the repository root), or
-- your secret store, with `BOSS_PLATFORM_SECRET_STORE_URL` / `BOSS_VAULT_ADDR` /
-  `BOSS_KMS_MASTER_KEY` set so BOSS can read it back.
+**Step 2 — set it as `CLAUDE_CODE_OAUTH_TOKEN`** on the deployment: in the env file BOSS reads
+(`.env` beside your compose file, or in a clone's root), or in your own secret store with
+`BOSS_PLATFORM_SECRET_STORE_URL` / `BOSS_VAULT_ADDR` / `BOSS_KMS_MASTER_KEY` set so BOSS can
+read it back.
 
 **Step 3 — restart BOSS.** There is no Connect step: `claude_code` is the default engine and
-picks the token up on its next run.
-
-Verify:
+picks the token up on its next run. Verify:
 
 ```bash
 boss-engine call list_harnesses --args '{}'
 ```
 
+> Codex's one-command route (`store_subscription_token.py`, above) does **not** cover Claude
+> yet. Claude resolves its token per project through a different path, so it still needs the
+> variable set. Tracked; Codex is the one that needed it most, because its credential is a file
+> rather than something you can paste.
+
 **If it fails**
 
 | You see | Fix |
 |---|---|
-| the task runs but authentication is refused | The token expired. Mint a new one and set it again. |
+| a run's authentication is refused | The token expired. Mint a new one and repeat. |
 | `claude: not found` in a run's output | The image or host is missing the CLI. |
 
 ### Cursor on a server

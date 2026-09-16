@@ -105,6 +105,34 @@ def read_token(auth_file: Path, field: str) -> str:
     return token
 
 
+def send_to_boss(api: str, api_key: str, project_id: str, provider: str, credential: str,
+                 actor: str = "setup", timeout: int = 30) -> dict:
+    """Give the credential to BOSS and let it decide where it lives.
+
+    The default route, because it is the only one that asks nothing of the customer's
+    infrastructure: BOSS writes to the best store the installation has — a managed store, a
+    vault, its local encrypted vault, or Postgres — and reads it back itself, so there is no
+    env file to edit, no secret service to run, and no redeploy.
+    """
+    request = urllib.request.Request(
+        f"{api.rstrip('/')}/v1/setup/coding-agents/credential", method="POST",
+        data=json.dumps({"project_id": project_id, "actor": actor,
+                         "provider": provider, "credential": credential}).encode(),
+        headers={"x-boss-api-key": api_key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = (json.loads(exc.read().decode() or "{}").get("detail") or "")[:200]
+        except Exception:  # noqa: BLE001 — the status is the part that always travels
+            detail = ""
+        raise SystemExit(f"BOSS refused the credential: HTTP {exc.code} {detail}") from None
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"could not reach BOSS at {api}: {type(exc).__name__}") from None
+
+
 def store(store_url: str, ops_token: str, key: str, value: str, timeout: int = 20) -> dict:
     request = urllib.request.Request(
         f"{store_url.rstrip('/')}/secret", method="POST",
@@ -164,8 +192,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("provider", choices=sorted(tokenable),
                         help="which subscription CLI to take the token from")
+    parser.add_argument("--boss-api", default=os.environ.get("BOSS_API", ""),
+                        help="your BOSS API address (or set BOSS_API). The default route.")
+    parser.add_argument("--boss-api-key", default=os.environ.get("BOSS_API_KEY", ""),
+                        help="your BOSS API key (or set BOSS_API_KEY)")
+    parser.add_argument("--project-id", default="boss-dogfood",
+                        help="the BOSS project to attach the subscription to")
     parser.add_argument("--store-url", default=os.environ.get("OPS_BASE_URL", ""),
-                        help="base URL of the secret store (or set OPS_BASE_URL)")
+                        help="advanced: write to your own secret store instead of BOSS")
     parser.add_argument("--ops-token", default="", help="store token; prefer the file")
     parser.add_argument("--ops-token-file", default=DEFAULT_OPS_TOKEN_FILE)
     parser.add_argument("--auth-file", default="", help="override the CLI's credential file")
@@ -194,8 +228,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     if token.startswith("<") and token.endswith(">"):
         raise SystemExit(f"{auth_file} contains the placeholder {token!r}, not a credential")
 
-    destination = (f"{args.write_env} (env file)" if args.write_env
-                   else f"{args.store_url or 'no destination set'}/secret")
+    if args.write_env:
+        destination = f"{args.write_env} (env file)"
+    elif args.store_url:
+        destination = f"{args.store_url}/secret"
+    elif args.boss_api:
+        destination = f"{args.boss_api} (BOSS chooses the store)"
+    else:
+        destination = "no destination set"
     if args.dry_run:
         print(f"would store {key} ({len(token)} chars) — {what} from {auth_file}")
         print(f"             -> {destination}")
@@ -207,23 +247,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"{action} {key} ({len(token)} chars) in {target}")
         print("restart BOSS for it to take effect.")
         return 0
-    if not args.store_url:
-        # "or set OPS_BASE_URL" was the whole message, and it was read by somebody who HAD set
-        # it — without `export`, so the shell could echo it and this process could not see it.
-        # A child cannot tell that case from unset, so the message has to name it.
-        raise SystemExit(
-            "no secret store to write to. Pass --store-url, or export the variable:\n"
-            "    export OPS_BASE_URL=http://127.0.0.1:8099\n"
-            "`export` matters — a variable set without it shows up in `echo $OPS_BASE_URL` "
-            "but is not passed to this script.")
+    if args.store_url:
+        ops_token = resolve_ops_token(args.ops_token, args.ops_token_file)
+        result = store(args.store_url, ops_token, key, token)
+        if not result.get("ok", True):
+            raise SystemExit(f"secret store reported failure: {result}")
+        print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
+        print("your store is not BOSS's: make sure BOSS can read it, or use the default "
+              "--boss-api route instead.")
+        return 0
 
-    ops_token = resolve_ops_token(args.ops_token, args.ops_token_file)
-    result = store(args.store_url, ops_token, key, token)
-    if not result.get("ok", True):
-        raise SystemExit(f"secret store reported failure: {result}")
+    if not args.boss_api:
+        # "or set BOSS_API" alone was read once by somebody who HAD set it — without `export`,
+        # so their shell echoed it while this process saw nothing. A child cannot tell unset
+        # from unexported, so the message has to raise the possibility itself.
+        raise SystemExit(
+            "no destination. Pass --boss-api, or export the variables:\n"
+            "    export BOSS_API=https://your-boss-api\n"
+            "    export BOSS_API_KEY=your-boss-api-key\n"
+            "`export` matters — a variable set without it shows up in `echo $BOSS_API` but is "
+            "not passed to this script.")
+    if not args.boss_api_key:
+        raise SystemExit("no --boss-api-key (or BOSS_API_KEY) to authenticate to BOSS with.")
+
+    result = send_to_boss(args.boss_api, args.boss_api_key, args.project_id,
+                          args.provider, token)
     print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
-    print("redeploy for it to reach the running process — the store feeds the app's "
-          "environment at deploy time.")
+    print(f"BOSS put it in its {result.get('backend', 'configured')} store. "
+          f"Nothing to restart.")
     return 0
 
 

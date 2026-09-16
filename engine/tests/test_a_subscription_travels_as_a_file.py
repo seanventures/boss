@@ -191,3 +191,71 @@ def test_a_run_authorises_a_file_route_harness_too(monkeypatch, tmp_path) -> Non
     source = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
     assert "auth_file_secret" in source, (
         "run_role still gates authorisation on token_env alone, so the file route never runs")
+
+
+# --- BOSS stores it, so the customer needs no store of their own -------------
+
+
+def test_the_harness_finds_what_bosss_own_api_stored(monkeypatch, tmp_path) -> None:
+    """The join that makes the one-command route work.
+
+    `put_secret` namespaces keys as BOSS_<SCOPE>_<FIELD> so a shared store stays readable, so a
+    credential BOSS stored itself is NOT under the plain name. A reader that looked only under
+    the plain name would miss everything the product put there — the credential would be
+    stored successfully and never found, which is the worst of both.
+    """
+    from boss_engine.services.cli_harness import SUBSCRIPTION_SECRET_SCOPE
+    from boss_engine.services.secrets_service import ref_key_for
+
+    namespaced = ref_key_for(SUBSCRIPTION_SECRET_SCOPE, "CODEX_AUTH_JSON")
+    assert namespaced == "BOSS_SUBSCRIPTION_CODEX_AUTH_JSON"
+
+    class OnlyNamespaced:
+        def get(self, key):
+            if key != namespaced:
+                raise KeyError(key)
+            return json.dumps(CREDENTIAL)
+
+    monkeypatch.delenv("CODEX_AUTH_JSON", raising=False)
+    monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
+                        lambda settings: "database")
+    monkeypatch.setattr("boss_engine.services.secret_backends.backend_for",
+                        lambda kind, settings: OnlyNamespaced())
+
+    agent = GenericCliCodeAgent(Settings(), BUILTIN_CLI_HARNESSES["codex"])
+    assert json.loads(agent._resolve_secret("CODEX_AUTH_JSON")) == CREDENTIAL
+
+
+def test_an_operator_set_variable_still_wins(monkeypatch) -> None:
+    """The plain name must keep working; people set it by hand while working things out."""
+    monkeypatch.setenv("CODEX_AUTH_JSON", json.dumps(CREDENTIAL))
+
+    agent = GenericCliCodeAgent(Settings(), BUILTIN_CLI_HARNESSES["codex"])
+    assert json.loads(agent._resolve_secret("CODEX_AUTH_JSON")) == CREDENTIAL
+
+
+def test_storing_refuses_a_provider_that_cannot_travel() -> None:
+    """Cursor has no credential that works off its own machine; accepting one would lie."""
+    from boss_engine.services.setup_service import SetupError, store_coding_agent_credential
+
+    with pytest.raises(SetupError) as exc:
+        store_coding_agent_credential(None, Settings(), "p", "cursor", "{}", actor="t")
+    assert "no credential that travels" in str(exc.value)
+
+
+def test_storing_refuses_malformed_json_without_quoting_it() -> None:
+    from boss_engine.services.setup_service import SetupError, store_coding_agent_credential
+
+    with pytest.raises(SetupError) as exc:
+        store_coding_agent_credential(
+            None, Settings(), "p", "codex", '{"tokens": "super-secret-value"', actor="t")
+    assert "not valid JSON" in str(exc.value)
+    assert "super-secret-value" not in str(exc.value)
+
+
+def test_storing_refuses_an_empty_credential() -> None:
+    from boss_engine.services.setup_service import SetupError, store_coding_agent_credential
+
+    with pytest.raises(SetupError) as exc:
+        store_coding_agent_credential(None, Settings(), "p", "codex", "   ", actor="t")
+    assert "required" in str(exc.value)

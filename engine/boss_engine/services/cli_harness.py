@@ -36,6 +36,10 @@ from typing import Optional
 
 _log = logging.getLogger(__name__)
 
+#: Scope under which BOSS's own API stores a subscription credential. One constant so the
+#: endpoint that writes it and the harness that reads it cannot disagree about the key.
+SUBSCRIPTION_SECRET_SCOPE = "subscription"
+
 
 @dataclass(frozen=True)
 class CliHarnessSpec:
@@ -557,18 +561,36 @@ class GenericCliCodeAgent:
                           f"({after.get('auth_detail') or 'no detail'})"}
 
     def _resolve_secret(self, name: str) -> Optional[str]:
-        """A stored value: the environment first, then the deployment's secret store."""
+        """A stored value: the environment, then the secret store, under either key.
+
+        Two keys, because there are two ways a credential legitimately arrives. An operator who
+        sets it themselves uses the plain name. BOSS's own API stores it through `put_secret`,
+        which namespaces keys as BOSS_<SCOPE>_<FIELD> so that a store shared with other systems
+        stays readable — deliberate, and it means looking under one name only would miss
+        everything the product put there itself.
+
+        The namespaced key is derived, not looked up, so this needs no database connection —
+        which matters because it runs inside a sandboxed agent process that must not have one.
+        """
         direct = os.environ.get(name)
         if direct:
             return direct.strip() or None
         try:
             from .secret_backends import backend_for, default_secret_backend
+            from .secrets_service import ref_key_for
 
-            value = backend_for(default_secret_backend(self.settings), self.settings).get(name)
+            store = backend_for(default_secret_backend(self.settings), self.settings)
+            for key in (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name)):
+                try:
+                    value = store.get(key)
+                except Exception:  # noqa: BLE001 — absent under this key, try the next
+                    continue
+                if (value or "").strip():
+                    return value.strip()
+            return None
         except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
             _log.info("no stored %s for %s (%s)", name, self.spec.name, type(exc).__name__)
             return None
-        return (value or "").strip() or None
 
     def _resolve_token(self) -> Optional[str]:
         """The travelling token: the environment first, then the deployment's secret store.

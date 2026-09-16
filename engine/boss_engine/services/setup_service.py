@@ -165,6 +165,55 @@ def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
     return detect_all(settings)
 
 
+def store_coding_agent_credential(
+    connection, settings: Settings, project_id: str, provider: str, credential: str, *,
+    actor: str = "setup",
+) -> dict[str, Any]:
+    """Put a subscription's credential into whatever store THIS installation has.
+
+    The point is that the customer needs no store of their own. `default_secret_backend` picks
+    the best thing available — a managed store, a vault, the local encrypted file vault, and
+    Postgres last — so an installation with nothing configured still works, and one with a
+    vault uses it, without the operator choosing or knowing.
+
+    This is deliberately NOT `upload_credential`. That route refuses subscription sources
+    because it exists for pasted API keys, and that rule is worth keeping. What arrives here is
+    not a pasted key: it is the credential the provider's own CLI minted through the official
+    login that rule is protecting, so it gets its own door rather than a hole in that one.
+    """
+    from .cli_harness import SUBSCRIPTION_SECRET_SCOPE, load_specs
+    from .secret_backends import default_secret_backend
+    from .secrets_service import put_secret
+
+    spec = load_specs(settings).get(provider)
+    if spec is None:
+        raise SetupError(
+            f"no CLI coding agent called {provider!r}. Known: "
+            f"{', '.join(sorted(load_specs(settings)))}.")
+    key = spec.auth_file_secret or spec.token_env
+    if not key:
+        raise SetupError(
+            f"{provider} cannot be used from a server — it has no credential that travels.")
+    credential = (credential or "").strip()
+    if not credential:
+        raise SetupError("credential is required.")
+    if spec.auth_file_name.endswith(".json"):
+        try:
+            json.loads(credential)
+        except json.JSONDecodeError:
+            # Malformed is all that is safe to say; the text is a live credential.
+            raise SetupError(f"the {provider} credential is not valid JSON.") from None
+
+    stored = put_secret(
+        connection, settings, project_id=project_id, name=key, value=credential,
+        secret_kind="api_token", backend=default_secret_backend(settings),
+        scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
+    )
+    return {"ok": True, "provider": provider, "key": key,
+            "backend": stored["backend"], "ref_key": stored["ref_key"],
+            "fingerprint": stored["fingerprint"], "raw_secret_stored": False}
+
+
 def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> dict[str, Any]:
     """Make the agent complete one real turn before calling it connected.
 

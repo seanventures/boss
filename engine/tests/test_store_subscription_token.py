@@ -129,16 +129,61 @@ def test_a_credential_file_that_is_not_json_is_refused(mod, tmp_path) -> None:
 def test_a_real_run_without_a_destination_refuses_early(mod, tmp_path) -> None:
     """Better to stop than to read a credential into memory for a request nowhere to send.
 
-    The message must name `export`. The first person to hit this had set OPS_BASE_URL without
+    The message must name `export`. The first person to hit this had set the variable without
     it, so the shell echoed the value back to them while this process saw nothing — and the
-    original message, "or set OPS_BASE_URL", told them to do what they had just done. A child
-    process cannot distinguish unexported from unset, so the text has to raise the possibility.
+    original message told them to do what they had just done. A child process cannot
+    distinguish unexported from unset, so the text has to raise the possibility.
     """
     path = _auth_file(tmp_path, {"access_token": "real-token-value"})
     with pytest.raises(SystemExit) as exc:
-        mod.main(["codex", "--auth-file", str(path), "--store-url", ""])
-    assert "--store-url" in str(exc.value)
+        mod.main(["codex", "--auth-file", str(path), "--boss-api", "", "--store-url", ""])
+    assert "--boss-api" in str(exc.value)
     assert "export" in str(exc.value)
+
+
+def test_boss_is_the_default_destination(mod, tmp_path, monkeypatch, capsys) -> None:
+    """The point of the whole change: the customer needs no store of their own.
+
+    Before this, a subscription on a server meant owning the delivery — an env file you may not
+    be able to reach, or a secret service you may not run, then a redeploy. BOSS already knows
+    the best store this installation has, so the honest interface is "give it to BOSS".
+    """
+    sent = {}
+
+    def fake(api, api_key, project_id, provider, credential, actor="setup", timeout=30):
+        sent.update(api=api, key=api_key, project=project_id,
+                    provider=provider, credential=credential)
+        return {"ok": True, "backend": "database"}
+
+    monkeypatch.setattr(mod, "send_to_boss", fake)
+    path = _auth_file(tmp_path, {"tokens": {"access_token": "real-token-value"}})
+
+    assert mod.main(["codex", "--auth-file", str(path),
+                     "--boss-api", "https://boss.example", "--boss-api-key", "k"]) == 0
+
+    assert sent["api"] == "https://boss.example"
+    assert sent["provider"] == "codex"
+    assert json.loads(sent["credential"]) == {"tokens": {"access_token": "real-token-value"}}
+    out = capsys.readouterr().out
+    assert "database" in out and "Nothing to restart" in out
+    assert "real-token-value" not in out
+
+
+def test_boss_refusing_the_credential_does_not_echo_it(mod, monkeypatch) -> None:
+    """BOSS's error body can quote the request, and the request carried the credential."""
+    import urllib.error
+
+    def refuse(*_a, **_k):
+        raise urllib.error.HTTPError(
+            "http://boss/x", 422, "unprocessable", {},
+            __import__("io").BytesIO(b'{"detail": "the codex credential is not valid JSON."}'))
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    with pytest.raises(SystemExit) as exc:
+        mod.send_to_boss("http://boss", "k", "p", "codex", "secret-credential-value")
+
+    assert "422" in str(exc.value)
+    assert "secret-credential-value" not in str(exc.value)
 
 
 def test_a_rejected_write_does_not_echo_the_request_body(mod, monkeypatch) -> None:
