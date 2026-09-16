@@ -69,32 +69,59 @@ Nothing is stored when it fails, so just fix and retry.
 
 ## B — subscription, same machine
 
-Install and sign in:
+BOSS runs where you signed in — your laptop, a dev box, a container you log in from.
+
+### Codex
 
 ```bash
 npm install -g @openai/codex && codex login
-# Claude Code: npm install -g @anthropic-ai/claude-code && claude login
 ```
 
-**Console:** Setup → Model → Codex subscription → Connect.
-
-**CLI:**
+**Console:** Setup → Model → Codex subscription → **Connect**. Or:
 
 ```bash
 boss-engine call connect_coding_agent --args '{"provider":"codex"}'
 ```
 
-BOSS stores no credential here. Verify:
+Then point BOSS at it — `BOSS_CODE_AGENT_ENGINE=codex`, or
+[one provider everywhere](#use-one-provider-everywhere). Verify:
 
 ```bash
 boss-engine call detect_coding_agents --args '{}'
 ```
 
-You want `"ready": true`.
+You want codex with `"ready": true`. BOSS stores no credential; the CLI keeps its own session.
 
 **If it fails** — read `next_step`; it is the command to run. `npm install …` means the CLI is
 not on `PATH` for the user BOSS runs as. `sign in with: codex login` means it is not signed in,
 or you signed in as a different OS user.
+
+### Claude Code
+
+```bash
+npm install -g @anthropic-ai/claude-code && claude login
+```
+
+That is the whole setup. `claude_code` is BOSS's default engine and it uses the CLI's own
+session, so there is no Connect step, no credential to store, and nothing to configure. If you
+previously switched engines, switch back with `BOSS_CODE_AGENT_ENGINE=claude_code`.
+
+Verify:
+
+```bash
+boss-engine call list_harnesses --args '{}'
+```
+
+You want `claude_code` listed. Claude is not part of the coding-agent **detection** list, so it
+will not appear in `detect_coding_agents` — that command covers Codex, Cursor and Aider only.
+
+**If it fails** — the CLI must be on `PATH` for the user BOSS runs as, and signed in as that
+same OS user.
+
+### Cursor
+
+Detected and connected exactly like Codex, but unverified and usable only here — see
+[Known limits](#known-limits).
 
 ---
 
@@ -102,17 +129,19 @@ or you signed in as a different OS user.
 
 Your login is on your laptop; BOSS is elsewhere. Send the credential.
 
-| Subscription | What to send | Key |
-|---|---|---|
-| Codex | the whole `~/.codex/auth.json` | `CODEX_AUTH_JSON` |
-| Claude Code | the token from `claude setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
-| Cursor | not supported on a server | — |
-
-Do **not** set `CODEX_ACCESS_TOKEN`. Codex reads that variable itself and errors on it.
+| Subscription | What to send | Key | Go to |
+|---|---|---|---|
+| Codex | the whole `~/.codex/auth.json` | `CODEX_AUTH_JSON` | [Codex](#codex-on-a-server) |
+| Claude Code | the token from `claude setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` | [Claude Code](#claude-code-on-a-server) |
+| Cursor | not supported on a server | — | — |
 
 Both CLIs are already in the BOSS image. You supply only the credential.
 
-### Step 1 — put the credential where BOSS runs
+### Codex on a server
+
+Do **not** set `CODEX_ACCESS_TOKEN`. Codex reads that variable itself and errors on it.
+
+#### Step 1 — put the credential where BOSS runs
 
 Run these on the machine where you are signed in. Nothing is printed but the size.
 Pick **one**.
@@ -152,7 +181,7 @@ Storing it is not enough on its own; continue to Step 2.
 
 Add `--dry-run` to either to see what would be sent without sending it.
 
-### Step 2 — make BOSS read it (route B only)
+#### Step 2 — make BOSS read it (route B only)
 
 A stored secret is not yet in front of the running process. Pick **one**.
 
@@ -171,7 +200,7 @@ Set these on BOSS, then restart:
 
 BOSS reads **one** store — the first of those that answers — so put the credential in that one.
 
-### Step 3 — connect
+#### Step 3 — connect
 
 If Step 2 did not already recreate the containers, restart BOSS first.
 
@@ -205,6 +234,43 @@ Success looks like this — BOSS runs a real Codex turn before saying yes:
 | `agent identity JWT payload is not valid JSON` | `CODEX_ACCESS_TOKEN` is set. Unset it. |
 | `the stored credential file did not sign codex in` | Expired. Re-run Step 1 from a machine where `codex login status` says you are signed in. |
 | `not valid JSON` | Stored value is truncated. Re-run Step 1. |
+
+### Claude Code on a server
+
+Claude mints a token for exactly this, so there is no file to move.
+
+**Step 1 — mint it**, on a machine where you are signed in:
+
+```bash
+claude setup-token
+```
+
+**Step 2 — set it on the deployment** as `CLAUDE_CODE_OAUTH_TOKEN`, by whichever route suits
+you. Both are the same routes Codex uses above:
+
+- the env file BOSS reads (`.env` beside your compose file, or in the repository root), or
+- your secret store, with `BOSS_PLATFORM_SECRET_STORE_URL` / `BOSS_VAULT_ADDR` /
+  `BOSS_KMS_MASTER_KEY` set so BOSS can read it back.
+
+**Step 3 — restart BOSS.** There is no Connect step: `claude_code` is the default engine and
+picks the token up on its next run.
+
+Verify:
+
+```bash
+boss-engine call list_harnesses --args '{}'
+```
+
+**If it fails**
+
+| You see | Fix |
+|---|---|
+| the task runs but authentication is refused | The token expired. Mint a new one and set it again. |
+| `claude: not found` in a run's output | The image or host is missing the CLI. |
+
+### Cursor on a server
+
+Not supported. Cursor has no headless token, so it only works where its login lives.
 
 ---
 
@@ -259,7 +325,9 @@ Values must be single-line.
 ### Known limits
 
 - A copied Codex credential does not get the refreshes your laptop's CLI performs. It expires;
-  re-run Step 1 when it does.
-- Cursor works only on the machine holding its login.
+  re-send it when it does. A Claude token expires too — mint a new one.
+- Claude Code is not covered by `detect_coding_agents`; use `list_harnesses` to confirm it.
+- Cursor works only on the machine holding its login, and no governed task has been completed
+  on it yet.
 - `list_harnesses` shows `verified: false` until a full governed task has completed on a
   harness. Wired is not proven.
