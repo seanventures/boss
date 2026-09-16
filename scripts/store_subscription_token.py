@@ -131,7 +131,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"             -> {args.store_url or '<--store-url not set>'}/secret")
         return 0
     if not args.store_url:
-        raise SystemExit("--store-url is required (or set OPS_BASE_URL)")
+        # "or set OPS_BASE_URL" was the whole message, and it was read by somebody who HAD set
+        # it — without `export`, so the shell could echo it and this process could not see it.
+        # A child cannot tell that case from unset, so the message has to name it.
+        raise SystemExit(
+            "no secret store to write to. Pass --store-url, or export the variable:\n"
+            "    export OPS_BASE_URL=http://127.0.0.1:8099\n"
+            "`export` matters — a variable set without it shows up in `echo $OPS_BASE_URL` "
+            "but is not passed to this script.")
 
     ops_token = resolve_ops_token(args.ops_token, args.ops_token_file)
     result = store(args.store_url, ops_token, spec.token_env, token)

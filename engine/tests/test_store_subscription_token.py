@@ -95,11 +95,18 @@ def test_a_dry_run_sends_nothing_and_shows_nothing(mod, tmp_path, capsys) -> Non
 
 
 def test_a_real_run_without_a_destination_refuses_early(mod, tmp_path) -> None:
-    """Better to stop than to read a credential into memory for a request nowhere to send."""
+    """Better to stop than to read a credential into memory for a request nowhere to send.
+
+    The message must name `export`. The first person to hit this had set OPS_BASE_URL without
+    it, so the shell echoed the value back to them while this process saw nothing — and the
+    original message, "or set OPS_BASE_URL", told them to do what they had just done. A child
+    process cannot distinguish unexported from unset, so the text has to raise the possibility.
+    """
     path = _auth_file(tmp_path, {"access_token": "real-token-value"})
     with pytest.raises(SystemExit) as exc:
         mod.main(["codex", "--auth-file", str(path), "--store-url", ""])
     assert "--store-url" in str(exc.value)
+    assert "export" in str(exc.value)
 
 
 def test_a_rejected_write_does_not_echo_the_request_body(mod, monkeypatch) -> None:
