@@ -464,6 +464,10 @@ class Settings(BaseSettings):
     infisical_client_secret_file: str = Field(
         default="", alias="BOSS_INFISICAL_CLIENT_SECRET_FILE"
     )
+    # `infisical bootstrap` returns a machine-identity TOKEN rather than a client id/secret,
+    # so a bundled instance authenticates with this and skips the exchange entirely.
+    infisical_token: str = Field(default="", alias="BOSS_INFISICAL_TOKEN")
+    infisical_token_file: str = Field(default="", alias="BOSS_INFISICAL_TOKEN_FILE")
     infisical_project_id: str = Field(default="", alias="BOSS_INFISICAL_PROJECT_ID")
     infisical_environment: str = Field(default="prod", alias="BOSS_INFISICAL_ENVIRONMENT")
     infisical_secret_path: str = Field(default="/", alias="BOSS_INFISICAL_SECRET_PATH")

@@ -17,12 +17,54 @@ services:
       - "${BOSS_POSTGRES_PORT:-5432}:5432"
     volumes:
       - boss_community_pg:/var/lib/postgresql/data
+      # Creates the `infisical` database on first init, so the optional secret store shares
+      # this server instead of shipping a Postgres of its own.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U boss -d boss"]
       interval: 3s
       timeout: 5s
       retries: 30
       start_period: 10s
+
+  # --- optional secret store -------------------------------------------------
+  #
+  # `docker compose up` gives you BOSS alone and secrets fall back to the database, which is
+  # honest but not where a token belongs. `docker compose --profile secrets up` adds Infisical
+  # and BOSS keeps them there instead. Opt-in, because an evaluator should not have to pull a
+  # secret store to try the product, and a production install should not have to do without.
+  infisical-redis:
+    image: redis:7-alpine
+    profiles: ["secrets"]
+    restart: unless-stopped
+    volumes:
+      - boss_community_infisical_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  infisical:
+    image: infisical/infisical:latest-postgres
+    profiles: ["secrets"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      infisical-redis:
+        condition: service_healthy
+    environment:
+      # Its own database on BOSS's Postgres server — see initdb/10-infisical.sql.
+      DB_CONNECTION_URI: postgres://boss:${BOSS_DB_PASSWORD:-boss}@db:5432/infisical
+      REDIS_URL: redis://infisical-redis:6379
+      # No defaults on purpose. A shipped default encryption key is the same key on every
+      # installation that forgot to change it, which is worse than refusing to start.
+      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?generate with scripts/install/gen_infisical_keys.sh}
+      AUTH_SECRET: ${INFISICAL_AUTH_SECRET:?generate with scripts/install/gen_infisical_keys.sh}
+      SITE_URL: ${INFISICAL_SITE_URL:-http://localhost:8080}
+    ports:
+      - "${INFISICAL_PORT:-8080}:8080"
 
   api:
     build:
@@ -127,5 +169,6 @@ services:
       - "${BOSS_WEB_PORT:-3000}:3000"
 
 volumes:
+  boss_community_infisical_redis:
   boss_community_pg:
   boss_community_artifacts:

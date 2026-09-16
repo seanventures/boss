@@ -137,8 +137,15 @@ def test_every_api_path_the_doc_curls_is_a_real_route(doc: str) -> None:
 
 def test_every_environment_variable_the_doc_names_is_read_somewhere(doc: str) -> None:
     """A doc that names a setting the code never reads sends the operator to a dead end."""
+    # Engine source AND the shipped compose files: a variable can legitimately be read by
+    # docker compose rather than by BOSS — ports, the bundled store's encryption key — and
+    # those are still real settings a reader can act on. What must not survive is a name
+    # nothing anywhere consumes.
     engine = REPO / "engine" / "boss_engine"
-    haystack = "\n".join(p.read_text() for p in engine.rglob("*.py"))
+    sources = [p.read_text() for p in engine.rglob("*.py")]
+    sources += [p.read_text() for p in (REPO / "scripts" / "install").glob("*.yml")
+                if p.is_file()]
+    haystack = "\n".join(sources)
 
     # Vars the customer sets in their OWN shell for the examples, not BOSS settings.
     ours = {"OPS", "OPS_BASE_URL", "BOSS_API"}

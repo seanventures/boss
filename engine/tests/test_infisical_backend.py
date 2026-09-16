@@ -265,3 +265,49 @@ def test_the_client_secret_can_stay_out_of_the_environment(tmp_path, monkeypatch
     monkeypatch.setenv("BOSS_INFISICAL_CLIENT_SECRET_FILE", str(secret_file))
 
     assert backend_for("infisical", Settings()).kind == "infisical"
+
+
+# --- the bundled instance, which has a token and no client secret ------------
+
+
+def test_a_bootstrap_token_is_used_without_an_exchange(server) -> None:
+    """`infisical bootstrap` returns a machine-identity TOKEN, not a client id/secret.
+
+    A backend that could only exchange credentials would be unable to authenticate against the
+    instance BOSS provisioned itself — the bundled case, which is the whole point of Phase 2.
+    """
+    backend = InfisicalBackend("https://infisical.example", "", "", "proj", token="boot-token")
+
+    assert backend.get("CODEX_AUTH_JSON") == "{}"
+    assert server.logins == 0, "it should not have tried to log in"
+    sent = [c for c in server.calls if "/api/v4/secrets/" in c[1]][0]
+    assert sent[0] == "GET"
+
+
+def test_a_token_is_enough_to_be_considered_configured(monkeypatch) -> None:
+    from boss_engine.config import Settings
+    from boss_engine.services.secret_backends import backend_for
+
+    monkeypatch.setenv("BOSS_INFISICAL_URL", "https://infisical.example")
+    monkeypatch.setenv("BOSS_INFISICAL_PROJECT_ID", "proj")
+    monkeypatch.setenv("BOSS_INFISICAL_TOKEN", "boot-token")
+    for absent in ("BOSS_INFISICAL_CLIENT_ID", "BOSS_INFISICAL_CLIENT_SECRET"):
+        monkeypatch.delenv(absent, raising=False)
+
+    assert backend_for("infisical", Settings()).kind == "infisical"
+
+
+def test_half_a_machine_identity_is_not_configured(monkeypatch) -> None:
+    """A client id with no secret would fail at the first call, far from the cause."""
+    from boss_engine.config import Settings
+    from boss_engine.services.secret_backends import backend_for
+
+    monkeypatch.setenv("BOSS_INFISICAL_URL", "https://infisical.example")
+    monkeypatch.setenv("BOSS_INFISICAL_PROJECT_ID", "proj")
+    monkeypatch.setenv("BOSS_INFISICAL_CLIENT_ID", "cid")
+    for absent in ("BOSS_INFISICAL_TOKEN", "BOSS_INFISICAL_CLIENT_SECRET",
+                   "BOSS_INFISICAL_CLIENT_SECRET_FILE"):
+        monkeypatch.delenv(absent, raising=False)
+
+    with pytest.raises(SecretUnavailable):
+        backend_for("infisical", Settings())

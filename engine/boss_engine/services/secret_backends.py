@@ -225,10 +225,16 @@ class InfisicalBackend:
     _EXPIRY_MARGIN_SECONDS = 120
 
     def __init__(self, base_url: str, client_id: str, client_secret: str, project_id: str,
-                 environment: str = "prod", secret_path: str = "/", timeout: int = 15):
+                 environment: str = "prod", secret_path: str = "/", timeout: int = 15,
+                 token: str = ""):
         self._base = base_url.rstrip("/")
         self._client_id = client_id
         self._client_secret = client_secret
+        #: A machine-identity token used directly, skipping the login exchange. This is what
+        #: `infisical bootstrap` hands back when BOSS provisions its own instance — an identity
+        #: token, not a client id/secret pair — so the bundled case has no credentials to
+        #: exchange and would otherwise be unable to authenticate at all.
+        self._static_token = (token or "").strip()
         self._project = project_id
         self._environment = environment or "prod"
         self._path = secret_path or "/"
@@ -266,6 +272,8 @@ class InfisicalBackend:
             return {}
 
     def _access_token(self) -> str:
+        if self._static_token:
+            return self._static_token
         if self._token and time.time() < self._token_expires_at:
             return self._token
         data = self._request(
@@ -329,6 +337,20 @@ class InfisicalBackend:
                     "environment": self._environment, "path": self._path}
         except SecretUnavailable as exc:
             return {"ok": False, "kind": self.kind, "error": str(exc)}
+
+
+def _infisical_token(settings: Settings) -> str:
+    """A machine-identity token, from settings or a file."""
+    value = (getattr(settings, "infisical_token", "") or "").strip()
+    if value:
+        return value
+    path = (getattr(settings, "infisical_token_file", "") or "").strip()
+    if path:
+        expanded = os.path.expanduser(path)
+        if os.path.isfile(expanded):
+            with open(expanded, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+    return ""
 
 
 def _infisical_secret(settings: Settings) -> str:
@@ -765,14 +787,20 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
         client_id = (getattr(settings, "infisical_client_id", "") or "").strip()
         project = (getattr(settings, "infisical_project_id", "") or "").strip()
         client_secret = _infisical_secret(settings)
-        if not (base and client_id and client_secret and project):
+        token = _infisical_token(settings)
+        # Either credential shape is enough: a machine identity to exchange, or a token that
+        # already is one. A bundled instance is bootstrapped and hands back the latter.
+        authenticable = bool(token) or bool(client_id and client_secret)
+        if not (base and project and authenticable):
             raise SecretUnavailable(
-                "infisical is not configured (BOSS_INFISICAL_URL, BOSS_INFISICAL_CLIENT_ID, "
-                "BOSS_INFISICAL_CLIENT_SECRET or _FILE, BOSS_INFISICAL_PROJECT_ID)")
+                "infisical is not configured (BOSS_INFISICAL_URL and BOSS_INFISICAL_PROJECT_ID, "
+                "plus either BOSS_INFISICAL_TOKEN or BOSS_INFISICAL_CLIENT_ID with "
+                "BOSS_INFISICAL_CLIENT_SECRET or _FILE)")
         return InfisicalBackend(
             base, client_id, client_secret, project,
             environment=(getattr(settings, "infisical_environment", "") or "prod"),
-            secret_path=(getattr(settings, "infisical_secret_path", "") or "/"))
+            secret_path=(getattr(settings, "infisical_secret_path", "") or "/"),
+            token=token)
     if normalised == "platform_secret_store":
         base = (getattr(settings, "platform_secret_store_url", "") or "").strip()
         token = _platform_token(settings)

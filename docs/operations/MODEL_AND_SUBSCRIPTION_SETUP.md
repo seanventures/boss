@@ -293,6 +293,23 @@ Local models are free — price them at zero or the ledger will invent a bill:
 BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'
 ```
 
+### Run a secret store alongside BOSS
+
+BOSS can bring up Infisical with it, so credentials live in a real secret store instead of the
+database fallback. Opt-in — plain `docker compose up` is unchanged.
+
+```bash
+sh scripts/install/gen_infisical_keys.sh .env
+docker compose -f scripts/install/community-compose.yml --profile secrets up -d
+```
+
+Then point BOSS at it with `BOSS_INFISICAL_URL`, `BOSS_INFISICAL_PROJECT_ID`, and either
+`BOSS_INFISICAL_TOKEN` or `BOSS_INFISICAL_CLIENT_ID` + `BOSS_INFISICAL_CLIENT_SECRET`.
+
+Back up the `.env` those keys are written to: `INFISICAL_ENCRYPTION_KEY` is the only way to read
+what Infisical stores. If the default ports clash on your machine, set `BOSS_POSTGRES_PORT` and
+`INFISICAL_PORT`.
+
 ### Run the secret store yourself
 
 Implement four endpoints and BOSS uses it unchanged, authenticated with an `X-Ops-Token` header:
