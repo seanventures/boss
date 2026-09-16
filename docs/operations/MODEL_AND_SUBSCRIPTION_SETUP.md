@@ -14,8 +14,9 @@ thing for anyone scripting it.
 Where the commands run:
 
 - `curl …` — anywhere that can reach your BOSS API.
-- `boss-engine …` — where the engine is installed (`pip install boss-engine`).
-- `python3 scripts/…` — from a clone of the BOSS repository.
+- `boss-engine …` — where the engine is installed (`pip install boss-engine`). From a clone,
+  use `PYTHONPATH=engine python3 -m boss_engine …` instead.
+- `python3 scripts/…` — from the root of a clone of the BOSS repository.
 
 If you use the commands, set these two first:
 
@@ -33,7 +34,7 @@ export BOSS_API_KEY=your-boss-api-key          # from your deployment's BOSS_API
 | `openrouter` | `anthropic/claude-sonnet-4.5` | <https://openrouter.ai/keys> |
 | `openai` | `gpt-4o` | <https://platform.openai.com/api-keys> |
 | `anthropic` | `claude-sonnet-4-5` | <https://console.anthropic.com/settings/keys> |
-| `custom` | yours | your endpoint |
+| `custom` | yours | your endpoint — also pass `"base_url"` |
 
 **Console:** Setup → Model → pick provider → paste key → Verify and save.
 
@@ -52,13 +53,17 @@ Done. The key is verified before it is stored.
 
 **If it fails**
 
-| Status | Fix |
+Nothing is stored when it fails, so just fix and retry.
+
+| You get | Means |
 |---|---|
-| 401 | Key wrong or truncated. Re-copy it. |
-| 403 | Your account cannot use that model. Try the example model. |
-| 404 | Wrong model name or base URL. |
-| 429 | Rate limited. Retry. |
-| 409 | You picked a subscription. Go to B or C. |
+| `422` · that key was rejected — check it was copied whole | Key wrong or truncated. |
+| `422` · the key is valid but not allowed to use that model | Try the example model for that provider. |
+| `422` · no model called … — check the model name | Wrong model name or base URL. |
+| `422` · the provider is rate-limiting right now | The key works. Retry shortly. |
+| `422` · could not reach … | Network or base URL problem, not the key. |
+| `409` · is a subscription, not an API key | You picked `codex`/`cursor`/Claude. Go to B or C. |
+| `400` · a base URL is required for a custom provider | Add `"base_url"` to the request. |
 
 ---
 
@@ -122,6 +127,9 @@ Which file: the one BOSS already reads for its other settings.
 | From a clone | `.env` in the repository root |
 | Kubernetes | no env file — use a Secret, or route B |
 
+Run from the root of your BOSS clone. `.env` is then the repository's own file; pass a full
+path instead if the file you need is elsewhere (`--write-env /srv/boss/.env`):
+
 ```bash
 python3 scripts/store_subscription_token.py codex --write-env .env
 ```
@@ -133,7 +141,7 @@ If you cannot reach the machine's filesystem, use route B.
 **B — send it to an HTTP secret store:**
 
 ```bash
-export OPS_BASE_URL=http://127.0.0.1:8099
+export OPS_BASE_URL=http://127.0.0.1:8099   # your secret store's address
 python3 scripts/store_subscription_token.py codex --dry-run
 python3 scripts/store_subscription_token.py codex
 ```
@@ -177,11 +185,16 @@ curl -X POST "${BOSS_API:?}/v1/setup/coding-agents/connect" \
   -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"codex"}'
 ```
 
-Success looks like this — BOSS runs a real turn before saying yes:
+Success looks like this — BOSS runs a real Codex turn before saying yes:
 
-```
-"authenticated": true, "auth_detail": "Logged in using ChatGPT",
-"proof": { "ok": true, "replied": "BOSS_OK" }
+```json
+{
+  "ok": true,
+  "provider": "codex",
+  "detected": { "authenticated": true, "auth_detail": "Logged in using ChatGPT",
+                "ready": true },
+  "proof": { "ok": true, "exit_code": 0, "replied": "BOSS_OK" }
+}
 ```
 
 **If it fails**
@@ -220,7 +233,7 @@ boss-engine call provider_audit --args '{"expect":"openai","dimension":"vendor"}
 
 ### Other lanes
 
-| Lane | Key | Base URL |
+| Lane | Key setting | Base URL setting |
 |---|---|---|
 | `openrouter` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` |
 | `groq` | `GROQ_API_KEY` | `GROQ_BASE_URL` |

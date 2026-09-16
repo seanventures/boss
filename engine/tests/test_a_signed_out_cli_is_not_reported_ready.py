@@ -83,3 +83,40 @@ def test_the_captured_deployment_output_now_reads_as_signed_out() -> None:
         "precondition: the affirmative pattern still matches the denial — which is WHY the "
         "negative check has to exist and win")
     assert not _verdict(codex, "Not logged in")
+
+
+# --- which line gets reported -----------------------------------------------
+
+
+def test_auth_detail_reports_the_status_not_a_warning() -> None:
+    """These CLIs print warnings before their answer, and the doc keys troubleshooting on this.
+
+    Measured: a fresh CODEX_HOME makes codex emit "WARNING: proceeding, even though we could
+    not create PATH aliases…" ahead of the login status. Reporting the first line handed the
+    operator a sentence about symlinks while they were debugging a login.
+    """
+    from boss_engine.services.cli_harness import _auth_detail
+
+    codex = BUILTIN_CLI_HARNESSES["codex"]
+    warned = ("WARNING: proceeding, even though we could not create PATH aliases\n"
+              "Logged in using ChatGPT")
+
+    assert _auth_detail(codex, warned) == "Logged in using ChatGPT"
+
+
+def test_a_denial_behind_a_warning_is_still_what_gets_reported() -> None:
+    from boss_engine.services.cli_harness import _auth_detail
+
+    codex = BUILTIN_CLI_HARNESSES["codex"]
+
+    assert _auth_detail(codex, "WARNING: noise\nNot logged in") == "Not logged in"
+
+
+def test_a_warning_alone_is_better_than_nothing() -> None:
+    """When the CLI says only that, it is the whole answer available."""
+    from boss_engine.services.cli_harness import _auth_detail
+
+    codex = BUILTIN_CLI_HARNESSES["codex"]
+
+    assert _auth_detail(codex, "WARNING: only a warning").startswith("WARNING")
+    assert _auth_detail(codex, "") == ""

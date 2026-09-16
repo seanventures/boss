@@ -347,7 +347,12 @@ def detect(spec: CliHarnessSpec) -> dict:
         result["next_step"] = None
         return result
     code, out = _run_probe(found, spec.auth_check_args)
-    detail = out.splitlines()[0][:200] if out else ""
+    # The line that ANSWERS the question, not merely the first one printed. These CLIs emit
+    # warnings before their status — a fresh CODEX_HOME produces "WARNING: proceeding, even
+    # though we could not create PATH aliases…" — and reporting that as `auth_detail` hands the
+    # operator a sentence about symlinks when they are debugging a login. The troubleshooting
+    # tables in the setup doc are keyed on this field, so it has to be the status.
+    detail = _auth_detail(spec, out)
     result["auth_detail"] = detail or None
     # The denial is checked first and wins outright: "Not logged in" contains "logged in", so
     # a positive-only test reports a signed-out CLI as ready.
@@ -364,6 +369,25 @@ def detect(spec: CliHarnessSpec) -> dict:
             if credential and not result["token_present"] and not _is_interactive_host()
             else f"sign in with: {spec.signin_hint}")
     return result
+
+
+def _auth_detail(spec: CliHarnessSpec, out: str) -> str:
+    """The most informative line of an auth-status output."""
+    import re as _re
+
+    lines = [line.strip() for line in (out or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    for pattern in (spec.auth_fail_pattern, spec.auth_ok_pattern):
+        if not pattern:
+            continue
+        for line in lines:
+            if _re.search(pattern, line):
+                return line[:200]
+    for line in lines:
+        if not _re.match(r"(?i)^\s*(warning|note)\b", line):
+            return line[:200]
+    return lines[0][:200]
 
 
 def _is_interactive_host() -> bool:
