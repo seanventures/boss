@@ -110,13 +110,28 @@ python3 scripts/store_subscription_token.py codex
 
 The `export` matters — without it the script cannot see the variable.
 
-No secret store? Set `CODEX_AUTH_JSON` directly in the deployment's environment instead
-(`docker run -e`, compose, a Kubernetes secret, your platform's UI). `--dry-run` reports the
-value's size so you can confirm before sending it.
+No secret store? Skip this step — Step 2 covers setting the value directly.
 
-### Step 2 — point BOSS at the store
+### Step 2 — make BOSS see it
 
-Skip this if you set the environment variable directly.
+Storing a secret does not put it in front of the running process. Pick the row that matches how
+your deployment gets its configuration.
+
+**Your platform writes stored secrets into the app's environment at deploy time.** This is the
+common case. Render the key and recreate the containers:
+
+```bash
+python3 ops.py render CODEX_AUTH_JSON --recreate api worker
+```
+
+Nothing else to configure. Skip to Step 3.
+
+**You set environment variables by hand.** Set `CODEX_AUTH_JSON` in the deployment's
+environment — `docker run -e`, compose, a Kubernetes secret, your platform's UI. Nothing else
+to configure. Skip to Step 3.
+
+**You want BOSS to read the store itself, so the credential never enters the environment.**
+Point BOSS at the store:
 
 | Your store | Set on BOSS |
 |---|---|
@@ -124,11 +139,11 @@ Skip this if you set the environment variable directly.
 | Vault / OpenBao | `BOSS_VAULT_ADDR` + `BOSS_VAULT_TOKEN` |
 | Encrypted local files | `BOSS_KMS_MASTER_KEY` |
 
-BOSS uses **one** store — the first of those that answers. Put the credential in that one.
+BOSS reads **one** store — the first of those that answers — so put the credential in that one.
 
-### Step 3 — restart, then connect
+### Step 3 — connect
 
-Restart BOSS so it picks up the new configuration, then:
+If Step 2 did not already recreate the containers, restart BOSS first. Then:
 
 ```bash
 curl -X POST "${BOSS_API:?}/v1/setup/coding-agents/connect" \
