@@ -150,9 +150,10 @@ def test_boss_is_the_default_destination(mod, tmp_path, monkeypatch, capsys) -> 
     """
     sent = {}
 
-    def fake(api, api_key, project_id, provider, credential, actor="setup", timeout=30):
-        sent.update(api=api, key=api_key, project=project_id,
-                    provider=provider, credential=credential)
+    def fake(api, api_key, project_id, provider, credential, actor="setup", timeout=30,
+             accept_database_fallback=False):
+        sent.update(api=api, key=api_key, project=project_id, provider=provider,
+                    credential=credential, accepted=accept_database_fallback)
         return {"ok": True, "backend": "database"}
 
     monkeypatch.setattr(mod, "send_to_boss", fake)
@@ -163,6 +164,7 @@ def test_boss_is_the_default_destination(mod, tmp_path, monkeypatch, capsys) -> 
 
     assert sent["api"] == "https://boss.example"
     assert sent["provider"] == "codex"
+    assert sent["accepted"] is False, "the operator has not accepted anything by default"
     assert json.loads(sent["credential"]) == {"tokens": {"access_token": "real-token-value"}}
     out = capsys.readouterr().out
     assert "database" in out and "Nothing to restart" in out
@@ -325,3 +327,71 @@ def test_each_route_says_where_the_credential_actually_went(mod, tmp_path, monke
     out = capsys.readouterr().out
     assert "http://mine.example" in out
     assert "YOUR store, not BOSS's" in out
+
+
+def test_a_fallback_refusal_is_relayed_not_retried(mod, tmp_path, monkeypatch) -> None:
+    """BOSS asks whether Postgres is acceptable; the script must not answer for the operator.
+
+    Re-sending with the flag set on their behalf would defeat the one exchange that exists to
+    make the choice explicit — and they would learn where their credential went by reading the
+    source.
+    """
+    import io
+    import urllib.error
+
+    def refuse(*_a, **_k):
+        raise urllib.error.HTTPError(
+            "http://boss/x", 409, "conflict", {},
+            io.BytesIO(json.dumps({"detail": {
+                "error": "secret_store_fallback_not_accepted",
+                "message": "no secret store configured; anyone with the database has it",
+                "backend": "database",
+            }}).encode()))
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+
+    with pytest.raises(SystemExit) as exc:
+        mod.send_to_boss("http://boss", "k", "p", "codex", "cred")
+
+    assert "anyone with the database has it" in str(exc.value)
+    assert "--accept-database-fallback" in str(exc.value)
+
+
+def test_the_flag_travels_when_the_operator_sets_it(mod, tmp_path, monkeypatch) -> None:
+    sent = {}
+
+    def capture(request, timeout=None):
+        sent.update(json.loads(request.data.decode()))
+
+        class R:
+            def read(self_inner):
+                return b'{"ok": true, "backend": "database", "fallback_accepted": true}'
+
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *_):
+                return False
+        return R()
+
+    monkeypatch.setattr("urllib.request.urlopen", capture)
+    path = _auth_file(tmp_path, {"tokens": {"access_token": "v"}})
+
+    assert mod.main(["codex", "--auth-file", str(path), "--boss-api", "http://boss",
+                     "--boss-api-key", "k", "--accept-database-fallback"]) == 0
+    assert sent["accept_database_fallback"] is True
+
+
+def test_storing_in_the_database_says_so_afterwards(mod, tmp_path, monkeypatch, capsys) -> None:
+    """A success message that does not mention it leaves the operator thinking it went to a vault."""
+    monkeypatch.setattr(mod, "send_to_boss",
+                        lambda *a, **k: {"ok": True, "backend": "database",
+                                         "fallback_accepted": True})
+    path = _auth_file(tmp_path, {"tokens": {"access_token": "v"}})
+
+    mod.main(["codex", "--auth-file", str(path), "--boss-api", "http://boss",
+              "--boss-api-key", "k", "--accept-database-fallback"])
+
+    out = capsys.readouterr().out
+    assert "BOSS's own database" in out
+    assert "bootstrap_infisical" in out

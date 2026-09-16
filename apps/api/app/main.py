@@ -14817,19 +14817,35 @@ def setup_store_coding_agent_credential(payload: dict) -> dict:
     best store this installation has, down to Postgres when it has nothing else, so the honest
     interface is "give it to BOSS" and the rest is an implementation detail.
     """
-    from .services.setup_service import SetupError, store_coding_agent_credential
+    from .services.setup_service import (
+        SecretFallbackNotAccepted,
+        SetupError,
+        store_coding_agent_credential,
+    )
 
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "setup")
     provider = str(payload.get("provider") or "").strip().lower()
     credential = str(payload.get("credential") or "")
+    accept = bool(payload.get("accept_database_fallback"))
     if not project_id or not provider:
         raise HTTPException(status_code=400, detail="project_id and provider are required")
     with begin() as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
         try:
             return store_coding_agent_credential(
-                connection, get_settings(), project_id, provider, credential, actor=actor)
+                connection, get_settings(), project_id, provider, credential, actor=actor,
+                accept_database_fallback=accept)
+        except SecretFallbackNotAccepted as exc:
+            # 409, not 422. Nothing is wrong with the request and retrying it unchanged will
+            # fail identically — what is missing is a decision, and the body says which one so
+            # a client can put it to the operator rather than guessing.
+            raise HTTPException(status_code=409, detail={
+                "error": "secret_store_fallback_not_accepted",
+                "message": str(exc),
+                "backend": exc.backend,
+                "resend_with": {"accept_database_fallback": True},
+            }) from exc
         except SetupError as exc:
             # 422: the operator can fix every one of these, and the message says how.
             raise HTTPException(status_code=422, detail=str(exc)) from exc

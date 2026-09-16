@@ -154,6 +154,10 @@ python3 scripts/store_subscription_token.py codex
 
 It prints the credential's size and destination, never its contents. Nothing to restart.
 
+If this installation has no secret store, BOSS stops and asks before putting a live credential
+in its database — add `--accept-database-fallback` to say yes deliberately, or set one up with
+[the bundled store](#run-a-secret-store-alongside-boss).
+
 It needs `BOSS_API` and `BOSS_API_KEY` from the top of this page, and calls
 `POST {BOSS_API}/v1/setup/coding-agents/credential` — use that directly if you would rather not
 run the script. BOSS replies with which store it used (`database` when you run none of your

@@ -165,9 +165,21 @@ def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
     return detect_all(settings)
 
 
+class SecretFallbackNotAccepted(SetupError):
+    """The only store available is one the operator should be asked about first.
+
+    Not a SetupError the caller can merely retry: nothing is wrong with the request, and
+    repeating it verbatim will fail identically. What is missing is a decision.
+    """
+
+    def __init__(self, backend: str, message: str):
+        super().__init__(message)
+        self.backend = backend
+
+
 def store_coding_agent_credential(
     connection, settings: Settings, project_id: str, provider: str, credential: str, *,
-    actor: str = "setup",
+    actor: str = "setup", accept_database_fallback: bool = False,
 ) -> dict[str, Any]:
     """Put a subscription's credential into whatever store THIS installation has.
 
@@ -182,6 +194,7 @@ def store_coding_agent_credential(
     login that rule is protecting, so it gets its own door rather than a hole in that one.
     """
     from .cli_harness import SUBSCRIPTION_SECRET_SCOPE, load_specs
+    from .core import emit_event
     from .secret_backends import default_secret_backend
     from .secrets_service import put_secret
 
@@ -204,14 +217,36 @@ def store_coding_agent_credential(
             # Malformed is all that is safe to say; the text is a live credential.
             raise SetupError(f"the {provider} credential is not valid JSON.") from None
 
+    backend = default_secret_backend(settings)
+    # ASK BEFORE FALLING BACK TO POSTGRES. `default_secret_backend` takes the best store the
+    # installation has and quietly drops to `database` when it has none — which is right for
+    # not blocking a first run, and wrong as a silent default for a live subscription
+    # credential. The operator gets told once, in the words of this module's own comment: the
+    # database is not a good place for a token.
+    if backend == "database" and not accept_database_fallback:
+        raise SecretFallbackNotAccepted(
+            backend,
+            "this installation has no secret store configured, so the credential would go "
+            "into BOSS's Postgres database. That works and survives restarts, but anyone with "
+            "the database has the credential. Set up a secret store (see "
+            "scripts/install/bootstrap_infisical.sh), or re-send with "
+            "accept_database_fallback=true to store it there deliberately.")
+
     stored = put_secret(
         connection, settings, project_id=project_id, name=key, value=credential,
-        secret_kind="api_token", backend=default_secret_backend(settings),
+        secret_kind="api_token", backend=backend,
         scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
     )
+    if backend == "database":
+        # Recorded, not just permitted. "Who accepted a weaker store, and when" is a question
+        # somebody asks after an incident, and an answer that depends on memory is no answer.
+        emit_event(connection, project_id, "secret.fallback_accepted", actor,
+                   "secret_ref", stored["secret_ref_id"],
+                   {"backend": backend, "key": key, "provider": provider})
     return {"ok": True, "provider": provider, "key": key,
             "backend": stored["backend"], "ref_key": stored["ref_key"],
-            "fingerprint": stored["fingerprint"], "raw_secret_stored": False}
+            "fingerprint": stored["fingerprint"], "raw_secret_stored": False,
+            "fallback_accepted": backend == "database"}
 
 
 def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> dict[str, Any]:

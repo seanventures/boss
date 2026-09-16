@@ -106,7 +106,8 @@ def read_token(auth_file: Path, field: str) -> str:
 
 
 def send_to_boss(api: str, api_key: str, project_id: str, provider: str, credential: str,
-                 actor: str = "setup", timeout: int = 30) -> dict:
+                 actor: str = "setup", timeout: int = 30,
+                 accept_database_fallback: bool = False) -> dict:
     """Give the credential to BOSS and let it decide where it lives.
 
     The default route, because it is the only one that asks nothing of the customer's
@@ -117,18 +118,32 @@ def send_to_boss(api: str, api_key: str, project_id: str, provider: str, credent
     request = urllib.request.Request(
         f"{api.rstrip('/')}/v1/setup/coding-agents/credential", method="POST",
         data=json.dumps({"project_id": project_id, "actor": actor,
-                         "provider": provider, "credential": credential}).encode(),
+                         "provider": provider, "credential": credential,
+                         "accept_database_fallback": accept_database_fallback}).encode(),
         headers={"x-boss-api-key": api_key, "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
-        detail = ""
+        body = {}
         try:
-            detail = (json.loads(exc.read().decode() or "{}").get("detail") or "")[:200]
+            body = json.loads(exc.read().decode() or "{}")
         except Exception:  # noqa: BLE001 — the status is the part that always travels
-            detail = ""
-        raise SystemExit(f"BOSS refused the credential: HTTP {exc.code} {detail}") from None
+            body = {}
+        detail = body.get("detail")
+        # A DECISION, NOT A FAILURE. BOSS refuses to put a live credential in Postgres without
+        # being told to, and the operator is the one who decides. Retrying with the flag set
+        # automatically would answer the question on their behalf, which is the one thing this
+        # exchange exists to prevent — so it is printed and the run stops.
+        if exc.code == 409 and isinstance(detail, dict):
+            raise SystemExit(
+                f"{detail.get('message')}\n\n"
+                f"To store it in the database anyway, re-run with "
+                f"--accept-database-fallback.") from None
+        if isinstance(detail, dict):
+            detail = detail.get("message", "")
+        raise SystemExit(
+            f"BOSS refused the credential: HTTP {exc.code} {str(detail or '')[:200]}") from None
     except Exception as exc:  # noqa: BLE001
         raise SystemExit(f"could not reach BOSS at {api}: {type(exc).__name__}") from None
 
@@ -210,6 +225,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--field", default="", help="override the field to read")
     parser.add_argument("--write-env", metavar="FILE", default="",
                         help="write KEY=value into this env file instead of a secret store")
+    parser.add_argument("--accept-database-fallback", action="store_true",
+                        help="store in BOSS's database when no secret store is configured")
     parser.add_argument("--dry-run", action="store_true",
                         help="find the credential and report its size; send nothing")
     args = parser.parse_args(argv)
@@ -276,10 +293,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         raise SystemExit("no --boss-api-key (or BOSS_API_KEY) to authenticate to BOSS with.")
 
     result = send_to_boss(args.boss_api, args.boss_api_key, args.project_id,
-                          args.provider, token)
+                          args.provider, token,
+                          accept_database_fallback=args.accept_database_fallback)
     print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
-    print(f"destination: {args.boss_api} — BOSS put it in its "
-          f"{result.get('backend', 'configured')} store. Nothing to restart.")
+    backend = result.get("backend", "configured")
+    print(f"destination: {args.boss_api} — BOSS put it in its {backend} store. "
+          f"Nothing to restart.")
+    if result.get("fallback_accepted"):
+        print("that store is BOSS's own database. Anyone with the database has this "
+              "credential; scripts/install/bootstrap_infisical.sh sets up a real one.")
     return 0
 
 
