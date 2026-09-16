@@ -8,11 +8,14 @@ Pick your row. Follow that section. Ignore the rest.
 | A Claude or Codex subscription | on the machine you signed in on | [B — subscription, same machine](#b--subscription-same-machine) |
 | A Claude or Codex subscription | on a server | [C — subscription, server](#c--subscription-server) |
 
-Set these first; every command below uses them.
+Most of this can be done from the console: **Setup → Model**. The commands below do the same
+thing for anyone scripting it.
+
+If you use the commands, set these two first:
 
 ```bash
-export BOSS_API=https://your-boss-api
-export BOSS_API_KEY=your-boss-api-key
+export BOSS_API=https://boss-api.example.com   # your BOSS API address, the one the console talks to
+export BOSS_API_KEY=your-boss-api-key          # from your deployment's BOSS_API_KEY / BOSS_CONSOLE_API_KEY
 ```
 
 ---
@@ -143,7 +146,11 @@ BOSS reads **one** store — the first of those that answers — so put the cred
 
 ### Step 3 — connect
 
-If Step 2 did not already recreate the containers, restart BOSS first. Then:
+If Step 2 did not already recreate the containers, restart BOSS first.
+
+**Console:** Setup → Model → Codex subscription → **Connect**.
+
+**Or with the API:**
 
 ```bash
 curl -X POST "${BOSS_API:?}/v1/setup/coding-agents/connect" \
