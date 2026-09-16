@@ -243,9 +243,20 @@ def test_detection_reports_what_is_missing_and_the_command_that_fixes_it() -> No
     from boss_engine.services.cli_harness import CliHarnessSpec, detect
 
     found = detect(CliHarnessSpec(
-        name="nope", binary="definitely-not-installed-xyz", signin_hint="nope login"))
+        name="nope", binary="definitely-not-installed-xyz", signin_hint="nope login",
+        install_hint="npm install -g nope"))
     assert found["installed"] is False and found["ready"] is False
-    assert "install" in found["next_step"] and "nope login" in found["next_step"]
+    # The next step is the COMMAND to run, not a sentence about it. The sign-in command is
+    # carried separately so the wizard can show both steps at once and mark off the done one.
+    assert found["next_step"] == "npm install -g nope"
+    assert found["signin_hint"] == "nope login"
+
+
+def test_a_spec_with_no_install_command_still_says_something_useful() -> None:
+    from boss_engine.services.cli_harness import CliHarnessSpec, detect
+
+    found = detect(CliHarnessSpec(name="nope", binary="definitely-not-installed-xyz"))
+    assert "install" in (found["next_step"] or "")
 
 
 def test_detection_never_raises_because_both_answers_are_useful() -> None:

@@ -40,7 +40,7 @@ type Provider = {
 type CodingAgent = {
   name: string; binary: string; installed: boolean; version: string | null;
   authenticated: boolean | null; auth_detail: string | null; ready: boolean;
-  next_step: string | null;
+  next_step: string | null; install_hint?: string; signin_hint?: string; docs_url?: string;
 };
 
 async function call<T>(body: Record<string, unknown>): Promise<{ ok: boolean; data?: T; error?: string }> {
@@ -443,20 +443,39 @@ function ModelStep({ projectId, actor, providers, onDone }: {
                     : <>{detected.auth_detail ?? "Signed in."}</>}</>
               : <>not installed on this machine.</>}
           </p>
-          {detected.ready ? (
-            <button className="button" disabled={connecting}
-                    data-testid="setup-agent-connect" onClick={() => void connectAgent()}>
-              {connecting ? "Checking it answers…" : `Connect ${chosen?.label ?? provider}`}
-            </button>
-          ) : (
+          {/* THE STEPS STAY ON SCREEN EVEN WHEN IT IS ALREADY WORKING.
+              A wizard that hides the instructions the moment it is happy makes the SECOND
+              visit worse than the first — and the second visit is the common one: a new
+              machine, an expired login, a colleague being shown how. Re-running either
+              command is safe, and so is pressing Connect again. */}
+          <ol data-testid="setup-agent-steps" className="hint">
+            <li>
+              Install it: <code>{detected.install_hint ?? `install ${detected.binary}`}</code>
+              {detected.installed ? " — already installed." : null}
+            </li>
+            <li>
+              Sign in: <code>{detected.signin_hint}</code>
+              {detected.authenticated ? " — already signed in." : null}
+            </li>
+            <li>Press Connect below. BOSS checks it, it never asks you for a credential.</li>
+          </ol>
+          <button className="button" disabled={connecting || !detected.installed}
+                  data-testid="setup-agent-connect" onClick={() => void connectAgent()}>
+            {connecting ? "Checking it answers…"
+              : detected.ready ? `Connect ${chosen?.label ?? provider}`
+              : `Re-check ${chosen?.label ?? provider}`}
+          </button>
+          {!detected.ready ? (
             // The next COMMAND, not "not configured" — which sends somebody to search.
             <p data-testid="setup-agent-next-step">
-              To use it here: <code>{detected.next_step}</code>
+              Run <code>{detected.next_step}</code> first, then press Re-check.
             </p>
-          )}
+          ) : null}
           <p className="hint">
             Connecting proves it works before recording anything: BOSS makes the agent complete
-            one turn in its read-only sandbox. Signed in is not the same as working.
+            one turn in its read-only sandbox. Signed in is not the same as working — so
+            pressing this again after re-authorising is the way to confirm it, not a no-op.
+            {detected.docs_url ? <> The CLI&rsquo;s own docs: <code>{detected.docs_url}</code>.</> : null}
           </p>
         </div>
       ) : subscription ? (

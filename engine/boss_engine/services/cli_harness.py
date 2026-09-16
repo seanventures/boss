@@ -81,6 +81,12 @@ class CliHarnessSpec:
     #: What to tell the operator to run when it is installed but not signed in. This is the
     #: whole value of detection: a specific next command instead of "not configured".
     signin_hint: str = ""
+    #: How to install it. Shown ALWAYS, not only when missing — somebody re-doing a login, or
+    #: moving to a new machine, needs the same two commands as somebody starting, and a UI
+    #: that hides them once it is happy makes the second visit worse than the first.
+    install_hint: str = ""
+    #: Where the operator can read the CLI's own docs, for the cases neither command covers.
+    docs_url: str = ""
     #: The entitlement source this CLI satisfies, so connecting it records governance state
     #: rather than only flipping a setting.
     entitlement_source_id: str = ""
@@ -117,6 +123,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         auth_check_args=("login", "status"),
         auth_ok_pattern=r"(?i)logged\s+in",
         signin_hint="codex login",
+        install_hint="npm install -g @openai/codex",
+        docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
     ),
@@ -137,6 +145,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         auth_check_args=("status",),
         auth_ok_pattern=r"(?i)logged\s+in|authenticated",
         signin_hint="cursor-agent login",
+        install_hint="curl https://cursor.com/install -fsS | bash",
+        docs_url="https://docs.cursor.com/en/cli/overview",
         entitlement_source_id="cursor_subscription",
         entitlement_provider="cursor",
     ),
@@ -156,6 +166,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         # the whole check and there is nothing to sign in to.
         auth_check_args=(),
         signin_hint="set OPENAI_API_KEY or ANTHROPIC_API_KEY in the environment",
+        install_hint="python -m pip install aider-install && aider-install",
+        docs_url="https://aider.chat/docs/install.html",
     ),
 }
 
@@ -233,11 +245,13 @@ def detect(spec: CliHarnessSpec) -> dict:
         "auth_detail": None,
         "ready": False,
         "signin_hint": spec.signin_hint,
+        "install_hint": spec.install_hint,
+        "docs_url": spec.docs_url,
         "verified_harness": spec.verified,
         "next_step": None,
     }
     if not found:
-        result["next_step"] = f"install the {spec.name} CLI, then sign in with: {spec.signin_hint}"
+        result["next_step"] = (spec.install_hint or f"install the {spec.name} CLI")
         return result
     code, out = _run_probe(found, spec.version_args)
     if code == 0 and out:

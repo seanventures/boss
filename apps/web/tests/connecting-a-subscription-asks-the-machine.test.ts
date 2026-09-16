@@ -80,3 +80,30 @@ describe("the route", () => {
     expect(ROUTE).not.toMatch(/\$\{API_URL\}\$\{body\./);
   });
 });
+
+describe("the steps survive success", () => {
+  it("shows install and sign-in commands even when it is already working", () => {
+    // A wizard that hides the instructions the moment it is happy makes the SECOND visit
+    // worse than the first — and the second visit is the common one: a new machine, an
+    // expired login, a colleague being shown how.
+    expect(UI).toContain('data-testid="setup-agent-steps"');
+    expect(UI).toContain("detected.install_hint");
+    expect(UI).toContain("detected.signin_hint");
+    expect(UI).toContain("THE STEPS STAY ON SCREEN EVEN WHEN IT IS ALREADY WORKING");
+  });
+
+  it("marks what is already done rather than hiding it", () => {
+    expect(UI).toContain("already installed");
+    expect(UI).toContain("already signed in");
+  });
+
+  it("lets you press it again after re-authorising", () => {
+    // Re-connecting is how you confirm a new login, so it must not be a no-op or disabled.
+    expect(UI).toContain("Re-check");
+    expect(UI).toContain("pressing this again after re-authorising");
+  });
+
+  it("only disables the button when there is no binary to run", () => {
+    expect(UI).toContain("disabled={connecting || !detected.installed}");
+  });
+});
