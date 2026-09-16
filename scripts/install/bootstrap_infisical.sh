@@ -21,6 +21,11 @@ PROJECT_SLUG="${INFISICAL_PROJECT_SLUG:-boss-secrets}"   # Infisical requires 5+
 PORT="$(grep -s '^INFISICAL_PORT=' "$ENV_FILE" | cut -d= -f2)"
 PORT="${PORT:-8080}"
 URL="http://127.0.0.1:${PORT}"
+# The address BOSS will use, which is NOT the one this script probes. From inside the api
+# container 127.0.0.1 is that container, so a host URL written into .env configures a store
+# the process cannot reach — and it fails as "not configured", pointing at the wrong thing.
+# Bundled BOSS reaches it by service name on the compose network.
+BOSS_URL="${BOSS_INFISICAL_URL:-http://infisical:8080}"
 
 if grep -qs '^BOSS_INFISICAL_TOKEN=' "$ENV_FILE"; then
   echo "$ENV_FILE already holds BOSS_INFISICAL_TOKEN — nothing to do." >&2
@@ -74,7 +79,7 @@ rm -f "$BOOT_ERR"
 # token is lost there is no retry.
 umask 077
 {
-  echo "BOSS_INFISICAL_URL=$URL"
+  echo "BOSS_INFISICAL_URL=$BOSS_URL"
   echo "BOSS_INFISICAL_TOKEN=$TOKEN"
 } >> "$ENV_FILE"
 
@@ -92,7 +97,7 @@ fi
 echo "BOSS_INFISICAL_PROJECT_ID=$PROJECT_ID" >> "$ENV_FILE"
 
 echo "done. $ENV_FILE now points BOSS at Infisical."
-echo "  url     $URL"
+echo "  url     $BOSS_URL   (BOSS reaches it here; you use $URL)"
 echo "  project $PROJECT_ID"
 echo "admin login: $ADMIN_EMAIL (password was generated and not stored — reset it in the UI)"
 echo "restart BOSS so it picks up the new settings."

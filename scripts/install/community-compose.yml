@@ -101,6 +101,14 @@ services:
       # reports "not signed in" while the operator is looking at the credential they just set.
       CODEX_AUTH_JSON: ${CODEX_AUTH_JSON:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Where BOSS keeps secrets. Without these forwarded, bootstrap writes them into .env and
+      # the container never sees them — the store is configured and unreachable at once.
+      BOSS_INFISICAL_URL: ${BOSS_INFISICAL_URL:-}
+      BOSS_INFISICAL_TOKEN: ${BOSS_INFISICAL_TOKEN:-}
+      BOSS_INFISICAL_PROJECT_ID: ${BOSS_INFISICAL_PROJECT_ID:-}
+      BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
+      BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
+      BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_BOOTSTRAP_SEED_API_ENABLED: "false"
       # Community: no Account Connect required
@@ -146,6 +154,14 @@ services:
       # reports "not signed in" while the operator is looking at the credential they just set.
       CODEX_AUTH_JSON: ${CODEX_AUTH_JSON:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Where BOSS keeps secrets. Without these forwarded, bootstrap writes them into .env and
+      # the container never sees them — the store is configured and unreachable at once.
+      BOSS_INFISICAL_URL: ${BOSS_INFISICAL_URL:-}
+      BOSS_INFISICAL_TOKEN: ${BOSS_INFISICAL_TOKEN:-}
+      BOSS_INFISICAL_PROJECT_ID: ${BOSS_INFISICAL_PROJECT_ID:-}
+      BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
+      BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
+      BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts

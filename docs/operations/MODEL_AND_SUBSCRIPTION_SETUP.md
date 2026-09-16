@@ -309,7 +309,9 @@ sh scripts/install/bootstrap_infisical.sh .env
 ```
 
 The third command provisions Infisical and writes `BOSS_INFISICAL_URL`, `BOSS_INFISICAL_TOKEN`
-and `BOSS_INFISICAL_PROJECT_ID` into your `.env`. Restart BOSS and it stores secrets there.
+and `BOSS_INFISICAL_PROJECT_ID` into your `.env`. Restart BOSS (`up -d api worker`) and it
+stores secrets there. On a brand-new install, seed it first with
+`docker compose exec api python -m boss_engine bootstrap`.
 
 To use an Infisical you already run, skip the bundling and set those three yourself —
 `BOSS_INFISICAL_CLIENT_ID` + `BOSS_INFISICAL_CLIENT_SECRET` work in place of the token.

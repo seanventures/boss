@@ -117,3 +117,31 @@ def test_the_encryption_key_has_no_default(compose: str) -> None:
         line = [ln for ln in block.splitlines() if ln.strip().startswith(f"{required}:")][0]
         assert ":?" in line, f"{required} has a default; it must refuse to start instead"
         assert "gen_infisical_keys.sh" in line, f"{required} does not say how to fix it"
+
+
+def test_the_secret_store_settings_reach_the_services(compose: str) -> None:
+    """Bootstrap writes these into .env; compose has to carry them into the container.
+
+    Measured on a real local stack: without forwarding, `bootstrap_infisical.sh` reported
+    success, .env held all three settings, and BOSS answered "infisical is not configured" —
+    configured and unreachable at the same time, with the error naming the thing that was set.
+    """
+    required = ("BOSS_INFISICAL_URL", "BOSS_INFISICAL_TOKEN", "BOSS_INFISICAL_PROJECT_ID")
+    missing = []
+    for service in NEEDS_CREDENTIALS:
+        block = _service_block(compose, service)
+        missing += [f"{service} does not receive {n}" for n in required if f"{n}:" not in block]
+    assert not missing, "\n".join(missing)
+
+
+def test_bootstrap_writes_an_address_the_container_can_reach() -> None:
+    """127.0.0.1 inside the api container is that container, not the host.
+
+    The script probes Infisical from the host and BOSS talks to it from the compose network,
+    so the address it PROBES and the address it WRITES are different on purpose.
+    """
+    script = (REPO / "scripts" / "install" / "bootstrap_infisical.sh").read_text()
+
+    assert 'BOSS_URL="${BOSS_INFISICAL_URL:-http://infisical:8080}"' in script
+    assert 'echo "BOSS_INFISICAL_URL=$BOSS_URL"' in script, (
+        "it writes the host URL, which the container cannot reach")
