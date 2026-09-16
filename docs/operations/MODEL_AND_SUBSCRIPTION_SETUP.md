@@ -107,9 +107,20 @@ Do **not** set `CODEX_ACCESS_TOKEN`. Codex reads that variable itself and errors
 
 Both CLIs are already in the BOSS image. You supply only the credential.
 
-### Step 1 — send it
+### Step 1 — put the credential where BOSS runs
 
-Run on the machine where you are signed in. Nothing is printed but the size.
+Run these on the machine where you are signed in. Nothing is printed but the size.
+Pick **one**.
+
+**A — write it into the deployment's env file.** Simplest, and works anywhere:
+
+```bash
+python3 scripts/store_subscription_token.py codex --write-env /path/to/your/.env
+```
+
+Restart BOSS. **You are done — skip to Step 3.**
+
+**B — send it to an HTTP secret store:**
 
 ```bash
 export OPS_BASE_URL=http://127.0.0.1:8099
@@ -119,24 +130,20 @@ python3 scripts/store_subscription_token.py codex
 
 The `export` matters — without it the script cannot see the variable.
 
-No secret store? Skip this step — Step 2 covers setting the value directly.
+Storing it is not enough on its own; continue to Step 2.
 
-### Step 2 — make BOSS see it
+Add `--dry-run` to either to see what would be sent without sending it.
 
-Storing a secret does not put it in front of the running process. Pick the row that matches how
-your deployment gets its configuration.
+### Step 2 — make BOSS read it (route B only)
 
-**Your platform writes stored secrets into the app's environment at deploy time.** This is the
-common case. Apply `CODEX_AUTH_JSON` to the app using whatever your platform provides for that
-— a deploy, a config sync, a "restart with new secrets" action — then recreate the containers.
-Nothing else to configure. Skip to Step 3.
+A stored secret is not yet in front of the running process. Pick **one**.
 
-**You set environment variables by hand.** Set `CODEX_AUTH_JSON` in the deployment's
-environment — `docker run -e`, compose, a Kubernetes secret, your platform's UI. Nothing else
-to configure. Skip to Step 3.
+**B1 — have your platform put it in the app's environment.** If your deployment already
+applies stored secrets at deploy time, trigger that (a deploy, a config sync, a restart), then
+recreate the containers. Nothing to configure on BOSS.
 
-**You want BOSS to read the store itself, so the credential never enters the environment.**
-Point BOSS at the store:
+**B2 — have BOSS read the store directly**, so the credential never enters the environment.
+Set these on BOSS, then restart:
 
 | Your store | Set on BOSS |
 |---|---|

@@ -120,6 +120,34 @@ def store(store_url: str, ops_token: str, key: str, value: str, timeout: int = 2
         raise SystemExit(f"secret store unreachable: {type(exc).__name__}") from None
 
 
+def write_env_file(path: Path, key: str, value: str) -> str:
+    """Set `key` in an env file, replacing any line that already sets it.
+
+    Appending blindly leaves two assignments for the same name, and which one wins is decided
+    by whatever reads the file — so a stale credential can quietly outrank the new one.
+
+    Created 0600 when new. An env file holding a live session should not be readable by every
+    process on the box, and a mode fixed after the write leaves a window where it is.
+    """
+    line = f"{key}={value}"
+    existing = path.read_text().splitlines() if path.is_file() else []
+    replaced = False
+    out = []
+    for entry in existing:
+        if entry.startswith(f"{key}=") or entry.startswith(f"export {key}="):
+            if not replaced:
+                out.append(line)
+                replaced = True
+            continue          # drop any further duplicates
+        out.append(entry)
+    if not replaced:
+        out.append(line)
+    if not path.is_file():
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
+    path.write_text("\n".join(out) + "\n")
+    return "updated" if replaced else "added"
+
+
 def resolve_ops_token(explicit: str, token_file: str) -> str:
     if explicit:
         return explicit.strip()
@@ -142,8 +170,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--ops-token-file", default=DEFAULT_OPS_TOKEN_FILE)
     parser.add_argument("--auth-file", default="", help="override the CLI's credential file")
     parser.add_argument("--field", default="", help="override the field to read")
+    parser.add_argument("--write-env", metavar="FILE", default="",
+                        help="write KEY=value into this env file instead of a secret store")
     parser.add_argument("--dry-run", action="store_true",
-                        help="find the token and report its shape; send nothing")
+                        help="find the credential and report its size; send nothing")
     args = parser.parse_args(argv)
 
     spec = tokenable[args.provider]
@@ -164,9 +194,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     if token.startswith("<") and token.endswith(">"):
         raise SystemExit(f"{auth_file} contains the placeholder {token!r}, not a credential")
 
+    destination = (f"{args.write_env} (env file)" if args.write_env
+                   else f"{args.store_url or 'no destination set'}/secret")
     if args.dry_run:
         print(f"would store {key} ({len(token)} chars) — {what} from {auth_file}")
-        print(f"             -> {args.store_url or '<--store-url not set>'}/secret")
+        print(f"             -> {destination}")
+        return 0
+
+    if args.write_env:
+        target = Path(os.path.expanduser(args.write_env))
+        action = write_env_file(target, key, token)
+        print(f"{action} {key} ({len(token)} chars) in {target}")
+        print("restart BOSS for it to take effect.")
         return 0
     if not args.store_url:
         # "or set OPS_BASE_URL" was the whole message, and it was read by somebody who HAD set

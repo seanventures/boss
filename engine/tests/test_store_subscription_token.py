@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -159,3 +160,84 @@ def test_only_providers_that_can_actually_travel_are_offered(mod) -> None:
     """Cursor has no token route, so offering it would promise something that cannot work."""
     with pytest.raises(SystemExit):
         mod.main(["cursor", "--dry-run"])
+
+
+# --- writing straight into an env file --------------------------------------
+#
+# The route for a deployment with no HTTP secret store, which is most of them. Without it,
+# Step 2 of the setup doc had no command at all for the common case — only prose telling the
+# reader to "use whatever your platform provides", which is not an instruction.
+
+
+def test_it_writes_the_credential_into_an_env_file(mod, tmp_path, capsys) -> None:
+    env = tmp_path / ".env"
+    env.write_text("EXISTING=1\n")
+    auth = _auth_file(tmp_path, {"tokens": {"access_token": "real-token-value"}})
+
+    assert mod.main(["codex", "--auth-file", str(auth), "--write-env", str(env)]) == 0
+
+    lines = env.read_text().splitlines()
+    assert "EXISTING=1" in lines
+    assert any(ln.startswith("CODEX_AUTH_JSON=") for ln in lines)
+    assert "real-token-value" not in capsys.readouterr().out
+
+
+def test_rewriting_replaces_rather_than_appends(mod, tmp_path) -> None:
+    """Two assignments of one name leave the winner up to whatever reads the file.
+
+    Appending blindly means a stale credential can outrank the new one, and the operator sees
+    an expired session after doing exactly what they were told.
+    """
+    env = tmp_path / ".env"
+    env.write_text("CODEX_AUTH_JSON=stale\nAFTER=2\n")
+    auth = _auth_file(tmp_path, {"tokens": {"access_token": "fresh"}})
+
+    mod.main(["codex", "--auth-file", str(auth), "--write-env", str(env)])
+
+    assignments = [ln for ln in env.read_text().splitlines()
+                   if ln.startswith("CODEX_AUTH_JSON=")]
+    assert len(assignments) == 1
+    assert "stale" not in assignments[0]
+    assert "AFTER=2" in env.read_text(), "unrelated settings must survive"
+
+
+def test_an_export_prefixed_duplicate_is_replaced_too(mod, tmp_path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("export CODEX_AUTH_JSON=stale\n")
+    auth = _auth_file(tmp_path, {"tokens": {"access_token": "fresh"}})
+
+    mod.main(["codex", "--auth-file", str(auth), "--write-env", str(env)])
+
+    assert "stale" not in env.read_text()
+
+
+def test_a_new_env_file_is_not_world_readable(mod, tmp_path) -> None:
+    import stat
+
+    env = tmp_path / "fresh.env"
+    auth = _auth_file(tmp_path, {"tokens": {"access_token": "v"}})
+
+    mod.main(["codex", "--auth-file", str(auth), "--write-env", str(env)])
+
+    assert stat.S_IMODE(os.stat(env).st_mode) == 0o600
+
+
+def test_the_written_value_is_one_line_and_parses_back(mod, tmp_path) -> None:
+    """An env file cannot carry a newline, and these auth files are pretty-printed."""
+    env = tmp_path / ".env"
+    auth = tmp_path / "auth.json"
+    auth.write_text(json.dumps({"tokens": {"access_token": "v"}}, indent=2))
+
+    mod.main(["codex", "--auth-file", str(auth), "--write-env", str(env)])
+
+    line = [ln for ln in env.read_text().splitlines()
+            if ln.startswith("CODEX_AUTH_JSON=")][0]
+    assert json.loads(line.split("=", 1)[1]) == {"tokens": {"access_token": "v"}}
+
+
+def test_a_dry_run_names_the_env_file_as_the_destination(mod, tmp_path, capsys) -> None:
+    auth = _auth_file(tmp_path, {"tokens": {"access_token": "v"}})
+
+    mod.main(["codex", "--auth-file", str(auth), "--write-env", "/tmp/x.env", "--dry-run"])
+
+    assert "/tmp/x.env" in capsys.readouterr().out
