@@ -198,7 +198,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="your BOSS API key (or set BOSS_API_KEY)")
     parser.add_argument("--project-id", default="boss-dogfood",
                         help="the BOSS project to attach the subscription to")
-    parser.add_argument("--store-url", default=os.environ.get("OPS_BASE_URL", ""),
+    # NOT defaulted from OPS_BASE_URL. It was, and a variable exported hours earlier for a
+    # different step silently took precedence over the documented default — the credential
+    # went to the operator's own store while the page said BOSS would hold it, and the run
+    # succeeded, so nothing pointed at the discrepancy. An advanced route has to be asked for.
+    parser.add_argument("--store-url", default="",
                         help="advanced: write to your own secret store instead of BOSS")
     parser.add_argument("--ops-token", default="", help="store token; prefer the file")
     parser.add_argument("--ops-token-file", default=DEFAULT_OPS_TOKEN_FILE)
@@ -253,8 +257,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not result.get("ok", True):
             raise SystemExit(f"secret store reported failure: {result}")
         print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
-        print("your store is not BOSS's: make sure BOSS can read it, or use the default "
-              "--boss-api route instead.")
+        print(f"destination: {args.store_url} — YOUR store, not BOSS's.")
+        print("BOSS cannot read it until you point it at that store "
+              "(BOSS_PLATFORM_SECRET_STORE_URL / BOSS_VAULT_ADDR / BOSS_KMS_MASTER_KEY).")
         return 0
 
     if not args.boss_api:
@@ -273,8 +278,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     result = send_to_boss(args.boss_api, args.boss_api_key, args.project_id,
                           args.provider, token)
     print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
-    print(f"BOSS put it in its {result.get('backend', 'configured')} store. "
-          f"Nothing to restart.")
+    print(f"destination: {args.boss_api} — BOSS put it in its "
+          f"{result.get('backend', 'configured')} store. Nothing to restart.")
     return 0
 
 

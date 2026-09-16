@@ -286,3 +286,42 @@ def test_a_dry_run_names_the_env_file_as_the_destination(mod, tmp_path, capsys) 
     mod.main(["codex", "--auth-file", str(auth), "--write-env", "/tmp/x.env", "--dry-run"])
 
     assert "/tmp/x.env" in capsys.readouterr().out
+
+
+def test_a_stale_ops_base_url_does_not_hijack_the_default_route(mod, tmp_path, monkeypatch,
+                                                                capsys) -> None:
+    """THE trap. `--store-url` used to default from OPS_BASE_URL and outrank `--boss-api`.
+
+    Somebody exported OPS_BASE_URL for an earlier step, ran the documented command hours later,
+    and their credential went to their own store while the page said BOSS would hold it. The
+    run SUCCEEDED, so nothing pointed at the discrepancy — they only noticed because the
+    command did not ask for the BOSS variables the doc said it needed.
+
+    An advanced route has to be asked for explicitly.
+    """
+    monkeypatch.setenv("OPS_BASE_URL", "http://stale.example:8099")
+    monkeypatch.setenv("BOSS_API", "https://boss.example")
+    monkeypatch.setenv("BOSS_API_KEY", "k")
+    sent = {}
+    monkeypatch.setattr(mod, "send_to_boss",
+                        lambda *a, **k: sent.update(api=a[0]) or {"ok": True, "backend": "database"})
+    path = _auth_file(tmp_path, {"tokens": {"access_token": "v"}})
+
+    assert mod.main(["codex", "--auth-file", str(path)]) == 0
+
+    assert sent.get("api") == "https://boss.example", "a stale export outranked the default"
+    assert "stale.example" not in capsys.readouterr().out
+
+
+def test_each_route_says_where_the_credential_actually_went(mod, tmp_path, monkeypatch,
+                                                            capsys) -> None:
+    """Two destinations that both print "stored" are indistinguishable at a glance."""
+    monkeypatch.setattr(mod, "store", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(mod, "resolve_ops_token", lambda *a, **k: "t")
+    path = _auth_file(tmp_path, {"tokens": {"access_token": "v"}})
+
+    mod.main(["codex", "--auth-file", str(path), "--store-url", "http://mine.example"])
+
+    out = capsys.readouterr().out
+    assert "http://mine.example" in out
+    assert "YOUR store, not BOSS's" in out

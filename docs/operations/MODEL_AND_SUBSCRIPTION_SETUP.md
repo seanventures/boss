@@ -208,6 +208,9 @@ Or send it to your own secret store, then point BOSS at that store with
 python3 scripts/store_subscription_token.py codex --store-url "${OPS_BASE_URL:?your store}"
 ```
 
+`--store-url` must be passed explicitly; it is not picked up from the environment, so an
+address exported for something else cannot silently redirect the default route.
+
 BOSS reads **one** store — the first of those that answers — so put it in that one.
 
 ### Claude Code on a server
