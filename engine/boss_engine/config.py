@@ -448,6 +448,23 @@ class Settings(BaseSettings):
     native_max_output_tokens: int = Field(
         default=8192, alias="BOSS_NATIVE_MAX_OUTPUT_TOKENS"
     )
+    # The platform secret store is the most protected backend BOSS knows about and the
+    # first one `default_secret_backend` tries — but it is reached only through these
+    # settings. Without them `backend_for("platform_secret_store")` read an attribute that
+    # did not exist, raised SecretUnavailable, and every installation silently fell through
+    # to a lesser store. A backend nothing can select is not a backend.
+    platform_secret_store_url: str = Field(
+        default="", alias="BOSS_PLATFORM_SECRET_STORE_URL"
+    )
+    # The token itself, or a path to read it from. A file keeps it out of the process
+    # environment, where anything that dumps env — a crash reporter, a subprocess, a log —
+    # would carry it along.
+    platform_secret_store_token: str = Field(
+        default="", alias="BOSS_PLATFORM_SECRET_STORE_TOKEN"
+    )
+    platform_secret_store_token_file: str = Field(
+        default="", alias="BOSS_PLATFORM_SECRET_STORE_TOKEN_FILE"
+    )
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
     openai_codex_oauth_enabled: bool = Field(
