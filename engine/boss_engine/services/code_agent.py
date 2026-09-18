@@ -581,6 +581,27 @@ class ClaudeCodeAgent:
                 return str(local)
         return configured
 
+    def _child_env(self) -> dict:
+        """The agent's environment, plus the credential this install actually holds.
+
+        `agent_environment` decides what may be INHERITED and denies by default — that stays
+        exactly as it is. This adds one value BOSS resolved itself, for the same reason the
+        caches are added: it is something BOSS computed rather than something the process
+        happened to be started with.
+        """
+        env = agent_environment(os.environ, _shared_tool_caches())
+        if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get("ANTHROPIC_API_KEY"):
+            token = (getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
+            if not token:
+                # The lane binder runs only where a connection and project are in scope; a
+                # sandboxed agent process has neither, so the store is asked directly.
+                from .cli_harness import stored_credential
+
+                token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+            if token:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        return env
+
     def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
                       cwd: Optional[Path] = None) -> str:
         criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria) or "- (none specified)"
@@ -822,7 +843,18 @@ class ClaudeCodeAgent:
                     # found, which were production's. 204 of them.
                     #
                     # Deny by default now. See services/agent_env.py for what survives and why.
-                    env=agent_environment(os.environ, _shared_tool_caches()),
+                    #
+                    # AND WHAT BOSS HOLDS, not only what it inherited. `agent_environment`
+                    # copies CLAUDE_CODE_OAUTH_TOKEN out of this PROCESS's environment — where
+                    # it is not, on any install that keeps credentials in a secret store. The
+                    # token was resolved into `settings` by `_bind_lane_credentials` and then
+                    # never reached the child, so a governed run died on the CLI's own words:
+                    #
+                    #     claude code agent exited 1: Not logged in · Please run /login
+                    #
+                    # about a subscription that was connected, proved and stored. Same gap as
+                    # the chat adapter had, one layer down.
+                    env=self._child_env(),
                 )
                 register_seat(child.pid, seat)
                 if stdin_prompt is not None and child.stdin is not None:

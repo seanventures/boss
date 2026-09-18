@@ -223,3 +223,39 @@ def test_and_the_environment_still_wins_over_the_store(monkeypatch):
     env = ClaudeCliAdapter(get_settings())._child_env()
 
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-from-the-environment"
+
+
+def test_and_the_code_agent_gets_it_too():
+    """"claude code agent exited 1: Not logged in · Please run /login" — on a governed run,
+    about a subscription that was connected, proved and stored.
+
+    Same gap as the chat adapter, one layer down and found later because a build is the
+    slower thing to try. `agent_environment` decides what may be INHERITED and denies by
+    default, which is right; the token is not inherited on an install that keeps credentials
+    in a secret store, so it has to be added the way the tool caches are — as something BOSS
+    resolved rather than something the process was started with.
+    """
+    import inspect
+
+    from boss_engine.services.code_agent import ClaudeCodeAgent
+
+    invoke = inspect.getsource(ClaudeCodeAgent._invoke)
+    assert "env=self._child_env()" in invoke
+
+    env = inspect.getsource(ClaudeCodeAgent._child_env)
+    # The allowlist still decides what is inherited — this adds one value, it does not widen.
+    assert "agent_environment(os.environ, _shared_tool_caches())" in env
+    assert "stored_credential(self.settings, \"CLAUDE_CODE_OAUTH_TOKEN\")" in env
+    # And what the lane binder already resolved is preferred over asking the store again.
+    assert env.index("claude_code_oauth_token") < env.index("stored_credential")
+
+
+def test_and_an_operator_set_token_still_wins():
+    """What somebody exports while debugging must not be overridden by a store — the same rule
+    the chat path follows."""
+    import inspect
+
+    from boss_engine.services.code_agent import ClaudeCodeAgent
+
+    env = inspect.getsource(ClaudeCodeAgent._child_env)
+    assert 'if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get("ANTHROPIC_API_KEY"):' in env
