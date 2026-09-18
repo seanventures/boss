@@ -10,7 +10,12 @@ import {
   runAgentActionAction,
 } from "./actions";
 
-type Msg = { role: string; content: string; actions?: Array<{ kind: string }>; created_at?: string;
+/** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
+ *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
+ *  that is sometimes absent reach the render. */
+type RecordedAction = { kind?: string; tool?: string; ok?: boolean };
+
+type Msg = { role: string; content: string; actions?: RecordedAction[]; created_at?: string;
              attachments?: Array<{ name: string; kind: string }> };
 
 /** A file the operator attached to the message they are writing. */
@@ -121,6 +126,21 @@ function railBtn(active: boolean) {
  */
 /** Marks where the model's context ends and the person's message begins. */
 export const APP_FACTS_END = "[/app context]";
+
+/**
+ * What to call an action in the transcript.
+ *
+ * THIS CRASHED THE WHOLE CONSOLE. `a.kind.replaceAll(...)` assumed every recorded action has a
+ * `kind`, and one of the two writers records `{id, tool, ok}` instead — so a thread containing
+ * one of those threw `Cannot read properties of undefined (reading 'replaceAll')` during
+ * render, React unmounted the tree, and the operator got "Application error: a client-side
+ * exception has occurred" with no console at all. A transcript is a log of what happened; one
+ * unfamiliar row in it must never be able to take the page down.
+ */
+export function actionLabel(action: { kind?: string; tool?: string } | null | undefined): string {
+  const name = (action?.kind ?? action?.tool ?? "").trim();
+  return name ? name.replaceAll("_", " ") : "action";
+}
 
 export function stripAppFacts(content: string): string {
   const text = content ?? "";
@@ -1133,7 +1153,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               )}
               {m.actions && m.actions.length > 0 ? (
                 <div className="agent-action-row">
-                  {m.actions.map((a, j) => <span className="agent-action" key={j}>{a.kind.replaceAll("_", " ")}</span>)}
+                  {m.actions.map((a, j) => (
+                    <span className="agent-action" key={j}>{actionLabel(a)}</span>
+                  ))}
                 </div>
               ) : null}
             </article>

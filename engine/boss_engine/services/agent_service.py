@@ -242,7 +242,12 @@ class AgentService:
         self.append_message(
             connection, thread_id=thread_id, role="assistant", content=content,
             tool_calls=[{"tool": tool, "args": args or {}, "ok": ok, "error": error or ""}],
-            actions=[{"id": action_id, "tool": tool, "ok": ok}],
+            # `kind` AS WELL AS `tool`, because both names are already in the table and the
+            # console read only the first: a row written here — {id, tool, ok} — made the
+            # transcript throw on `a.kind.replaceAll(...)` and took the whole page down with
+            # it. The console no longer depends on either being present; writing both stops
+            # the two shapes from drifting further apart.
+            actions=[{"id": action_id, "tool": tool, "kind": tool, "ok": ok}],
             proposed_actions=survivors,
         )
         for row in rows:
