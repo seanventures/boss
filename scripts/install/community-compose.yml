@@ -76,6 +76,9 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: api
+      args:
+        BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
+        BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
     image: boss-community-api:local
     restart: unless-stopped
     depends_on:
@@ -140,6 +143,9 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: worker
+      args:
+        BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
+        BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
     image: boss-community-worker:local
     restart: unless-stopped
     depends_on:

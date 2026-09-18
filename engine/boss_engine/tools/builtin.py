@@ -1624,6 +1624,110 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "note": "Offered to the operator as a button. NOT executed."}
 
     @reg.tool(
+        "diagnose_setup",
+        "EVERYTHING about whether this install is set up, in one call: which steps are done, "
+        "the GitHub connection and the REASON its last test failed, which coding agents are "
+        "installed/signed in/connected, which model answers chat and which builds, where "
+        "secrets are stored, and what to do next. Use this FIRST for any question about "
+        "setup, connecting a repository or a model, a token being rejected, or 'the check "
+        "failed' — it is the whole picture and it names the next action. Read-only; no "
+        "credential value is ever returned.",
+        _obj({}),
+        kind="read",
+    )
+    def diagnose_setup(ctx, *, project_id, actor, args):
+        # WHY THIS EXISTS. Asked why a GitHub connection failed, the agent had to assemble the
+        # answer from `query_db` over events, source inspection and three tools that do not
+        # work in a container — and still could not say why, because the reason had been
+        # discarded. Setup is the one thing every customer touches first; answering it should
+        # not be an investigation.
+        pid = args.get("project_id") or project_id
+        from ..services.setup_service import (
+            build_engine_for,
+            chat_engine_for,
+            connected_engines,
+            list_coding_agents,
+            setup_status,
+            with_recorded_connections,
+        )
+
+        out: dict = {"project_id": pid}
+        with ctx.begin() as c:
+            try:
+                out["steps"] = setup_status(c, ctx.settings, pid)
+            except Exception as exc:  # noqa: BLE001 — a partial picture beats none
+                out["steps_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            # THE REASON, not just the verdict. `last_error` is where the redacted message
+            # lives, and reading it is the difference between "the check failed" and "GitHub
+            # has no paramg/boss-sandbox visible to this token".
+            try:
+                out["github_connections"] = [dict(r) for r in c.execute(
+                    _text("SELECT id, connection_label, auth_method, status, "
+                          "       last_test_status, last_tested_at, last_error "
+                          "  FROM github_connections WHERE project_id = :p"),
+                    {"p": pid}).mappings().all()]
+                out["repositories"] = [dict(r) for r in c.execute(
+                    _text("SELECT full_name, role, status FROM github_repository_bindings "
+                          " WHERE project_id = :p"), {"p": pid}).mappings().all()]
+            except Exception as exc:  # noqa: BLE001
+                out["github_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            try:
+                agents = with_recorded_connections(
+                    list_coding_agents(ctx.settings), c, pid)
+                out["coding_agents"] = [
+                    {k: a.get(k) for k in
+                     ("name", "installed", "version", "authenticated", "auth_detail",
+                      "ready", "connected", "connected_at", "next_step", "credential_kind")}
+                    for a in agents]
+                out["connected_engines"] = sorted(
+                    connected_engines(c, ctx.settings, pid))
+                # THE PROJECT'S CHOICES FIRST, or this reports the deployment default and
+                # contradicts the console: `build_engine_for` reads settings.code_agent_engine,
+                # which the pipeline layers before calling it.
+                from ..services.project_settings import applied as _applied
+
+                effective = _applied(c, pid, ctx.settings)
+                out["chat_model"] = chat_engine_for(c, effective, pid) or "(the API key)"
+                out["build_model"] = build_engine_for(c, effective, pid)
+                out["role_models"] = {
+                    "implementer": effective.code_agent_engine,
+                    "adversarial_reviewer": effective.code_review_engine or "(the implementer)",
+                    "hard_problems": effective.code_agent_strong_engine or "(the implementer)",
+                    "routine_work": effective.code_agent_low_cost_engine or "(the implementer)",
+                }
+            except Exception as exc:  # noqa: BLE001
+                out["agents_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        try:
+            from ..services.secret_backends import default_secret_backend
+
+            out["secret_store"] = default_secret_backend(ctx.settings)
+        except Exception as exc:  # noqa: BLE001
+            out["secret_store"] = f"unavailable ({type(exc).__name__})"
+
+        # WHAT TO DO NEXT, in order, so the answer is an instruction rather than a dump.
+        next_steps: list[str] = []
+        for step in (out.get("steps") or {}).get("steps", []):
+            if not step.get("done"):
+                next_steps.append(f"{step['title']}: {step['detail']}")
+        for conn in out.get("github_connections", []):
+            if conn.get("last_test_status") == "failed":
+                reason = (conn.get("last_error") or {}).get("message") or "no reason recorded"
+                next_steps.append(
+                    f"the GitHub connection {conn['id']} last failed its test: {reason}")
+        # ONLY THE ONES SOMEBODY IS TRYING TO USE. Listing every CLI that could be installed
+        # turned this into a to-do list of four vendors — "cursor: curl … | bash" is not a
+        # next step for an operator who has never wanted Cursor. An agent that is installed
+        # but not connected IS half-done and worth naming; so is having nothing at all.
+        any_connected = bool(out.get("connected_engines"))
+        for agent in out.get("coding_agents", []):
+            if agent.get("connected") or not agent.get("next_step"):
+                continue
+            if agent.get("installed") or not any_connected:
+                next_steps.append(f"{agent['name']}: {agent['next_step']}")
+        out["next_steps"] = next_steps or ["nothing outstanding — this install is set up."]
+        return out
+
+    @reg.tool(
         "inspect_self",
         "Look at the container BOSS is running in: CPU load and throttling, memory use and "
         "OOM-kill count, free disk, how much space preview workdirs are holding, and the "
@@ -3256,6 +3360,36 @@ _MAX_FILE_BYTES = 400_000
 _REPO_CACHE = _os.environ.get("BOSS_REPO_CACHE") or "/tmp/boss-repo-cache"
 
 
+#: Words a person puts in front of a role's name in a sentence, and never in the table.
+_ROLE_NOISE = ("the ", "a ", "an ", "our ", "role ", "agent ")
+
+
+def _role_name_candidates(wanted: str) -> list[str]:
+    """Every spelling of a role name that should find the same row, most literal first.
+
+    "the Deployment Manager", "Deployment Manager" and "deployment_manager" are one role. A
+    tool that only accepts the third makes the model guess, and the guess costs a turn — which
+    is exactly what happened: the first call failed and the retry worked.
+    """
+    raw = (wanted or "").strip()
+    if not raw:
+        return []
+    out = [raw]
+    lowered = raw.lower()
+    for noise in _ROLE_NOISE:
+        if lowered.startswith(noise):
+            lowered = lowered[len(noise):].strip()
+    if lowered and lowered not in out:
+        out.append(lowered)
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    if slug and slug not in out:
+        out.append(slug)
+    spaced = slug.replace("_", " ")
+    if spaced and spaced not in out:
+        out.append(spaced)
+    return out
+
+
 def _repo_root(settings: Any, repo: str,
                ref: _Optional[str] = None) -> tuple[_Optional[str], _Optional[str]]:
     """The local path for `repo` at `ref`, cloning it if we do not have it yet.
@@ -4342,6 +4476,12 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
     def describe_role(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         wanted = str(args.get("role") or "").strip()
+        # HOW A PERSON SAYS IT vs HOW THE TABLE SPELLS IT. Measured: an agent asked about
+        # "the Deployment Manager" — the name the console had just shown it — got "no role
+        # 'the Deployment Manager' on boss-dogfood" and had to guess `deployment_manager` on
+        # the retry. The display name, the slug, and the way anyone writes either in a
+        # sentence should all find the same row.
+        candidates = _role_name_candidates(wanted)
         with ctx.begin() as c:
             # TWO TABLES HOLD ROLES, AND THIS ONLY LOOKED IN ONE.
             #
@@ -4354,21 +4494,44 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
             #
             # The workforce is checked FIRST because that is what a named agent is. A panel
             # seat is the fallback, so asking about one still works.
-            row = c.execute(
-                _text("SELECT role_key, display_name AS title, spec, "
-                      "       COALESCE(autonomy_level, 1) AS risk_tier "
-                      "  FROM roles WHERE project_id = :p "
-                      "   AND (lower(role_key) = lower(:w) OR lower(display_name) = lower(:w)) "
-                      " LIMIT 1"),
-                {"p": pid, "w": wanted}).mappings().first()
-            if row is None:
+            row = None
+            for candidate in candidates:
                 row = c.execute(
-                    _text("SELECT role_key, title, "
-                          "       jsonb_build_object('lens', lens) AS spec, risk_tier "
-                          "  FROM meeting_roles WHERE project_id = :p "
-                          "   AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w)) "
+                    _text("SELECT role_key, display_name AS title, spec, "
+                          "       COALESCE(autonomy_level, 1) AS risk_tier "
+                          "  FROM roles WHERE project_id = :p "
+                          "   AND (lower(role_key) = lower(:w) "
+                          "        OR lower(display_name) = lower(:w) "
+                          "        OR lower(replace(display_name, ' ', '_')) = lower(:w)) "
                           " LIMIT 1"),
-                    {"p": pid, "w": wanted}).mappings().first()
+                    {"p": pid, "w": candidate}).mappings().first()
+                if row is not None:
+                    break
+            if row is None:
+                for candidate in candidates:
+                    row = c.execute(
+                        _text("SELECT role_key, title, "
+                              "       jsonb_build_object('lens', lens) AS spec, risk_tier "
+                              "  FROM meeting_roles WHERE project_id = :p "
+                              "   AND (lower(role_key) = lower(:w) "
+                              "        OR lower(title) = lower(:w) "
+                              "        OR lower(replace(title, ' ', '_')) = lower(:w)) "
+                              " LIMIT 1"),
+                        {"p": pid, "w": candidate}).mappings().first()
+                    if row is not None:
+                        break
+            if row is None and candidates:
+                # LAST RESORT: one unambiguous partial match. "deployment" finding exactly one
+                # role is an answer; finding three is a question, and the list below asks it.
+                near = c.execute(
+                    _text("SELECT role_key, display_name AS title, spec, "
+                          "       COALESCE(autonomy_level, 1) AS risk_tier "
+                          "  FROM roles WHERE project_id = :p "
+                          "   AND (role_key ILIKE :like OR display_name ILIKE :like) "
+                          " ORDER BY length(role_key) LIMIT 2"),
+                    {"p": pid, "like": f"%{candidates[-1]}%"}).mappings().all()
+                if len(near) == 1:
+                    row = near[0]
             if row is None:
                 # NAME WHAT EXISTS. "No role X" sends the reader hunting for a typo; the list
                 # says whether they are even asking the right project.
@@ -4378,6 +4541,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                     {"p": pid}).scalars().all()
                 return {"ok": False,
                         "error": f"no role {wanted!r} on {pid}",
+                        "tried": candidates,
                         "available": list(available)}
             # The agent DEFINITION, when one has been published for this role: its prompts,
             # rules and requested skills are the SME's remit, and they live apart from the
@@ -5035,25 +5199,49 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 lines = [ln for ln in lines if rx.search(ln)]
             tail = [ln.rstrip()[:500] for ln in lines[-limit:]]
             return {"service": service, "source": path, "lines": len(tail), "log": tail}
-        # A DEAD END IS NOT AN ANSWER, AND THIS ONE IS PERMANENT IN PRODUCTION.
+        # NO FILE IS NOT NO LOG. In a container these services log to stdout, so the loop
+        # above always fails there — and it used to end in a refusal that named other tools.
+        # Measured live: the model reported "the tool cannot access container stdout" and
+        # treated the logging question as closed, which is the right conclusion about FILES
+        # and the wrong one about the log.
         #
-        # The services log to stdout in their containers, so this always fails there — and the
-        # advice it gave was "read them with `docker logs`, or set BOSS_WORKER_LOG", neither of
-        # which BOSS can do from inside its own container. Measured live: read_logs failed, and
-        # the model treated the whole logging question as closed.
-        #
-        # BOSS records every model interaction and every step transition in its OWN tables,
-        # which is the record the operator means when they say "check the activity logs". Those
-        # tools work here, so the refusal names them.
-        return {"ok": False, "service": service,
-                "error": ("no log file readable from this process — in a container these "
-                          "services log to stdout, so this tool cannot reach them and will not "
-                          "start working later. Use BOSS's own record instead, which is more "
-                          "detailed than the service log: get_run_activity(run_id=...) for what "
-                          "a run did and when, read_run_turns(run_id=...) for the model's "
-                          "actual turns, diagnose_run for a build, and query_db over `events` "
-                          "for anything else. Do not report this as 'the logs are unavailable'."),
-                "use_instead": ["get_run_activity", "read_run_turns", "diagnose_run", "query_db"]}
+        # `log_capture` has been writing the same records into `app_logs` all along — every
+        # service, every deployment shape, no docker socket and no mounted volume. Reading the
+        # table is not a fallback; on a containerised install it is the only place the log
+        # exists, so it is where this tool looks when there is no file.
+        try:
+            sql = ("SELECT created_at, level, logger, message, project_id, run_id "
+                   "FROM app_logs WHERE (:svc = '' OR service = :svc) ")
+            params: dict = {"svc": "" if service in ("", "all") else service,
+                            "lim": max(1, min(limit, 500))}
+            if args.get("project_id") or project_id:
+                sql += "AND (project_id IS NULL OR project_id = :pid) "
+                params["pid"] = args.get("project_id") or project_id
+            sql += "ORDER BY created_at DESC LIMIT :lim"
+            with ctx.begin() as c:
+                rows = c.execute(_text(sql), params).mappings().all()
+        except Exception as exc:  # noqa: BLE001 — say which of the two places failed
+            return {"ok": False, "service": service,
+                    "error": f"no log file, and app_logs could not be read: "
+                             f"{type(exc).__name__}"}
+        entries = []
+        for row in reversed(rows):          # oldest first, like a tail
+            line = f"{row['created_at']} {row['level']:<7} {row['logger']} {row['message']}"
+            if rx is not None and not rx.search(line):
+                continue
+            entries.append(line[:500])
+        if entries:
+            return {"service": service, "source": "app_logs (BOSS's own capture)",
+                    "lines": len(entries), "log": entries}
+        return {"ok": True, "service": service, "source": "app_logs (BOSS's own capture)",
+                "lines": 0, "log": [],
+                "note": ("the log is readable and has nothing matching. An empty answer here "
+                         "means nothing was recorded, NOT that logging is unavailable — "
+                         "capture writes one row at startup, so a truly empty table would "
+                         "mean the service has not started. For a build, "
+                         "get_run_activity(run_id=...) and read_run_turns(run_id=...) carry "
+                         "more than the service log does."),
+                "use_instead": ["get_run_activity", "read_run_turns", "diagnose_run"]}
 
 
     @reg.tool(
@@ -5419,6 +5607,30 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         root, err = _repo_root(ctx.settings, repo, ref)
         if root is None:
             return {"ok": False, "error": err}
+        # AN IMAGE IS NOT A CHECKOUT. BOSS's own source is COPYed into the container without
+        # .git, so this returned git's own words — "fatal: not a git repository" — to an agent
+        # that had reasonably asked when a fix shipped. That reads as a broken tool; the true
+        # answer is that this install has no history to read, and the thing the question wants
+        # is which source it is running, which the build stamps.
+        if not _os.path.isdir(_os.path.join(root, ".git")):
+            sha = (_os.environ.get("BOSS_SOURCE_SHA") or "").strip()
+            built = (_os.environ.get("BOSS_BUILT_AT") or "").strip()
+            return {
+                "ok": False,
+                "error": (f"{repo} has no git history in this install — it runs from a built "
+                          f"image, which carries the source but not the repository. This is "
+                          f"permanent here, not a transient failure."),
+                "running_source_sha": sha or "unknown (image built without a stamp)",
+                "built_at": built or "unknown",
+                "how_to_answer_anyway": (
+                    "To check whether a change is in the RUNNING build, read the file with "
+                    "read_code/search_code — the source in the image is what is executing. "
+                    "For when it shipped, the commit above identifies the build; for a "
+                    "customer repository, repo_activity and read_pull_request read GitHub "
+                    "directly and do not need a checkout."),
+                "use_instead": ["read_code", "search_code", "repo_activity",
+                                "read_pull_request", "inspect_self"],
+            }
         # A SHALLOW CLONE HAS NO HISTORY TO SHOW. Customer repos are cloned --depth 1, so
         # `git log` returned exactly one commit — and a one-entry history reads as "nothing
         # ever changed here", which is the opposite of what this tool is for.

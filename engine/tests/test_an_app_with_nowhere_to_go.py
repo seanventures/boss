@@ -453,39 +453,57 @@ class TestADeployQuestionIsAnsweredByTheDeployment:
 
 
 class TestTheLogToolPointsSomewhereReal:
-    """`read_logs` cannot work in production — the services log to stdout in their containers —
-    and its refusal said "read them with `docker logs`, or set BOSS_WORKER_LOG", neither of which
-    BOSS can do from inside its own container. So the model treated logging as a closed door.
+    """`read_logs` could not work in production — the services log to stdout in their
+    containers — so it refused, and named the tools that do work. That was the right shape for
+    a tool that genuinely could not answer, and the wrong conclusion about the log: BOSS's own
+    `log_capture` has been writing the same records into `app_logs` all along, in every
+    deployment shape, needing no docker socket and no mounted volume.
 
-    BOSS records every model turn and every step transition in its own tables. That is what the
-    operator means by "check the activity logs", and those tools work."""
+    Measured live before this changed: "read_logs: no log file readable from this process. The
+    tool cannot access container stdout, so I queried database events instead." The model did
+    the right thing with a tool that should not have made it necessary.
+
+    So the contract is now: read the file if there is one, otherwise read the table — and an
+    EMPTY answer still has to be distinguishable from an unavailable one, because those look
+    identical and need opposite responses."""
 
     @staticmethod
-    def _error():
+    def _body():
         from boss_engine.tools import builtin
 
-        body = inspect.getsource(builtin)
-        i = body.index("no log file readable from this process")
-        return body[i:i + 1200]
+        return inspect.getsource(
+            {s.name: s for s in builtin.build_default_registry().specs()}["read_logs"].handler)
 
-    def test_it_names_the_tools_that_do_work(self):
-        error = self._error()
-        for tool in ("get_run_activity", "read_run_turns", "diagnose_run", "query_db"):
-            assert tool in error, tool
+    def test_it_reads_the_log_that_exists_in_a_container(self):
+        body = self._body()
+        assert "app_logs" in body
+        assert "BOSS's own capture" in body
 
-    def test_it_says_the_failure_is_permanent_rather_than_transient(self):
-        assert "will not " in self._error() and "start working later" in self._error()
+    def test_it_still_prefers_a_real_file_when_there_is_one(self):
+        """A developer running locally has .local-logs, and that is the fuller record."""
+        body = self._body()
+        assert body.index("_os.path.isfile") < body.index("app_logs")
 
-    def test_it_forbids_reporting_the_logs_as_unavailable(self):
-        assert "Do not report this as" in self._error()
+    def test_an_empty_log_is_not_reported_as_an_unavailable_one(self):
+        assert "means nothing was recorded, NOT that logging is unavailable" in self._body()
+
+    def test_it_names_the_tools_that_carry_more(self):
+        body = self._body()
+        for tool in ("get_run_activity", "read_run_turns", "diagnose_run"):
+            assert tool in body, tool
 
     def test_the_alternatives_are_machine_readable_too(self):
-        assert '"use_instead"' in self._error()
+        assert '"use_instead"' in self._body()
 
     def test_those_tools_actually_exist(self):
         names = build_discuss_read_registry().names()
         for tool in ("get_run_activity", "read_run_turns", "diagnose_run", "query_db"):
             assert tool in names, tool
+
+    def test_and_the_pattern_filter_still_applies(self):
+        """Filtering is why anybody passes a pattern; dropping it when the source changed
+        would make the tool return 500 unrelated lines and look broken again."""
+        assert "rx.search(line)" in self._body()
 
 
 class TestANamelessButtonMustNotLoseTheTurn:

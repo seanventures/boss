@@ -19,7 +19,7 @@
  */
 "use strict";
 
-const { spawn, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
@@ -272,10 +272,26 @@ function composeStream(root, envFile, args) {
   return new Promise((resolve) => {
     const child = spawn("docker", ["compose", "-f", COMPOSE, "--env-file", envFile, ...args], {
       cwd: root,
+      // STAMP THE BUILD WITH THE COMMIT IT CAME FROM. Without it the running image cannot say
+      // which source it is, so "is the fix I just read actually deployed?" has no answer —
+      // the container carries the source but not the repository.
+      env: { ...process.env, ...buildStamp(root) },
       stdio: ["ignore", "inherit", "inherit"],
     });
     child.on("close", resolve);
   });
+}
+
+function buildStamp(root) {
+  let sha = "unknown";
+  try {
+    sha = execFileSync("git", ["-C", root, "rev-parse", "--short", "HEAD"],
+                       { encoding: "utf8" }).trim() || "unknown";
+    const dirty = execFileSync("git", ["-C", root, "status", "--porcelain"],
+                               { encoding: "utf8" }).trim();
+    if (dirty) sha += "-dirty";          // a developer's working tree is not a commit
+  } catch { /* not a clone, or no git — "unknown" is the honest answer */ }
+  return { BOSS_SOURCE_SHA: sha, BOSS_BUILT_AT: new Date().toISOString() };
 }
 
 /**

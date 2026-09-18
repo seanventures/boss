@@ -286,7 +286,28 @@ def self_snapshot(preview_root: Optional[str] = None) -> dict[str, Any]:
         "memory": memory,
         "disk": disk,
         "processes": processes,
+        # WHICH SOURCE IS RUNNING. Asked whether a fix was in the live API, an agent read the
+        # source in the image — correctly — and then could not tell whether that image was
+        # the one serving traffic, because `git_history` has no repository to read and nothing
+        # else reported a version. The build stamps it.
+        "build": _build_stamp(),
         "notes": notes or ["Nothing anomalous in CPU, memory or disk."],
+    }
+
+
+def _build_stamp() -> dict[str, Any]:
+    """The commit this image was built from, as the build recorded it."""
+    import os
+
+    sha = (os.environ.get("BOSS_SOURCE_SHA") or "").strip()
+    built = (os.environ.get("BOSS_BUILT_AT") or "").strip()
+    return {
+        "source_sha": sha or None,
+        "built_at": built or None,
+        "note": ("the source in this image is what is executing, so read_code answers 'is "
+                 "the fix in the running build'" if sha or built else
+                 "this image was built without a stamp, so the running commit is unknown; "
+                 "read_code still shows the source that is executing"),
     }
 
 

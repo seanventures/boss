@@ -82,6 +82,15 @@ COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md
 COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md
 ENV PYTHONPATH=/app:/app/engine
 
+# WHICH SOURCE IS THIS RUNNING? The image carries no .git, so `git_history` on BOSS's own
+# source fails and "does the running API contain that fix?" had no answer — an agent
+# investigating a bug could read the source in the image and not tell whether it had shipped.
+# The build stamps it; `inspect_self` and `git_history` report it.
+ARG BOSS_SOURCE_SHA=unknown
+ARG BOSS_BUILT_AT=unknown
+ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
+    BOSS_BUILT_AT=$BOSS_BUILT_AT
+
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss
 
@@ -124,6 +133,15 @@ COPY engine ./engine
 COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md
 COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md
 ENV PYTHONPATH=/app:/app/engine
+
+# WHICH SOURCE IS THIS RUNNING? The image carries no .git, so `git_history` on BOSS's own
+# source fails and "does the running API contain that fix?" had no answer — an agent
+# investigating a bug could read the source in the image and not tell whether it had shipped.
+# The build stamps it; `inspect_self` and `git_history` report it.
+ARG BOSS_SOURCE_SHA=unknown
+ARG BOSS_BUILT_AT=unknown
+ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
+    BOSS_BUILT_AT=$BOSS_BUILT_AT
 
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss
