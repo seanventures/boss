@@ -18,11 +18,13 @@ export async function GET(req: Request) {
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const path = view === "providers"
     ? "/v1/setup/model-providers"
-    // Which coding-agent CLIs this machine already has, and what each still needs. There is
-    // no credential in this answer and none is asked for: a subscription is an OAuth session
-    // the CLI holds, so detection is the whole of it.
+    // Which coding-agent CLIs this machine already has, what each still needs, and which of
+    // them was already connected. There is no credential in this answer and none is asked
+    // for: a subscription is an OAuth session the CLI holds, so detection is most of it.
+    // project_id travels because the recorded connection is per project — without it the
+    // answer is live detection only, which is what made a saved connection look undone.
     : view === "coding-agents"
-    ? "/v1/setup/coding-agents"
+    ? `/v1/setup/coding-agents?project_id=${encodeURIComponent(projectId)}`
     : `/v1/setup/status?project_id=${encodeURIComponent(projectId)}`;
   try {
     const r = await fetch(`${API_URL}${path}`, {

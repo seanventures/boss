@@ -14790,18 +14790,33 @@ def setup_model_providers() -> dict:
 
 
 @app.get("/v1/setup/coding-agents")
-def setup_coding_agents() -> dict:
-    """Which coding-agent CLIs this machine has, and what each still needs.
+def setup_coding_agents(project_id: str = "") -> dict:
+    """Which coding-agent CLIs this machine has, what each still needs, and what was connected.
 
     A subscription is not a key. A Codex or Cursor plan is an OAuth session held by that CLI,
     so there is nothing for an operator to paste and a form asking them to would be asking for
     a credential that does not exist. BOSS looks for the CLI they already use instead.
+
+    `connected` reports what was RECORDED, separately from what detection finds now. Returning
+    detection alone made a completed connection look undone: after a refresh or a redeploy the
+    wizard showed the same Connect button as a fresh install, with nothing saying the work had
+    already been done — so an operator reasonably concluded it had not been saved.
     """
-    from .services.setup_service import list_coding_agents
+    from .services.setup_service import list_coding_agents, with_recorded_connections
 
     agents = list_coding_agents(get_settings())
+    if project_id:
+        # Best effort: detection is useful on its own, and a lookup that fails must not take
+        # the wizard down with it — every agent then reports connected=False, which is what
+        # this endpoint said before it could read the record at all.
+        try:
+            with begin(engine) as connection:
+                agents = with_recorded_connections(agents, connection, project_id)
+        except Exception:  # noqa: BLE001
+            pass
     return {"agents": agents,
             "ready": [a["name"] for a in agents if a["ready"]],
+            "connected": [a["name"] for a in agents if a.get("connected")],
             "not_ready": [{"name": a["name"], "next_step": a["next_step"]}
                           for a in agents if not a["ready"]]}
 
@@ -19517,6 +19532,10 @@ def get_project_settings(project_id: str) -> dict:
             knobs.append({
                 "key": key, "label": spec["label"], "help": spec["help"],
                 "kind": spec["kind"], "min": spec.get("min"), "max": spec.get("max"),
+                # A picker cannot be drawn without the options, and the options are whatever
+                # the harness registry holds right now — so they travel with the knob rather
+                # than being duplicated in the console, where they would drift.
+                "choices": ps._allowed_choices(spec) if spec["kind"] == "choice" else None,
                 "value": chosen.get(key, default),
                 "default": default,
                 "source": "project" if key in chosen else "deployment default",

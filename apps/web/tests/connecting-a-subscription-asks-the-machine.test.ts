@@ -23,7 +23,9 @@ const ROUTE = readFileSync(new URL("../app/api/setup/route.ts", import.meta.url)
 
 describe("the wizard asks the machine", () => {
   it("looks for the CLI instead of asking for a credential", () => {
-    expect(UI).toContain('"/api/setup?view=coding-agents"');
+    // The project id joined it later, so the recorded connection could travel back with the
+    // detection: a saved connection had been showing as an untouched Connect button.
+    expect(UI).toContain("/api/setup?view=coding-agents&project_id=");
     expect(UI).toContain("ASK THE MACHINE, DO NOT ASK THE OPERATOR");
   });
 
@@ -70,7 +72,7 @@ describe("it does not repeat the green-tick-over-nothing mistake", () => {
 
 describe("the route", () => {
   it("reaches both coding-agent endpoints", () => {
-    expect(ROUTE).toContain('"/v1/setup/coding-agents"');
+    expect(ROUTE).toContain("/v1/setup/coding-agents?project_id=");
     expect(ROUTE).toContain('"/v1/setup/coding-agents/connect"');
   });
 

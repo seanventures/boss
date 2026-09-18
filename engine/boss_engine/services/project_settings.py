@@ -46,7 +46,56 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "falls back to a colder path.",
         "kind": "int", "min": 0, "max": 5,
     },
+    # WHICH MODEL BUILDS, as a dial rather than a deployment. Choosing a provider meant editing
+    # an environment variable and recreating the containers — so an installation that had
+    # connected three subscriptions could still only use the one it was deployed with, and
+    # "switch to Codex for this project" was an ops task. The credentials are already stored;
+    # only the choice was missing.
+    "code_agent_engine": {
+        "attr": "code_agent_engine",
+        "label": "Implementer",
+        "help": "Which harness writes the code on this project.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    "code_review_engine": {
+        "attr": "code_review_engine",
+        "label": "Adversarial reviewer",
+        "help": "Which harness reviews the code and writes the line-by-line findings. Worth "
+                "differing from the implementer — a reviewer that is the same model rarely "
+                "disagrees with itself. Empty means the implementer reviews its own work.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    "code_agent_strong_engine": {
+        "attr": "code_agent_strong_engine",
+        "label": "Hard problems",
+        "help": "Used when a task escalates — a repair after repeated failure, or work the "
+                "router judges difficult. Empty means the implementer handles it.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    "code_agent_low_cost_engine": {
+        "attr": "code_agent_low_cost_engine",
+        "label": "Routine work",
+        "help": "Used for the cheap end — small, well-specified changes. Empty means the "
+                "implementer handles those too.",
+        "kind": "choice", "choices": "harnesses",
+    },
 }
+
+
+def _allowed_choices(spec: dict[str, Any]) -> list[str]:
+    """The values a choice knob will accept, asked of the registry rather than hardcoded.
+
+    A list written here would drift the moment a harness was added, and the failure would be a
+    provider the operator has connected and cannot select.
+    """
+    if spec.get("choices") != "harnesses":
+        return list(spec.get("choices") or [])
+    try:
+        from .harness_registry import available_harnesses
+
+        return sorted(h["name"] for h in available_harnesses())
+    except Exception:  # noqa: BLE001 — a knob must not break because a registry did
+        return []
 
 
 class UnknownKnob(ValueError):
@@ -71,6 +120,16 @@ def coerce(key: str, value: Any) -> Any:
             raise ValueError(
                 f"{spec['label']} has to be between {spec['min']} and {spec['max']}.")
         return number
+    if spec["kind"] == "choice":
+        name = str(value or "").strip().lower()
+        allowed = _allowed_choices(spec)
+        if allowed and name not in allowed:
+            # Name what IS available. "Invalid value" sends somebody to the source to find out
+            # what the valid ones are, and the answer changes as harnesses are registered.
+            raise ValueError(
+                f"{spec['label']}: '{name}' is not a harness BOSS can drive. "
+                f"Available: {', '.join(allowed)}.")
+        return name
     return value
 
 
@@ -103,6 +162,36 @@ def clear_one(connection, project_id: str, key: str) -> None:
         text("DELETE FROM project_settings WHERE project_id = :p AND key = :k"),
         {"p": project_id, "k": key},
     )
+
+
+def applied(connection, project_id: Optional[str], settings: Any) -> Any:
+    """`settings` with this project's choices layered on top.
+
+    One place, rather than a lookup at each use. The alternative is threading `effective(...)`
+    through every read of every knob — `code_agent_strong_engine` alone is read in four
+    different functions — and the reads that got missed would be the ones that quietly kept
+    using the deployment default while the console showed the operator's choice.
+
+    Never raises, and returns the original object when there is nothing to layer: a settings
+    table that is unreachable must not stop work.
+    """
+    if not project_id:
+        return settings
+    try:
+        chosen = get_all(connection, project_id)
+    except Exception:  # noqa: BLE001 — the environment is a complete answer on its own
+        return settings
+    overrides = {}
+    for key, value in chosen.items():
+        spec = KNOBS.get(key)
+        if spec and value not in (None, ""):
+            overrides[spec["attr"]] = value
+    if not overrides:
+        return settings
+    try:
+        return settings.model_copy(update=overrides)
+    except Exception:  # noqa: BLE001
+        return settings
 
 
 def effective(connection, project_id: Optional[str], settings: Any, key: str) -> Any:

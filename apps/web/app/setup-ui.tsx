@@ -16,6 +16,8 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
+import { SettingsKnobs } from "./settings-knobs-ui";
+
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
 type EnvCheck = {
@@ -25,9 +27,15 @@ type EnvCheck = {
   base_url?: string; model?: string; key_last4?: string;
   models_available?: number; model_listed?: boolean; note?: string;
 };
+/** A model source this project has already saved — newest first in `Status.model_saved`. */
+type SavedModel = {
+  source_id: string; provider: string; wizard_provider: string; auth_method: string;
+  kind: string; connected: boolean; verified: boolean; saved_at: string | null;
+};
 type Status = {
   ready?: boolean; steps?: Step[]; repositories?: number;
   model_sources?: number; model_from_environment?: boolean;
+  model_saved?: SavedModel[];
   environment?: { github?: EnvCheck; model?: EnvCheck };
 };
 type Provider = {
@@ -41,7 +49,30 @@ type CodingAgent = {
   name: string; binary: string; installed: boolean; version: string | null;
   authenticated: boolean | null; auth_detail: string | null; ready: boolean;
   next_step: string | null; install_hint?: string; signin_hint?: string; docs_url?: string;
+  // What was RECORDED, as opposed to what detection sees now. These two answer different
+  // questions and the wizard needs both: detection says whether a build could run this
+  // minute, `connected` says whether anyone ever finished this step. Showing only the first
+  // meant a refresh or a redeploy presented a finished connection as untouched.
+  connected?: boolean; connected_at?: string | null; connected_status?: string | null;
 };
+
+/**
+ * Which dropdown entry the model picker should open on.
+ *
+ * "Can you pick up the one that's last saved?" — so: the most recently saved source that the
+ * catalogue actually offers. Exported and pure because this is the whole of the decision, and
+ * a rule buried in a component is a rule nothing can test.
+ *
+ * Returns "" when there is nothing saved, or when everything saved is something this build's
+ * catalogue does not list — in which case the caller keeps its own default rather than
+ * selecting an option that is not in the list.
+ */
+export function lastSavedProvider(saved: SavedModel[], providers: Provider[]): string {
+  const offered = new Set(providers.map((p) => p.provider));
+  // `saved` arrives newest-first from the API; find keeps that order.
+  const hit = saved.find((m) => m.wizard_provider && offered.has(m.wizard_provider));
+  return hit?.wizard_provider ?? "";
+}
 
 async function call<T>(body: Record<string, unknown>): Promise<{ ok: boolean; data?: T; error?: string }> {
   try {
@@ -126,7 +157,8 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
       <Configured env={status?.environment} />
 
       <GitHubStep projectId={projectId} actor={actor} onDone={reload} />
-      <ModelStep projectId={projectId} actor={actor} providers={providers} onDone={reload} />
+      <ModelStep projectId={projectId} actor={actor} providers={providers}
+                 saved={status?.model_saved ?? []} onDone={reload} />
     </section>
   );
 }
@@ -300,10 +332,17 @@ function GitHubStep({ projectId, actor, onDone }: {
   );
 }
 
-function ModelStep({ projectId, actor, providers, onDone }: {
-  projectId: string; actor: string; providers: Provider[]; onDone: () => void;
+function ModelStep({ projectId, actor, providers, saved, onDone }: {
+  projectId: string; actor: string; providers: Provider[]; saved: SavedModel[];
+  onDone: () => void;
 }) {
   const [provider, setProvider] = useState("openrouter");
+  // PICK UP THE LAST ONE SAVED. The wizard opened on its first dropdown entry every time,
+  // which on an install that had already connected something read as though the connection
+  // had been lost. `touched` is what keeps this a starting point rather than a correction:
+  // once the operator chooses a provider themselves, a later status refresh must not move it.
+  const [touched, setTouched] = useState(false);
+  const startOn = lastSavedProvider(saved, providers);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
@@ -312,21 +351,33 @@ function ModelStep({ projectId, actor, providers, onDone }: {
   const [agents, setAgents] = useState<CodingAgent[] | null>(null);
   const [connecting, setConnecting] = useState(false);
 
+  useEffect(() => {
+    if (touched || !startOn) return;
+    setProvider(startOn);
+    const next = providers.find((p) => p.provider === startOn);
+    setBaseUrl(next?.base_url ?? "");
+    setModel(next?.example_model ?? "");
+  }, [touched, startOn, providers]);
+
   const chosen = providers.find((p) => p.provider === provider);
   const subscription = chosen?.kind === "subscription";
 
   // ASK THE MACHINE, DO NOT ASK THE OPERATOR. A subscription is an OAuth session the CLI
   // holds; there is no credential to type, so the only honest question is whether the CLI is
   // here and signed in — and BOSS can answer that itself.
+  const loadAgents = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/setup?view=coding-agents&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (r.ok) setAgents(((await r.json()).agents ?? []) as CodingAgent[]);
+    } catch { setAgents(null); }   // fall back to the manual instructions below
+  }, [projectId]);
+
   useEffect(() => {
     if (!subscription) { setAgents(null); return; }
-    (async () => {
-      try {
-        const r = await fetch("/api/setup?view=coding-agents", { cache: "no-store" });
-        if (r.ok) setAgents(((await r.json()).agents ?? []) as CodingAgent[]);
-      } catch { setAgents(null); }   // fall back to the manual instructions below
-    })();
-  }, [subscription, provider]);
+    void loadAgents();
+  }, [subscription, provider, loadAgents]);
 
   const detected = agents?.find((a) => a.name === provider) ?? null;
 
@@ -344,8 +395,10 @@ function ModelStep({ projectId, actor, providers, onDone }: {
       // The API answers 422 with the next command for every fixable case, so show it verbatim
       // rather than "could not connect".
       : { ok: false, text: r.error ?? "could not connect" });
-    if (r.ok) onDone();
-  }, [connecting, projectId, actor, provider, onDone]);
+    // Re-read the recorded state rather than assuming it. The banner below is meant to say
+    // what the database holds; setting it from the reply would make it say what we hoped.
+    if (r.ok) { await loadAgents(); onDone(); }
+  }, [connecting, projectId, actor, provider, onDone, loadAgents]);
 
   const save = useCallback(async () => {
     if (busy) return;
@@ -374,11 +427,33 @@ function ModelStep({ projectId, actor, providers, onDone }: {
           </p>
         </div>
       </div>
+      {/* WHAT IS ALREADY SAVED, BEFORE THE FORM. The form asks a question this list has
+          already answered, and reading the question first is what made an operator believe a
+          connection had been lost when it was sitting in the database the whole time. */}
+      {saved.length ? (
+        <p className="detail" data-testid="setup-model-saved">
+          Saved here:{" "}
+          {saved.map((m, i) => {
+            const label = providers.find((p) => p.provider === m.wizard_provider)?.label
+                          ?? m.source_id;
+            return (
+              <span key={m.source_id}>
+                {i ? ", " : ""}
+                <b>{label}</b>
+                {m.kind === "subscription" ? " (subscription)" : ""}
+                {m.saved_at ? ` — ${m.saved_at.slice(0, 16).replace("T", " ")}` : ""}
+              </span>
+            );
+          })}
+          . The picker starts on the most recent one.
+        </p>
+      ) : null}
       <div className="setup-form">
         <label className="setup-field">
           <span>Provider</span>
           <select value={provider} data-testid="setup-model-provider"
                   onChange={(e) => {
+                    setTouched(true);
                     setProvider(e.target.value); setResult(null);
                     const next = providers.find((p) => p.provider === e.target.value);
                     setBaseUrl(next?.base_url ?? "");
@@ -434,6 +509,17 @@ function ModelStep({ projectId, actor, providers, onDone }: {
             {chosen?.note} There is nothing to paste: the CLI holds its own login, and BOSS
             runs it on this machine.
           </p>
+          {/* WHAT WAS SAVED, FIRST AND UNCONDITIONALLY.
+              This line is the answer to "did my connection stick?", and it comes from
+              entitlement_sources, not from a probe — so a restart, a refresh or a redeploy
+              cannot make a finished step read as an untouched one. */}
+          {detected.connected ? (
+            <p className="setup-ok" data-testid="setup-agent-connected">
+              Connected{detected.connected_at
+                ? ` — saved ${detected.connected_at.slice(0, 16).replace("T", " ")}`
+                : ""}. Nothing to redo.
+            </p>
+          ) : null}
           <p data-testid="setup-agent-state">
             <b>{detected.binary}</b>{" "}
             {detected.installed
@@ -457,11 +543,15 @@ function ModelStep({ projectId, actor, providers, onDone }: {
               Sign in: <code>{detected.signin_hint}</code>
               {detected.authenticated ? " — already signed in." : null}
             </li>
-            <li>Press Connect below. BOSS checks it, it never asks you for a credential.</li>
+            <li>
+              Press Connect below. BOSS checks it, it never asks you for a credential.
+              {detected.connected ? " — already connected." : null}
+            </li>
           </ol>
           <button className="button" disabled={connecting || !detected.installed}
                   data-testid="setup-agent-connect" onClick={() => void connectAgent()}>
             {connecting ? "Checking it answers…"
+              : detected.connected ? `Re-check ${chosen?.label ?? provider}`
               : detected.ready ? `Connect ${chosen?.label ?? provider}`
               : `Re-check ${chosen?.label ?? provider}`}
           </button>
@@ -511,6 +601,37 @@ function ModelStep({ projectId, actor, providers, onDone }: {
           {result.text}
         </p>
       ) : null}
+      <RoleModels projectId={projectId} actor={actor} />
     </article>
+  );
+}
+
+/**
+ * Which connected model fills which role.
+ *
+ * It belongs HERE, immediately after connecting one, because that is the moment the question
+ * arises — and because these knobs first shipped under "Govern", beside concurrency and spend,
+ * where nobody looking to change a model would think to look.
+ *
+ * Collapsed by default: an installation with one provider has nothing to decide, and a wizard
+ * that opens four pickers in front of somebody who has just connected their first model makes
+ * a simple setup look like a configuration exercise.
+ */
+function RoleModels({ projectId, actor }: { projectId: string; actor: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="setup-roles" data-testid="setup-role-models">
+      <button type="button" className="cap-btn" aria-expanded={open}
+              data-testid="setup-role-models-toggle"
+              onClick={() => setOpen((v) => !v)}>
+        {open ? "Hide" : "Choose"} a model per role
+      </button>
+      <p className="detail">
+        Who implements, who reviews it adversarially, and which model takes over when a task
+        escalates. Unset means the implementer does that job too. Saved per project and applied
+        on the next run — no restart.
+      </p>
+      {open ? <SettingsKnobs projectId={projectId} actor={actor} only="choice" /> : null}
+    </div>
   );
 }

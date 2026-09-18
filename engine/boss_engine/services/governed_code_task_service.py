@@ -1712,6 +1712,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _pinned_engine = _mc_default.split(":", 1)[0].strip().lower()
         if _pinned_engine not in ("claude_code", "openai", "native"):
             _pinned_engine = ""
+    # The project's choices, layered over the deployment's, ONCE — every `settings.*_engine`
+    # read below and in the functions this calls then sees them. Credentials for several
+    # providers can be connected at once, so which model fills which role is a decision
+    # somebody makes in the console, not one frozen into the container at deploy time.
+    from .project_settings import applied as _applied_settings
+
+    with _transaction(engine) as _c:
+        settings = _applied_settings(_c, project_id, settings)
     build_engine = (
         _pinned_engine or settings.code_agent_engine or "claude_code"
     ).lower()

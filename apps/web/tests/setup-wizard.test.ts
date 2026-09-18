@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { lastSavedProvider } from "../app/setup-ui";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -132,5 +133,81 @@ describe("what the install is already running on", () => {
 
   it("and says what connecting something new would do to it", () => {
     expect(UI).toContain("replaces what is here");
+  });
+});
+
+/**
+ * "Even when it is connected, after refreshing or deployment it is not getting saved.. can you
+ * pick up the one that's last saved?"
+ *
+ * Nothing was being lost. The step rendered live detection and a Connect button, so a finished
+ * connection was indistinguishable from a fresh install — and the picker always opened on its
+ * first entry, which read as the connection having been forgotten.
+ */
+const SAVED = (wizard_provider: string, saved_at: string, kind = "subscription") => ({
+  source_id: `src-${wizard_provider}`, provider: "x", wizard_provider,
+  auth_method: "official_cli_oauth", kind, connected: true, verified: false, saved_at,
+});
+const OFFERED = [
+  { provider: "openrouter", label: "OpenRouter", kind: "api_key" },
+  { provider: "codex", label: "Codex", kind: "subscription" },
+];
+
+describe("the picker opens on what was last saved", () => {
+  it("picks the newest saved source — the API returns them newest-first", () => {
+    expect(lastSavedProvider(
+      [SAVED("codex", "2026-09-18T02:15:00Z"), SAVED("openrouter", "2026-09-01T00:00:00Z")],
+      OFFERED)).toBe("codex");
+  });
+
+  it("nothing saved means nothing to restore, and the caller keeps its own default", () => {
+    expect(lastSavedProvider([], OFFERED)).toBe("");
+  });
+
+  it("and it never selects an option that is not in the list", () => {
+    // A source recorded by an older build, or one behind an edition flag. Selecting it would
+    // leave a <select> showing a value it has no <option> for.
+    expect(lastSavedProvider([SAVED("gemini", "2026-09-18T02:15:00Z")], OFFERED)).toBe("");
+    // Falls through to the next saved one it CAN offer rather than giving up.
+    expect(lastSavedProvider(
+      [SAVED("gemini", "2026-09-18T02:15:00Z"), SAVED("codex", "2026-09-01T00:00:00Z")],
+      OFFERED)).toBe("codex");
+  });
+
+  it("a source with no resolved dropdown key is skipped, not selected as blank", () => {
+    expect(lastSavedProvider([SAVED("", "2026-09-18T02:15:00Z")], OFFERED)).toBe("");
+  });
+
+  it("but the operator's own choice wins over it", () => {
+    // Otherwise every status refresh would drag the dropdown back while they were reading it.
+    expect(UI).toContain("if (touched || !startOn) return;");
+    expect(UI).toContain("setTouched(true);");
+  });
+});
+
+describe("a connection that was made says so", () => {
+  it("the step shows what is saved before it shows the form", () => {
+    expect(UI).toContain('data-testid="setup-model-saved"');
+    expect(UI).toContain("Saved here:");
+  });
+
+  it("a connected CLI is reported from the record, not only from a probe", () => {
+    expect(UI).toContain('data-testid="setup-agent-connected"');
+    expect(UI).toContain("connected_at");
+    // Detection and the record answer different questions; both are kept.
+    expect(UI).toContain("detected.connected");
+  });
+
+  it("and the button says re-check rather than inviting the same connection again", () => {
+    expect(UI).toContain("detected.connected ? `Re-check");
+  });
+
+  it("the recorded state is re-read after connecting, not assumed from the reply", () => {
+    expect(UI).toContain("await loadAgents(); onDone();");
+  });
+
+  it("the record is per project, so the project id travels with the request", () => {
+    expect(ROUTE).toContain("/v1/setup/coding-agents?project_id=");
+    expect(UI).toContain("view=coding-agents&project_id=");
   });
 });

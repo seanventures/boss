@@ -257,3 +257,67 @@ describe("supplied photographs replace the drawings", () => {
     expect(HERO4).toContain("function slugFor");
   });
 });
+
+describe("choosing a model per role", () => {
+  // A model is a choice, not a number. Every setting rendered as a number input, so the engine
+  // knobs would have appeared as a spinner an operator could type "codex" into and lose.
+  it("renders a picker for choice knobs, not a number field", () => {
+    expect(KNOBS).toContain('k.kind === "choice"');
+    expect(KNOBS).toContain("<select");
+  });
+
+  it("takes the options from the API rather than listing them", () => {
+    // A list here drifts from the harness registry, and the failure is a provider the operator
+    // has connected and cannot select.
+    expect(KNOBS).toContain("k.choices");
+    for (const hardcoded of ['value="codex"', 'value="claude_code"', 'value="openrouter"']) {
+      expect(KNOBS).not.toContain(hardcoded);
+    }
+  });
+
+  it("offers an empty option, because empty is a real answer here", () => {
+    // For the reviewer and both escalation lanes, unset means "the implementer does this too".
+    expect(KNOBS).toContain('<option value="">');
+  });
+
+  it("saves when the operator picks, not when the field loses focus", () => {
+    // A select fires change on selection; waiting for blur loses the choice.
+    expect(KNOBS).toContain("onChange");
+  });
+
+  it("offers a model for each pipeline role", () => {
+    // The roles an operator thinks in: who writes it, who argues with it, and the two lanes a
+    // task escalates into. Named in the store so the console cannot invent one.
+    for (const knob of ["code_agent_engine", "code_review_engine",
+                        "code_agent_strong_engine", "code_agent_low_cost_engine"]) {
+      expect(STORE).toContain(`"${knob}"`);
+    }
+  });
+
+  it("asks the registry what the choices are", () => {
+    expect(STORE).toContain("available_harnesses");
+  });
+
+  it("asks the question in Setup, beside the step that connects a model", () => {
+    // These first shipped under Govern, next to concurrency and spend — where somebody looking
+    // to change a model would never think to look. The moment the question arises is straight
+    // after connecting one.
+    const SETUP = codeOnly("app/setup-ui.tsx");
+    expect(SETUP).toContain("SettingsKnobs");
+    expect(SETUP).toContain('only="choice"');
+    expect(SETUP).toContain("setup-role-models");
+  });
+
+  it("collapses the pickers until asked for", () => {
+    // An installation with one provider has nothing to decide, and four open pickers make a
+    // simple setup look like a configuration exercise.
+    const SETUP = codeOnly("app/setup-ui.tsx");
+    expect(SETUP).toContain("aria-expanded");
+  });
+
+  it("leaves Govern the numbers and nothing else", () => {
+    // Rendered in both places, a change made in one would look absent in the other.
+    const PAGE = codeOnly("app/page.tsx");
+    expect(PAGE).toContain('only="number"');
+  });
+});

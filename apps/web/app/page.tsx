@@ -1760,7 +1760,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               restart. Each says where its value comes from; a project value overrides the
               deployment default.
             </p>
-            <SettingsKnobs projectId={activeProjectId} actor={activeActorId} />
+            {/* Numbers only. Which model fills which role is asked in Setup, next to the
+                step that connects one — not here beside concurrency and spend. */}
+            <SettingsKnobs projectId={activeProjectId} actor={activeActorId} only="number" />
           </div>
         </section>
         ) : null}

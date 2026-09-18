@@ -165,6 +165,38 @@ def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
     return detect_all(settings)
 
 
+def with_recorded_connections(
+    agents: list[dict[str, Any]], connection: Connection, project_id: str,
+) -> list[dict[str, Any]]:
+    """Add what was RECORDED to what detection found. Mutates and returns the agents.
+
+    Two different questions, and the wizard needs both answers. Detection says whether a build
+    could run this minute; the record says whether anybody ever finished the step. Reporting
+    only the first made a completed connection look undone — after a refresh or a redeploy the
+    operator saw the same Connect button as on a fresh install, with nothing on screen saying
+    the work had already been done, and reasonably concluded it had not been saved.
+    """
+    recorded: dict[str, dict[str, Any]] = {}
+    if project_id:
+        rows = connection.execute(
+            # connection_status, NOT the row's existence. A project is SEEDED with a catalogue
+            # row for every provider BOSS knows about, all of them 'not_connected' — so
+            # "a row exists" would report every CLI as connected, including ones nobody has
+            # ever signed in to.
+            text("SELECT source_id, status, connection_status, auth_method, updated_at "
+                 "FROM entitlement_sources "
+                 "WHERE project_id = :p AND connection_status = 'connected'"),
+            {"p": project_id},
+        ).mappings().all()
+        recorded = {r["source_id"]: dict(r) for r in rows}
+    for agent in agents:
+        row = recorded.get(agent.get("entitlement_source_id") or "")
+        agent["connected"] = bool(row)
+        agent["connected_at"] = str(row["updated_at"]) if row else None
+        agent["connected_status"] = row["connection_status"] if row else None
+    return agents
+
+
 class SecretFallbackNotAccepted(SetupError):
     """The only store available is one the operator should be asked about first.
 
@@ -509,11 +541,65 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
              "WHERE project_id = :p AND status = 'enabled'"),
         {"p": project_id},
     ).scalar() or 0
+    # A CONNECTED SUBSCRIPTION IS A CONNECTED MODEL. Counting stored credentials alone meant
+    # an operator could sign the Codex CLI in, press Connect, watch BOSS prove a live turn and
+    # record the entitlement — and still be told "Connect a model" on the next page load,
+    # because a subscription has no credential to store a reference to. The step looked unsaved
+    # when the only thing missing was this clause.
     models = connection.execute(
         text("SELECT count(*) FROM entitlement_sources "
-             "WHERE project_id = :p AND credential_secret_ref_id IS NOT NULL"),
+             "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
+             "                           OR connection_status = 'connected')"),
         {"p": project_id},
     ).scalar() or 0
+    # WHICH ONE, AND WHEN — not just how many. "Connect a model" with a tick beside it and
+    # nothing else on screen is the shape of a wizard that has forgotten what you told it: the
+    # operator cannot tell whether the thing they connected an hour ago is the thing that is
+    # saved. Newest first, so the head of this list is the last thing anybody connected.
+    saved_rows = connection.execute(
+        text("SELECT source_id, provider, auth_method, connection_status, status, updated_at "
+             "FROM entitlement_sources "
+             "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
+             "                           OR connection_status = 'connected') "
+             "ORDER BY updated_at DESC"),
+        {"p": project_id},
+    ).mappings().all()
+    # WHICH DROPDOWN ENTRY THIS IS. The console needs to reselect the thing that was saved,
+    # and a source_id is not a wizard provider key: the API-key route writes "setup-<key>",
+    # the CLI route writes the harness's entitlement id. Resolved here, from the harness
+    # registry, so the console never has to guess the mapping and cannot drift from it.
+    from .cli_harness import load_specs
+
+    by_entitlement = {spec.entitlement_source_id: spec.name
+                      for spec in load_specs(settings).values()
+                      if spec.entitlement_source_id}
+    # claude_code is native rather than a CLI harness, so it has no spec to read this from.
+    by_entitlement.setdefault("anthropic_claude_code", "claude_code")
+
+    def _wizard_provider(source_id: str) -> str:
+        if source_id.startswith("setup-"):
+            return source_id[len("setup-"):]
+        return by_entitlement.get(source_id, "")
+
+    saved = [
+        {
+            "source_id": r["source_id"],
+            "provider": r["provider"],
+            "wizard_provider": _wizard_provider(r["source_id"]),
+            "auth_method": r["auth_method"],
+            "kind": ("subscription" if str(r["auth_method"] or "").endswith("oauth")
+                     else "api_key"),
+            "connected": r["connection_status"] == "connected",
+            "verified": r["status"] == "verified",
+            # Postgres hands back a datetime; a driver that hands back a string is equally
+            # displayable, and neither is worth an exception on a status screen.
+            "saved_at": (r["updated_at"].isoformat()
+                         if hasattr(r["updated_at"], "isoformat")
+                         else (str(r["updated_at"]) or None)) if r["updated_at"] else None,
+        }
+        for r in saved_rows
+    ]
+
     # THE ENVIRONMENT COUNTS TOO, FOR BOTH STEPS. An install configured the old way — a token
     # and a key in the API's env — IS set up, and a wizard that says "not connected" to somebody
     # whose BOSS is already opening pull requests has told them a falsehood about their own
@@ -555,6 +641,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         "github_connections": int(connections),
         "repositories": int(repos),
         "model_sources": int(models),
+        "model_saved": saved,
         "model_from_environment": env_model,
         "github_from_environment": env_github,
     }
