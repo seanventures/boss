@@ -154,14 +154,17 @@ describe("an explanation sits on the thing it explains", () => {
 
   it("and it is labelled, so it is not a bare 'i' to a screen reader", () => {
     expect(UI).toContain('label="How setting a target works"');
-    expect(UI).toContain('label="Why this is unavailable"');
+    expect(UI).toContain('label="What stopping does"');
+    expect(UI).toContain('label="What restarting does"');
   });
 });
 
 describe("the footer is a row of actions, not a column of essays", () => {
   it("each button carries its own explanation", () => {
     expect(UI).toContain('data-testid="dw-run-actions"');
-    expect(UI.split('className="dw-run-action"').length - 1).toBe(4);
+    // Five since stopping became possible: re-check, stop, stop-and-run-again, run again,
+    // and build-on-this-research.
+    expect(UI.split('className="dw-run-action"').length - 1).toBe(5);
   });
 
   it("and none of them is followed by a permanent paragraph", () => {
@@ -170,11 +173,18 @@ describe("the footer is a row of actions, not a column of essays", () => {
     expect(block).not.toContain('<span className="detail">');
   });
 
-  it("a dead button still says why it is dead", () => {
-    // A disabled control with no reason is the one an operator clicks three times.
-    expect(UI).toContain("This run is still {run.status}");
-    const at = UI.indexOf('data-testid="dw-rerun-blocked"');
-    expect(UI.slice(at, at + 600)).toContain("<Explain");
+  it("there is no dead button left to explain", () => {
+    // There used to be one — Run again, disabled mid-flight, explaining that you should
+    // "cancel this run first" for a control that did not exist. The explanation was good and
+    // the button was the problem: it now stops the run and starts a new one.
+    expect(UI).not.toContain('data-testid="dw-rerun-blocked"');
+    const at = UI.indexOf('data-testid="dw-stop-and-rerun"');
+    expect(UI.slice(at, at + 900)).toContain("<Explain");
+  });
+
+  it("and the destructive one says what it destroys", () => {
+    const at = UI.indexOf('data-testid="dw-stop"');
+    expect(UI.slice(at, at + 700)).toContain("Stops the work, not just the record");
   });
 
   it("the action and its dot cannot be orphaned by wrapping", () => {

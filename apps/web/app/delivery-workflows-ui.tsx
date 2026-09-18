@@ -840,9 +840,31 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           // runs left the step believing there was still nowhere to ship.
           onBound={() => { void load(); void reloadTargets(); }}
           onRecheck={(run) => act("Re-check", "recheck", { run_id: run.id })}
+          onStop={(run) => act("Stop", "stop", {
+            run_id: run.id, reason: "stopped by the operator from the console",
+          })}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
+          // STOP, THEN START — in that order and as ONE press.
+          //
+          // "Run this workflow again does not stop the current run and start from the
+          // beginning." It did not, by design: re-running while a run is live makes a SECOND
+          // workflow for the same project, which is how three ended up going at once. The
+          // screen's own advice was "cancel this run first", for a control it did not offer.
+          // Now it offers it, and this does both — the stop has to land before the start, or
+          // the new run joins the old one instead of replacing it.
+          onStopAndRerun={async (run) => {
+            const stopped = await act("Stop", "stop", {
+              run_id: run.id, reason: "replaced by a fresh run from the console",
+            });
+            // ONLY START IF THE STOP LANDED. Starting after a failed cancel is the exact
+            // outcome this button exists to prevent: two live runs on one project.
+            if (!stopped?.ok) return;
+            await act("Re-run", "start", {
+              workflow_key: run.workflow_key, input: inputForRerun(run.input),
+            });
+          }}
           // BUILD ON WHAT THIS ALREADY FOUND. The server resolves the dossier from the run and
           // sets the adopt key itself — a client may not assert that work has happened. What
           // travels is the evidence, not the panel: a Research-Led Discovery panel answered a
@@ -1770,7 +1792,8 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onBuildOnThis, onRecheck, onSetTarget, onPrepareTarget,
+                   onRetryStep, onRerun, onStop, onStopAndRerun, onBuildOnThis, onRecheck,
+                   onSetTarget, onPrepareTarget,
                    onRunPreview,
                    onBound, projectId, actor, roles,
                    previewStarting,
@@ -1787,6 +1810,10 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   capabilities: Capability[];
   onRetryStep: (runId: string, stepId: string) => void;
   onRerun: (run: Run) => void;
+  /** Stop a live run: cancels the work it started, not only its bookkeeping. */
+  onStop: (run: Run) => void;
+  /** Stop it and start the same workflow again on the same directive, in that order. */
+  onStopAndRerun: (run: Run) => void;
   onBuildOnThis: (run: Run) => void;
   onRecheck: (run: Run) => void;
   onSetTarget: (runId: string, targetId: string) => void;
@@ -1920,6 +1947,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
               <StepPath run={run} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
+                        onStop={() => onStop(run)}
+                        onStopAndRerun={() => onStopAndRerun(run)}
                         onBuildOnThis={() => onBuildOnThis(run)}
                         busy={busy}
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
@@ -2036,8 +2065,8 @@ export function decidedButNotMoved(step: RunStep): string {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onBuildOnThis,
-                   onRecheck,
+function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onStop,
+                   onStopAndRerun, onBuildOnThis, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
                    previewStarting, busy, actor, roles }: {
@@ -2046,6 +2075,10 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
   roles: Array<{ role_key: string; display_name?: string | null }>;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
+  /** Stop a live run — the work it started, not only its bookkeeping. */
+  onStop: () => void;
+  /** Stop it and start the same workflow again from the beginning, in that order. */
+  onStopAndRerun: () => void;
   onBuildOnThis: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
@@ -2252,18 +2285,38 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onB
           </Explain>
         </span>
         {ACTIVE_RUN_STATES.has(run.status) ? (
-          <span className="dw-run-action">
-            <button type="button" className="cap-btn" disabled data-testid="dw-rerun-blocked">
-              Run this workflow again
-            </button>
-            {/* WHY IT IS DEAD, on the dead control. A disabled button with no reason is the
-                thing an operator clicks three times before giving up. */}
-            <Explain label="Why this is unavailable">
-              This run is still {run.status}. Starting it again would make a second workflow for
-              the same project, not retry this one — use &ldquo;Try … again&rdquo; on the step
-              that needs another go, or cancel this run first.
-            </Explain>
-          </span>
+          <>
+            {/* THE ADVICE NOW EXISTS AS A BUTTON. This screen told an operator to "cancel this
+                run first" and offered no way to cancel — so three runs piled up on one
+                project, which is exactly what it was warning against. */}
+            <span className="dw-run-action">
+              <button type="button" className="cap-btn dw-stop" disabled={!!busy}
+                      data-testid="dw-stop" onClick={onStop}>
+                {busy === "Stop" ? "Stopping…" : "Stop this run"}
+              </button>
+              <Explain label="What stopping does">
+                Stops the work, not just the record: every pending step is cancelled and so is
+                anything this run started — including a build that is still going in its own
+                sandbox. It cannot be resumed; start it again to try afresh.
+              </Explain>
+            </span>
+            <span className="dw-run-action">
+              <button type="button" className="cap-btn" disabled={!!busy}
+                      data-testid="dw-stop-and-rerun" onClick={onStopAndRerun}>
+                {busy === "Stop" || busy === "Re-run" ? "Restarting…" : "Stop and run again"}
+              </button>
+              {/* WHY THIS IS ONE BUTTON AND NOT TWO PRESSES. Running again while this one is
+                  live makes a SECOND workflow on the same project rather than retrying this
+                  one — the thing the disabled button used to explain and leave you to solve. */}
+              <Explain label="What restarting does">
+                Stops this run and starts {run.workflow_name} again from the beginning on the
+                same directive. Starting it again WITHOUT stopping would leave two workflows
+                running on one project, which is why it happens in that order.
+                For one step that needs another go, use &ldquo;Try … again&rdquo; on the step
+                instead — that keeps everything already done.
+              </Explain>
+            </span>
+          </>
         ) : (
           <span className="dw-run-action">
             <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}

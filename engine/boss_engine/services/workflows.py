@@ -3002,8 +3002,14 @@ def _cancel_work_this_run_started(
     Best-effort per item, and never raises: a code task that cannot be stopped must not prevent
     the run from being cancelled, or "cancel" fails exactly when it is needed most.
     """
-    from .jobs import JobQueue
+    # JobQueue HAS NEVER EXISTED HERE. `cancel_queued_job` is a method on JobLeaseService, so
+    # this import raised ImportError the first time anybody cancelled a run — the worst moment
+    # for a bad import, and directly above the comment promising that "cancel has to mean the
+    # work stops. Anything else is a button that lies." It lied by 500.
+    from ..config import get_settings
+    from .jobs import JobLeaseService
 
+    job_service = JobLeaseService(get_settings())
     stopped: list[dict[str, Any]] = []
     rows = connection.execute(
         text(
@@ -3038,7 +3044,7 @@ def _cancel_work_this_run_started(
                 {"work_id": work_id},
             ).scalars().all()
             for job_id in jobs:
-                JobQueue().cancel_queued_job(
+                job_service.cancel_queued_job(
                     connection, job_id, force=True, actor=actor,
                     reason=f"workflow run {run_id} was cancelled: {reason}",
                 )

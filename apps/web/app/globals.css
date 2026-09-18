@@ -9316,6 +9316,10 @@ a.agent-chip-name:hover { text-decoration: underline; }
 /* Each footer action and its dot travel together, so wrapping cannot orphan an explanation
    next to the wrong button. */
 .dw-run-action { display: inline-flex; align-items: center; gap: 7px; }
+/* Stopping a run destroys work in progress, so it does not look like its neighbours. Amber
+   rather than red: this is a deliberate operator action, not a failure. */
+.dw-stop { border-color: var(--amber, #d29922); color: var(--amber, #d29922); }
+.dw-stop:hover:not(:disabled) { background: rgba(210, 153, 34, .12); }
 
 /* One action, once the order is satisfied. No numbers, no sub-step containers — the bound
    target states itself and the single press sits under it. */

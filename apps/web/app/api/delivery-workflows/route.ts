@@ -114,6 +114,11 @@ const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   // Starting a preview is a CODE TASK operation — the same endpoint Factory calls — so the
   // run id here is the build's, not the workflow's.
   start_preview: (id) => `/v1/code-tasks/${encodeURIComponent(id)}/preview`,
+  // STOP. The screen told an operator with three live runs to "cancel this run first" and
+  // offered no way to do it — advice naming an action the product did not expose. Cancel
+  // stops the WORK, not just the bookkeeping: it also cancels the code task a build step
+  // started, which is the distinction that once cost a production database.
+  stop: (id) => `/v1/workflow-runs/${encodeURIComponent(id)}/cancel`,
 };
 
 export async function POST(req: Request) {

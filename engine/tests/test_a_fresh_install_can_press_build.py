@@ -105,3 +105,30 @@ def test_seeding_is_idempotent_on_every_boot():
     seed_source = inspect.getsource(wc.seed)
     assert "Idempotent" in seed_source
     assert "WorkflowConflictError" in seed_source
+
+
+def test_cancelling_a_run_can_actually_import_what_it_needs():
+    """"Cancel has to mean the work stops. Anything else is a button that lies." It lied by
+    500: the work-cancelling path imported `JobQueue` from services.jobs, where no such name
+    has ever existed — `cancel_queued_job` is a method on JobLeaseService. So the first cancel
+    anybody attempted raised ImportError, which is the worst moment for a bad import.
+    """
+    import inspect
+
+    from boss_engine.services import workflows
+
+    source = inspect.getsource(workflows._cancel_work_this_run_started)
+    code = "\n".join(line for line in source.splitlines()
+                     if not line.strip().startswith("#"))
+    assert "JobQueue" not in code
+    assert "JobLeaseService" in code
+    assert "job_service.cancel_queued_job(" in code
+
+
+def test_and_the_name_it_imports_exists():
+    """The assertion the ImportError would have failed. Written against the module rather than
+    the string, so renaming the method breaks this instead of production."""
+    from boss_engine.services.jobs import JobLeaseService
+
+    assert hasattr(JobLeaseService, "cancel_queued_job")
+    assert not hasattr(__import__("boss_engine.services.jobs", fromlist=["x"]), "JobQueue")

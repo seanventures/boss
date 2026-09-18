@@ -126,11 +126,18 @@ describe("re-running does not duplicate a live workflow", () => {
   const SOURCE = readFileSync(
     new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
 
-  it("refuses while the run is still going", () => {
-    // Pressed on a mid-flight run it starts a SECOND run on the same directive: two workflows
-    // for one project, both at step 6.
+  it("stops the live one first rather than refusing", () => {
+    // The rule is unchanged — a press must never leave two workflows on one project — but
+    // refusing was the wrong way to keep it: the button was disabled, its explanation said
+    // "cancel this run first", and no cancel existed anywhere. Three runs piled up. It now
+    // stops and starts, in that order, and does not start at all if the stop failed.
     expect(SOURCE).toContain("ACTIVE_RUN_STATES");
-    expect(SOURCE).toContain('data-testid="dw-rerun-blocked"');
+    expect(SOURCE).toContain('data-testid="dw-stop-and-rerun"');
+    expect(SOURCE).toContain("if (!stopped?.ok) return;");
+  });
+
+  it("and stopping is available on its own", () => {
+    expect(SOURCE).toContain('data-testid="dw-stop"');
   });
 
   it("points at the control that actually retries", () => {
