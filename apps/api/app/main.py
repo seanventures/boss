@@ -1220,6 +1220,26 @@ async def lifespan(_: FastAPI):
         print("[lifespan] activity-log capture installed")
     except Exception as exc:  # noqa: BLE001 — never block boot on a log handler
         print(f"[lifespan] activity-log capture unavailable: {exc}")
+    # A FRESH INSTALL MUST BE ABLE TO PRESS BUILD.
+    #
+    # The delivery catalogue — the twelve workflows a directive is routed to — was installed
+    # by an endpoint documented as "safe to call on every boot" that nothing called on boot.
+    # So a new project had an empty registry, and pressing Build answered 409 "No approved
+    # workflow mapping matched this class of work": true, unactionable, and about a thing the
+    # operator had never been asked to do. The core feature of the product did not work on a
+    # clean install.
+    #
+    # Idempotent by content hash: re-seeding an unchanged catalogue publishes nothing.
+    try:
+        from boss_engine.services.workflow_catalogue import seed as _seed_workflows
+
+        project = (settings.default_project_id or "").strip()
+        if project:
+            with begin(engine) as connection:
+                result = _seed_workflows(connection, project, actor="boss")
+            print(f"[lifespan] delivery catalogue: {result['count']} workflows for {project}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a seed
+        print(f"[lifespan] delivery catalogue seed skipped: {exc}")
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:

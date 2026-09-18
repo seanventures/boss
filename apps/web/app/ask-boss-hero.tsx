@@ -1966,7 +1966,14 @@ export function AskBossHero({
         ) : null}
 
         {error ? (
-          <p className="askboss-error" data-testid="askboss-error">⚠ {error}</p>
+          // SCROLLED TO, NOT JUST RENDERED. This sits below the composer and the suggestion
+          // chips, so on a laptop it lands under the fold: pressing Build produced a real 409
+          // with a real explanation that the operator never saw, and reported the core
+          // feature as "nothing happens". A message nobody is shown is not a message.
+          <p className="askboss-error" data-testid="askboss-error"
+             ref={(node) => node?.scrollIntoView({ block: "nearest", behavior: "smooth" })}>
+            ⚠ {error}
+          </p>
         ) : null}
 
         {reply ? (

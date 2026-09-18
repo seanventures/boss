@@ -506,4 +506,69 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
         except workflows.WorkflowConflictError:
             # Same content hash: already published. Nothing to do, and not an error.
             installed.append({"key": entry["key"], "version_id": None, "version": None})
-    return {"project_id": project_id, "installed": installed, "count": len(installed)}
+    mapped = _seed_default_mappings(connection, project_id, actor=actor)
+    return {"project_id": project_id, "installed": installed, "count": len(installed),
+            "mapped": mapped}
+
+
+#: EXACTLY THE ONE THE CONSOLE ALREADY CALLS THE DEFAULT, and nothing else.
+#:
+#: "Installing twelve workflows is not the same as choosing one, and a project that silently
+#: acquired a process nobody picked would be worse than a project with none." That rule is
+#: right and it stands: bugfix, feature.major and feature.minor stay unmapped until somebody
+#: chooses, and an unmapped class still resolves to nothing rather than a guess.
+#:
+#: The exception is `project.new`, because the composer's workflow picker already presents
+#: "Standard (default)" as the selected option. Shipping a control that says a default is in
+#: force while the router has none is the inconsistency that made the core feature fail on a
+#: clean install: pressing Build answered 409 about a mapping the operator had been shown as
+#: already chosen. Either the label was a lie or the mapping should exist; this makes it true.
+_DEFAULT_MAPPINGS: tuple[tuple[str, str], ...] = (
+    ("project.new", "standard_product_delivery"),
+)
+
+#: Below anything a person sets. Priority is part of the mapping's unique slot AND of the
+#: resolver's score, so seeding at the same 100 the console writes would both collide with an
+#: explicit choice and compete with it. A default must lose to a decision.
+_DEFAULT_MAPPING_PRIORITY = 10
+
+
+def _seed_default_mappings(
+    connection: Connection, project_id: str, *, actor: str = "boss",
+) -> list[dict[str, Any]]:
+    """Route each class of work to a workflow, unless somebody already has.
+
+    A published workflow that nothing points at is not reachable: pressing Build answered
+    "No approved workflow mapping matched this class of work" on an install whose registry
+    had just been filled. Installing and routing are one act for a default; choosing
+    differently is the operator's, and this never overwrites a slot they own.
+    """
+    seeded: list[dict[str, Any]] = []
+    for work_class, key in _DEFAULT_MAPPINGS:
+        existing = connection.execute(
+            text("SELECT id FROM workflow_mappings "
+                 " WHERE project_id=:p AND selector_kind='work_class' "
+                 "   AND selector_value=:sv AND enabled = true LIMIT 1"),
+            {"p": project_id, "sv": work_class},
+        ).first()
+        if existing:
+            continue                       # somebody has already chosen for this class
+        version = connection.execute(
+            text("SELECT v.id FROM workflow_versions v "
+                 "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                 " WHERE v.project_id=:p AND d.workflow_key=:k AND v.status='published' "
+                 " ORDER BY v.created_at DESC LIMIT 1"),
+            {"p": project_id, "k": key},
+        ).first()
+        if not version:
+            continue                       # not installed here; nothing to point at
+        try:
+            workflows.create_mapping(
+                connection, project_id=project_id, workflow_version_id=version[0],
+                selector_kind="work_class", selector_value=work_class,
+                scope_type="project", scope_id=project_id,
+                priority=_DEFAULT_MAPPING_PRIORITY, actor=actor)
+            seeded.append({"work_class": work_class, "workflow_key": key})
+        except Exception:  # noqa: BLE001 — a mapping that will not seed must not stop the rest
+            continue
+    return seeded
