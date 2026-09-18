@@ -466,13 +466,21 @@ def test_a_rejected_token_is_never_echoed_into_the_log() -> None:
 
 
 def test_the_environment_wins_over_the_stored_secret() -> None:
-    """What an operator exports while debugging must not be silently overridden by a store."""
+    """What an operator exports while debugging must not be silently overridden by a store.
+
+    Measured on the resolver both routes now share: `_resolve_token` used to hold a second
+    copy of this lookup, which read the store under the plain key only — so a credential
+    stored by BOSS's own API, which namespaces what it writes, was invisible to it.
+    """
     import inspect
 
     from boss_engine.services import cli_harness
 
-    src = inspect.getsource(cli_harness.GenericCliCodeAgent._resolve_token)
+    src = inspect.getsource(cli_harness.GenericCliCodeAgent._resolve_secret)
     assert src.index("os.environ.get") < src.index("backend_for")
+    # And the token route reaches it rather than reimplementing it.
+    assert "_resolve_secret(self.spec.token_env)" in inspect.getsource(
+        cli_harness.GenericCliCodeAgent._resolve_token)
 
 
 def test_signing_in_is_attempted_once_per_agent_not_per_call() -> None:

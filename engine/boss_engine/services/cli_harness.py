@@ -113,6 +113,13 @@ class CliHarnessSpec:
     # A CLI with neither can only ever be used where its login lives.
     token_env: str = ""
     #: argv that authorises the CLI from that token, read on stdin.
+    #:
+    #: EMPTY MEANS THE ENVIRONMENT VARIABLE *IS* THE LOGIN — there is no subcommand to run,
+    #: the CLI reads the variable on every invocation. claude-code works this way, and
+    #: verified against claude 2.1.273: with CLAUDE_CODE_OAUTH_TOKEN set, `claude auth status`
+    #: reports `"loggedIn": true, "authMethod": "oauth_token"` with nothing on disk at all.
+    #: So for that CLI there is nothing to sign in — only a value to put in the child's
+    #: environment, which is what `_env` does.
     token_login_args: tuple[str, ...] = ()
     # --- the credential FILE route ---------------------------------------------
     #
@@ -154,6 +161,16 @@ class CliHarnessSpec:
     entitlement_source_id: str = ""
     #: Provider the entitlement belongs to.
     entitlement_provider: str = ""
+    #: Should this spec also REGISTER a harness of the same name?
+    #:
+    #: False for claude_code: it already has a better driver. `ClaudeCodeAgent` is a
+    #: purpose-written adapter that a governed task has actually completed on, and registering
+    #: a generic `claude -p` wrapper under the same name would either collide at import or
+    #: quietly replace the good driver with a worse one. What this spec is for is the other
+    #: half — detection, the console's Connect button, and the credential route — none of
+    #: which the harness registry provides and all of which an operator needs before they can
+    #: choose the harness at all.
+    registers_harness: bool = True
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
@@ -163,6 +180,52 @@ class CliHarnessSpec:
 #: documentation is a hypothesis until a governed task completes on it, and presenting an
 #: untested adapter as ready is how a registry stops meaning anything.
 BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
+    # VERIFIED AGAINST claude 2.1.273. This spec does NOT drive Claude Code — see
+    # `registers_harness` — it makes Claude Code *connectable*: the console could detect and
+    # connect Codex but had only prose for Claude, telling the operator to set an environment
+    # variable on the API container and restart it. That is the one thing the wizard exists to
+    # remove, and it left the customer who picked Claude Code for a role with no way to pick it.
+    #
+    # The credential route is the environment variable, and `claude setup-token` mints exactly
+    # the long-lived token it wants. That is why Claude was never the CLI with the session
+    # problem: a subscription can run a laptop and a server at once because the server gets a
+    # token of its own, where Codex has no such command and the whole auth.json has to travel.
+    "claude_code": CliHarnessSpec(
+        name="claude_code",
+        binary="claude",
+        args=("-p",),
+        # Nothing here drives real work, so there is no write mode to declare. The proof turn
+        # runs with every tool disabled — `--tools ""` is the CLI's own way to say that — so
+        # connecting can read a model and cannot touch a file.
+        write_args=(),
+        read_only_args=("--tools", ""),
+        prompt_via="argv",
+        model_flag="--model",
+        # A governed task HAS completed on claude_code; this is the same engine, reached
+        # through its own adapter.
+        verified=True,
+        registers_harness=False,
+        description="Claude Code headless (`claude -p`). Authorised by a Claude "
+                    "subscription's own login, or an Anthropic API key.",
+        env_passthrough=("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"),
+        version_args=("--version",),
+        # JSON, so the check is a field rather than a sentence that can be reworded.
+        auth_check_args=("auth", "status"),
+        auth_ok_pattern=r'"loggedIn":\s*true',
+        auth_fail_pattern=r'"loggedIn":\s*false',
+        signin_hint="claude setup-token",
+        install_hint="npm install -g @anthropic-ai/claude-code",
+        token_env="CLAUDE_CODE_OAUTH_TOKEN",
+        # No token_login_args: the variable is the login. See the field's own note.
+        token_hint="run `claude setup-token` on a machine where you are signed in — it mints "
+                   "a long-lived token meant for exactly this, and does not disturb the "
+                   "session you use yourself",
+        home_env="CLAUDE_CONFIG_DIR",
+        default_home="~/.claude",
+        docs_url="https://docs.claude.com/en/docs/claude-code/setup",
+        entitlement_source_id="anthropic_claude_code",
+        entitlement_provider="anthropic",
+    ),
     # VERIFIED AGAINST codex-cli 0.154.0, not taken from documentation. `codex exec` is the
     # non-interactive mode; `--sandbox` is a real flag with a real read-only value, which is
     # what lets Codex hold "the reviewer cannot edit". Smoke-tested: edits a file in place in
@@ -281,12 +344,23 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
     return specs
 
 
-def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20) -> tuple[int, str]:
+def _uses_env_route(spec: CliHarnessSpec) -> bool:
+    """Is this CLI's credential simply an environment variable it reads on every run?
+
+    Three routes exist and they need telling apart: a login subcommand fed a token
+    (`token_login_args`), a credential file that has to be placed (`auth_file_secret`), and
+    this one — nothing to run and nothing to write, the variable is the login.
+    """
+    return bool(spec.token_env) and not spec.token_login_args and not spec.auth_file_secret
+
+
+def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
+               extra_env: Optional[dict] = None) -> tuple[int, str]:
     """Run a short informational command. Never raises: a probe that explodes tells the
     operator less than one that reports what happened."""
     try:
         proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout,
-                              env={**os.environ, "CI": "1"})
+                              env={**os.environ, "CI": "1", **(extra_env or {})})
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
     except OSError as exc:
@@ -294,7 +368,7 @@ def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20) -> tuple[i
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
 
 
-def detect(spec: CliHarnessSpec) -> dict:
+def detect(spec: CliHarnessSpec, settings=None) -> dict:
     """Is this coding agent installed on THIS machine, and is it signed in?
 
     Detection is the difference between a product and a set of instructions. BOSS cannot ask a
@@ -304,6 +378,11 @@ def detect(spec: CliHarnessSpec) -> dict:
 
     Never raises. "Not installed" and "installed but signed out" are answers, and each has a
     different next step — which is the whole point of asking.
+
+    `settings` is optional and only matters for a CLI whose credential is an environment
+    variable: the value BOSS stored is not in this process's environment, so without it the
+    probe would report "not signed in" about a credential the install genuinely holds — and
+    the operator who had just handed it over would be told it had not arrived.
     """
     import re as _re
 
@@ -336,7 +415,20 @@ def detect(spec: CliHarnessSpec) -> dict:
     #: connected" and "is the CLI signed in right now" cannot be shown as the separate
     #: questions they are — and a completed setup reads as an untouched one after a refresh.
     result["entitlement_source_id"] = spec.entitlement_source_id
-    result["token_present"] = bool(credential and os.environ.get(credential))
+    # A STORED CREDENTIAL COUNTS AS PRESENT. The environment is only one of the two places
+    # it legitimately lives; the other is whatever secret store this install has, which is
+    # where BOSS's own API puts it.
+    probe_env: dict = {}
+    stored_token = None
+    if settings is not None and _uses_env_route(spec):
+        try:
+            stored_token = GenericCliCodeAgent(settings, spec)._resolve_secret(spec.token_env)
+        except Exception:  # noqa: BLE001 — an unreachable store is "absent", not a crash
+            stored_token = None
+        if stored_token:
+            probe_env[spec.token_env] = stored_token
+    result["token_present"] = bool(
+        credential and (os.environ.get(credential) or stored_token))
     # CAN THIS SUBSCRIPTION BE USED FROM A SERVER AT ALL? Detection answers "is the CLI here";
     # this answers "could it be, on a machine the operator does not sit at". A CLI with no
     # token route can only ever be used where its login lives, and saying so is the difference
@@ -354,7 +446,7 @@ def detect(spec: CliHarnessSpec) -> dict:
         result["ready"] = True
         result["next_step"] = None
         return result
-    code, out = _run_probe(found, spec.auth_check_args)
+    code, out = _run_probe(found, spec.auth_check_args, extra_env=probe_env)
     # The line that ANSWERS the question, not merely the first one printed. These CLIs emit
     # warnings before their status — a fresh CODEX_HOME produces "WARNING: proceeding, even
     # though we could not create PATH aliases…" — and reporting that as `auth_detail` hands the
@@ -434,12 +526,21 @@ def _looks_like_revoked_credential(*streams: Optional[str]) -> bool:
 
 
 def _auth_detail(spec: CliHarnessSpec, out: str) -> str:
-    """The most informative line of an auth-status output."""
+    """The most informative line of an auth-status output, as a SENTENCE.
+
+    The line-picking below assumes the CLI prints prose. `claude auth status` prints JSON,
+    which is better to test against and worse to read: the most informative line is literally
+    `"loggedIn": false,` — a fragment, shown to a customer, on the screen where they are
+    trying to work out whether their subscription is connected.
+    """
     import re as _re
 
     lines = [line.strip() for line in (out or "").splitlines() if line.strip()]
     if not lines:
         return ""
+    spoken = _spoken_auth_detail(out)
+    if spoken:
+        return spoken
     for pattern in (spec.auth_fail_pattern, spec.auth_ok_pattern):
         if not pattern:
             continue
@@ -450,6 +551,24 @@ def _auth_detail(spec: CliHarnessSpec, out: str) -> str:
         if not _re.match(r"(?i)^\s*(warning|note)\b", line):
             return line[:200]
     return lines[0][:200]
+
+
+def _spoken_auth_detail(out: str) -> str:
+    """Turn a JSON auth status into the sentence a person would say about it."""
+    try:
+        parsed = json.loads((out or "").strip())
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(parsed, dict) or "loggedIn" not in parsed:
+        return ""
+    if not parsed.get("loggedIn"):
+        return "Not signed in."
+    method = {"oauth_token": "a long-lived token", "api_key": "an API key",
+              "oauth": "a subscription login"}.get(str(parsed.get("authMethod") or ""), "")
+    source = parsed.get("apiKeySource")
+    if method and source:
+        return f"Signed in with {method} ({source})."
+    return f"Signed in with {method}." if method else "Signed in."
 
 
 def _is_interactive_host() -> bool:
@@ -467,7 +586,7 @@ def _is_interactive_host() -> bool:
 
 def detect_all(settings) -> list[dict]:
     """Every CLI coding agent BOSS knows about, and what each needs to become usable."""
-    return [detect(spec) for spec in load_specs(settings).values()]
+    return [detect(spec, settings) for spec in load_specs(settings).values()]
 
 
 class CliHarnessUnavailable(RuntimeError):
@@ -504,6 +623,13 @@ class GenericCliCodeAgent:
                 env[name] = value
         env.setdefault("HOME", os.environ.get("HOME", ""))
         env["CI"] = "1"
+        # THE VARIABLE IS THE LOGIN, so it has to be here on every run. `env_passthrough`
+        # copies it when the operator set it in this process's environment; this also covers
+        # the credential BOSS itself stored, which is not in the environment at all.
+        if _uses_env_route(self.spec) and not env.get(self.spec.token_env):
+            token = self._resolve_secret(self.spec.token_env)
+            if token:
+                env[self.spec.token_env] = token
         return env
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:
@@ -532,11 +658,23 @@ class GenericCliCodeAgent:
         box, so it is piped in. Nothing about the value is logged, including its length.
         """
         has_file_route = bool(self.spec.auth_file_secret and self.spec.auth_file_name)
-        if not has_file_route and (not self.spec.token_env or not self.spec.token_login_args):
+        env_route = _uses_env_route(self.spec)
+        if not has_file_route and not env_route and (
+                not self.spec.token_env or not self.spec.token_login_args):
             return {"authorised": None, "reason": "this CLI has no token route"}
-        found = detect(self.spec)
+        found = detect(self.spec, self.settings)
         if not found["installed"]:
             return {"authorised": False, "reason": "not installed"}
+        if env_route:
+            # Nothing to sign in and nothing to write: the credential is handed to the CLI in
+            # its environment by `_env` on each run. So "authorised" is exactly "we have one",
+            # and there is no state left behind that could go stale.
+            if self._resolve_secret(self.spec.token_env):
+                return {"authorised": True,
+                        "reason": "the stored token is given to the CLI on every run"}
+            return {"authorised": bool(found["authenticated"]),
+                    "reason": (f"no {self.spec.token_env} available to this install "
+                               f"({self.spec.token_hint})")}
         if has_file_route:
             # DELIBERATELY BEFORE the "already signed in" shortcut. A credential file left in
             # place by an earlier run makes the CLI report signed in, so short-circuiting on
@@ -735,25 +873,11 @@ class GenericCliCodeAgent:
     def _resolve_token(self) -> Optional[str]:
         """The travelling token: the environment first, then the deployment's secret store.
 
-        Environment first because that is what an operator sets while working something out,
-        and a store that silently overrode it would make debugging impossible.
+        Delegates, rather than repeating the lookup. The copy that used to live here read the
+        store under the plain key ONLY, so a token stored by BOSS's own API — which namespaces
+        what it writes — was invisible to the one code path that needed it.
         """
-        direct = os.environ.get(self.spec.token_env)
-        if direct:
-            return direct.strip() or None
-        try:
-            from .secret_backends import backend_for, default_secret_backend
-
-            # `default_secret_backend` names the best store this installation actually has —
-            # a managed one, a vault, or the local fallback — so the harness does not have to
-            # know which, and a deployment that changes store keeps working.
-            value = backend_for(default_secret_backend(self.settings), self.settings).get(
-                self.spec.token_env)
-        except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
-            _log.info("no stored %s for %s (%s)", self.spec.token_env, self.spec.name,
-                      type(exc).__name__)
-            return None
-        return (value or "").strip() or None
+        return self._resolve_secret(self.spec.token_env)
 
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,

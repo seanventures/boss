@@ -105,6 +105,32 @@ def read_token(auth_file: Path, field: str) -> str:
     return token
 
 
+def read_piped_token(stream) -> str:
+    """The credential from standard input, for a CLI that PRINTS one rather than storing it.
+
+    `claude setup-token` writes its token to stdout, so there is no file to read — which is
+    also why it is the one CLI whose credential never has to be found on disk at all. It may
+    print a line of explanation around the token, and a token has no whitespace in it, so the
+    longest whitespace-free run is the token. Stated rather than guessed at: if that run is
+    short enough to be a word, this refuses instead of storing prose.
+    """
+    text = stream.read()
+    if not text.strip():
+        raise SystemExit(
+            "nothing on standard input. Pipe the token in:\n"
+            "    claude setup-token | python3 scripts/store_subscription_token.py "
+            "claude_code --stdin")
+    candidate = max(text.split(), key=len)
+    if len(candidate) < 20:
+        # Long enough to be a credential, short enough to be a sentence: say which, without
+        # echoing it. A store that cannot tell a credential from a placeholder needs a caller
+        # that can, and that is the whole reason this script exists.
+        raise SystemExit(
+            f"standard input does not look like a credential (longest token: "
+            f"{len(candidate)} characters). Did the command print an error instead?")
+    return candidate
+
+
 def send_to_boss(api: str, api_key: str, project_id: str, provider: str, credential: str,
                  # "setup" is not a member of any project BOSS seeds, so the endpoint refused
                  # every call with "Actor 'setup' is not an active member of org 'org_boss'" —
@@ -206,8 +232,11 @@ def resolve_ops_token(explicit: str, token_file: str) -> str:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # Every CLI whose credential can TRAVEL. Requiring a `token_source_file` excluded the one
+    # CLI that needs no file — claude-code prints its token — so the script could not do the
+    # thing its own docstring described.
     tokenable = {name: spec for name, spec in BUILTIN_CLI_HARNESSES.items()
-                 if spec.token_source_file and (spec.token_env or spec.auth_file_secret)}
+                 if spec.token_env or spec.auth_file_secret}
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("provider", choices=sorted(tokenable),
                         help="which subscription CLI to take the token from")
@@ -228,6 +257,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--ops-token", default="", help="store token; prefer the file")
     parser.add_argument("--ops-token-file", default=DEFAULT_OPS_TOKEN_FILE)
     parser.add_argument("--auth-file", default="", help="override the CLI's credential file")
+    parser.add_argument("--stdin", action="store_true",
+                        help="read the credential from standard input, for a CLI that prints "
+                             "one: claude setup-token | ... claude_code --stdin")
     parser.add_argument("--field", default="", help="override the field to read")
     parser.add_argument("--write-env", metavar="FILE", default="",
                         help="write KEY=value into this env file instead of a secret store")
@@ -238,22 +270,36 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     spec = tokenable[args.provider]
-    auth_file = Path(os.path.expanduser(args.auth_file or spec.token_source_file))
-    # Which of the two routes this CLI actually supports. Codex takes the whole file; claude
-    # takes a minted token. The spec decides, so this script never has to be told.
-    if spec.auth_file_secret:
+    source_file = args.auth_file or spec.token_source_file
+    auth_file = Path(os.path.expanduser(source_file)) if source_file else None
+    # Which of the three routes this CLI actually supports. Codex takes the whole file; a
+    # CLI that prints its credential is piped in; anything else has a field in a file. The
+    # spec decides, so this script never has to be told.
+    if args.stdin:
+        key = spec.auth_file_secret or spec.token_env
+        token = read_piped_token(sys.stdin)
+        what = "the token"
+        origin = "standard input"
+    elif auth_file is None:
+        raise SystemExit(
+            f"{args.provider} keeps no credential file to read — it prints one. Pipe it in:\n"
+            f"    {spec.signin_hint} | python3 scripts/store_subscription_token.py "
+            f"{args.provider} --stdin")
+    elif spec.auth_file_secret:
         key = spec.auth_file_secret
         token = read_whole_file(auth_file)
         what = f"the whole {auth_file.name}"
+        origin = str(auth_file)
     else:
         key = spec.token_env
         token = read_token(auth_file, args.field or spec.token_source_field)
         what = f"the {args.field or spec.token_source_field} field"
+        origin = str(auth_file)
 
     # A placeholder reaching the store is the failure this script exists to prevent, so it is
     # checked here too rather than trusted to never happen again.
     if token.startswith("<") and token.endswith(">"):
-        raise SystemExit(f"{auth_file} contains the placeholder {token!r}, not a credential")
+        raise SystemExit(f"{origin} contains the placeholder {token!r}, not a credential")
 
     if args.write_env:
         destination = f"{args.write_env} (env file)"
@@ -264,7 +310,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     else:
         destination = "no destination set"
     if args.dry_run:
-        print(f"would store {key} ({len(token)} chars) — {what} from {auth_file}")
+        print(f"would store {key} ({len(token)} chars) — {what} from {origin}")
         print(f"             -> {destination}")
         return 0
 
@@ -279,7 +325,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         result = store(args.store_url, ops_token, key, token)
         if not result.get("ok", True):
             raise SystemExit(f"secret store reported failure: {result}")
-        print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
+        print(f"stored {key} ({len(token)} chars) — {what} from {origin}")
         print(f"destination: {args.store_url} — YOUR store, not BOSS's.")
         print("BOSS cannot read it until you point it at that store "
               "(BOSS_PLATFORM_SECRET_STORE_URL / BOSS_VAULT_ADDR / BOSS_KMS_MASTER_KEY).")
@@ -301,7 +347,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     result = send_to_boss(args.boss_api, args.boss_api_key, args.project_id,
                           args.provider, token, actor=args.actor,
                           accept_database_fallback=args.accept_database_fallback)
-    print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
+    print(f"stored {key} ({len(token)} chars) — {what} from {origin}")
     backend = result.get("backend", "configured")
     print(f"destination: {args.boss_api} — BOSS put it in its {backend} store. "
           f"Nothing to restart.")

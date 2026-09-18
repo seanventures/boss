@@ -187,12 +187,15 @@ in as a different OS user than BOSS runs as. If it says `installed: false`, you 
 ### Claude Code
 
 ```bash
-npm install -g @anthropic-ai/claude-code && claude login
+npm install -g @anthropic-ai/claude-code && claude auth login
 ```
 
-That is the whole setup: `claude_code` is BOSS's default engine and uses the CLI's own session.
-No Connect step, nothing stored. Verify with `boss-engine call list_harnesses --args '{}'` —
-Claude is not in `detect_coding_agents`, which covers Codex, Cursor and Aider only.
+`claude_code` is BOSS's default engine and uses the CLI's own session. Press **Connect** in the
+console to record it, or check it from the shell:
+
+```bash
+boss-engine call detect_coding_agents --args '{}'
+```
 
 ## C — subscription, send the credential
 
@@ -272,23 +275,41 @@ in its database — add `--accept-database-fallback` to say yes deliberately.
 
 ### Claude Code
 
+On your own machine:
+
 ```bash
 claude setup-token
 ```
 
-Set the result as `CLAUDE_CODE_OAUTH_TOKEN` on the deployment — in the `.env` BOSS reads, or in
-your own secret store — then restart BOSS. There is no Connect step; `claude_code` is the
-default engine and picks it up on its next run.
+That prints a long-lived token made for headless use. It is a separate credential from the
+session you sign in with, so BOSS holding it does not disturb your own login.
 
-> Codex's one-command route does not cover Claude yet: Claude resolves its token per project
-> through a different path, so it still needs the variable set.
+**In the console:** Setup → Step two → Provider **Claude Code subscription** → paste it into
+*Token from `claude setup-token`* → **Store and connect**. BOSS writes it to this install's
+secret store, keeps a reference rather than the value, and proves it with one real turn. No
+restart and nothing to put in a file.
+
+**Or from the shell**, if you prefer:
+
+```bash
+claude setup-token | python3 scripts/store_subscription_token.py claude_code --stdin
+```
+
+Then connect it:
+
+```bash
+curl -sS -X POST "$BOSS_API/v1/setup/coding-agents/connect" \
+  -H "Authorization: Bearer $BOSS_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"claude_code"}'
+```
 
 ---
 
 ## Choose a model per role
 
-Once more than one provider is connected, which model fills which role is set per project in the
-console — **Setup → Settings** — and takes effect on the next run. No restart, no `.env`.
+Connect as many models as you like — each Connect records its own, and none replaces another.
+Which one fills which role is then set per project in the console: **Setup → Step two → Choose
+a model per role**. It takes effect on the next run. No restart, no `.env`.
 
 | Role | What it does | Unset means |
 |---|---|---|
@@ -300,9 +321,11 @@ console — **Setup → Settings** — and takes effect on the next run. No rest
 Worth making the reviewer a different model from the implementer: one that is the same model
 rarely disagrees with itself.
 
-The options are whatever this installation can actually drive — the list comes from the harness
-registry, so a provider you connect appears immediately and one BOSS cannot drive is refused by
-name. A project that chooses nothing keeps using the deployment's defaults.
+**The options are the models you have connected**, not everything BOSS can drive — a picker
+offering eleven providers on an install with one credential is a picker where ten of the
+choices fail inside a build. Connect another model and it appears in every role immediately;
+a model you chose and later disconnected stays listed, so the setting is never rewritten
+behind you. A project that chooses nothing keeps using the deployment's defaults.
 
 ## Use one provider everywhere
 

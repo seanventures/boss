@@ -98,6 +98,37 @@ def _allowed_choices(spec: dict[str, Any]) -> list[str]:
         return []
 
 
+def offered_choices(connection, settings, project_id: str,
+                    spec: dict[str, Any], current: Any = None) -> list[str]:
+    """The values worth OFFERING for this knob on this project, as opposed to accepting.
+
+    Two different questions, and conflating them is what made the role pickers useless:
+    `_allowed_choices` answers "could BOSS drive this at all", which is the right bound for
+    validation and the wrong list for a dropdown. A picker should show what this project has
+    actually connected — otherwise ten of its eleven options are credentials the operator
+    does not have, and choosing one fails later, inside a build, looking like a bad model.
+
+    `current` is always included. A model can be un-connected after being chosen, and a
+    picker that silently drops the value it is displaying rewrites the operator's setting the
+    next time they touch anything else on the form.
+    """
+    allowed = _allowed_choices(spec)
+    if spec.get("choices") != "harnesses" or not allowed:
+        return allowed
+    try:
+        from .setup_service import connected_engines
+
+        connected = set(connected_engines(connection, settings, project_id))
+    except Exception:  # noqa: BLE001 — a knob must not break because a lookup did
+        return allowed
+    offered = [name for name in allowed if name in connected]
+    if current and current not in offered and current in allowed:
+        offered.append(str(current))
+    # Nothing connected yet: show everything rather than an empty dropdown, which would read
+    # as "this install cannot do it" instead of "connect a model first".
+    return sorted(offered) or allowed
+
+
 class UnknownKnob(ValueError):
     """The key is not one of ours. Refused rather than stored."""
 

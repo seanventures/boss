@@ -1794,6 +1794,12 @@ def _register_builtin_harnesses() -> None:
         return build
 
     for cli_name, cli_spec in BUILTIN_CLI_HARNESSES.items():
+        if not cli_spec.registers_harness:
+            # claude_code: already registered above, with a purpose-written driver. Its spec
+            # exists so the console can detect and connect it, not to replace ClaudeCodeAgent
+            # with a generic `claude -p` wrapper — and registering it here would collide with
+            # the real one rather than override it, which is the correct outcome either way.
+            continue
         register_harness(
             cli_name, _cli_builder(cli_name), kind="cli", verified=cli_spec.verified,
             requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),

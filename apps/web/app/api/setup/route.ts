@@ -55,10 +55,15 @@ export async function POST(req: Request) {
   const path = step === "github" ? "/v1/github/easy-connect"
              : step === "model" ? "/v1/setup/model"
              : step === "coding-agent" ? "/v1/setup/coding-agents/connect"
+             // A subscription whose credential TRAVELS — claude_code's headless token. BOSS
+             // chooses the store, so the operator hands the value over once here instead of
+             // editing an env file on the API container and restarting it.
+             : step === "coding-agent-credential" ? "/v1/setup/coding-agents/credential"
              : "";
   if (!path) {
     return NextResponse.json(
-      { error: "step must be 'github', 'model' or 'coding-agent'" }, { status: 400 });
+      { error: "step must be 'github', 'model', 'coding-agent' or "
+               + "'coding-agent-credential'" }, { status: 400 });
   }
   try {
     const r = await fetch(`${API_URL}${path}`, {
@@ -69,8 +74,16 @@ export async function POST(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
-                               { status: r.status });
+      // A detail can be a SENTENCE or a DECISION. The credential route answers 409 with an
+      // object naming what to resend, and flattening that to a string would leave the console
+      // unable to offer the choice it describes.
+      const detail = data?.detail;
+      return NextResponse.json(
+        typeof detail === "object" && detail !== null
+          ? { error: (detail as Record<string, unknown>).message ?? `HTTP ${r.status}`,
+              decision: detail }
+          : { error: detail ?? `HTTP ${r.status}` },
+        { status: r.status });
     }
     return NextResponse.json(data);
   } catch (e) {

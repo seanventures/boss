@@ -26,6 +26,22 @@ from boss_engine.services.setup_service import (
 CREDENTIAL = json.dumps({"tokens": {"access_token": "v"}})
 
 
+class _Connection:
+    """Enough of a connection to record the statements run against it.
+
+    These tests are about the DECISION, not about storage, so put_secret is stubbed — but the
+    write also stamps the provider onto the reference it just created, and a None standing in
+    for a connection made that look like a failure of this module rather than of the fiction.
+    """
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, statement, params=None):
+        self.statements.append(str(statement))
+        return self
+
+
 @pytest.fixture
 def on_database(monkeypatch):
     """An installation with no secret store configured — the common first run."""
@@ -50,7 +66,7 @@ def events(monkeypatch):
 
 def test_it_refuses_the_database_until_asked(on_database, events) -> None:
     with pytest.raises(SecretFallbackNotAccepted) as exc:
-        store_coding_agent_credential(None, Settings(), "p", "codex", CREDENTIAL, actor="ceo")
+        store_coding_agent_credential(_Connection(), Settings(), "p", "codex", CREDENTIAL, actor="ceo")
 
     assert exc.value.backend == "database"
     assert not events, "nothing should be recorded for a write that did not happen"
@@ -59,7 +75,7 @@ def test_it_refuses_the_database_until_asked(on_database, events) -> None:
 def test_the_refusal_says_what_the_trade_is_and_how_to_proceed(on_database) -> None:
     """"Not configured" would send somebody hunting. This is a decision, so state it."""
     with pytest.raises(SecretFallbackNotAccepted) as exc:
-        store_coding_agent_credential(None, Settings(), "p", "codex", CREDENTIAL, actor="ceo")
+        store_coding_agent_credential(_Connection(), Settings(), "p", "codex", CREDENTIAL, actor="ceo")
 
     message = str(exc.value)
     assert "anyone with the database has the credential" in message
@@ -74,14 +90,14 @@ def test_it_is_not_a_plain_setup_error(on_database) -> None:
     this one cannot — what is missing is a decision, not a correction.
     """
     with pytest.raises(SetupError):        # still one, for callers that catch broadly
-        store_coding_agent_credential(None, Settings(), "p", "codex", CREDENTIAL, actor="ceo")
+        store_coding_agent_credential(_Connection(), Settings(), "p", "codex", CREDENTIAL, actor="ceo")
 
     assert issubclass(SecretFallbackNotAccepted, SetupError)
 
 
 def test_accepting_stores_it_and_records_who_accepted(on_database, events) -> None:
     result = store_coding_agent_credential(
-        None, Settings(), "p", "codex", CREDENTIAL, actor="ceo",
+        _Connection(), Settings(), "p", "codex", CREDENTIAL, actor="ceo",
         accept_database_fallback=True)
 
     assert result["backend"] == "database"
@@ -106,7 +122,7 @@ def test_a_real_store_needs_no_acknowledgement(monkeypatch, events) -> None:
                          "backend": "infisical", "fingerprint": "fp"})
 
     result = store_coding_agent_credential(
-        None, Settings(), "p", "codex", CREDENTIAL, actor="ceo")
+        _Connection(), Settings(), "p", "codex", CREDENTIAL, actor="ceo")
 
     assert result["backend"] == "infisical"
     assert result["fallback_accepted"] is False

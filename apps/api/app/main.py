@@ -19524,23 +19524,32 @@ def get_project_settings(project_id: str) -> dict:
     tells an operator whether changing it here will do anything.
     """
     from boss_engine.services import project_settings as ps
+    from boss_engine.services.setup_service import connected_engines
     with begin(engine) as connection:
         chosen = ps.get_all(connection, project_id)
+        connected = connected_engines(connection, settings, project_id)
         knobs = []
         for key, spec in ps.KNOBS.items():
             default = getattr(settings, spec["attr"], None)
+            value = chosen.get(key, default)
             knobs.append({
                 "key": key, "label": spec["label"], "help": spec["help"],
                 "kind": spec["kind"], "min": spec.get("min"), "max": spec.get("max"),
-                # A picker cannot be drawn without the options, and the options are whatever
-                # the harness registry holds right now — so they travel with the knob rather
-                # than being duplicated in the console, where they would drift.
-                "choices": ps._allowed_choices(spec) if spec["kind"] == "choice" else None,
-                "value": chosen.get(key, default),
+                # A picker cannot be drawn without the options, and the options are the ones
+                # THIS PROJECT has connected — not every harness BOSS can drive. Offering all
+                # eleven on an install with one credential is a dropdown where ten choices
+                # fail at build time and nothing says which.
+                "choices": (ps.offered_choices(connection, settings, project_id, spec, value)
+                            if spec["kind"] == "choice" else None),
+                "value": value,
                 "default": default,
                 "source": "project" if key in chosen else "deployment default",
             })
-    return {"project_id": project_id, "knobs": knobs}
+    return {"project_id": project_id, "knobs": knobs,
+            # So the console can say WHY the list is short, and what to do about it, instead
+            # of showing a one-item picker with no explanation.
+            "connected_engines": sorted(connected),
+            "connected_engine_detail": [connected[name] for name in sorted(connected)]}
 
 
 @app.put("/v1/settings/{key}")

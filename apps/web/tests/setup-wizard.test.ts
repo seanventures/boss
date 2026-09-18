@@ -149,8 +149,8 @@ const SAVED = (wizard_provider: string, saved_at: string, kind = "subscription")
   auth_method: "official_cli_oauth", kind, connected: true, verified: false, saved_at,
 });
 const OFFERED = [
-  { provider: "openrouter", label: "OpenRouter", kind: "api_key" },
-  { provider: "codex", label: "Codex", kind: "subscription" },
+  { provider: "openrouter", label: "OpenRouter", kind: "api_key", api: "openai" },
+  { provider: "codex", label: "Codex", kind: "subscription", api: "cli" },
 ];
 
 describe("the picker opens on what was last saved", () => {
@@ -209,5 +209,81 @@ describe("a connection that was made says so", () => {
   it("the record is per project, so the project id travels with the request", () => {
     expect(ROUTE).toContain("/v1/setup/coding-agents?project_id=");
     expect(UI).toContain("view=coding-agents&project_id=");
+  });
+});
+
+/**
+ * "I choose claude code for few roles.. But looks like I could connect only one model in the
+ * UI.. I want multiple models and choose only those active models to be assigned in the role."
+ */
+describe("a subscription whose credential travels gets a box to travel in", () => {
+  it("takes the token, rather than naming an environment variable to go and set", () => {
+    // The old answer was: set CLAUDE_CODE_OAUTH_TOKEN on the API container and restart it —
+    // which is the step the wizard exists to remove.
+    expect(UI).toContain('data-testid="setup-agent-token"');
+    expect(UI).toContain('data-testid="setup-agent-token-input"');
+    expect(UI).toContain('detected.credential_kind === "token"');
+  });
+
+  it("the field is a password field and is wiped as soon as BOSS has the value", () => {
+    const at = UI.indexOf('data-testid="setup-agent-token-input"');
+    expect(UI.slice(at - 200, at)).toContain('type="password"');
+    expect(UI).toContain("setToken(\"\")");
+  });
+
+  it("it is shown even when a token is already stored, so an expired one can be replaced", () => {
+    expect(UI).toContain("pasting replaces it");
+  });
+
+  it("storing goes through the credential route, then proves the connection", () => {
+    expect(UI).toContain('step: "coding-agent-credential"');
+    expect(ROUTE).toContain('"/v1/setup/coding-agents/credential"');
+  });
+
+  it("and a store with nowhere good to put it is a question, not a failure", () => {
+    // 409: nothing is wrong with the request, so resending it unchanged fails identically.
+    expect(UI).toContain("secret_store_fallback_not_accepted");
+    expect(UI).toContain("Store in the database and connect");
+    // The decision object survives the proxy rather than being flattened to a sentence.
+    expect(ROUTE).toContain("decision: detail");
+  });
+
+  it("a file-route CLI gets no paste box — there is nothing an operator can type", () => {
+    // codex: the whole auth.json travels, and asking somebody to paste one by hand is how a
+    // live credential ends up in a screenshot.
+    expect(UI).not.toContain('data-testid="setup-agent-file-input"');
+  });
+});
+
+describe("a role picker offers what is connected", () => {
+  const KNOBS = codeOnly("app/settings-knobs-ui.tsx");
+
+  it("the connected list comes from the API, with the knobs", () => {
+    expect(KNOBS).toContain("connected_engines");
+    expect(KNOBS).toContain('data-testid="settings-connected-engines"');
+  });
+
+  it("and says what to do when there is only one", () => {
+    // A one-option picker with no explanation reads as a limit of the product.
+    expect(KNOBS).toContain("Connect another above and it appears here");
+    expect(KNOBS).toContain("Nothing is connected yet");
+  });
+
+  it("only on the model panel — a number knob has nothing to connect", () => {
+    expect(KNOBS).toContain('only === "choice" ? (');
+  });
+});
+
+describe("the page does not contradict itself", () => {
+  it("does not say there is nothing to paste above a paste box", () => {
+    // It said exactly that, in the same card, two lines apart — and the operator believes the
+    // sentence rather than the form.
+    const at = UI.indexOf("There is nothing to paste");
+    expect(at).toBeGreaterThan(-1);
+    expect(UI.slice(at - 400, at)).toContain('detected.credential_kind === "token"');
+  });
+
+  it("and the next step is the button on this page, not a shell command", () => {
+    expect(UI).toContain("Paste the token above and press");
   });
 });

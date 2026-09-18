@@ -16,7 +16,9 @@ import React, { useCallback, useEffect, useState } from "react";
 type Knob = {
   key: string; label: string; help: string; kind: string;
   min?: number | null; max?: number | null;
-  /** For kind "choice": what this installation can actually drive, from the harness registry. */
+  /** For kind "choice": the models THIS PROJECT has connected — not every harness BOSS can
+   *  drive. A picker of eleven options on an install with one credential is a picker where
+   *  ten choices fail at build time and nothing on screen says which. */
   choices?: string[] | null;
   value: number | string | null; default: number | string | null; source: string;
 };
@@ -32,6 +34,7 @@ export function SettingsKnobs(
   { projectId, actor, only }: { projectId: string; actor: string; only?: "choice" | "number" },
 ) {
   const [knobs, setKnobs] = useState<Knob[] | null>(null);
+  const [connected, setConnected] = useState<string[]>([]);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -42,6 +45,7 @@ export function SettingsKnobs(
       if (!r.ok) { setKnobs([]); return; }
       const body = await r.json();
       setKnobs(body.knobs ?? []);
+      setConnected((body.connected_engines ?? []) as string[]);
     } catch { setKnobs([]); }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
@@ -77,6 +81,18 @@ export function SettingsKnobs(
 
   return (
     <div className="settings-knobs" data-testid="settings-knobs">
+      {/* WHY THE LIST IS THIS SHORT. Without it a one-option picker reads as a limit of the
+          product rather than as "you have connected one model", and the fix — connect
+          another, above — is invisible. */}
+      {only === "choice" ? (
+        <p className="detail" data-testid="settings-connected-engines">
+          {connected.length
+            ? <>Choosing between <b>{connected.join(", ")}</b> — the models this project has
+                connected. Connect another above and it appears here.</>
+            : <>Nothing is connected yet, so every harness BOSS can drive is listed. Connect a
+                model above and these narrow to the ones that will actually run.</>}
+        </p>
+      ) : null}
       {shown.map((k) => (
         <div className="settings-knob" key={k.key}>
           <div className="settings-knob-head">

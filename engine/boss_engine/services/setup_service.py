@@ -165,6 +165,104 @@ def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
     return detect_all(settings)
 
 
+def connected_engines(
+    connection: Connection, settings: Settings, project_id: str,
+) -> dict[str, dict[str, Any]]:
+    """The engines this project can actually run a role on, and why each one qualifies.
+
+    "Looks like I could connect only one model in the UI.. I want multiple models and choose
+    only those active models to be assigned in the role."
+
+    The role pickers were offering every harness BOSS can DRIVE — eleven of them, on an
+    install where exactly one was connected. That is not a choice, it is a quiz: ten of the
+    options fail at build time with a missing credential, and nothing on screen says which.
+
+    An engine qualifies here if this project has a credential or a connection for it:
+
+      * a connected subscription (`entitlement_sources.connection_status = 'connected'`),
+      * a stored API key (a source with a credential reference), or
+      * a credential in this install's own environment — an install configured the old way is
+        configured, and dropping those would take working engines off the menu.
+
+    Returns {engine: {"why": ..., "source_id": ..., "saved_at": ...}}, keyed by harness name
+    so the caller can intersect it with the registry without knowing about entitlements.
+    """
+    from .cli_harness import load_specs
+    from .harness_registry import available_harnesses
+
+    known = {h["name"] for h in available_harnesses()}
+
+    # source_id -> engine. Asked of the specs rather than written down, so a harness added
+    # later is not silently unofferable.
+    by_entitlement = {spec.entitlement_source_id: spec.name
+                      for spec in load_specs(settings).values()
+                      if spec.entitlement_source_id}
+    by_entitlement.setdefault("anthropic_claude_code", "claude_code")
+    # What the API-key route records, `setup-<provider>`, mapped to the lane that spends it.
+    # openai and "anything OpenAI-compatible" are both the engine-owned native agent.
+    by_api_provider = {"openai": "native", "custom": "native", "anthropic": "claude_code",
+                       "openrouter": "openrouter", "groq": "groq", "deepseek": "deepseek",
+                       "azure": "azure"}
+
+    found: dict[str, dict[str, Any]] = {}
+
+    def offer(engine: str, why: str, **extra: Any) -> None:
+        if engine in known and engine not in found:
+            found[engine] = {"engine": engine, "why": why, **extra}
+
+    rows = connection.execute(
+        text("SELECT source_id, provider, connection_status, updated_at, "
+             "       credential_secret_ref_id "
+             "FROM entitlement_sources WHERE project_id = :p "
+             "ORDER BY updated_at DESC"),
+        {"p": project_id},
+    ).mappings().all()
+    for row in rows:
+        source_id = row["source_id"] or ""
+        connected = row["connection_status"] == "connected"
+        has_key = bool(row["credential_secret_ref_id"])
+        if not connected and not has_key:
+            continue          # a seeded catalogue row: nobody has connected this
+        engine = by_entitlement.get(source_id) or (
+            by_api_provider.get(source_id[len("setup-"):])
+            if source_id.startswith("setup-") else None)
+        if not engine:
+            continue
+        offer(engine, "subscription" if connected else "api key",
+              source_id=source_id,
+              saved_at=(row["updated_at"].isoformat()
+                        if hasattr(row["updated_at"], "isoformat")
+                        else str(row["updated_at"] or "")) or None)
+
+    # And the environment, for an install that was set up before any of this existed.
+    env_lanes = [("native", "openai_api_key"), ("claude_code", "claude_code_oauth_token"),
+                 ("claude_code", "anthropic_api_key"), ("azure", "azure_openai_key"),
+                 ("openrouter", "openrouter_api_key"), ("groq", "groq_api_key"),
+                 ("deepseek", "deepseek_api_key"), ("vllm", "vllm_base_url"),
+                 ("ollama", "ollama_base_url")]
+    for engine, attr in env_lanes:
+        if _set_deliberately(settings, attr):
+            offer(engine, "this install's environment", source_id=None, saved_at=None)
+    return found
+
+
+def _set_deliberately(settings: Settings, attr: str) -> bool:
+    """Is this setting a value somebody CHOSE, rather than the one BOSS ships?
+
+    Measured: `ollama_base_url` defaults to the local daemon's address, so "is it non-empty"
+    reported Ollama as a connected model on an install with no Ollama running — and it went
+    into the role pickers ahead of the models the operator had actually connected. A shipped
+    default is not a connection.
+    """
+    value = str(getattr(settings, attr, "") or "").strip()
+    if not value:
+        return False
+    fields = getattr(type(settings), "model_fields", {}) or {}
+    field = fields.get(attr)
+    default = getattr(field, "default", None) if field is not None else None
+    return value != str(default or "").strip()
+
+
 def with_recorded_connections(
     agents: list[dict[str, Any]], connection: Connection, project_id: str,
 ) -> list[dict[str, Any]]:
@@ -269,6 +367,16 @@ def store_coding_agent_credential(
         secret_kind="api_token", backend=backend,
         scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
     )
+    # NAME THE PROVIDER ON THE REFERENCE. `put_secret` records the secret KIND in that column
+    # ("api_token"), which is not what reads it: the runtime looks a lane's credential up by
+    # provider — `resolve_project_credential(provider="anthropic")` for claude_code — so a
+    # token stored without this is written successfully and then never found. The API-key
+    # route already does the same fix-up for the same reason.
+    if spec.entitlement_provider:
+        connection.execute(
+            text("UPDATE secret_refs SET provider = :provider WHERE id = :id"),
+            {"provider": spec.entitlement_provider, "id": stored["secret_ref_id"]},
+        )
     if backend == "database":
         # Recorded, not just permitted. "Who accepted a weaker store, and when" is a question
         # somebody asks after an incident, and an answer that depends on memory is no answer.

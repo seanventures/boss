@@ -54,6 +54,12 @@ type CodingAgent = {
   // minute, `connected` says whether anyone ever finished this step. Showing only the first
   // meant a refresh or a redeploy presented a finished connection as untouched.
   connected?: boolean; connected_at?: string | null; connected_status?: string | null;
+  // How this subscription reaches a SERVER. "token" means the CLI reads a value the operator
+  // can mint on their own machine and hand over — claude_code does; "file" means the CLI's
+  // whole credential file has to travel, which is codex. "" means it can only be used where
+  // its login already lives.
+  credential_kind?: string; credential_env?: string | null; token_present?: boolean;
+  token_hint?: string | null; portable?: boolean;
 };
 
 /**
@@ -74,14 +80,21 @@ export function lastSavedProvider(saved: SavedModel[], providers: Provider[]): s
   return hit?.wizard_provider ?? "";
 }
 
-async function call<T>(body: Record<string, unknown>): Promise<{ ok: boolean; data?: T; error?: string }> {
+/** A decision the API is asking for, rather than an error it is reporting. */
+type Decision = { error?: string; message?: string; backend?: string };
+
+async function call<T>(body: Record<string, unknown>): Promise<
+  { ok: boolean; data?: T; error?: string; decision?: Decision }> {
   try {
     const r = await fetch("/api/setup", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: String(data?.error ?? `HTTP ${r.status}`) };
+    if (!r.ok) {
+      return { ok: false, error: String(data?.error ?? `HTTP ${r.status}`),
+               decision: data?.decision as Decision | undefined };
+    }
     return { ok: true, data: data as T };
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message ?? e) };
@@ -350,6 +363,10 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [agents, setAgents] = useState<CodingAgent[] | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [token, setToken] = useState("");
+  // The store fallback is a decision, so it is asked once and remembered for the retry
+  // rather than being sent optimistically on the first attempt.
+  const [acceptFallback, setAcceptFallback] = useState(false);
 
   useEffect(() => {
     if (touched || !startOn) return;
@@ -399,6 +416,45 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
     // what the database holds; setting it from the reply would make it say what we hoped.
     if (r.ok) { await loadAgents(); onDone(); }
   }, [connecting, projectId, actor, provider, onDone, loadAgents]);
+
+  const storeTokenAndConnect = useCallback(async () => {
+    if (connecting || !token.trim()) return;
+    setConnecting(true); setResult(null);
+    const stored = await call<Record<string, unknown>>({
+      step: "coding-agent-credential",
+      payload: { project_id: projectId, actor, provider, credential: token.trim(),
+                 accept_database_fallback: acceptFallback },
+    });
+    if (!stored.ok) {
+      setConnecting(false);
+      // 409 is not a failure, it is a question: this install has no secret store, so the
+      // token would go into Postgres. Say so and let them decide, rather than storing it
+      // quietly or refusing outright.
+      if (stored.decision?.error === "secret_store_fallback_not_accepted") {
+        setAcceptFallback(true);
+        setResult({ ok: false, text: `${stored.error} Press the button again to store it `
+                                     + `in the database deliberately.` });
+        return;
+      }
+      setResult({ ok: false, text: stored.error ?? "could not store the token" });
+      return;
+    }
+    // The value is gone from the form the moment BOSS has it. A credential left in an input
+    // survives every screenshot and session restore after it.
+    setToken("");
+    const connected = await call<Record<string, unknown>>({
+      step: "coding-agent",
+      payload: { project_id: projectId, actor, provider, prove: true },
+    });
+    setConnecting(false);
+    setResult(connected.ok
+      ? { ok: true, text: `Connected. BOSS holds the token in its `
+                          + `${String(stored.data?.backend ?? "secret")} store and ${provider} `
+                          + `answered a test turn.` }
+      : { ok: false, text: connected.error ?? "the token was stored but did not work" });
+    await loadAgents();
+    if (connected.ok) onDone();
+  }, [connecting, token, acceptFallback, projectId, actor, provider, onDone, loadAgents]);
 
   const save = useCallback(async () => {
     if (busy) return;
@@ -506,8 +562,15 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
       {subscription && detected ? (
         <div className="detail" data-testid="setup-model-agent-detected">
           <p>
-            {chosen?.note} There is nothing to paste: the CLI holds its own login, and BOSS
-            runs it on this machine.
+            {chosen?.note}{" "}
+            {detected.credential_kind === "token"
+              // Said differently for the two routes, because the page below says something
+              // different too. "There is nothing to paste" above a paste box is a page that
+              // contradicts itself, and the operator believes the sentence, not the form.
+              ? <>One value travels: the token its CLI mints for headless use. BOSS stores
+                  that and runs the CLI here — your own login stays yours.</>
+              : <>There is nothing to paste: the CLI holds its own login, and BOSS runs it on
+                  this machine.</>}
           </p>
           {/* WHAT WAS SAVED, FIRST AND UNCONDITIONALLY.
               This line is the answer to "did my connection stick?", and it comes from
@@ -540,14 +603,54 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
               {detected.installed ? " — already installed." : null}
             </li>
             <li>
-              Sign in: <code>{detected.signin_hint}</code>
+              {detected.credential_kind === "token"
+                ? <>Mint a token for BOSS: <code>{detected.signin_hint}</code> on your own
+                    machine, then paste it below. It is made for headless use, so it does not
+                    disturb the session you sign in with yourself.</>
+                : <>Sign in: <code>{detected.signin_hint}</code></>}
               {detected.authenticated ? " — already signed in." : null}
             </li>
             <li>
-              Press Connect below. BOSS checks it, it never asks you for a credential.
+              {detected.credential_kind === "token"
+                // "It never asks you for a credential" is true of the file route and false
+                // here, where the box below is asking for exactly one.
+                ? <>Press <b>Store and connect</b>. BOSS proves it with one real turn before
+                    recording anything.</>
+                : <>Press Connect below. BOSS checks it, it never asks you for a credential.</>}
               {detected.connected ? " — already connected." : null}
             </li>
           </ol>
+          {/* A CREDENTIAL THAT TRAVELS GETS A BOX TO TRAVEL IN.
+              claude_code reads a token it can mint anywhere, and until now the console said
+              so and then left the operator to set an environment variable on the API
+              container and restart it — the exact step this wizard exists to remove. BOSS
+              takes the value and picks the store itself. Shown even once a token is present,
+              because replacing one is how an expired token gets fixed. */}
+          {detected.credential_kind === "token" ? (
+            <div className="setup-form" data-testid="setup-agent-token">
+              <label className="setup-field">
+                <span>
+                  Token from <code>{detected.signin_hint}</code>
+                  {detected.token_present ? " — one is already stored; pasting replaces it" : ""}
+                </span>
+                <input type="password" value={token} autoComplete="off" spellCheck={false}
+                       data-testid="setup-agent-token-input" placeholder="sk-ant-oat01-…"
+                       onChange={(e) => setToken(e.target.value)} />
+              </label>
+              <button type="button" className="cap-btn primary"
+                      disabled={connecting || !token.trim() || !detected.installed}
+                      data-testid="setup-agent-token-submit"
+                      onClick={() => void storeTokenAndConnect()}>
+                {connecting ? "Storing and checking…"
+                  : acceptFallback ? "Store in the database and connect"
+                  : "Store and connect"}
+              </button>
+              <p className="hint">
+                BOSS writes it straight through to this install&rsquo;s secret store and keeps
+                a reference, never the value. No restart, and nothing to put in an env file.
+              </p>
+            </div>
+          ) : null}
           <button className="button" disabled={connecting || !detected.installed}
                   data-testid="setup-agent-connect" onClick={() => void connectAgent()}>
             {connecting ? "Checking it answers…"
@@ -555,12 +658,20 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
               : detected.ready ? `Connect ${chosen?.label ?? provider}`
               : `Re-check ${chosen?.label ?? provider}`}
           </button>
-          {!detected.ready ? (
-            // The next COMMAND, not "not configured" — which sends somebody to search.
-            <p data-testid="setup-agent-next-step">
-              Run <code>{detected.next_step}</code> first, then press Re-check.
-            </p>
-          ) : null}
+          {detected.ready ? null
+            : detected.credential_kind === "token" && !detected.token_present ? (
+              // The thing to do is ON THIS PAGE. Detection's own next step is a shell
+              // instruction for setting an environment variable, which was the right answer
+              // until the box above existed and is a worse one now.
+              <p data-testid="setup-agent-next-step">
+                Paste the token above and press <b>Store and connect</b>.
+              </p>
+            ) : (
+              // The next COMMAND, not "not configured" — which sends somebody to search.
+              <p data-testid="setup-agent-next-step">
+                Run <code>{detected.next_step}</code> first, then press Re-check.
+              </p>
+            )}
           <p className="hint">
             Connecting proves it works before recording anything: BOSS makes the agent complete
             one turn in its read-only sandbox. Signed in is not the same as working — so
