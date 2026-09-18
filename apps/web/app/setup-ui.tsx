@@ -335,14 +335,27 @@ function GitHubStep({ projectId, actor, onDone }: {
     // and browser session restore after it.
     setToken("");
     if (!r.ok) { setResult({ ok: false, text: r.error ?? "could not connect" }); return; }
-    const test = (r.data?.test ?? null) as { status?: string; message?: string } | null;
+    // THE REASON LIVES IN `detail`. Reading only `message` and `status` produced "Connected,
+    // but the check failed: failed" — four words that tell the operator nothing and told
+    // BOSS's own agent nothing either, so it could only repeat them back.
+    const test = (r.data?.test ?? null) as {
+      status?: string; message?: string;
+      detail?: { message?: string; missing_permissions?: string[] };
+    } | null;
     const bound = (r.data?.repository_binding ?? null) as { full_name?: string } | null;
     const passed = !test || test.status === "passed" || test.status === "ok";
+    const missing = test?.detail?.missing_permissions ?? [];
+    const why = missing.length
+      // The most common real failure, and the only one with a precise fix: the token works
+      // and is short a permission. Name it rather than saying "failed".
+      ? `the token is missing ${missing.join(" and ")} — add ${missing.length > 1 ? "them" : "it"} `
+        + `at Read and write on the token, then press Connect and test again`
+      : test?.detail?.message ?? test?.message ?? test?.status ?? "unknown";
     setResult({
       ok: passed,
       text: passed
         ? `Connected${bound?.full_name ? ` — ${bound.full_name} is the build target.` : "."}`
-        : `Connected, but the check failed: ${test?.message ?? test?.status ?? "unknown"}`,
+        : `Connected, but the check failed: ${why}`,
     });
     onDone();
   }, [token, repo, busy, projectId, actor, onDone]);

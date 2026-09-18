@@ -28,6 +28,31 @@ class GitHubRepositoryBindingNotFoundError(RuntimeError):
     pass
 
 
+#: Credential shapes that must never reach a stored message. A provider's own error body can
+#: echo the request, and the request carried the token.
+_CREDENTIAL_PATTERNS = (
+    r"gh[pousr]_[A-Za-z0-9]{16,}",
+    r"github_pat_[A-Za-z0-9_]{20,}",
+    r"sk-[A-Za-z0-9_\-]{16,}",
+    r"(?i)bearer\s+[A-Za-z0-9._\-]{12,}",
+    r"-----BEGIN[^-]+PRIVATE KEY-----",
+    r"[A-Za-z0-9_\-]{40,}",          # anything long enough to be a credential we do not know
+)
+
+
+def _redact_credentials(error: BaseException, limit: int = 300) -> str:
+    """The reason a call failed, with anything credential-shaped removed.
+
+    Discarding the reason entirely — which is what this replaced — protects the token and
+    costs the operator the one fact they needed. Redacting keeps both: "GitHub has no
+    paramg/boss-sandbox visible to this token" is safe to store and is the whole answer.
+    """
+    text_value = str(error or "").strip() or error.__class__.__name__
+    for pattern in _CREDENTIAL_PATTERNS:
+        text_value = re.sub(pattern, "[redacted]", text_value)
+    return text_value[:limit]
+
+
 class GitHubConnectionStateError(RuntimeError):
     pass
 
@@ -690,9 +715,14 @@ class GitHubConnectionService:
                 "detail": safe_result,
             }
         except Exception as error:
+            # SAY WHY. This recorded a constant — "GitHub connection test failed." — and threw
+            # the reason away, so a failed test was unactionable for the operator AND for
+            # BOSS's own agent, which could only report the same four words back. The caution
+            # was right and the remedy was too blunt: a GitHub error body can echo the token,
+            # so the message is REDACTED rather than discarded.
             safe_error = {
                 "type": error.__class__.__name__,
-                "message": "GitHub connection test failed.",
+                "message": f"GitHub connection test failed: {_redact_credentials(error)}",
             }
             self.receipts.mark_failed(connection, receipt["id"], safe_error)
             self._record_test_failure(
@@ -1089,7 +1119,16 @@ class GitHubConnectionService:
             project_id=project_id,
             credential_ref=credential_ref,
         )
-        if self.secret_resolver is self._resolve_secret:
+        # ASK THE QUESTION DIRECTLY. `self.secret_resolver is self._resolve_secret` is always
+        # False: line 61 stored a bound method and this created a NEW one to compare it
+        # against, and bound methods are never identical under `is`. So the branch that passes
+        # the live connection never ran, resolution fell back to `_active_connection`, and on
+        # the setup path — where nothing had set it — the token could not be read at all. The
+        # operator saw "Connected, but the check failed: failed".
+        #
+        # `_custom_secret_resolver` is the thing actually being asked about: did the caller
+        # inject a resolver, or is this our own?
+        if self._custom_secret_resolver is None:
             credential = self._resolve_secret(secret_ref, connection)
         else:
             credential = self.secret_resolver(secret_ref)
