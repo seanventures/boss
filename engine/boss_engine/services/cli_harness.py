@@ -199,7 +199,16 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         # connecting can read a model and cannot touch a file.
         write_args=(),
         read_only_args=("--tools", ""),
-        prompt_via="argv",
+        # STDIN, NOT ARGV, and `--tools` is the reason. It is VARIADIC — `--tools <tools...>`
+        # — so it consumes every argument that follows it, including a prompt appended last:
+        #
+        #   claude -p --tools "" "Reply with exactly: BOSS_OK"
+        #   Error: Input must be provided either through stdin or as a prompt argument
+        #
+        # Measured against claude 2.1.273, on the first real connect. The prompt on stdin has
+        # no trailing argument to be mistaken for a tool name, and `--print` documents stdin
+        # as a first-class route rather than a workaround.
+        prompt_via="stdin",
         model_flag="--model",
         # A governed task HAS completed on claude_code; this is the same engine, reached
         # through its own adapter.
@@ -672,9 +681,11 @@ class GenericCliCodeAgent:
             if self._resolve_secret(self.spec.token_env):
                 return {"authorised": True,
                         "reason": "the stored token is given to the CLI on every run"}
+            # SHORT ON PURPOSE. The caller pairs this with detection's own next step, which
+            # already carries the hint — saying it twice produced a 422 that stated the same
+            # sentence in the same breath, once in brackets.
             return {"authorised": bool(found["authenticated"]),
-                    "reason": (f"no {self.spec.token_env} available to this install "
-                               f"({self.spec.token_hint})")}
+                    "reason": f"no {self.spec.token_env} stored for this install"}
         if has_file_route:
             # DELIBERATELY BEFORE the "already signed in" shortcut. A credential file left in
             # place by an earlier run makes the CLI report signed in, so short-circuiting on

@@ -155,3 +155,19 @@ def test_and_a_cli_that_speaks_prose_is_left_alone():
     assert _auth_detail(codex, "Logged in using ChatGPT") == "Logged in using ChatGPT"
     assert _auth_detail(codex, "WARNING: could not create PATH aliases\nNot logged in") == (
         "Not logged in")
+
+
+def test_the_prompt_travels_on_stdin_because_tools_is_variadic():
+    """MEASURED ON THE FIRST REAL CONNECT, and the failure was mine:
+
+        claude -p --tools "" "Reply with exactly: BOSS_OK"
+        Error: Input must be provided either through stdin or as a prompt argument
+
+    `--tools <tools...>` is variadic, so it consumes every argument after it — including a
+    prompt appended last. The credential was stored and the CLI was signed in; the proof turn
+    could not be given anything to do, which reads as "your subscription does not work".
+    """
+    assert CLAUDE.prompt_via == "stdin"
+    # The trap is the combination, so the guard is too: any spec whose last read-only
+    # argument is a variadic flag's value cannot append its prompt to argv.
+    assert CLAUDE.read_only_args[0] == "--tools"
