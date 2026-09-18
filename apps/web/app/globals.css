@@ -9241,6 +9241,13 @@ a.agent-chip-name:hover { text-decoration: underline; }
 .setup-field input:focus, .setup-field select:focus {
   outline: none; border-color: var(--accent, #4C8DF6);
 }
+/* The two quiet expanders — how to get a token, and which model does which job. Both are
+   there for whoever wants them and out of the way of everybody who has done this before. */
+.setup-help, .setup-roles { margin-top: 14px; }
+.setup-help ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 8px; max-width: 620px; }
+.setup-help ol li { line-height: 1.5; }
+.setup-help p { max-width: 620px; }
+
 .setup-ok { margin-top: 10px; color: var(--green, #3FB950); font-size: .86rem; }
 .setup-bad { margin-top: 10px; color: var(--amber, #d29922); font-size: .86rem; }
 

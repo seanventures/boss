@@ -287,3 +287,70 @@ describe("the page does not contradict itself", () => {
     expect(UI).toContain("Paste the token above and press");
   });
 });
+
+/**
+ * "If you can provide me simple steps on how to get the token for git hub… or if it may change
+ * then we should probably use an Agent in the setup."
+ *
+ * Both, in that order of reliance. The steps are exact, free and offline; the agent has no
+ * browser, so for "where do I click" it is the less reliable source — it earns its place on
+ * the things a list cannot anticipate.
+ */
+describe("getting a GitHub token is written out, not searched for", () => {
+  it("the steps are on the page, behind an expander", () => {
+    expect(UI).toContain('data-testid="setup-github-help"');
+    expect(UI).toContain('data-testid="setup-github-help-steps"');
+    expect(UI).toContain("How do I get a token?");
+  });
+
+  it("collapsed by default — the second visit does not need them", () => {
+    const at = UI.indexOf('data-testid="setup-github-help-toggle"');
+    expect(UI.slice(at - 300, at)).toContain("useState(false)");
+  });
+
+  it("the link goes to the create form, not to a settings index", () => {
+    // The address that has outlived several reshuffles of the surrounding UI, which is why it
+    // is here instead of a screenshot.
+    expect(UI).toContain("https://github.com/settings/personal-access-tokens/new");
+  });
+
+  it("it names the two permissions exactly as GitHub labels them", () => {
+    expect(UI).toContain("Contents");
+    expect(UI).toContain("Pull requests");
+    expect(UI).toContain("Read and write");
+  });
+
+  it("and the three things people actually get wrong", () => {
+    // Measured against the failures this step produces: an org-owned repo with a
+    // personally-owned token, a repo that does not exist yet, and an expiry nobody noted.
+    expect(UI).toContain("Resource owner");
+    expect(UI).toContain("It must already exist");
+    expect(UI).toContain("pick a date you will not be surprised by");
+  });
+
+  it("including the organisation that blocks fine-grained tokens", () => {
+    expect(UI).toContain("blocks fine-grained tokens");
+    expect(UI).toContain("<code>repo</code>");
+  });
+});
+
+describe("and an agent is one click away, carrying the error", () => {
+  it("both steps offer it", () => {
+    expect(UI).toContain('data-testid="setup-ask-boss"');
+    expect((UI.match(/<AskBoss/g) ?? []).length).toBe(2);
+  });
+
+  it("it opens the console's own dock rather than a second chat surface", () => {
+    expect(UI).toContain('url.searchParams.set("agent", "general")');
+    expect(UI).toContain('url.searchParams.set("dock_ask", question)');
+  });
+
+  it("and clears the role, so it cannot inherit whoever was addressed last", () => {
+    expect(UI).toContain('url.searchParams.delete("dock_role")');
+  });
+
+  it("the question carries what failed, because that is the whole value of asking", () => {
+    expect(UI).toContain("It failed with: ${problem}");
+    expect(UI).toContain("Ask BOSS about this error");
+  });
+});

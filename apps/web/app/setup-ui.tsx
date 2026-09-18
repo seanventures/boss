@@ -254,6 +254,49 @@ function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) 
   );
 }
 
+/**
+ * Ask BOSS about the step you are looking at.
+ *
+ * "If you can provide me simple steps on how to get the token for git hub… or if it may change
+ * then we should probably use an Agent in the setup."
+ *
+ * Both, with the division of labour that way round. The steps below are exact, free and
+ * offline; an agent asked "where do I click" answers from training data with no browser open,
+ * so it is the LESS reliable source for the one thing that has a known answer. Where it earns
+ * its place is everything a list cannot anticipate — a token GitHub rejected, an organisation
+ * that blocks fine-grained tokens, a 403 on push — so the question it opens with carries
+ * whatever went wrong on screen.
+ *
+ * It opens the console's existing dock (`?agent=general&dock_ask=`) rather than becoming a
+ * second chat surface with its own habits.
+ */
+function askInDock(question: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", "general");
+    url.searchParams.set("dock_ask", question);
+    // ADDRESS IT, DO NOT INHERIT IT: dock_role survives in the URL until something clears it,
+    // so a door that sets only the question opens whichever role was last addressed.
+    url.searchParams.delete("dock_role");
+    window.history.replaceState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
+function AskBoss({ about, problem }: { about: string; problem?: string | null }) {
+  // The error is the whole value of asking. Without it the agent starts by asking what
+  // happened, which the operator has already told the screen.
+  const question = problem
+    ? `I am setting up BOSS — ${about}. It failed with: ${problem}. What do I do?`
+    : `I am setting up BOSS — ${about}. Walk me through it.`;
+  return (
+    <button type="button" className="cap-btn" data-testid="setup-ask-boss"
+            onClick={() => askInDock(question)}>
+      {problem ? "Ask BOSS about this error" : "Ask BOSS about this step"}
+    </button>
+  );
+}
+
 function GitHubStep({ projectId, actor, onDone }: {
   projectId: string; actor: string; onDone: () => void;
 }) {
@@ -310,12 +353,13 @@ function GitHubStep({ projectId, actor, onDone }: {
         </div>
       </div>
       <p className="detail">
-        A <a href="https://github.com/settings/personal-access-tokens" target="_blank"
+        A <a href="https://github.com/settings/personal-access-tokens/new" target="_blank"
              rel="noreferrer">fine-grained token</a> scoped to the one repository, with{" "}
         <b>Contents: read and write</b> and <b>Pull requests: read and write</b>. The token is
         written straight through to this install&rsquo;s secret store — BOSS keeps a reference,
         never the value.
       </p>
+      <TokenHelp />
       <div className="setup-form">
         <label className="setup-field">
           <span>Token</span>
@@ -341,7 +385,75 @@ function GitHubStep({ projectId, actor, onDone }: {
           {result.text}
         </p>
       ) : null}
+      <AskBoss about="connecting a GitHub repository so BOSS can open pull requests"
+               problem={result && !result.ok ? result.text : null} />
     </article>
+  );
+}
+
+/**
+ * How to get the token, written out rather than linked to.
+ *
+ * "It will be easier rather me searching for the steps." Six clicks in somebody else's
+ * settings UI is not knowledge worth holding, and a wizard that names the two permissions and
+ * then leaves you to find the page has done the easy half.
+ *
+ * Collapsed, because the second visit does not need it and the field above is the point. The
+ * deep link goes straight to the create form — that address has outlived several reshuffles of
+ * the surrounding UI, which is exactly why it is here instead of a screenshot.
+ */
+function TokenHelp() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="setup-help" data-testid="setup-github-help">
+      <button type="button" className="cap-btn" aria-expanded={open}
+              data-testid="setup-github-help-toggle" onClick={() => setOpen((v) => !v)}>
+        {open ? "Hide" : "How do I get a token?"}
+      </button>
+      {open ? (
+        <ol className="hint" data-testid="setup-github-help-steps">
+          <li>
+            Open{" "}
+            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank"
+               rel="noreferrer">github.com/settings/personal-access-tokens/new</a>{" "}
+            — that is Settings → Developer settings → Personal access tokens → Fine-grained
+            tokens → Generate new token.
+          </li>
+          <li>
+            <b>Token name</b>: anything you will recognise later, such as <code>boss</code>.
+            <b> Expiration</b>: your choice — BOSS keeps working until the day it expires, and
+            then every build fails at push time, so pick a date you will not be surprised by.
+          </li>
+          <li>
+            <b>Resource owner</b>: you, for your own repository. For a repository owned by an
+            organisation, pick the organisation here — a token owned by you cannot reach it,
+            and some organisations must approve the token before it works.
+          </li>
+          <li>
+            <b>Repository access</b> → <i>Only select repositories</i> → choose the one
+            repository BOSS should build in. It must already exist; BOSS writes branches and
+            pull requests, it does not create the repository.
+          </li>
+          <li>
+            <b>Permissions</b> → Repository permissions → set exactly two to{" "}
+            <i>Read and write</i>: <b>Contents</b> and <b>Pull requests</b>. Everything else
+            can stay at no access. Metadata turns itself on and is read-only — that is normal.
+          </li>
+          <li>
+            <b>Generate token</b>, then copy it. GitHub shows it once. Paste it above and press
+            Connect and test — BOSS checks it can actually push before saving anything.
+          </li>
+        </ol>
+      ) : null}
+      {open ? (
+        <p className="hint">
+          If your organisation blocks fine-grained tokens, a classic token with the{" "}
+          <code>repo</code> scope works too. BOSS tests whichever you give it the same way:
+          it asks GitHub whether this token can push to that repository, so a token that is
+          short a permission is refused here rather than at push time.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -712,6 +824,11 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
           {result.text}
         </p>
       ) : null}
+      {/* The step where the errors are least guessable — an expired subscription, a CLI signed
+          in as another OS user, a plan that does not cover the model. The question carries the
+          provider and the failure, so the answer can start from the failure. */}
+      <AskBoss about={`connecting ${chosen?.label ?? provider} as the model BOSS builds with`}
+               problem={result && !result.ok ? result.text : null} />
       <RoleModels projectId={projectId} actor={actor} />
     </article>
   );
