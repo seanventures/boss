@@ -1,0 +1,225 @@
+""""I've configured the claude and codex right? why the agent did not work"
+
+Because nothing had chosen between them. What the operator saw, having connected two working
+subscriptions minutes earlier:
+
+    IntegrationConfigurationError: OPENAI_API_KEY is not configured.. This is a failure on my
+    side, not a limit on what BOSS knows
+
+True, and useless. The CHAT adapters for both CLIs already existed — `ClaudeCliAdapter`,
+`make_codex_chat_adapter` — and the selection went: `chat_llm_engine` is empty, so inherit
+`llm_engine`, which defaults to "auto", which is the OpenAI adapter. An install with two
+subscriptions and no API key therefore had a chat that could not answer, and a Setup screen
+that said everything was connected.
+
+Two fixes, and the second is the one that matters: the choice is now a knob in the console,
+AND an unset choice resolves to a subscription that IS connected rather than to an API key
+that is not.
+"""
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import create_engine, text
+
+from boss_engine.services.project_settings import (
+    CHAT_ENGINES,
+    KNOBS,
+    _allowed_choices,
+    offered_choices,
+)
+from boss_engine.services.setup_service import chat_engine_for
+
+
+class _Settings:
+    openai_api_key = ""
+    anthropic_api_key = ""
+    claude_code_oauth_token = ""
+    azure_openai_key = ""
+    openrouter_api_key = ""
+    groq_api_key = ""
+    deepseek_api_key = ""
+    vllm_base_url = ""
+    ollama_base_url = ""
+    cli_harnesses_json = ""
+    chat_llm_engine = ""
+    llm_engine = "auto"
+
+
+@pytest.fixture()
+def connection():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE entitlement_sources ("
+            " project_id TEXT, source_id TEXT, provider TEXT, connection_status TEXT,"
+            " credential_secret_ref_id TEXT, updated_at TIMESTAMP)"))
+        conn.execute(text("CREATE TABLE project_settings (project_id TEXT, key TEXT,"
+                          " value TEXT)"))
+    with engine.begin() as conn:
+        yield conn
+
+
+def _connect(conn, source_id):
+    conn.execute(text(
+        "INSERT INTO entitlement_sources (project_id, source_id, provider,"
+        " connection_status, credential_secret_ref_id, updated_at)"
+        " VALUES ('p', :s, 'x', 'connected', NULL, :at)"),
+        {"s": source_id, "at": datetime(2026, 9, 18, tzinfo=timezone.utc)})
+
+
+def _choose(conn, value):
+    conn.execute(text("INSERT INTO project_settings (project_id, key, value)"
+                      " VALUES ('p', 'chat_llm_engine', :v)"), {"v": value})
+
+
+def test_a_connected_subscription_answers_the_chat(connection):
+    """THE BUG. Claude Code was connected and proved with a real turn; the chat asked for an
+    OpenAI key."""
+    _connect(connection, "anthropic_claude_code")
+
+    assert chat_engine_for(connection, _Settings(), "p") == "claude_code"
+
+
+def test_codex_will_do_it_too_when_claude_is_not_there(connection):
+    _connect(connection, "openai_codex_chatgpt")
+
+    assert chat_engine_for(connection, _Settings(), "p") == "codex"
+
+
+def test_claude_first_when_both_are_connected(connection):
+    """Not a preference about quality: Claude is the one whose subscription mints a headless
+    token designed for this, so it is the one that keeps working unattended."""
+    _connect(connection, "anthropic_claude_code")
+    _connect(connection, "openai_codex_chatgpt")
+
+    assert chat_engine_for(connection, _Settings(), "p") == "claude_code"
+
+
+def test_an_api_key_is_left_exactly_as_it_was(connection):
+    """An install that has always run its chat on a key must not have the conversation moved
+    underneath it because a subscription was connected for builds."""
+    class _WithKey(_Settings):
+        openai_api_key = "sk-x"
+
+    _connect(connection, "anthropic_claude_code")
+
+    assert chat_engine_for(connection, _WithKey(), "p") == ""
+
+
+def test_the_console_choice_beats_everything(connection):
+    class _WithKey(_Settings):
+        openai_api_key = "sk-x"
+
+    _connect(connection, "anthropic_claude_code")
+    _choose(connection, "codex")
+
+    assert chat_engine_for(connection, _WithKey(), "p") == "codex"
+
+
+def test_and_the_deployment_setting_beats_the_guess(connection):
+    class _Configured(_Settings):
+        chat_llm_engine = "native"
+
+    _connect(connection, "anthropic_claude_code")
+
+    assert chat_engine_for(connection, _Configured(), "p") == "native"
+
+
+def test_nothing_connected_changes_nothing(connection):
+    """Silence, so the adapter behaves exactly as it did before this existed — including its
+    own error message, which is the honest one when there is genuinely no model."""
+    assert chat_engine_for(connection, _Settings(), "p") == ""
+
+
+def test_the_console_offers_only_engines_that_can_hold_a_conversation(connection):
+    """Offering the harness list here would be a green tick over nothing: the factory honours
+    exactly these three and sends everything else to the OpenAI adapter, so "openrouter" in
+    this box would silently mean "OpenAI"."""
+    assert CHAT_ENGINES == ("claude_code", "codex", "native")
+    assert _allowed_choices(KNOBS["chat_llm_engine"]) == list(CHAT_ENGINES)
+    assert "aider" not in _allowed_choices(KNOBS["chat_llm_engine"])
+
+
+def test_and_narrows_them_to_what_is_connected(connection):
+    _connect(connection, "openai_codex_chatgpt")
+
+    assert offered_choices(connection, _Settings(), "p", KNOBS["chat_llm_engine"]) == ["codex"]
+
+
+def test_the_console_vocabulary_reaches_the_factory(connection):
+    """`claude_code` is the name in the role pickers, in detection and on the Connect button;
+    this factory has always spelled it `claude_cli`. Without the alias the operator's choice
+    lands in the `!= "claude_cli"` branch and gets the OpenAI adapter — the exact failure."""
+    from boss_engine.services.claude_cli_adapter import _chat_engine_name
+
+    assert _chat_engine_name("claude_code") == "claude_cli"
+    assert _chat_engine_name("codex") == "codex"
+    assert _chat_engine_name("native") == "native"
+
+
+def test_the_router_resolves_it_once_per_turn():
+    """The answerer is cached, so the engine has to be cached with it — and a change in the
+    console has to rebuild it on the next turn, not at the next restart."""
+    import inspect
+
+    from boss_engine.services import intent_router
+
+    turn = inspect.getsource(intent_router.IntentRouter.route_turn)
+    assert "self._use_project_chat_model(connection, project_id)" in turn
+
+    apply = inspect.getsource(intent_router.IntentRouter._use_project_chat_model)
+    assert "chat_engine_for" in apply
+    assert "self._answer_agent_obj = None" in apply
+
+
+def test_the_chat_cli_is_given_the_credential_this_install_holds():
+    """THE SECOND HALF OF THE SAME BUG, and the one that made the first invisible.
+
+    Selecting Claude was not enough: the adapter ran `claude` with no environment at all, so
+    the child inherited the API container's — which on an install that keeps its token in a
+    secret store is empty. `claude -p` said "Not logged in", the falling-back adapter
+    correctly read that as "this backend is unavailable here", and handed the operator the
+    SECOND backend's error about a subscription that was connected, proved and stored.
+    """
+    import inspect
+
+    from boss_engine.services import claude_cli_adapter, codex_cli_adapter
+
+    invoke = inspect.getsource(claude_cli_adapter.ClaudeCliAdapter._invoke)
+    assert "env=self._child_env()" in invoke
+
+    env = inspect.getsource(claude_cli_adapter.ClaudeCliAdapter._child_env)
+    assert "stored_credential(self.settings, \"CLAUDE_CODE_OAUTH_TOKEN\")" in env
+
+    # Codex travels as a FILE, so the fix is to place it, not to pass a token.
+    codex = inspect.getsource(codex_cli_adapter.CodexCliAdapter._child_env)
+    assert "ensure_authorised()" in codex
+
+
+def test_and_one_resolver_serves_both_the_builder_and_the_talker():
+    """Two copies of "environment, then the store, under either key" is how the chat came to
+    have none."""
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    assert "stored_credential(self.settings, name)" in inspect.getsource(
+        cli_harness.GenericCliCodeAgent._resolve_secret)
+
+
+def test_and_the_environment_still_wins_over_the_store(monkeypatch):
+    """What an operator exports while debugging must not be silently overridden — measured by
+    setting it, rather than by reading the order of two lines."""
+    from boss_engine.config import get_settings
+    from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-from-the-environment")
+
+    def _never(*_a, **_k):  # a store read here would mean the environment lost
+        raise AssertionError("the store was consulted while the environment was set")
+
+    monkeypatch.setattr("boss_engine.services.cli_harness.stored_credential", _never)
+
+    env = ClaudeCliAdapter(get_settings())._child_env()
+
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-from-the-environment"

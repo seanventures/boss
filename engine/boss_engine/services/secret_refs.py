@@ -15,12 +15,26 @@ class SecretRefNotFoundError(RuntimeError):
 
 
 class SecretRefService:
+    # EVERY STORE BOSS CAN ACTUALLY WRITE TO, not a subset of them.
+    #
+    # `infisical` and `database` were missing, and both are what `default_secret_backend`
+    # returns on a normal install: the installer provisions Infisical, and an install with no
+    # store at all falls back to Postgres. So pasting a GitHub token into the wizard — which
+    # writes through the chosen backend and then records a `<kind>:<key>` reference — failed
+    # with "credential_ref kind must be one of: env, local_runner, local_vault,
+    # platform_secret_store, vault" on the two configurations customers will have. The write
+    # succeeded and the reference was refused, so Step one could not complete.
+    #
+    # Reading never had this problem: `resolve_secret_ref` asks `backend_for`, which knows all
+    # of these. It was only the validation that had its own private list.
     ALLOWED_REF_KINDS = {
         "env",
         "vault",
         "local_vault",
         "local_runner",
         "platform_secret_store",
+        "infisical",
+        "database",
     }
     ALLOWED_SCOPE_TYPES = {"org", "workspace", "project"}
     ALLOWED_SECRET_KINDS = {
@@ -38,6 +52,8 @@ class SecretRefService:
         "local_vault",
         "local_runner",
         "platform_secret_store",
+        "infisical",
+        "database",
     }
     ALLOWED_STATUSES = {
         "active",
@@ -486,12 +502,17 @@ class SecretRefService:
 
     @staticmethod
     def _storage_backend_for_ref_kind(ref_kind: str) -> str:
+        # A missing entry here is a KeyError rather than a message, so every kind the
+        # allow-list accepts has to appear. `env` is the only one whose stored backend name
+        # differs from its ref kind.
         return {
             "env": "environment",
             "vault": "vault",
             "local_vault": "local_vault",
             "local_runner": "local_runner",
             "platform_secret_store": "platform_secret_store",
+            "infisical": "infisical",
+            "database": "database",
         }[ref_kind]
 
     @staticmethod

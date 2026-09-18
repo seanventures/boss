@@ -349,6 +349,13 @@ describe("and an agent is one click away, carrying the error", () => {
     expect(UI).toContain('url.searchParams.delete("dock_role")');
   });
 
+  it("and starts a NEW conversation rather than reopening the last one", () => {
+    // Measured: a question about connecting a repository opened under a week-old Deployment
+    // Manager thread, banner and all — "Continuing with the Deployment Manager". Clearing the
+    // role is not enough, because the resumed thread carries the role it was had with.
+    expect(UI).toContain('url.searchParams.set("dock_fresh", "1")');
+  });
+
   it("the question carries what failed, because that is the whole value of asking", () => {
     expect(UI).toContain("It failed with: ${problem}");
     expect(UI).toContain("Ask BOSS about this error");

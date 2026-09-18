@@ -263,6 +263,55 @@ def _set_deliberately(settings: Settings, attr: str) -> bool:
     return value != str(default or "").strip()
 
 
+def chat_engine_for(
+    connection: Connection, settings: Settings, project_id: str,
+) -> str:
+    """Which model should answer in the chat, meetings and agent panels.
+
+    "I've configured the claude and codex right? why the agent did not work" — and the answer
+    was:
+
+        IntegrationConfigurationError: OPENAI_API_KEY is not configured
+
+    True, and useless. The subscription the operator had just connected can hold a
+    conversation perfectly well: the adapters for both CLIs already existed. What was missing
+    was anything choosing one. `chat_llm_engine` defaults to empty, which inherits
+    `llm_engine`, which defaults to "auto", which means the OpenAI adapter — so an install
+    with two working subscriptions and no API key had a chat that could not answer.
+
+    Order, most deliberate first:
+
+      1. what this project chose in the console,
+      2. what this deployment set in its environment,
+      3. a connected subscription — Claude first, because it is the one with a headless token
+         designed for it — but only when there is no API key, so an install that has always
+         run on a key keeps running on it,
+      4. nothing, which is the OpenAI adapter and its own error message.
+
+    Returns a name from `project_settings.CHAT_ENGINES`, or "" to leave the choice alone.
+    """
+    from .project_settings import CHAT_ENGINES, effective
+
+    try:
+        chosen = (effective(connection, project_id, settings, "chat_llm_engine") or "").strip()
+    except Exception:  # noqa: BLE001 — an unreachable settings table is not an answer
+        chosen = (getattr(settings, "chat_llm_engine", "") or "").strip()
+    if chosen:
+        return chosen.lower()
+    # An API key IS a configured chat model, and the adapter has always used it. Overriding
+    # that with a CLI would move the conversation of every install that already worked.
+    if str(getattr(settings, "openai_api_key", "") or "").strip():
+        return ""
+    try:
+        connected = connected_engines(connection, settings, project_id)
+    except Exception:  # noqa: BLE001
+        return ""
+    for candidate in CHAT_ENGINES:
+        if candidate in connected:
+            return candidate
+    return ""
+
+
 def with_recorded_connections(
     agents: list[dict[str, Any]], connection: Connection, project_id: str,
 ) -> list[dict[str, Any]]:

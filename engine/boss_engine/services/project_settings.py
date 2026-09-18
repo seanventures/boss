@@ -79,7 +79,26 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "implementer handles those too.",
         "kind": "choice", "choices": "harnesses",
     },
+    # AND THE MODEL THAT TALKS. Separate from the four above because it is a separate
+    # question: an operator who connected a subscription for BUILDS was told "OPENAI_API_KEY
+    # is not configured" by the chat, which is true and unhelpful — the subscription they had
+    # just connected can answer perfectly well, nothing had selected it.
+    "chat_llm_engine": {
+        "attr": "chat_llm_engine",
+        "label": "Console chat, agents and meetings",
+        "help": "Which model answers in the chat, runs the agent panels and speaks in "
+                "meetings. Empty means BOSS uses whichever subscription is connected, and "
+                "the API key from this install's environment when one is set.",
+        "kind": "choice", "choices": "chat_engines",
+    },
 }
+
+#: Engines that can hold a CONVERSATION, as opposed to drive a coding CLI.
+#:
+#: Not the same set as the harnesses, and offering the harness list here would be a green tick
+#: over nothing: `make_agent_chat_adapter` honours exactly these three and sends everything
+#: else to the OpenAI adapter, so "openrouter" in this box would silently mean "OpenAI".
+CHAT_ENGINES = ("claude_code", "codex", "native")
 
 
 def _allowed_choices(spec: dict[str, Any]) -> list[str]:
@@ -88,6 +107,8 @@ def _allowed_choices(spec: dict[str, Any]) -> list[str]:
     A list written here would drift the moment a harness was added, and the failure would be a
     provider the operator has connected and cannot select.
     """
+    if spec.get("choices") == "chat_engines":
+        return list(CHAT_ENGINES)
     if spec.get("choices") != "harnesses":
         return list(spec.get("choices") or [])
     try:
@@ -113,7 +134,7 @@ def offered_choices(connection, settings, project_id: str,
     next time they touch anything else on the form.
     """
     allowed = _allowed_choices(spec)
-    if spec.get("choices") != "harnesses" or not allowed:
+    if spec.get("choices") not in ("harnesses", "chat_engines") or not allowed:
         return allowed
     try:
         from .setup_service import connected_engines

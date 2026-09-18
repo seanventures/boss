@@ -1346,10 +1346,37 @@ class GitHubConnectionService:
 
     @classmethod
     def _normalize_repository(cls, repository: str) -> tuple[str, str, str]:
-        owner, separator, name = repository.strip().partition("/")
+        """owner/name, from whatever form of it somebody actually has to hand.
+
+        A person told "the repository" reaches for the thing in their address bar, because that
+        is where the repository is. Refusing a pasted GitHub URL with "repository must use a
+        valid 'owner/name' format" makes them retype what they had already given us correctly,
+        and the field cannot say which two words of the URL it wanted. Every form below names
+        the same repository unambiguously, so all of them are accepted:
+
+            paramg/boss-sandbox
+            https://github.com/paramg/boss-sandbox
+            https://github.com/paramg/boss-sandbox/tree/main/docs
+            git@github.com:paramg/boss-sandbox.git
+        """
+        text_value = (repository or "").strip()
+        # A URL or an SSH remote: take the first two path segments after the host, which is
+        # where owner and name are in every GitHub address shape.
+        match = re.match(
+            r"^(?:https?://|git\+ssh://|ssh://)?(?:[^@/]+@)?[^/:]*github[^/:]*[/:]"
+            r"(?P<owner>[^/]+)/(?P<name>[^/#?]+)",
+            text_value, flags=re.IGNORECASE)
+        if match:
+            owner, name = match.group("owner"), match.group("name")
+            # `.git` belongs to the clone URL, not to the repository's name.
+            if name.endswith(".git"):
+                name = name[: -len(".git")]
+            text_value = f"{owner}/{name}"
+        owner, separator, name = text_value.partition("/")
+        # Trailing path — /tree/main, /pull/3 — is a place IN the repository, not part of it.
+        name = name.split("/", 1)[0]
         if (
             not separator
-            or "/" in name
             or not cls._REPOSITORY_PART.fullmatch(owner)
             or not cls._REPOSITORY_PART.fullmatch(name)
         ):

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -98,6 +99,29 @@ class CliChatBrain:
 
     def _invoke(self, prompt: str) -> dict:  # pragma: no cover - subclass responsibility
         raise NotImplementedError
+
+    def _child_env(self) -> dict:
+        """The CLI's environment, with the credential this install actually holds.
+
+        Nothing was passed here, so the child inherited the API container's environment — and
+        on an install whose token lives in a secret store that is empty. `claude -p` answered
+        "Not logged in", the falling-back adapter read that as "this backend is not available
+        here" and handed the operator the SECOND backend's error:
+
+            IntegrationConfigurationError: OPENAI_API_KEY is not configured
+
+        about a subscription that was connected, proved with a real turn, and stored. The
+        coding harness had always resolved the stored credential; the chat never did, so the
+        one interface a customer talks to was the one that could not reach the model.
+        """
+        from .cli_harness import stored_credential
+
+        env = dict(os.environ)
+        if not (env.get("CLAUDE_CODE_OAUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")):
+            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN")
+            if token:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        return env
 
     def _usage(self, data: dict) -> dict:  # pragma: no cover - subclass responsibility
         raise NotImplementedError
@@ -348,6 +372,7 @@ class ClaudeCliAdapter(CliChatBrain):
                 text=True,
                 timeout=timeout,
                 cwd=self._scratch_dir(),
+                env=self._child_env(),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
@@ -366,6 +391,29 @@ class ClaudeCliAdapter(CliChatBrain):
         if data.get("is_error"):
             raise RuntimeError(f"claude CLI error: {data.get('result') or data.get('subtype')}")
         return data
+
+    def _child_env(self) -> dict:
+        """The CLI's environment, with the credential this install actually holds.
+
+        Nothing was passed here, so the child inherited the API container's environment — and
+        on an install whose token lives in a secret store that is empty. `claude -p` answered
+        "Not logged in", the falling-back adapter read that as "this backend is not available
+        here" and handed the operator the SECOND backend's error:
+
+            IntegrationConfigurationError: OPENAI_API_KEY is not configured
+
+        about a subscription that was connected, proved with a real turn, and stored. The
+        coding harness had always resolved the stored credential; the chat never did, so the
+        one interface a customer talks to was the one that could not reach the model.
+        """
+        from .cli_harness import stored_credential
+
+        env = dict(os.environ)
+        if not (env.get("CLAUDE_CODE_OAUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")):
+            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN")
+            if token:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        return env
 
     def _usage(self, data: dict) -> dict:
         u = data.get("usage") or {}
@@ -451,11 +499,32 @@ class FallingBackAdapter:
         return out
 
 
+#: What the console calls these engines, mapped onto what this factory calls them.
+#:
+#: The console shows one vocabulary everywhere — `claude_code` is the name in the role pickers,
+#: in detection and on the Connect button — and this factory has always spelled it
+#: `claude_cli`. An operator who chose `claude_code` for the chat would otherwise land in the
+#: `engine != "claude_cli"` branch and get the OpenAI adapter, which is the exact failure this
+#: is meant to remove.
+_CHAT_ENGINE_ALIASES = {
+    "claude_code": "claude_cli",
+    "claude": "claude_cli",
+    "anthropic": "claude_cli",
+    "codex_cli": "codex",
+    "openai": "native",
+}
+
+
+def _chat_engine_name(value: str) -> str:
+    key = (value or "").strip().lower()
+    return _CHAT_ENGINE_ALIASES.get(key, key)
+
+
 def make_chat_adapter(settings: Settings):
     """Pick the completion backend: a subscription CLI, else the OpenAI/Azure adapter."""
     from .openai_adapter import OpenAIAdapter
 
-    engine = (getattr(settings, "llm_engine", "auto") or "auto").lower()
+    engine = _chat_engine_name(getattr(settings, "llm_engine", "auto") or "auto")
     if engine == "claude_cli":
         return ClaudeCliAdapter(settings)
     if engine == "codex":
@@ -475,7 +544,7 @@ def make_agent_chat_adapter(settings: Settings):
     """
     from .openai_adapter import OpenAIAdapter
 
-    engine = (getattr(settings, "chat_llm_engine", "") or "").strip().lower()
+    engine = _chat_engine_name(getattr(settings, "chat_llm_engine", "") or "")
     if not engine:
         return make_chat_adapter(settings)          # inherit — local dev, CI
     model = (getattr(settings, "chat_model", "") or "").strip() or None

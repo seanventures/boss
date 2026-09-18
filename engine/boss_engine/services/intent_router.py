@@ -1371,6 +1371,31 @@ class IntentRouter:
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
         self._answer_agent_obj = None  # lazy: read-only tool-grounded answerer
+        self._chat_engine_applied = None  # which model that answerer was built for
+
+    def _use_project_chat_model(self, connection, project_id: str) -> None:
+        """Point the answer agent at the model THIS PROJECT connected.
+
+        Called once per turn, before the agent is built. The chat asked for OPENAI_API_KEY on
+        an install whose operator had connected two subscriptions, because nothing had ever
+        chosen between them — see `setup_service.chat_engine_for`, which is where that choice
+        now lives.
+
+        The agent is cached, so the resolved engine is cached with it: a change in the console
+        rebuilds it on the next turn rather than at the next restart.
+        """
+        try:
+            from .setup_service import chat_engine_for
+
+            engine = chat_engine_for(connection, self.settings, project_id)
+        except Exception:  # noqa: BLE001 — a settings lookup must not end a conversation
+            return
+        if engine and engine != (getattr(self.settings, "chat_llm_engine", "") or ""):
+            self.settings = self.settings.model_copy(update={"chat_llm_engine": engine})
+            self._answer_agent_obj = None
+        elif engine != self._chat_engine_applied:
+            self._answer_agent_obj = None
+        self._chat_engine_applied = engine
 
     def _answer_agent(self):
         """A read-only, tool-grounded agent used by the DISCUSS/answer path so the
@@ -1423,6 +1448,10 @@ class IntentRouter:
         #: The conversation this turn belongs to, so progress can be reported while it runs.
         thread_id: Optional[str] = None,
     ) -> RouterTurn:
+        # BEFORE ANYTHING ELSE IN THE TURN: whichever model this project connected is the one
+        # that should answer, and the router is the first place that knows both the project and
+        # the database.
+        self._use_project_chat_model(connection, project_id)
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
             return self._confirm_plan(

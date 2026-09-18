@@ -353,6 +353,43 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
     return specs
 
 
+def stored_credential(settings, name: str) -> Optional[str]:
+    """A CLI credential: the environment first, then this install's secret store.
+
+    Module-level and shared, because two different things shell out to these CLIs. The coding
+    harness resolved the stored credential; the CHAT adapter did not, and ran `claude` with
+    whatever the API container happened to have in its environment — which on an install that
+    keeps its token in Infisical is nothing. So the console chat answered
+
+        IntegrationConfigurationError: OPENAI_API_KEY is not configured
+
+    about a Claude subscription that was connected, proved and stored: `claude -p` said "Not
+    logged in", the falling-back adapter correctly read that as "this backend is unavailable
+    here", and the operator was handed the second backend's problem instead of the first's.
+
+    Both keys are tried for the same reason as everywhere else: an operator who sets a
+    credential themselves uses the plain name, and BOSS's own API namespaces what it writes.
+    """
+    direct = os.environ.get(name)
+    if direct and direct.strip():
+        return direct.strip()
+    try:
+        from .secret_backends import backend_for, default_secret_backend
+        from .secrets_service import ref_key_for
+
+        store = backend_for(default_secret_backend(settings), settings)
+        for key in (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name)):
+            try:
+                value = store.get(key)
+            except Exception:  # noqa: BLE001 — absent under this key, try the next
+                continue
+            if (value or "").strip():
+                return value.strip()
+    except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
+        _log.info("no stored %s (%s)", name, type(exc).__name__)
+    return None
+
+
 def _uses_env_route(spec: CliHarnessSpec) -> bool:
     """Is this CLI's credential simply an environment variable it reads on every run?
 
@@ -861,25 +898,7 @@ class GenericCliCodeAgent:
         The namespaced key is derived, not looked up, so this needs no database connection —
         which matters because it runs inside a sandboxed agent process that must not have one.
         """
-        direct = os.environ.get(name)
-        if direct:
-            return direct.strip() or None
-        try:
-            from .secret_backends import backend_for, default_secret_backend
-            from .secrets_service import ref_key_for
-
-            store = backend_for(default_secret_backend(self.settings), self.settings)
-            for key in (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name)):
-                try:
-                    value = store.get(key)
-                except Exception:  # noqa: BLE001 — absent under this key, try the next
-                    continue
-                if (value or "").strip():
-                    return value.strip()
-            return None
-        except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
-            _log.info("no stored %s for %s (%s)", name, self.spec.name, type(exc).__name__)
-            return None
+        return stored_credential(self.settings, name)
 
     def _resolve_token(self) -> Optional[str]:
         """The travelling token: the environment first, then the deployment's secret store.

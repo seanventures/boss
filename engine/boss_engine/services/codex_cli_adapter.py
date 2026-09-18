@@ -45,6 +45,28 @@ class CodexCliAdapter(CliChatBrain):
     def _codex_bin(self) -> str:
         return (getattr(self.settings, "codex_cli_path", "") or "codex").strip() or "codex"
 
+    def _child_env(self) -> dict:
+        """The CLI's environment, with the credential this install holds restored if needed.
+
+        Same gap as the Claude path, with codex's own route: what travels is the CLI's whole
+        auth file, so the fix is to make sure it is on disk before asking a question rather
+        than to pass a token. `ensure_authorised` is the harness's own idempotent placement of
+        it and is cheap once the file is there.
+        """
+        import os
+
+        env = dict(os.environ)
+        try:
+            from .cli_harness import GenericCliCodeAgent, load_specs
+
+            spec = load_specs(self.settings).get("codex")
+            if spec is not None:
+                GenericCliCodeAgent(self.settings, spec).ensure_authorised()
+        except Exception as exc:  # noqa: BLE001 — the CLI may already be signed in
+            _log.info("could not restore the codex credential for chat (%s)",
+                      type(exc).__name__)
+        return env
+
     def _scratch_dir(self) -> str:
         directory = (self.settings.repo_root / ".local-logs" / "codex-scratch").resolve()
         directory.mkdir(parents=True, exist_ok=True)
@@ -79,7 +101,7 @@ class CodexCliAdapter(CliChatBrain):
         try:
             proc = subprocess.run(
                 low_priority(cmd), input=prompt, capture_output=True, text=True,
-                timeout=timeout, cwd=self._scratch_dir(),
+                timeout=timeout, cwd=self._scratch_dir(), env=self._child_env(),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(

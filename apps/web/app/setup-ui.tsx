@@ -278,6 +278,13 @@ function askInDock(question: string): void {
     // ADDRESS IT, DO NOT INHERIT IT: dock_role survives in the URL until something clears it,
     // so a door that sets only the question opens whichever role was last addressed.
     url.searchParams.delete("dock_role");
+    // AND START A NEW CONVERSATION. Clearing the role is not enough — the dock reopens the
+    // last thread, which carries the role it was had with. A setup question opened under a
+    // week-old Deployment Manager conversation, banner and all: "Continuing with the
+    // Deployment Manager". A question about connecting a repository has nothing to do with
+    // releases and rollbacks, and answering it with that history in context is worse than
+    // answering it cold.
+    url.searchParams.set("dock_fresh", "1");
     window.history.replaceState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
