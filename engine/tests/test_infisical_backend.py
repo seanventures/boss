@@ -227,12 +227,28 @@ def test_health_says_no_rather_than_raising(monkeypatch) -> None:
 # --- selection, and not breaking installations that have no Infisical ---------
 
 
-def test_an_unconfigured_infisical_names_every_setting_it_needs() -> None:
+#: Every Infisical field, blanked. Settings reads the repo's `.env`, and once somebody runs the
+#: local installer that file HOLDS a working Infisical — so a test that proves "unconfigured
+#: behaves like this" by hoping the developer has not configured one passes on a clean checkout
+#: and fails on a working machine. State the condition instead of assuming it.
+_NO_INFISICAL = {
+    "infisical_url": "", "infisical_client_id": "", "infisical_client_secret": "",
+    "infisical_client_secret_file": "", "infisical_token": "", "infisical_token_file": "",
+    "infisical_project_id": "",
+}
+
+
+def _settings_without_infisical(**overrides):
     from boss_engine.config import Settings
+
+    return Settings().model_copy(update={**_NO_INFISICAL, **overrides})
+
+
+def test_an_unconfigured_infisical_names_every_setting_it_needs() -> None:
     from boss_engine.services.secret_backends import backend_for
 
     with pytest.raises(SecretUnavailable) as exc:
-        backend_for("infisical", Settings())
+        backend_for("infisical", _settings_without_infisical())
 
     message = str(exc.value)
     for setting in ("BOSS_INFISICAL_URL", "BOSS_INFISICAL_CLIENT_ID",
@@ -247,13 +263,11 @@ def test_it_is_tried_first_but_skipped_when_absent(monkeypatch) -> None:
     entry that raises "not configured" has to fall through silently — otherwise every
     installation without Infisical would break on upgrade.
     """
-    from boss_engine.config import Settings
     from boss_engine.services.secret_backends import _BACKEND_PREFERENCE, default_secret_backend
 
     assert _BACKEND_PREFERENCE[0] == "infisical"
-    monkeypatch.delenv("BOSS_INFISICAL_URL", raising=False)
 
-    assert default_secret_backend(Settings()) != "infisical"
+    assert default_secret_backend(_settings_without_infisical()) != "infisical"
 
 
 def test_the_client_secret_can_stay_out_of_the_environment(tmp_path, monkeypatch) -> None:
@@ -302,20 +316,16 @@ def test_a_token_is_enough_to_be_considered_configured(monkeypatch) -> None:
     assert backend_for("infisical", Settings()).kind == "infisical"
 
 
-def test_half_a_machine_identity_is_not_configured(monkeypatch) -> None:
+def test_half_a_machine_identity_is_not_configured() -> None:
     """A client id with no secret would fail at the first call, far from the cause."""
-    from boss_engine.config import Settings
     from boss_engine.services.secret_backends import backend_for
 
-    monkeypatch.setenv("BOSS_INFISICAL_URL", "https://infisical.example")
-    monkeypatch.setenv("BOSS_INFISICAL_PROJECT_ID", "proj")
-    monkeypatch.setenv("BOSS_INFISICAL_CLIENT_ID", "cid")
-    for absent in ("BOSS_INFISICAL_TOKEN", "BOSS_INFISICAL_CLIENT_SECRET",
-                   "BOSS_INFISICAL_CLIENT_SECRET_FILE"):
-        monkeypatch.delenv(absent, raising=False)
+    half = _settings_without_infisical(
+        infisical_url="https://infisical.example", infisical_project_id="proj",
+        infisical_client_id="cid")
 
     with pytest.raises(SecretUnavailable):
-        backend_for("infisical", Settings())
+        backend_for("infisical", half)
 
 
 def test_it_calls_the_api_version_the_software_actually_serves() -> None:

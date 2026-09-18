@@ -332,6 +332,10 @@ def detect(spec: CliHarnessSpec) -> dict:
     result["credential_kind"] = ("file" if spec.auth_file_secret else
                                  ("token" if spec.token_env else ""))
     result["token_hint"] = spec.token_hint
+    #: So a caller can line detection up against what was RECORDED. Without it, "is this
+    #: connected" and "is the CLI signed in right now" cannot be shown as the separate
+    #: questions they are — and a completed setup reads as an untouched one after a refresh.
+    result["entitlement_source_id"] = spec.entitlement_source_id
     result["token_present"] = bool(credential and os.environ.get(credential))
     # CAN THIS SUBSCRIPTION BE USED FROM A SERVER AT ALL? Detection answers "is the CLI here";
     # this answers "could it be, on a machine the operator does not sit at". A CLI with no
@@ -373,6 +377,60 @@ def detect(spec: CliHarnessSpec) -> dict:
             if credential and not result["token_present"] and not _is_interactive_host()
             else f"sign in with: {spec.signin_hint}")
     return result
+
+
+#: What a CLI says when its credential was valid and has since been revoked elsewhere. Captured
+#: from codex-cli, which reports all three for the same underlying cause — a refresh performed
+#: on another machine, which single-uses the token this one holds.
+_REVOKED_CREDENTIAL = (
+    r"(?i)refresh token was revoked|invalidated oauth token"
+    r"|could not be refreshed.*(log ?out|sign in again)")
+
+
+#: Fields these CLIs use to record when a credential was last issued. Checked in order.
+_CREDENTIAL_TIMESTAMPS = ("last_refresh", "last_refreshed", "issued_at", "updated_at")
+
+
+def _credential_issued_at(content: Optional[str]) -> Optional[str]:
+    """When this credential was minted, as the file itself records it."""
+    if not content:
+        return None
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    for field in _CREDENTIAL_TIMESTAMPS:
+        value = parsed.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _newer_credential(on_disk: Optional[str], candidate: Optional[str]) -> Optional[str]:
+    """Which of these is more recent — "disk", "candidate", or None when it cannot be told.
+
+    ISO-8601 timestamps compare correctly as strings when both carry the same shape, which
+    these do; anything else returns None so the caller falls back to its normal behaviour
+    rather than acting on a guess.
+    """
+    disk_at, candidate_at = _credential_issued_at(on_disk), _credential_issued_at(candidate)
+    if not disk_at or not candidate_at or disk_at == candidate_at:
+        return None
+    return "disk" if disk_at > candidate_at else "candidate"
+
+
+def _looks_like_revoked_credential(*streams: Optional[str]) -> bool:
+    """Did this fail because the credential died, rather than because the work was bad?
+
+    Worth distinguishing: a revoked credential is the one failure BOSS can fix by itself, and
+    every other failure is one where retrying would waste a turn of the operator's subscription.
+    """
+    import re as _re
+
+    blob = "\n".join(s or "" for s in streams)
+    return bool(_re.search(_REVOKED_CREDENTIAL, blob))
 
 
 def _auth_detail(spec: CliHarnessSpec, out: str) -> str:
@@ -479,10 +537,16 @@ class GenericCliCodeAgent:
         found = detect(self.spec)
         if not found["installed"]:
             return {"authorised": False, "reason": "not installed"}
+        if has_file_route:
+            # DELIBERATELY BEFORE the "already signed in" shortcut. A credential file left in
+            # place by an earlier run makes the CLI report signed in, so short-circuiting on
+            # that meant a NEWER credential in the store was never written — and the operator
+            # who re-sent one, exactly as told, saw nothing change. Measured: the CLI said
+            # "Logged in using ChatGPT" while every turn failed 401 on a token the laptop had
+            # since rotated. The store is the source of truth; the file is a cache of it.
+            return self._authorise_from_file(cli_reports_signed_in=bool(found["authenticated"]))
         if found["authenticated"]:
             return {"authorised": True, "reason": "already signed in"}
-        if has_file_route:
-            return self._authorise_from_file()
         token = self._resolve_token()
         if not token:
             return {"authorised": False,
@@ -531,12 +595,49 @@ class GenericCliCodeAgent:
             raise
         return final
 
-    def _authorise_from_file(self) -> dict:
-        """Sign the CLI in by restoring its own credential file from the secret store."""
+    def _current_auth_file(self) -> Optional[str]:
+        """What the CLI is using right now, if anything."""
+        path = os.path.join(self.cli_home(), self.spec.auth_file_name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            return None
+
+    def _authorise_from_file(self, cli_reports_signed_in: bool = False) -> dict:
+        """Sign the CLI in by restoring its own credential file from the secret store.
+
+        The stored credential WINS over whatever is on disk, because the file is only ever a
+        copy of it and a copy goes stale: the machine that minted it rotates its token, which
+        invalidates every other copy, and the CLI goes on reporting "logged in" from a file
+        whose token now 401s. Trusting the file meant re-sending a fresh credential changed
+        nothing at all.
+
+        With nothing stored, the file is all there is — that is an install where the operator
+        signed the CLI in themselves, and overwriting it would be taking away the only
+        credential they have.
+        """
         content = self._resolve_secret(self.spec.auth_file_secret)
         if not content:
+            if cli_reports_signed_in:
+                return {"authorised": True, "reason": "signed in with the CLI's own session"}
             return {"authorised": False,
                     "reason": f"no {self.spec.auth_file_secret} available to this install"}
+        on_disk = self._current_auth_file()
+        if cli_reports_signed_in and (on_disk or "").strip() == content.strip():
+            # Already running the stored credential; rewriting it would prove nothing.
+            return {"authorised": True, "reason": "already signed in from the stored credential"}
+        # NEVER GO BACKWARDS. These credentials carry the moment they were issued, and an older
+        # one is not merely redundant — it is revoked, because every refresh invalidates what
+        # came before. A three-day-old value left in an environment variable by an earlier
+        # experiment was restored over a session created minutes before, on every attempt, and
+        # the CLI then failed 401 on a credential BOSS had just put there itself.
+        newer = _newer_credential(on_disk, content)
+        if newer == "disk" and cli_reports_signed_in:
+            _log.info("%s already holds a newer credential than the stored one; keeping it",
+                      self.spec.name)
+            return {"authorised": True,
+                    "reason": "the CLI holds a newer credential than the stored one"}
         if self.spec.auth_file_name.endswith(".json"):
             try:
                 json.loads(content)
@@ -559,6 +660,45 @@ class GenericCliCodeAgent:
         return {"authorised": False,
                 "reason": f"the stored credential file did not sign {self.spec.name} in "
                           f"({after.get('auth_detail') or 'no detail'})"}
+
+    def remember_rotated_credential(self) -> bool:
+        """Push a credential the CLI has rotated back into the store.
+
+        These CLIs refresh on use, and the refresh REVOKES what came before. So the copy in the
+        store is correct for exactly as long as nobody uses it: the first run rotates the pair,
+        the file on disk moves on, and the store is left holding a token that is now revoked.
+        Nothing notices until the container is rebuilt and BOSS restores that dead credential —
+        an install that worked for weeks failing on a routine `up --build`.
+
+        Only when the credential came FROM the store. An operator who sets the environment
+        variable themselves owns that value, and writing over it would take a decision that is
+        theirs to make.
+        """
+        if not (self.spec.auth_file_secret and self.spec.auth_file_name):
+            return False
+        if os.environ.get(self.spec.auth_file_secret):
+            return False
+        current = self._current_auth_file()
+        if not current or not current.strip():
+            return False
+        try:
+            from .secret_backends import backend_for, default_secret_backend
+            from .secrets_service import ref_key_for
+
+            store = backend_for(default_secret_backend(self.settings), self.settings)
+            key = ref_key_for(SUBSCRIPTION_SECRET_SCOPE, self.spec.auth_file_secret)
+            try:
+                if (store.get(key) or "").strip() == current.strip():
+                    return False        # unchanged; writing would churn the store for nothing
+            except Exception:  # noqa: BLE001 — absent is a reason to write, not to stop
+                pass
+            store.put(key, current.strip())
+        except Exception as exc:  # noqa: BLE001 — a run must not fail because a cache is stale
+            _log.info("could not write back the rotated %s credential (%s)",
+                      self.spec.name, type(exc).__name__)
+            return False
+        _log.info("%s credential rotated; the stored copy was updated", self.spec.name)
+        return True
 
     def _resolve_secret(self, name: str) -> Optional[str]:
         """A stored value: the environment, then the secret store, under either key.
@@ -667,6 +807,31 @@ class GenericCliCodeAgent:
                 f"{self.spec.name} did not finish within {timeout}s") from None
         ms = int((time.monotonic() - started) * 1000)
         ok = proc.returncode == 0
+        if ok:
+            # The CLI may have rotated its credential during that run; keep the store current
+            # so a rebuild does not restore a token this run has already invalidated.
+            self.remember_rotated_credential()
+        elif _looks_like_revoked_credential(proc.stdout, proc.stderr):
+            # "Signed in" is not the same as "usable", and only a real turn can tell the
+            # difference: the CLI reports a healthy session right up until the moment a rotation
+            # elsewhere revokes it. Restoring the stored credential and trying once more is the
+            # difference between self-healing and a support ticket.
+            restored = self._authorise_from_file(cli_reports_signed_in=False)
+            if restored.get("authorised"):
+                _log.info("%s credential was revoked; restored and retrying once",
+                          self.spec.name)
+                try:
+                    proc = subprocess.run(
+                        low_priority(argv), cwd=str(cwd),
+                        input=(prompt if self.spec.prompt_via == "stdin" else None),
+                        capture_output=True, text=True, timeout=timeout,
+                        start_new_session=True, env=self._env(),
+                    )
+                    ok = proc.returncode == 0
+                    if ok:
+                        self.remember_rotated_credential()
+                except subprocess.TimeoutExpired:
+                    pass
         summary = ""
         if final_path:
             try:

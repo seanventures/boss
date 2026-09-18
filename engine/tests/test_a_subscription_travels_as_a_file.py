@@ -193,6 +193,82 @@ def test_a_run_authorises_a_file_route_harness_too(monkeypatch, tmp_path) -> Non
         "run_role still gates authorisation on token_env alone, so the file route never runs")
 
 
+# --- a stale credential file must not outrank the store ----------------------
+
+
+def test_a_newer_stored_credential_replaces_a_stale_file(agent, monkeypatch) -> None:
+    """THE bug a customer hit. "Signed in" is not "signed in with the right credential".
+
+    A file written by an earlier run makes the CLI report signed in, so authorisation used to
+    stop there and never write the newer credential. Measured on a real install: the CLI said
+    "Logged in using ChatGPT" while every turn failed 401, because the laptop that minted the
+    token had since rotated it — and re-sending a fresh one, exactly as the docs instruct,
+    changed nothing at all.
+    """
+    agent._write_auth_file(json.dumps({"tokens": {"access_token": "stale"}}))
+    fresh = json.dumps({"tokens": {"access_token": "fresh"}})
+    monkeypatch.setenv("CODEX_AUTH_JSON", fresh)
+    monkeypatch.setattr(
+        "boss_engine.services.cli_harness.detect",
+        lambda spec: {"installed": True, "authenticated": True,
+                      "auth_detail": "Logged in using ChatGPT"},
+    )
+
+    result = agent._authorise_from_file(cli_reports_signed_in=True)
+
+    assert result["authorised"] is True
+    assert json.loads(agent._current_auth_file()) == json.loads(fresh), (
+        "the stale file survived, so re-sending a credential does nothing")
+
+
+def test_an_unchanged_credential_is_not_rewritten(agent, monkeypatch) -> None:
+    """Rewriting the same bytes proves nothing and touches a live credential for no reason."""
+    same = json.dumps(CREDENTIAL)
+    agent._write_auth_file(same)
+    monkeypatch.setenv("CODEX_AUTH_JSON", same)
+
+    result = agent._authorise_from_file(cli_reports_signed_in=True)
+
+    assert result["reason"] == "already signed in from the stored credential"
+
+
+def test_a_hand_signed_in_cli_is_never_clobbered(agent, monkeypatch) -> None:
+    """Path B: BOSS runs where the operator signed in, and nothing is stored.
+
+    Overwriting here would take away the only credential they have — and there is nothing to
+    overwrite it WITH, which is worse.
+    """
+    agent._write_auth_file(json.dumps({"tokens": {"access_token": "theirs"}}))
+    monkeypatch.delenv("CODEX_AUTH_JSON", raising=False)
+    monkeypatch.setattr(type(agent), "_resolve_secret", lambda self, name: None)
+
+    result = agent._authorise_from_file(cli_reports_signed_in=True)
+
+    assert result["authorised"] is True
+    assert json.loads(agent._current_auth_file())["tokens"]["access_token"] == "theirs"
+
+
+def test_authorisation_consults_the_store_before_trusting_the_cli() -> None:
+    """Structural: the file route must run BEFORE the "already signed in" shortcut.
+
+    Checked by order rather than by mocking, because the defect was precisely that one branch
+    returned before the other could run.
+    """
+    import inspect
+
+    from boss_engine.services import cli_harness
+
+    source = inspect.getsource(cli_harness.GenericCliCodeAgent.ensure_authorised)
+    file_route_at = source.find("return self._authorise_from_file(")
+    # The RETURN, not any mention: the prose explaining this ordering also contains the phrase,
+    # and matching that made the test pass or fail on where a comment sat.
+    shortcut_at = source.find('return {"authorised": True, "reason": "already signed in"}')
+
+    assert file_route_at != -1 and shortcut_at != -1
+    assert file_route_at < shortcut_at, (
+        "the signed-in shortcut runs first, so a stale file blocks the stored credential")
+
+
 # --- BOSS stores it, so the customer needs no store of their own -------------
 
 

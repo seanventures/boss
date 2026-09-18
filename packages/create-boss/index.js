@@ -2,9 +2,9 @@
 /**
  * Stand up BOSS locally in one command.
  *
- * This is LOCAL_SETUP.md executed rather than read. Every step it runs is a step that document
- * describes, in the same order, so a reader who wants to understand what happened — or to do it
- * by hand on a machine this cannot reach — has one place to look.
+ * This is Part 1 of SETUP.md executed rather than read. Every step it runs is a step that
+ * document describes, in the same order, so a reader who wants to understand what happened — or
+ * to do it by hand on a machine this cannot reach — has one place to look.
  *
  * Two things it does that the document cannot:
  *
@@ -113,6 +113,25 @@ function portIsFree(port) {
  * handed to the database is still unused when the secret store asks — and both were assigned
  * 55700, which Docker rejected as "already allocated" after a full build.
  */
+/**
+ * Ports this stack is already publishing.
+ *
+ * "In use" by our OWN containers is not a conflict — it is the normal state of a second run.
+ * Without this, re-running moved every port: each configured one probed as occupied, was
+ * declared unusable and replaced, so the console and API landed somewhere new every time and
+ * any address the operator had saved stopped working.
+ */
+function ourPublishedPorts() {
+  const ps = spawnSync(
+    "docker",
+    ["ps", "--filter", "label=com.docker.compose.project=boss-community", "--format", "{{.Ports}}"],
+    { encoding: "utf8" }
+  );
+  const ports = new Set();
+  for (const match of (ps.stdout || "").matchAll(/:(\d+)->/g)) ports.add(Number(match[1]));
+  return ports;
+}
+
 function freePort(preferred, taken) {
   return (async () => {
     if (!taken.has(preferred) && (await portIsFree(preferred))) return preferred;
@@ -136,13 +155,95 @@ function readEnv(file) {
 
 function appendEnv(file, pairs) {
   const existing = readEnv(file);
-  const lines = Object.entries(pairs)
-    // NEVER overwrite. Re-running must not rotate a key: every secret already in the store was
-    // encrypted with the old one and would become unreadable.
-    .filter(([key]) => existing[key] === undefined)
-    .map(([key, value]) => `${key}=${value}`);
-  if (lines.length) fs.appendFileSync(file, `${lines.join("\n")}\n`, { mode: 0o600 });
+  const missing = Object.entries(pairs)
+    // NEVER overwrite a real value. Re-running must not rotate a key: every secret already in
+    // the store was encrypted with the old one and would become unreadable.
+    //
+    // But BLANK IS MISSING, not set. This tested `=== undefined`, so a placeholder line like
+    // `BOSS_API_KEY=` — which repositories carry as a template — counted as configured. The
+    // installer generated nothing, every service came up with an empty key, and the failure
+    // surfaced much later as "no BOSS_API_KEY to authenticate to BOSS with" from an unrelated
+    // script.
+    .filter(([key]) => !(existing[key] || "").trim());
+  const lines = missing.map(([key, value]) => `${key}=${value}`);
+  if (!lines.length) return 0;
+  // setEnv rather than append, so a blank line is REPLACED instead of duplicated.
+  setEnv(file, Object.fromEntries(missing));
   return lines.length;
+}
+
+/**
+ * Set keys, replacing any line that already sets them.
+ *
+ * Unlike `appendEnv`, this overwrites — which is right for a port and wrong for a key. A port
+ * that cannot be bound is worthless, so keeping it helps nobody; an encryption key that is
+ * replaced strands every secret encrypted under the old one.
+ */
+function setEnv(file, pairs) {
+  const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n") : [];
+  const remaining = new Map(Object.entries(pairs));
+  const out = [];
+  for (const line of lines) {
+    const at = line.indexOf("=");
+    const key = at > 0 ? line.slice(0, at) : "";
+    if (key && remaining.has(key)) {
+      out.push(`${key}=${remaining.get(key)}`);
+      remaining.delete(key);
+      continue;
+    }
+    out.push(line);
+  }
+  while (out.length && out[out.length - 1] === "") out.pop();
+  for (const [key, value] of remaining) out.push(`${key}=${value}`);
+  fs.writeFileSync(file, `${out.join("\n")}\n`, { mode: 0o600 });
+}
+
+/** Remove these keys entirely, so a later step treats them as absent rather than empty. */
+function dropEnv(file, keys) {
+  if (!fs.existsSync(file)) return;
+  const drop = new Set(keys);
+  const kept = fs
+    .readFileSync(file, "utf8")
+    .split("\n")
+    .filter((line) => {
+      const at = line.indexOf("=");
+      return !(at > 0 && drop.has(line.slice(0, at)));
+    });
+  while (kept.length && kept[kept.length - 1] === "") kept.pop();
+  fs.writeFileSync(file, `${kept.join("\n")}\n`, { mode: 0o600 });
+}
+
+/**
+ * Wait for the secret store, checking WHY it is not answering as we go.
+ *
+ * The first version polled in silence for three minutes and only then looked at the logs. A
+ * container that is crash-looping cannot become healthy, so every second of that wait was
+ * spent on a foregone conclusion — and from the outside it is indistinguishable from a hang,
+ * which is precisely how it was reported. Diagnosing early turns it into about fifteen
+ * seconds, and saying so while waiting turns the rest into visible progress.
+ *
+ * Returns "ready", "key-mismatch", or "timeout".
+ */
+async function waitForSecretStore(root, envFile, port, seconds = 180) {
+  const url = `http://127.0.0.1:${port}/api/status`;
+  const deadline = Date.now() + seconds * 1000;
+  let elapsed = 0;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (response.ok) return "ready";
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+    elapsed += 2;
+    // Give it a moment to fail on its own terms before reading anything into the logs.
+    if (elapsed % 10 === 0) {
+      if (diagnoseSecretStore(root, envFile) === "key-mismatch") return "key-mismatch";
+      note(`still waiting for the secret store (${elapsed}s)`);
+    }
+  }
+  return "timeout";
 }
 
 async function waitFor(url, seconds, what) {
@@ -177,9 +278,68 @@ function composeStream(root, envFile, args) {
   });
 }
 
+/**
+ * Can we actually use the secret store these settings describe?
+ *
+ * Asked of the store, not of the settings file. A token in `.env` proves somebody provisioned
+ * something once; it does not prove this instance still honours it. Reinstalling over a volume
+ * from an earlier install leaves a store bootstrapped under a DIFFERENT encryption key, where
+ * the account exists and the credential is refused.
+ */
+async function infisicalUsable(port, token, projectId) {
+  if (!token || !projectId) return false;
+  const query = `workspaceId=${encodeURIComponent(projectId)}&environment=prod&secretPath=%2F`;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/v3/secrets/raw?${query}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Drop and recreate Infisical's database, so it re-initialises under the current key. */
+async function resetSecretStore(root, envFile, port) {
+  note("resetting the secret store (everything it holds is discarded)");
+  const sql = compose(root, envFile, [
+    "exec", "-T", "db", "psql", "-U", "boss", "-d", "postgres",
+    "-c", "DROP DATABASE IF EXISTS infisical WITH (FORCE);",
+    "-c", "CREATE DATABASE infisical OWNER boss;",
+  ], { capture: true });
+  if (sql.status !== 0) {
+    die("Could not reset the secret store.", (sql.stderr || "").trim().slice(-300));
+  }
+  await composeStream(root, envFile, [...PROFILES, "restart", "infisical"]);
+  await waitFor(`http://127.0.0.1:${port}/api/status`, 180, "The secret store");
+  // The stale values name a store that no longer exists. Dropping the LINES rather than
+  // blanking them matters: bootstrap_infisical.sh skips a key the file already mentions, so a
+  // blank BOSS_INFISICAL_TOKEN= would survive provisioning and leave the install unusable.
+  dropEnv(envFile, ["BOSS_INFISICAL_URL", "BOSS_INFISICAL_TOKEN", "BOSS_INFISICAL_PROJECT_ID",
+                    "INFISICAL_ADMIN_EMAIL", "INFISICAL_ADMIN_PASSWORD"]);
+}
+
+/**
+ * Why will the secret store not start?
+ *
+ * One cause is common enough to name: installing over a volume from an earlier install leaves
+ * Infisical's data encrypted under that install's INFISICAL_ENCRYPTION_KEY, and it dies trying
+ * to decrypt its own root key. The container restart-loops and every health probe times out,
+ * so without this the installer waits three minutes and reports nothing useful.
+ */
+function diagnoseSecretStore(root, envFile) {
+  const logs = compose(root, envFile, ["logs", "--tail", "40", "infisical"], { capture: true });
+  const text = `${logs.stdout || ""}${logs.stderr || ""}`;
+  if (/decryptRootKey|unable to authenticate data/i.test(text)) return "key-mismatch";
+  return "unknown";
+}
+
 async function main() {
+  const args = process.argv.slice(2);
+  const resetRequested = args.includes("--reset-secret-store");
   const root = repoRoot();
-  const envFile = path.resolve(root, process.argv[2] || ".env");
+  const envFile = path.resolve(root, args.find((a) => !a.startsWith("--")) || ".env");
 
   console.log("Setting up BOSS locally.");
   note(`repository ${root}`);
@@ -199,19 +359,33 @@ async function main() {
 
   const chosen = {};
   const claimed = new Set();
+  const ours = ourPublishedPorts();
   for (const [name, preferred, what] of PORTS) {
-    const current = readEnv(envFile)[name];
-    const port = current ? Number(current) : await freePort(preferred, claimed);
+    const current = Number(readEnv(envFile)[name]) || 0;
+    if (current && ours.has(current) && !claimed.has(current)) {
+      claimed.add(current);
+      chosen[name] = current;
+      continue;   // already ours; moving it would break every saved address
+    }
+    // A CONFIGURED PORT IS A PREFERENCE, NOT A PROMISE. Trusting one because it was already in
+    // the file meant a stale BOSS_POSTGRES_PORT=5432 from somebody's dev setup was used
+    // unchecked, and setup died on "port is already allocated" after a full rebuild. Nothing is
+    // served by keeping a port that cannot be bound, so it is re-picked and written back.
+    const usable = current && !claimed.has(current) && (await portIsFree(current));
+    const port = usable ? current : await freePort(current || preferred, claimed);
     claimed.add(port);
     chosen[name] = port;
-    if (!current && port !== preferred) note(`${preferred} is taken; using ${port} for the ${what}`);
+    if (current && port !== current) {
+      note(`${name}=${current} is in use; switching to ${port}`);
+    } else if (!current && port !== preferred) {
+      note(`${preferred} is taken; using ${port} for the ${what}`);
+    }
   }
   if (new Set(Object.values(chosen)).size !== Object.keys(chosen).length) {
     die(`Two services were given the same port: ${JSON.stringify(chosen)}`,
         `Remove the *_PORT lines from ${envFile} and run again.`);
   }
-  appendEnv(envFile, chosen);
-  appendEnv(envFile, { INFISICAL_SITE_URL: `http://127.0.0.1:${chosen.INFISICAL_PORT}` });
+  setEnv(envFile, { ...chosen, INFISICAL_SITE_URL: `http://127.0.0.1:${chosen.INFISICAL_PORT}` });
   ok("ports chosen");
 
   step(2, "Building and starting containers (first run takes a few minutes)");
@@ -228,17 +402,55 @@ async function main() {
   ok("schema applied and defaults seeded");
 
   step(4, "Provisioning the secret store");
-  const already = readEnv(envFile).BOSS_INFISICAL_TOKEN;
-  if (already) {
+  const port = chosen.INFISICAL_PORT;
+
+  // DIAGNOSE WHILE WAITING, not after. A store that will never come up looks exactly like one
+  // that is still booting, and waiting out the full timeout first turns a known failure into
+  // three silent minutes that read as a hang.
+  const state = await waitForSecretStore(root, envFile, port);
+  if (state !== "ready") {
+    if (state === "timeout") {
+      die("The secret store did not come up.", `Look at: docker compose -f ${COMPOSE} logs infisical`);
+    }
+    note("the secret store cannot read its own data");
+    note("it was set up under a different INFISICAL_ENCRYPTION_KEY — usually a volume left by");
+    note("an earlier install. Nothing in it is readable without that original key.");
+    if (!resetRequested) {
+      die(
+        "Refusing to discard a secret store without being told to.",
+        "Re-run with --reset-secret-store to wipe and rebuild it, or restore the original " +
+          `INFISICAL_ENCRYPTION_KEY into ${envFile}.`
+      );
+    }
+    await resetSecretStore(root, envFile, port);
+  }
+
+  const settingsNow = readEnv(envFile);
+  const usable = await infisicalUsable(port, settingsNow.BOSS_INFISICAL_TOKEN,
+                                       settingsNow.BOSS_INFISICAL_PROJECT_ID);
+  if (usable) {
     ok("already provisioned, left alone");
   } else {
-    await waitFor(`http://127.0.0.1:${chosen.INFISICAL_PORT}/api/status`, 180, "The secret store");
+    if (settingsNow.BOSS_INFISICAL_TOKEN) {
+      // The file says provisioned and the store disagrees. Believe the store.
+      note("the stored credentials no longer work; provisioning again");
+      dropEnv(envFile, ["BOSS_INFISICAL_URL", "BOSS_INFISICAL_TOKEN", "BOSS_INFISICAL_PROJECT_ID"]);
+    }
     const boot = run("sh", ["scripts/install/bootstrap_infisical.sh", envFile], {
       cwd: root,
       capture: true,
     });
-    if (boot.status !== 0) {
-      die("Could not provision the secret store.", (boot.stderr || "").trim().slice(-400));
+    const provisioned = Boolean(readEnv(envFile).BOSS_INFISICAL_TOKEN);
+    if (boot.status !== 0 || !provisioned) {
+      const detail = `${boot.stdout || ""}${boot.stderr || ""}`;
+      if (/already been bootstrapped|no token/i.test(detail) && !resetRequested) {
+        die(
+          "The secret store is already set up, but this install has no credential for it.",
+          "Infisical issues that token once. Re-run with --reset-secret-store to rebuild the " +
+            "store, or put the original BOSS_INFISICAL_TOKEN back in your settings file."
+        );
+      }
+      die("Could not provision the secret store.", detail.trim().slice(-400));
     }
     ok("admin, organization, project and machine identity created");
   }
@@ -278,8 +490,9 @@ BOSS is running.
 Credentials are in ${envFile}. Back it up: INFISICAL_ENCRYPTION_KEY is the only way to read
 what the secret store holds.
 
-BOSS ships with no model — connect one from the console (Setup → Model), or see
-docs/operations/MODEL_AND_SUBSCRIPTION_SETUP.md.
+BOSS ships with no model — connect one from the console (Setup → Model), or see Part 2 of
+docs/operations/SETUP.md. This install runs in containers, so a subscription you are signed
+into on this machine still has to be sent across: that is Path C, not Path B.
 `);
 }
 

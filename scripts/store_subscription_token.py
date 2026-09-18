@@ -106,7 +106,11 @@ def read_token(auth_file: Path, field: str) -> str:
 
 
 def send_to_boss(api: str, api_key: str, project_id: str, provider: str, credential: str,
-                 actor: str = "setup", timeout: int = 30,
+                 # "setup" is not a member of any project BOSS seeds, so the endpoint refused
+                 # every call with "Actor 'setup' is not an active member of org 'org_boss'" —
+                 # a name invented here rather than taken from the roles that actually exist.
+                 # `ceo` is seeded, holds entitlement_manage, and is what the docs already use.
+                 actor: str = "ceo", timeout: int = 30,
                  accept_database_fallback: bool = False) -> dict:
     """Give the credential to BOSS and let it decide where it lives.
 
@@ -213,6 +217,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="your BOSS API key (or set BOSS_API_KEY)")
     parser.add_argument("--project-id", default="boss-dogfood",
                         help="the BOSS project to attach the subscription to")
+    parser.add_argument("--actor", default="ceo",
+                        help="who is doing this; must be a member of the project")
     # NOT defaulted from OPS_BASE_URL. It was, and a variable exported hours earlier for a
     # different step silently took precedence over the documented default — the credential
     # went to the operator's own store while the page said BOSS would hold it, and the run
@@ -293,7 +299,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         raise SystemExit("no --boss-api-key (or BOSS_API_KEY) to authenticate to BOSS with.")
 
     result = send_to_boss(args.boss_api, args.boss_api_key, args.project_id,
-                          args.provider, token,
+                          args.provider, token, actor=args.actor,
                           accept_database_fallback=args.accept_database_fallback)
     print(f"stored {key} ({len(token)} chars) — {what} from {auth_file}")
     backend = result.get("backend", "configured")

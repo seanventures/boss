@@ -1,6 +1,6 @@
 """Every command in the customer-facing setup doc, checked against the shipping code.
 
-WHY. `MODEL_AND_SUBSCRIPTION_SETUP.md` is the page a customer follows to connect a model, so a
+WHY. `SETUP.md` is the page a customer follows to install BOSS and connect a model, so a
 command that has rotted there is not a documentation defect — it is the product failing on
 first contact, at the one moment the customer has no context to debug it.
 
@@ -33,14 +33,13 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-DOC = REPO / "docs" / "operations" / "MODEL_AND_SUBSCRIPTION_SETUP.md"
+DOC = REPO / "docs" / "operations" / "SETUP.md"
 
 #: Docs a customer follows with their hands on a keyboard. The shell-level checks run over all
 #: of them; the checks about BOSS's own vocabulary run over the setup doc, which is the one
 #: that names tools, routes and settings. Add a page here when it starts carrying commands.
 CUSTOMER_FACING = (
     DOC,
-    REPO / "docs" / "operations" / "LOCAL_SETUP.md",
     REPO / "docs" / "operations" / "DESIGN_PARTNER_ONBOARDING.md",
     REPO / "README.md",
     REPO / "engine" / "README.md",
@@ -210,7 +209,10 @@ def test_every_file_a_command_runs_exists_in_this_repo() -> None:
         for line, body in shell_blocks(text):
             for raw in body.splitlines():
                 command = raw.strip()
-                if not command.startswith(("python3 ", "python ")):
+                # node too, not just python: the install guide now leads with
+                # `node packages/create-boss/index.js`, and a path that has moved there is the
+                # same defect as `ops.py` — a command a customer cannot run.
+                if not command.startswith(("python3 ", "python ", "node ")):
                     continue
                 argument = command.split()[1]
                 if argument.startswith("-"):      # python3 -c "…" runs no file

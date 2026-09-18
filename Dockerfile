@@ -52,6 +52,15 @@ RUN npx -y playwright install --with-deps chromium \
 # layer above stays cached.
 RUN rm -rf /home/boss/.npm /home/boss/.cache && chown -R boss:boss /home/boss
 
+# The coding CLIs keep their credential here, and a deployment may share it between containers
+# as a named volume so one rotating session serves all of them. Docker seeds a fresh named
+# volume from the image path and INHERITS ITS OWNERSHIP — with no such path in the image the
+# volume arrives owned by root, and a container running as `boss` then cannot write the
+# credential it was just given. Creating it here, owned correctly, is what makes the mount work.
+RUN mkdir -p /home/boss/.codex /home/boss/.claude \
+    && chown -R boss:boss /home/boss/.codex /home/boss/.claude \
+    && chmod 700 /home/boss/.codex /home/boss/.claude
+
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/api-requirements.txt

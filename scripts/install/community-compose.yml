@@ -2,7 +2,7 @@
 # Postgres + API + worker + Mission Control. No Cloud / Account Connect required.
 #
 # Used by: packages/create-boss  (node packages/create-boss/index.js), or by hand —
-# see docs/operations/LOCAL_SETUP.md. `install.sh` was referenced here and never existed.
+# see docs/operations/SETUP.md. `install.sh` was referenced here and never existed.
 
 name: boss-community
 
@@ -118,6 +118,12 @@ services:
       - "${BOSS_API_PORT:-8000}:8000"
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
+      # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
+      # credential: every refresh revokes the previous one, so two containers each holding
+      # their own copy revoke each other — api detects, worker builds, and whichever runs
+      # second finds a dead token. Sharing the directory gives them one credential and one
+      # refresh chain. It also survives `up --build`, which a container-local file does not.
+      - boss_community_cli_home:/home/boss/.codex
     healthcheck:
       test:
         - CMD
@@ -166,6 +172,12 @@ services:
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
+      # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
+      # credential: every refresh revokes the previous one, so two containers each holding
+      # their own copy revoke each other — api detects, worker builds, and whichever runs
+      # second finds a dead token. Sharing the directory gives them one credential and one
+      # refresh chain. It also survives `up --build`, which a container-local file does not.
+      - boss_community_cli_home:/home/boss/.codex
 
   web:
     profiles: ["web"]
@@ -190,6 +202,7 @@ services:
       - "${BOSS_WEB_PORT:-3000}:3000"
 
 volumes:
+  boss_community_cli_home:
   boss_community_infisical_redis:
   boss_community_pg:
   boss_community_artifacts:
