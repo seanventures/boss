@@ -10,6 +10,11 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # Setup, answered and repaired rather than described. `diagnose_setup` is the whole
+    # picture in one call; the other two are the actions that used to be instructions.
+    "diagnose_setup",
+    "test_github_access",
+    "set_project_setting",
     # A SUBSCRIPTION HAS NOTHING TO PASTE. A Codex or Cursor plan is an OAuth session the CLI
     # holds, so BOSS finds the CLI the customer already uses, proves it answers, and records
     # the entitlement — rather than asking an operator to transcribe a credential that does
@@ -165,11 +170,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 94, (
+    assert len(reg.names()) == 97, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 58
-    assert len(write) == 36
+    assert len(read) == 59
+    assert len(write) == 38
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -367,6 +372,14 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # RE-ASKING GITHUB A QUESTION whose answer has changed. It updates the connection's test
+    # state and nothing else; running it twice asks twice. This is what "fix it" means after
+    # an operator widens a token's repository access — and BOSS telling them to go and press
+    # the button themselves is what it replaced.
+    "test_github_access",
+    # TURNING A DIAL BACK IS SETTING IT AGAIN. Which model fills which role, how many agents
+    # run at once; an empty value hands it back to the deployment default. Nothing starts.
+    "set_project_setting",
     # CONNECTING A SUBSCRIPTION READS. It probes a CLI the operator already installed, makes
     # it answer once in a read-only sandbox, and records an entitlement row. It stores no
     # credential (there is none to store) and changes no code.

@@ -134,6 +134,82 @@ class GitHubConnectionService:
             raise GitHubConnectionNotFoundError("GitHub connection not found.")
         return self._serialize_connection(row)
 
+    def _connection_by_label(
+        self, connection: Connection, project_id: str, label: str,
+    ) -> Optional[dict[str, Any]]:
+        """The connection this project already has under that label, if any."""
+        row = connection.execute(
+            text("SELECT * FROM github_connections "
+                 " WHERE project_id = :p AND lower(connection_label) = lower(:l) LIMIT 1"),
+            {"p": project_id, "l": (label or "").strip()},
+        ).mappings().first()
+        return self._serialize_connection(row) if row else None
+
+    def repoint_connection(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        connection_id: str,
+        credential_ref: str,
+        auth_method: str,
+        app_id: Optional[str],
+        installation_id: Optional[str],
+        api_base_url: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Point an existing connection at a new credential, keeping everything else.
+
+        This is what "press Connect again with a better token" means. The id, the repository
+        bindings and the history stay; the credential and the failed test state do not. The
+        previous credential_ref is recorded in the event, because "which credential was this
+        using when it worked" is a question somebody asks later.
+        """
+        current = self.get_connection(connection, project_id, connection_id)
+        # STRAIGHT FROM THE TABLE. `_serialize_connection` does not expose credential_ref —
+        # rightly, it is an internal pointer — so reading it from the serialized dict would
+        # record "previous_credential_ref: null" in the event and lose the one fact the event
+        # exists for.
+        previous_ref = connection.execute(
+            text("SELECT credential_ref FROM github_connections "
+                 " WHERE project_id = :p AND id = :id"),
+            {"p": project_id, "id": connection_id}).scalar()
+        method = (auth_method or current["auth_method"]).strip().lower()
+        if method not in self.AUTH_METHODS:
+            raise ValueError(
+                "auth_method must be one of: " + ", ".join(sorted(self.AUTH_METHODS)) + ".")
+        self.secret_refs.parse_credential_ref(credential_ref)
+        connection.execute(
+            text("""
+                UPDATE github_connections
+                   SET credential_ref = :ref,
+                       auth_method = :method,
+                       app_id = :app_id,
+                       installation_id = :installation_id,
+                       api_base_url = :api_base_url,
+                       -- 'configured' is the state BEFORE a passing test; a pass sets
+                       -- 'active' and a failure 'error'. 'enabled' is not in this column's
+                       -- CHECK constraint at all — see the note below on the query that
+                       -- filtered by it.
+                       status = 'configured',
+                       last_test_status = NULL,
+                       last_error = NULL,
+                       updated_at = now()
+                 WHERE project_id = :p AND id = :id
+            """),
+            {"ref": credential_ref, "method": method, "app_id": app_id,
+             "installation_id": installation_id, "api_base_url": api_base_url,
+             "p": project_id, "id": connection_id},
+        )
+        emit_event(
+            connection, project_id, "github.connection_repointed", actor,
+            "github_connection", connection_id,
+            # The REFERENCE, never a value: these are `<kind>:<key>` pointers.
+            {"previous_credential_ref": previous_ref,
+             "credential_ref": credential_ref, "auth_method": method},
+        )
+        return self.get_connection(connection, project_id, connection_id)
+
     def create_connection(
         self,
         connection: Connection,
@@ -857,7 +933,12 @@ class GitHubConnectionService:
                     FROM github_repository_bindings b
                     JOIN github_connections c ON c.id = b.connection_id
                     WHERE b.project_id = :p AND b.status = 'active'
-                      AND c.status = 'enabled'
+                      -- 'configured' and 'active' ARE the healthy states. This said
+                      -- `c.status = 'enabled'`, a value the column's CHECK constraint does
+                      -- not permit — so the condition could never be true and this lookup
+                      -- always found nothing, silently, and fell through to whatever the
+                      -- caller does without a repository.
+                      AND c.status IN ('configured', 'active')
                     ORDER BY (LOWER(b.full_name) = :want) DESC,
                              (b.role = 'primary') DESC, b.updated_at DESC
                     LIMIT 1
@@ -981,26 +1062,51 @@ class GitHubConnectionService:
                 auth_method=auth_method,
                 actor=actor,
             )
-        created_connection = self.create_connection(
-            connection,
-            project_id=project_id,
-            connection_label=connection_label,
-            auth_method=auth_method,
-            credential_ref=credential_ref,
-            app_id=app_id,
-            installation_id=installation_id,
-            api_base_url=api_base_url or "https://api.github.com",
-            required_permissions=required_permissions
-            or ["pull", "push", "triage"],
-            metadata={
-                **(metadata or {}),
-                "setup": "easy_connect",
-                "env_credential_key": env_credential_key.strip().upper()
-                if env_credential_key
-                else None,
-            },
-            actor=actor,
-        )
+        # A SECOND ATTEMPT IS A RETRY, NOT A SECOND CONNECTION.
+        #
+        # Measured: the first attempt stored the connection and then failed its access test —
+        # correctly, the token could not see the repository. Fixing the token and pressing
+        # Connect again was refused with "Project already has a GitHub connection with this
+        # label", because the label is fixed at "GitHub" and this path only ever created. So
+        # the one screen whose job is to get this right could not be used twice, and the
+        # operator was told to go and find another page.
+        #
+        # Re-pointing the existing connection at the new credential is what they meant, and it
+        # keeps its id, its bindings and its history.
+        existing = self._connection_by_label(connection, project_id, connection_label)
+        if existing is not None:
+            created_connection = self.repoint_connection(
+                connection,
+                project_id=project_id,
+                connection_id=existing["id"],
+                credential_ref=credential_ref,
+                auth_method=auth_method,
+                app_id=app_id,
+                installation_id=installation_id,
+                api_base_url=api_base_url or "https://api.github.com",
+                actor=actor,
+            )
+        else:
+            created_connection = self.create_connection(
+                connection,
+                project_id=project_id,
+                connection_label=connection_label,
+                auth_method=auth_method,
+                credential_ref=credential_ref,
+                app_id=app_id,
+                installation_id=installation_id,
+                api_base_url=api_base_url or "https://api.github.com",
+                required_permissions=required_permissions
+                or ["pull", "push", "triage"],
+                metadata={
+                    **(metadata or {}),
+                    "setup": "easy_connect",
+                    "env_credential_key": env_credential_key.strip().upper()
+                    if env_credential_key
+                    else None,
+                },
+                actor=actor,
+            )
         binding = None
         test_result = None
         if repository and repository.strip():

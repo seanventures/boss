@@ -100,6 +100,8 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 | `the secret store cannot read its own data` | A volume from an earlier install, encrypted with a different key. Re-run with `--reset-secret-store` to rebuild it — everything it held is discarded. |
 | `bootstrap returned no token` | Already provisioned. Infisical issues that token once; the existing one is in `.env`. |
 | The console's organization picker does nothing | Known issue after a restart. Go straight to `/?org=org_boss`. |
+| `Connected, but the check failed` with a 404 | The token cannot see that repository. For a PRIVATE repository GitHub returns 404 rather than 403, so this is a scope answer, not a missing repository — BOSS names the repositories the token *can* reach. Widen **Repository access** on the token and press Connect and test again. |
+| Connecting again after fixing a token | Just press **Connect and test** again. The second attempt re-points the existing connection at the new credential and keeps its repository binding; it is a retry, not a second connection. |
 
 ---
 

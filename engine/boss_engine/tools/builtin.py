@@ -15,6 +15,7 @@ import json
 import os as _os
 import re
 import subprocess as _subprocess
+import uuid as _uuid
 from typing import Any, Optional as _Optional
 
 from .._compat import services_module
@@ -1622,6 +1623,119 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "args": call_args, "label": str(args.get("label") or name),
                 "why": str(args.get("why") or ""),
                 "note": "Offered to the operator as a button. NOT executed."}
+
+    @reg.tool(
+        "test_github_access",
+        "RE-RUN the GitHub access check for this project and return what GitHub said. Use "
+        "this after an operator changes a token's repository access or permissions — it is "
+        "the action that turns 'I fixed the token' into a verified connection, and it needs "
+        "no credential from anybody. Also use it to confirm a repair you suggested actually "
+        "worked, rather than telling the operator to go and press a button.",
+        _obj({"connection_id": {"type": "string",
+                                "description": "optional; the project's connection by default"},
+              "repository": {"type": "string",
+                             "description": "optional; owner/name, the primary binding by "
+                                            "default"}}),
+        kind="write",
+        # A READ OF GITHUB THAT RECORDS WHAT IT SAW. It asks GitHub one question and updates
+        # the connection's test state; running it again simply asks again, which is the whole
+        # point of it existing.
+        reversibility="safe",
+    )
+    def test_github_access(ctx, *, project_id, actor, args):
+        # WHY THIS IS A TOOL. Asked why a connection failed, the agent diagnosed it correctly
+        # and then said "open BOSS's GitHub view, select the repository, and click Test
+        # access" — an instruction to do by hand the one step it could have done itself.
+        # "Just explaining the problem would not help anyone."
+        from ..services.github_connections import GitHubConnectionService
+
+        pid = args.get("project_id") or project_id
+        svc = GitHubConnectionService(ctx.settings)
+        with ctx.begin() as c:
+            conn_id = str(args.get("connection_id") or "").strip()
+            if not conn_id:
+                row = c.execute(
+                    _text("SELECT id FROM github_connections WHERE project_id = :p "
+                          " ORDER BY created_at DESC LIMIT 1"), {"p": pid}).first()
+                if row is None:
+                    return {"ok": False,
+                            "error": f"{pid} has no GitHub connection to test — connect one "
+                                     f"in Setup first."}
+                conn_id = row[0]
+            wanted = str(args.get("repository") or "").strip()
+            binding = c.execute(
+                _text("SELECT id, full_name FROM github_repository_bindings "
+                      " WHERE project_id = :p AND status = 'active' "
+                      "   AND (:w = '' OR lower(full_name) = lower(:w)) "
+                      " ORDER BY (role = 'primary') DESC LIMIT 1"),
+                {"p": pid, "w": wanted}).mappings().first()
+            if binding is None:
+                return {"ok": False,
+                        "error": (f"no active repository binding on {pid}"
+                                  + (f" for {wanted}" if wanted else "")
+                                  + " — bind one in Setup first.")}
+            try:
+                # A NEW dedupe key each time: this is deliberately repeatable, because the
+                # whole point is to re-ask a question whose answer has changed.
+                result = svc.test_connection(
+                    c, project_id=pid, connection_id=conn_id,
+                    binding_id=binding["id"],
+                    dedupe_key=f"agent-retest-{_uuid.uuid4().hex[:12]}",
+                    actor=actor)
+            except Exception as exc:  # noqa: BLE001 — the reason is the answer
+                return {"ok": False, "repository": binding["full_name"],
+                        "error": f"{type(exc).__name__}: {exc}"[:400]}
+        detail = result.get("detail") or {}
+        passed = result.get("status") == "passed"
+        return {"ok": passed, "status": result.get("status"),
+                "repository": binding["full_name"],
+                "granted_permissions": detail.get("granted_permissions"),
+                "missing_permissions": detail.get("missing_permissions"),
+                "message": detail.get("message"),
+                "next": ("nothing — this connection works" if passed else
+                         "the message above is what GitHub said; fix that and test again")}
+
+    @reg.tool(
+        "set_project_setting",
+        "Change one of this project's settings — which model implements, reviews, handles "
+        "hard or routine work, or answers in chat; how many agents run at once; the turn and "
+        "review-round budgets. Takes effect on the next run, no restart. Use it to APPLY a "
+        "change you have recommended once the operator agrees, instead of describing where "
+        "they could click. Send an empty value to hand a setting back to the deployment "
+        "default. Refuses a key or a value that is not allowed, and says what is.",
+        _obj({"key": {"type": "string", "description": "the setting, e.g. code_review_engine"},
+              "value": {"type": "string",
+                        "description": "the new value; empty to use the deployment default"}},
+             required=["key"]),
+        kind="write",
+        # UNDONE BY SETTING IT BACK, or by sending an empty value to return to the deployment
+        # default. It starts nothing and spends nothing; the next run reads the new value.
+        reversibility="safe",
+    )
+    def set_project_setting(ctx, *, project_id, actor, args):
+        from ..services import project_settings as ps
+
+        pid = args.get("project_id") or project_id
+        key = str(args.get("key") or "").strip()
+        value = args.get("value")
+        with ctx.begin() as c:
+            if key not in ps.KNOBS:
+                return {"ok": False, "error": f"{key!r} is not a setting BOSS can change",
+                        "available": sorted(ps.KNOBS)}
+            spec = ps.KNOBS[key]
+            if value in (None, ""):
+                ps.clear_one(c, pid, key)
+                return {"ok": True, "key": key, "value": None,
+                        "note": (f"{spec['label']} now follows the deployment default "
+                                 f"({getattr(ctx.settings, spec['attr'], None)})")}
+            try:
+                ps.set_one(c, pid, key, value, actor=actor)
+            except Exception as exc:  # noqa: BLE001 — the bound's own message is the answer
+                return {"ok": False, "key": key, "error": str(exc)[:300],
+                        "offered": ps.offered_choices(c, ctx.settings, pid, spec)}
+            return {"ok": True, "key": key, "value": value,
+                    "note": f"{spec['label']} is now {value} for {pid}; applies on the next "
+                            f"run, nothing to restart"}
 
     @reg.tool(
         "diagnose_setup",
@@ -5768,6 +5882,13 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is
+    # where that loop hurts most, since it is the first thing a customer touches. Asked twice
+    # about the same failed GitHub connection, BOSS explained it correctly and then told the
+    # operator to go and press Test access itself: "just explaining the problem would not help
+    # anyone." Both of these are reversible and neither takes a credential.
+    "test_github_access",
+    "set_project_setting",
     # The escape hatch from a registry of fixed questions: a real debugging session.
     "investigate",
     # Reconciling a run with a world that has moved on. Named by an investigation as the
