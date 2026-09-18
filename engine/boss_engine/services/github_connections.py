@@ -654,7 +654,19 @@ class GitHubConnectionService:
                 github_connection=github_connection,
                 binding=binding,
             )
-            repository = adapter.repo_metadata()
+            try:
+                repository = adapter.repo_metadata()
+            except Exception as probe_error:
+                # A 404 ON A PRIVATE REPOSITORY IS A SCOPE PROBLEM WEARING A NOT-FOUND SIGN.
+                # GitHub refuses to say a private repository exists to a token that cannot see
+                # it, so "404" is what a correctly-scoped-to-the-wrong-repositories token
+                # returns — and the operator, looking at the repository in their browser,
+                # reasonably concludes BOSS is broken. Measured: a valid fine-grained token
+                # belonging to the right account, scoped to two OTHER repositories.
+                raise RuntimeError(self._explain_repository_failure(
+                    connection, project_id=project_id,
+                    github_connection=github_connection, binding=binding,
+                    error=probe_error)) from probe_error
             returned_full_name = str(repository.get("full_name") or "").strip()
             if returned_full_name.casefold() != binding["full_name"].casefold():
                 raise RuntimeError("GitHub returned a different repository identity.")
@@ -722,7 +734,12 @@ class GitHubConnectionService:
             # so the message is REDACTED rather than discarded.
             safe_error = {
                 "type": error.__class__.__name__,
-                "message": f"GitHub connection test failed: {_redact_credentials(error)}",
+                # ROOM FOR THE EXPLANATION. The default cap is 300, which is right for an
+                # unknown provider error and cut this one off mid-sentence — the message here
+                # is one BOSS composed itself, naming the account and the repositories the
+                # token can reach. Still bounded; just bounded above what it has to say.
+                "message": ("GitHub connection test failed: "
+                            f"{_redact_credentials(error, limit=1200)}"),
             }
             self.receipts.mark_failed(connection, receipt["id"], safe_error)
             self._record_test_failure(
@@ -1102,6 +1119,74 @@ class GitHubConnectionService:
             github_connection,
             binding,
         )
+
+    def _explain_repository_failure(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        github_connection: dict[str, Any],
+        binding: dict[str, Any],
+        error: BaseException,
+    ) -> str:
+        """Why GitHub would not show us this repository, in terms the operator can act on.
+
+        The raw message is a URL and a status code. What the operator needs is which account
+        the token belongs to and which repositories it can actually reach — one extra call on
+        a path that has already failed, and it turns "404 Not Found" into the sentence that
+        names the fix.
+        """
+        base = _redact_credentials(error)
+        full_name = binding.get("full_name") or ""
+        if "404" not in base and "Not Found" not in base:
+            return base
+        hint = (f"GitHub will not confirm that {full_name} exists to this token. For a PRIVATE "
+                f"repository that is what a token without access returns — it is a scope "
+                f"answer, not a missing repository.")
+        try:
+            credential = self._resolve_secret(
+                self.secret_refs.require_usable(
+                    connection, project_id=project_id,
+                    credential_ref=self._credential_ref(
+                        connection, project_id, github_connection["id"])),
+                connection)
+            who = self._github_get("/user", credential) or {}
+            login = str(who.get("login") or "").strip()
+            repos = self._github_get(
+                "/user/repos?per_page=100&affiliation=owner,collaborator,"
+                "organization_member", credential)
+            if login:
+                hint += f" The token belongs to {login}."
+            if isinstance(repos, list):
+                names = sorted(str(r.get("full_name") or "") for r in repos)
+                shown = ", ".join(names[:10]) or "none"
+                hint += (f" It can reach {len(names)} repositor"
+                         f"{'y' if len(names) == 1 else 'ies'}: {shown}.")
+                if full_name and full_name not in names:
+                    hint += (f" {full_name} is not among them — add it under Repository "
+                             f"access on the token, or pick a repository it already covers. "
+                             f"Editing the token keeps its value, so nothing needs pasting "
+                             f"again.")
+        except Exception as exc:  # noqa: BLE001 — the hint is a bonus, never the failure
+            hint += f" (could not ask GitHub what the token covers: {type(exc).__name__})"
+        return f"{base} — {hint}"
+
+    @staticmethod
+    def _github_get(path: str, credential: str, timeout: int = 15) -> Any:
+        """A read against GitHub with the connection's own credential. Returns None on error."""
+        import urllib.error
+        import urllib.request
+
+        request = urllib.request.Request(
+            f"https://api.github.com{path}",
+            headers={"Authorization": f"Bearer {credential}",
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "boss-setup-check"})
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode() or "null")
+        except (urllib.error.URLError, OSError, ValueError):
+            return None
 
     def _make_adapter(
         self,

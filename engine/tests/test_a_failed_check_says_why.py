@@ -62,8 +62,10 @@ def test_so_the_resolver_is_chosen_by_asking_what_was_injected():
 
 
 def test_a_failure_records_its_reason():
-    code = _code_of(GitHubConnectionService.test_connection)
-    assert "_redact_credentials ( error )" in code
+    # The call lives inside an f-string, which `_code_of` strips along with comments — so this
+    # one reads raw source, and the comment above it does not contain the call.
+    source = inspect.getsource(GitHubConnectionService.test_connection)
+    assert "_redact_credentials(error, limit=1200)" in source
 
 
 def test_and_the_reason_is_the_useful_part():
@@ -93,4 +95,56 @@ def test_an_empty_error_still_says_something():
 
 
 def test_and_the_message_is_bounded():
-    assert len(_redact_credentials(RuntimeError("x" * 5000))) <= 300
+    # Words, not one long run of characters: the catch-all pattern treats any 40-character
+    # unbroken string as a credential it does not recognise, and would redact the whole thing.
+    long_prose = "the repository could not be read " * 200
+    assert len(_redact_credentials(RuntimeError(long_prose))) <= 300
+    # And the bound is the caller's to raise: the composed explanation names the account and
+    # the repositories the token can reach, and 300 cut it off mid-sentence.
+    raised = _redact_credentials(RuntimeError(long_prose), limit=1200)
+    assert 300 < len(raised) <= 1200
+
+
+# -- and a 404 on a private repository is a scope answer ---------------------------------------
+
+def test_a_404_is_explained_as_a_scope_answer():
+    """MEASURED, with the repository open in the operator's browser: "this already exists, I
+    dont know why BOSS is unable to recognize using the token I generated."
+
+    GitHub refuses to confirm that a PRIVATE repository exists to a token that cannot see it,
+    so 404 is exactly what a valid token scoped to the wrong repositories returns. Reporting
+    the status code invites the reasonable conclusion that BOSS is broken.
+    """
+    source = inspect.getsource(GitHubConnectionService._explain_repository_failure)
+    # The sentence is built from two adjacent literals, so assert on parts that are not split.
+    assert "For a PRIVATE" in source
+    assert "it is a scope" in source and "not a missing repository" in source
+
+
+def test_and_it_says_what_the_token_can_actually_reach():
+    """One extra call on a path that has already failed, and it turns a status code into the
+    sentence that names the fix. Verified live: "The token belongs to paramg. It can reach 2
+    repositories: … paramg/boss-sandbox is not among them — add it under Repository access."
+    """
+    source = inspect.getsource(GitHubConnectionService._explain_repository_failure)
+    assert '/user/repos' in source
+    assert "is not among them" in source
+    assert "Editing the token keeps its value" in source
+
+
+def test_the_extra_call_can_never_become_the_failure():
+    """A hint is a bonus. If GitHub will not answer the second question either, the operator
+    still gets the first answer rather than an error about diagnostics."""
+    source = inspect.getsource(GitHubConnectionService._explain_repository_failure)
+    assert "could not ask GitHub what the token covers" in source
+
+    probe = inspect.getsource(GitHubConnectionService._github_get)
+    assert "return None" in probe
+
+
+def test_and_a_non_404_failure_is_left_as_it_was():
+    """Bad credentials, a 403, a timeout — each already says what it is, and appending a
+    repository inventory to them would bury the answer."""
+    source = inspect.getsource(GitHubConnectionService._explain_repository_failure)
+    assert 'if "404" not in base and "Not Found" not in base:' in source
+    assert "return base" in source
