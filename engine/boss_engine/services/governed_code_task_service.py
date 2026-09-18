@@ -1710,7 +1710,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _pinned_engine = str(_mc_default.get("engine") or "").strip().lower()
     elif isinstance(_mc_default, str) and _mc_default.strip():
         _pinned_engine = _mc_default.split(":", 1)[0].strip().lower()
-        if _pinned_engine not in ("claude_code", "openai", "native"):
+        # ASK THE REGISTRY, not a list of three. This allow-list predates the harness seam and
+        # silently dropped every engine added since — a run pinned to "codex:gpt-5-codex" or
+        # "openrouter:…" in string form fell back to the process default and ran somewhere
+        # else, with nothing saying so.
+        try:
+            from .harness_registry import get_harness
+
+            get_harness(_pinned_engine)
+        except Exception:  # noqa: BLE001 — an unknown engine is not a pin
             _pinned_engine = ""
     # The project's choices, layered over the deployment's, ONCE — every `settings.*_engine`
     # read below and in the functions this calls then sees them. Credentials for several
@@ -1718,10 +1726,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # somebody makes in the console, not one frozen into the container at deploy time.
     from .project_settings import applied as _applied_settings
 
+    from .setup_service import build_engine_for as _build_engine_for
+
     with _transaction(engine) as _c:
         settings = _applied_settings(_c, project_id, settings)
+        # AND A DEFAULT THAT MATCHES THIS INSTALLATION. The chain used to end at the literal
+        # "claude_code", so an install that had connected only an OpenRouter key shelled out
+        # to a `claude` binary it does not have. This only speaks when the configured engine
+        # cannot run here — see build_engine_for.
+        _resolved_engine = _build_engine_for(_c, settings, project_id)
     build_engine = (
-        _pinned_engine or settings.code_agent_engine or "claude_code"
+        _pinned_engine or _resolved_engine or settings.code_agent_engine or "claude_code"
     ).lower()
     review_engine = (settings.code_review_engine or "").lower() or build_engine
     # Data-boundary enforcement: restricted/confidential tasks redact PII before any external

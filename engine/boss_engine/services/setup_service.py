@@ -263,6 +263,50 @@ def _set_deliberately(settings: Settings, attr: str) -> bool:
     return value != str(default or "").strip()
 
 
+def build_engine_for(
+    connection: Connection, settings: Settings, project_id: str,
+) -> str:
+    """Which harness should WRITE THE CODE when nobody has said.
+
+    "The main objective of BOSS is not to depend on a single model but must be able to
+    connect and work with any model provider."
+
+    The seam has been provider-agnostic for a while: one `run_role` interface, a registry of
+    eleven harnesses, a native tool-calling agent for any OpenAI-compatible key. What was left
+    of the old dependency was the DEFAULT. `code_agent_engine` ships as "claude_code" and
+    every fallback chain ends there, so a customer who connects only an OpenRouter key gets a
+    build that shells out to a `claude` binary their install does not have — and the failure
+    reads as a broken pipeline rather than as a default nobody chose.
+
+    Deliberately conservative: this only speaks when the configured engine CANNOT run here.
+    An install whose Claude Code is connected behaves exactly as it did, and an operator who
+    set the variable themselves is never second-guessed. What it removes is the case where the
+    default points at a harness this installation has no credential for.
+    """
+    configured = (getattr(settings, "code_agent_engine", "") or "").strip().lower()
+    try:
+        connected = connected_engines(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 — a lookup must not decide the pipeline cannot run
+        return configured
+    if not connected:
+        return configured          # nothing to choose from; leave the error where it was
+    if configured and configured in connected:
+        return configured
+    # Prefer a harness a governed task has actually completed on. `verified` is BOSS's own
+    # honesty flag and it is the right tie-breaker here: an unproven adapter is a hypothesis,
+    # and picking one BY DEFAULT would be presenting a hypothesis as a decision.
+    try:
+        from .harness_registry import available_harnesses
+
+        order = sorted(
+            (h for h in available_harnesses() if h["name"] in connected),
+            key=lambda h: (not h["verified"], h["kind"] != "cli", h["name"]),
+        )
+    except Exception:  # noqa: BLE001
+        return configured
+    return order[0]["name"] if order else configured
+
+
 def chat_engine_for(
     connection: Connection, settings: Settings, project_id: str,
 ) -> str:
