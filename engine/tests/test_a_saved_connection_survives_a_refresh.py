@@ -213,3 +213,67 @@ def test_another_projects_connection_is_not_this_projects(connection):
     agents = {a["name"]: a for a in with_recorded_connections(_agents(), connection, "p")}
 
     assert agents["codex"]["connected"] is False
+
+
+# -- "What BOSS is running on" must name what BOSS will run on ---------------------------------
+
+def test_the_card_reports_the_connected_repository_not_the_environment():
+    """Measured, with a connection that was tested and passing:
+
+        REPOSITORY  CHECK FAILED
+        seanheiney/boss-sandbox · token …ThOQ — GitHub has no seanheiney/boss-sandbox
+        visible to this token.
+
+    The project was bound to paramg/boss, every build would use it, and the card showed a
+    shipped default failing instead. A screen called "What BOSS is running on" has to name the
+    repository BOSS will run on.
+    """
+    import inspect
+
+    from boss_engine.services import setup_service
+
+    source = inspect.getsource(setup_service.setup_status)
+    assert "check_github_for_project(connection, settings, project_id)" in source
+
+
+def test_and_says_which_of_the_two_it_is():
+    """They are different facts. A card that shows one while implying the other is how an
+    operator concludes their working connection did not take."""
+    import inspect
+
+    from boss_engine.services.setup_service import check_github_for_project
+
+    source = inspect.getsource(check_github_for_project)
+    assert '"source": "connected"' in source
+    assert "return check_github(settings)" in source          # nothing bound: the env IS it
+
+
+def test_it_checks_with_the_credential_the_repository_was_connected_with():
+    """Checking a connected repository with the environment's token would report a failure
+    about a credential the project does not use."""
+    import inspect
+
+    from boss_engine.services.setup_service import check_github_for_project
+
+    source = inspect.getsource(check_github_for_project)
+    assert "_resolve_secret(secret, connection)" in source
+    assert 'permissions.get("push")' in source
+
+
+def test_a_404_on_a_private_repository_is_explained_here_too():
+    import inspect
+
+    from boss_engine.services.setup_service import check_github_for_project
+
+    assert "for a private" in inspect.getsource(check_github_for_project)
+
+
+def test_no_install_ships_pointed_at_somebody_elses_repository():
+    """`target_github_owner` shipped as "seanheiney" and `target_github_repo` as
+    "boss-sandbox", so every install claimed to be pointed at one developer's private sandbox
+    and the setup screen reported it failing — about a repository the operator has never heard
+    of and cannot see."""
+    from boss_engine.config import Settings
+
+    assert Settings.model_fields["target_github_owner"].default == ""
+    assert Settings.model_fields["target_github_repo"].default == ""

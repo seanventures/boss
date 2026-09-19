@@ -21,7 +21,10 @@ import { SettingsKnobs } from "./settings-knobs-ui";
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
 type EnvCheck = {
-  configured?: boolean; ok?: boolean; error?: string; source?: string;
+  configured?: boolean; ok?: boolean; error?: string;
+  /** "connected" when this is the repository the project is BOUND to, "environment" when it
+   *  is the legacy env pair. Different facts, and the card has to say which. */
+  source?: string;
   repository?: string; token_last4?: string; can_push?: boolean;
   default_branch?: string; private?: boolean;
   base_url?: string; model?: string; key_last4?: string;
@@ -200,8 +203,16 @@ function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) 
           <span className="eyebrow">Already on this install</span>
           <h2>What BOSS is running on</h2>
           <p className="detail">
-            Set from this install&rsquo;s environment. Checked just now against GitHub and the
-            model endpoint — not read from a variable and assumed.
+            {/* SAY WHICH ONE IT IS. This always read "set from this install's environment",
+                and reported the env pair even when the project had a repository connected —
+                so a working connection was invisible and a shipped default was shown failing
+                beside it. */}
+            {github?.source === "connected"
+              ? <>The repository this project is connected to, and the model endpoint for this
+                  install. Checked just now against GitHub — not read from a variable and
+                  assumed.</>
+              : <>Set from this install&rsquo;s environment. Checked just now against GitHub and
+                  the model endpoint — not read from a variable and assumed.</>}
           </p>
         </div>
       </div>
@@ -222,6 +233,7 @@ function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) 
               {/* THE LAST FOUR, never the token. Enough to tell two credentials apart when
                   somebody is working out which one an install is using; never enough to use. */}
               {github.token_last4 ? ` · token …${github.token_last4}` : ""}
+              {github.source === "connected" ? " · connected here" : " · from the environment"}
               {github.error ? <span className="setup-bad"> — {github.error}</span> : null}
             </dd>
           </div>

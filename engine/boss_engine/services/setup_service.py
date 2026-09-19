@@ -730,6 +730,76 @@ def check_model(settings: Settings) -> dict[str, Any]:
     return out
 
 
+def check_github_for_project(
+    connection: Connection, settings: Settings, project_id: str,
+) -> dict[str, Any]:
+    """The repository this project builds in, checked with the credential it is connected with.
+
+    The registry wins over the environment — that is already true of where a code task writes,
+    and a status card that reports the other one describes an install nobody is running.
+    """
+    try:
+        rows = connection.execute(
+            text("SELECT b.full_name, b.connection_id, b.role, b.status, "
+                 "       c.last_test_status "
+                 "  FROM github_repository_bindings b "
+                 "  JOIN github_connections c ON c.id = b.connection_id "
+                 " WHERE b.project_id = :p AND b.status = 'active' "
+                 " ORDER BY (b.role = 'primary') DESC, b.updated_at DESC LIMIT 1"),
+            {"p": project_id},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001 — a status card must not fail with the database
+        rows = None
+    if rows is None:
+        return check_github(settings)          # nothing connected: the environment is the answer
+
+    from .github_connections import GitHubConnectionService
+
+    out: dict[str, Any] = {
+        "configured": True,
+        "repository": rows["full_name"],
+        "source": "connected",
+        "connection_id": rows["connection_id"],
+        "last_test_status": rows["last_test_status"],
+    }
+    service = GitHubConnectionService(settings)
+    try:
+        credential_ref = service._credential_ref(connection, project_id, rows["connection_id"])
+        secret = service.secret_refs.require_usable(
+            connection, project_id=project_id, credential_ref=credential_ref)
+        token = service._resolve_secret(secret, connection) or ""
+    except Exception as exc:  # noqa: BLE001
+        out["ok"] = False
+        out["error"] = f"the stored credential could not be read ({type(exc).__name__})"
+        return out
+    out["token_last4"] = _last4(token)
+    owner, _, name = rows["full_name"].partition("/")
+    probe = _probe(
+        f"https://api.github.com/repos/{owner}/{name}",
+        {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+         "User-Agent": "boss-setup-check"},
+    )
+    if not probe["ok"]:
+        out["ok"] = False
+        out["error"] = {
+            401: "the token was rejected by GitHub.",
+            403: "the token is valid but not allowed to see that repository.",
+            404: (f"GitHub will not confirm {rows['full_name']} to this token — for a private "
+                  f"repository that is what no access looks like."),
+        }.get(probe.get("status"), probe.get("error") or "GitHub did not answer")
+        return out
+    body = probe.get("body") or {}
+    permissions = body.get("permissions") or {}
+    out["ok"] = bool(permissions.get("push"))
+    out["can_push"] = bool(permissions.get("push"))
+    out["default_branch"] = body.get("default_branch")
+    out["private"] = bool(body.get("private"))
+    if not out["ok"]:
+        out["error"] = (f"the token can see {rows['full_name']} but cannot push to it — "
+                        f"Contents needs read and write.")
+    return out
+
+
 def setup_status(connection: Connection, settings: Settings, project_id: str) -> dict[str, Any]:
     """What is connected, what is not, and what to do about it."""
     repos = connection.execute(
@@ -837,7 +907,15 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         # answer "set up as WHAT, and does it work" — which is the question an operator has when
         # they already believe it is configured, and the one a screen of empty forms refuses to
         # answer.
-        "environment": {"github": check_github(settings), "model": check_model(settings)},
+        # WHAT THIS PROJECT IS ACTUALLY POINTED AT, which is not always the environment.
+        #
+        # This card reported the env pair and nothing else, so an install whose operator had
+        # connected a repository — tested, passing, and the thing every build will use — was
+        # shown "seanheiney/boss-sandbox · CHECK FAILED" from a shipped default, with the
+        # working connection mentioned nowhere. A screen called "What BOSS is running on" has
+        # to name the repository BOSS will run on.
+        "environment": {"github": check_github_for_project(connection, settings, project_id),
+                        "model": check_model(settings)},
         "steps": steps,
         "github_connections": int(connections),
         "repositories": int(repos),

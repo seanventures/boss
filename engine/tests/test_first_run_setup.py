@@ -172,8 +172,10 @@ def test_the_status_carries_it_so_the_screen_can_show_it():
     from boss_engine.services import setup_service
 
     source = inspect.getsource(setup_service.setup_status)
-    assert '"environment": {"github": check_github(settings), "model": check_model(settings)}' \
-        in source
+    # The GitHub half asks the PROJECT now — the registry decides where a build writes, and a
+    # card reporting the environment instead described an install nobody was running.
+    assert '"github": check_github_for_project(connection, settings, project_id)' in source
+    assert '"model": check_model(settings)' in source
 
 
 def test_a_probe_never_raises_at_somebody_on_their_first_run():
