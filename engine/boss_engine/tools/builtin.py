@@ -5992,7 +5992,13 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "investigate",
     # Reconciling a run with a world that has moved on. Named by an investigation as the
     # operation whose absence forced it to write SQL by hand.
-    "recheck_workflow_run",
+        # RETRYING ONE DEAD STEP IS THE ACTION THAT FOLLOWS A DIAGNOSIS.
+    #
+    # BOSS could explain exactly why a panel step failed and had no way to offer the retry,
+    # so it ended with "tell me to go ahead" and no button. Reachable from chat means the
+    # operator gets the button; it is still a write, so nothing runs until they press it.
+    "retry_workflow_step",
+"recheck_workflow_run",
     # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
     # with hand-composed SQL — which BOSS took, against a schema it had to guess at.
     "create_deployment_target",
