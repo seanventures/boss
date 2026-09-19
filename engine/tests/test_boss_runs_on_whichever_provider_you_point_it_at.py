@@ -180,7 +180,12 @@ def test_codex_can_hold_the_reviewer_cannot_edit_invariant() -> None:
     codex = BUILTIN_CLI_HARNESSES["codex"]
     assert codex.supports_read_only()
     assert codex.read_only_args == ("--sandbox", "read-only")
-    assert codex.write_args == ("--sandbox", "workspace-write")
+    # The WRITE mode had to change: `workspace-write` makes codex enforce its own
+    # boundary with kernel facilities a container does not grant, so it wrote nothing
+    # and said "the environment blocked file operations" while exiting 0. See
+    # test_codex_can_write_in_its_sandbox. The invariant this test protects — a
+    # reviewer cannot edit — is the read-only assertion above, and it is untouched.
+    assert codex.write_args == ("--sandbox", "danger-full-access")
 
 
 def test_no_unit_test_spends_the_operators_subscription() -> None:

@@ -243,7 +243,25 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         name="codex",
         binary="codex",
         args=("exec", "--skip-git-repo-check", "--color", "never"),
-        write_args=("--sandbox", "workspace-write"),
+        # `danger-full-access`, AND THE NAME IS DOING IT A DISSERVICE HERE.
+        #
+        # With `workspace-write`, codex could not write a single file in BOSS's container and
+        # said so plainly while exiting 0:
+        #
+        #     I couldn't write `test_calc.py` because the environment blocked file operations.
+        #
+        # Its sandbox uses kernel facilities (landlock/seccomp) that a container does not give
+        # it, so its guard fails closed and every edit is silently refused. Measured: identical
+        # prompt, `workspace-write` wrote nothing and `danger-full-access` wrote the file and
+        # ran the tests.
+        #
+        # The flag's own help says it is "intended solely for running in environments that are
+        # externally sandboxed" — which is exactly this one: BOSS runs the agent inside an
+        # ephemeral clone, in a container, with a denied-by-default environment that does not
+        # carry DATABASE_URL. That isolation is BOSS's to provide, and claude_code already
+        # edits files here with no inner sandbox of its own. Codex was the only harness held to
+        # a second, broken boundary — so it was the only one that could not do its job.
+        write_args=("--sandbox", "danger-full-access"),
         read_only_args=("--sandbox", "read-only"),
         prompt_via="argv",
         model_flag="--model",
