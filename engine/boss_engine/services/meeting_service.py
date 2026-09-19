@@ -739,6 +739,24 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     # operator who sets one lock believes they have moved everything." It was true of meetings
     # too. `make_agent_chat_adapter` falls back to `make_chat_adapter` when the setting is
     # empty, so an install that never set it is unaffected.
+    # AND THE PROJECT'S CHOICE HAS TO REACH IT. The line above was right and still failed,
+    # because `settings` here is the DEPLOYMENT's: `chat_llm_engine` was set to `codex` in the
+    # console, on this project, and `make_agent_chat_adapter` never saw it. So the panel fell
+    # through to the OpenAI adapter and every meeting died with
+    # "OPENAI_API_KEY is not configured" — the exact failure the comment above describes,
+    # arriving through the one path nobody had layered the project onto.
+    #
+    # `chat_engine_for` is the same resolution the console chat uses: the project's choice,
+    # then the deployment's, then a subscription that is actually connected.
+    try:
+        from .setup_service import chat_engine_for
+
+        with begin(engine) as c:
+            chosen_engine = chat_engine_for(c, settings, run["project_id"])
+        if chosen_engine:
+            settings = settings.model_copy(update={"chat_llm_engine": chosen_engine})
+    except Exception:  # noqa: BLE001 — a settings lookup must not end a meeting
+        pass
     adapter = make_agent_chat_adapter(settings)
     add_cost = 0
     model = (run["usage"] or {}).get("model")

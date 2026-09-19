@@ -498,6 +498,36 @@ class FallingBackAdapter:
         self.last_backend = type(self.fallback).__name__
         return out
 
+    def create_text_response(self, prompt, system_prompt=None, model=None):
+        """The one-shot completion, on the same terms as the chat one.
+
+        MEETINGS USE THIS AND THIS ONLY. The panel calls `create_text_response`; both CLI
+        adapters inherit it from CliChatBrain and this wrapper did not have it at all — so
+        routing meetings at a subscription, which is what the setting labelled "Console chat,
+        agents and meetings" promises, would have raised AttributeError instead of the
+        OPENAI_API_KEY error it was meant to replace. A wrapper that implements half of the
+        interface it wraps is a fallback that only works for the callers somebody tested.
+        """
+        try:
+            out = self.primary.create_text_response(
+                prompt, system_prompt=system_prompt, model=model)
+            self.last_backend = type(self.primary).__name__
+            return out
+        except Exception as exc:  # noqa: BLE001
+            if not self._unavailable(exc):
+                raise
+            _log.warning("chat brain unavailable (%s); falling back to %s",
+                         exc, type(self.fallback).__name__)
+            if self._on_fallback:
+                try:
+                    self._on_fallback(exc)
+                except Exception:  # noqa: BLE001 — reporting must not break answering
+                    pass
+        out = self.fallback.create_text_response(
+            prompt, system_prompt=system_prompt, model=model)
+        self.last_backend = type(self.fallback).__name__
+        return out
+
 
 #: What the console calls these engines, mapped onto what this factory calls them.
 #:
