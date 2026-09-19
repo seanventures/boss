@@ -138,6 +138,26 @@ class CommandIntakeService:
         )
         return {"task_id": task_id}
 
+    def task_by_dedupe_key(
+        self, connection: Connection, project_id: str, dedupe_key: str,
+    ) -> Optional[str]:
+        """The task already filed under this identity, if there is one.
+
+        The lookup `create_task` already performs before it refuses, exposed so a caller that
+        MEANT "this is the same piece of work" can act on that rather than be told it is a
+        duplicate. Refusing is right for an accidental double-submit and wrong for a retry of
+        the same directive — the dedupe key says those are the same thing, which is the whole
+        reason it exists.
+        """
+        if not dedupe_key:
+            return None
+        row = connection.execute(
+            text("SELECT id FROM tasks "
+                 " WHERE project_id = :project_id AND dedupe_key = :dedupe_key LIMIT 1"),
+            {"project_id": project_id, "dedupe_key": dedupe_key},
+        ).first()
+        return row[0] if row else None
+
     def dispatch_plan(
         self,
         connection: Connection,

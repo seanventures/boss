@@ -628,21 +628,39 @@ def convene_prd_meeting_core(
                     "duplicate_of": existing_run}
 
     if task_id is None:
-        task = intake.create_task(
-            connection,
-            project_id=project_id,
-            title=f"PRD meeting: {directive[:90]}",
-            description=directive,
-            # Same directive, same project, same meeting. make_id() here meant a retried or
-            # double-submitted convene spent for a second identical panel.
-            dedupe_key=stable_dedupe_key("prd-meeting", project_id, directive),
-            priority="p1",
-            risk_tier=2,
-            inputs={"directive": directive, "url": url, "constraints": constraints},
-            required_artifacts=["meeting_minutes"],
-            data_boundary=str(constraints.get("data_boundary") or "internal"),
-        )
-        task_id = task["task_id"]
+        # Same directive, same project, same meeting. `make_id()` here meant a retried or
+        # double-submitted convene spent for a second identical panel.
+        dedupe_key = stable_dedupe_key("prd-meeting", project_id, directive)
+        # ADOPT THE TASK, DO NOT COLLIDE WITH IT.
+        #
+        # The dedupe key outlives the meeting it was made for. `active_duplicate_meeting`
+        # above catches a panel that is still going and returns it — right — but once that
+        # run is CANCELLED there is no active duplicate, while the task row it created still
+        # holds the key. So the next run on the same directive got:
+        #
+        #   ValueError: Task with dedupe_key already exists in this project: prd-meeting:…
+        #
+        # and deadlettered its panel step. "Stop and run again" walks into this every time,
+        # because stopping and re-running the same directive is exactly the case: the whole
+        # point of the key is that this IS the same meeting, so the run should take the task
+        # over rather than fail for the reason the key exists to express.
+        existing_task = intake.task_by_dedupe_key(connection, project_id, dedupe_key)
+        if existing_task:
+            task_id = existing_task
+        else:
+            task = intake.create_task(
+                connection,
+                project_id=project_id,
+                title=f"PRD meeting: {directive[:90]}",
+                description=directive,
+                dedupe_key=dedupe_key,
+                priority="p1",
+                risk_tier=2,
+                inputs={"directive": directive, "url": url, "constraints": constraints},
+                required_artifacts=["meeting_minutes"],
+                data_boundary=str(constraints.get("data_boundary") or "internal"),
+            )
+            task_id = task["task_id"]
     reservation = budget.reserve(
         connection, project_id, "model",
         settings.plan_budget_usd_micros * 4,
