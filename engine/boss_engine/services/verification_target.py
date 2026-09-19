@@ -36,15 +36,29 @@ VERIFY_SCRIPT_STEPS = (
 
 PYTHON_TEST_CMD = "python3 -m unittest discover -v"
 
-# One shell command so it fits the pipeline's single-command model; `&&` short-circuits on the first
-# failure, so the repair evidence points at the earliest broken stage (compile before lint before e2e).
-# The install guard makes the target self-sufficient on a FRESH clone (authoritative re-runs can
-# happen in a clean tree where node_modules doesn't exist yet — without it, `npm run build` exits
-# 127 and the failure reads as the task's fault when it's the environment's).
-_WEB_INSTALL = "[ -d node_modules ] || npm install --no-audit --no-fund --loglevel=error"
+# SEPARATE COMMANDS, NOT A SHELL CHAIN.
+#
+# This was one string joined with `&&` — "so it fits the pipeline's single-command model" —
+# and the sandbox deliberately runs commands WITHOUT a shell, refusing anything containing
+# operators. The two rules met for the first time on a real build and the build lost:
+#
+#   '[ -d node_modules ] || npm install … && npm run build && …' uses shell syntax, and
+#   sandbox commands run WITHOUT a shell.
+#
+# The sandbox is right — an argv[0]-only check would have run `npm install` and silently
+# skipped the tests. And the single-command model was never the contract: `test_commands` is a
+# LIST and the runner already does `[sandbox.run(cmd) for cmd in spec.test_commands]`, which
+# gives the same short-circuit (the first failure is the one the repair sees) with no shell.
+#
+# The install guard goes too: `[ -d node_modules ] ||` is shell syntax, and `npm install` on a
+# populated tree is already close to a no-op. Keeping the install FIRST is what makes the
+# target self-sufficient on a fresh clone — without it `npm run build` exits 127 and the
+# failure reads as the task's fault when it is the environment's.
 NPM_INSTALL_CMD = "npm install --no-audit --no-fund --loglevel=error"
 _WEB_STEPS = ["npm run build", "npm run typecheck", "npm run lint", "npm run test:e2e"]
-WEB_TEST_CMD = " && ".join([_WEB_INSTALL, *_WEB_STEPS])
+WEB_TEST_COMMANDS = [NPM_INSTALL_CMD, *_WEB_STEPS]
+#: Display only — the console shows the sequence as one line. Never execute this.
+WEB_TEST_CMD = " && ".join(WEB_TEST_COMMANDS)
 
 # Live official BugBox/HookWatch/ApproveIt failed because the model rewrote
 # package.json away from the scaffold: echo stubs, ESLint 6, bare `playwright
@@ -122,7 +136,8 @@ def detect_kind(spec: dict[str, Any], title: str = "") -> str:
 def default_test_commands(spec: dict[str, Any], title: str = "") -> list[str]:
     """The verification target when the task didn't specify one — web command set for web projects,
     the unittest default otherwise. (Callers use this as the fallback for ``spec['test_commands']``.)"""
-    return [WEB_TEST_CMD] if detect_kind(spec, title) == "web" else [PYTHON_TEST_CMD]
+    return (list(WEB_TEST_COMMANDS) if detect_kind(spec, title) == "web"
+            else [PYTHON_TEST_CMD])
 
 
 def verification_profile(spec: dict[str, Any], title: str = "") -> dict[str, Any]:
