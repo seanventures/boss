@@ -1,7 +1,7 @@
 """Multi-agent PRD meeting — BOSS convenes a panel of role-agents that debate,
 then synthesize, then draft, before the deliverable goes through the human gate.
 
-Each "agent" is the same brain (whatever make_chat_adapter returns — e.g. Claude on
+Each "agent" is the same brain (whatever make_agent_chat_adapter returns — e.g. Claude on
 the Max plan) wearing a different persona/system-prompt. BOSS orchestrates the
 rounds, shares one research pass across the panel, records the full minutes, and
 gates the final publish. This is BOSS running a company of AI departments.
@@ -27,7 +27,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from ..db import begin
-from .claude_cli_adapter import make_chat_adapter
+from .claude_cli_adapter import make_agent_chat_adapter
 from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_client import MCPClient
@@ -705,7 +705,23 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     with begin(engine) as c:
         personas = resolve_roles(run["role_keys"], load_role_map(c, run["project_id"]))
     state = dict(run["state"])
-    adapter = make_chat_adapter(settings)
+    # THE SETTING SAYS "AND MEETINGS", AND THIS LINE WAS NOT READING IT.
+    #
+    # `chat_llm_engine` is labelled "Console chat, agents and meetings" and its help text
+    # promises it "runs the agent panels and speaks in meetings". Only
+    # `make_agent_chat_adapter` reads it. `make_chat_adapter` reads `llm_engine`, a DIFFERENT
+    # knob that defaults to "auto" and falls through to the OpenAI adapter.
+    #
+    # So an operator who set this to `codex` — deliberately, in the box that names meetings —
+    # watched every panel die with "OPENAI_API_KEY is not configured", and the obvious
+    # remedy (set an OpenAI key) would have run their meetings on the provider they had just
+    # chosen not to use.
+    #
+    # The comment above `chat_llm_engine` describes this exact failure for the chat: "an
+    # operator who sets one lock believes they have moved everything." It was true of meetings
+    # too. `make_agent_chat_adapter` falls back to `make_chat_adapter` when the setting is
+    # empty, so an install that never set it is unaffected.
+    adapter = make_agent_chat_adapter(settings)
     add_cost = 0
     model = (run["usage"] or {}).get("model")
 
