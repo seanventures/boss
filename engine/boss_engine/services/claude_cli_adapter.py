@@ -494,7 +494,13 @@ class FallingBackAdapter:
                     self._on_fallback(exc)
                 except Exception:  # noqa: BLE001 — reporting must not break answering
                     pass
-        out = self.fallback.create_chat_completion(messages, tools=tools, **kwargs)
+        try:
+            out = self.fallback.create_chat_completion(messages, tools=tools, **kwargs)
+        except Exception as fallback_exc:  # noqa: BLE001
+            # THE FIRST FAILURE IS THE REAL ONE. Reporting the second hides a CLI that said
+            # exactly what was wrong behind a backend the operator never chose.
+            raise RuntimeError(
+                f"{exc} (and the fallback failed too: {fallback_exc})") from exc
         self.last_backend = type(self.fallback).__name__
         return out
 
@@ -523,8 +529,12 @@ class FallingBackAdapter:
                     self._on_fallback(exc)
                 except Exception:  # noqa: BLE001 — reporting must not break answering
                     pass
-        out = self.fallback.create_text_response(
-            prompt, system_prompt=system_prompt, model=model)
+        try:
+            out = self.fallback.create_text_response(
+                prompt, system_prompt=system_prompt, model=model)
+        except Exception as fallback_exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"{exc} (and the fallback failed too: {fallback_exc})") from exc
         self.last_backend = type(self.fallback).__name__
         return out
 
@@ -543,6 +553,25 @@ _CHAT_ENGINE_ALIASES = {
     "codex_cli": "codex",
     "openai": "native",
 }
+
+
+def openai_fallback_usable(settings: Settings) -> bool:
+    """Can the OpenAI adapter actually answer on this install?
+
+    A FALLBACK THAT CANNOT WORK IS NOT A FALLBACK — it is a way to replace an actionable error
+    with an unactionable one. `_UNAVAILABLE` includes "exited 1", so any hiccup from the CLI
+    (codex printed `failed to refresh available models` and exited 1) sent the call to the
+    OpenAI adapter, which on an install with no key raises
+
+        IntegrationConfigurationError: OPENAI_API_KEY is not configured.
+
+    and that is what the operator saw — about a subscription that was connected and working,
+    while the real reason sat in a log nobody reads. Twice.
+    """
+    for attr in ("openai_api_key", "azure_openai_key"):
+        if str(getattr(settings, attr, "") or "").strip():
+            return True
+    return False
 
 
 def _chat_engine_name(value: str) -> str:
@@ -587,7 +616,9 @@ def make_agent_chat_adapter(settings: Settings):
         return make_codex_chat_adapter(settings, model=model)
     if engine != "claude_cli":
         return OpenAIAdapter(settings)
-    return FallingBackAdapter(
-        ClaudeCliAdapter(settings, model=model),
-        OpenAIAdapter(settings),
-    )
+    claude = ClaudeCliAdapter(settings, model=model)
+    if not openai_fallback_usable(settings):
+        # Alone, deliberately: with nothing behind it, the CLI's own error reaches the caller
+        # — "not logged in", "usage limit", "exited 1 …" — each of which names its own fix.
+        return claude
+    return FallingBackAdapter(claude, OpenAIAdapter(settings))

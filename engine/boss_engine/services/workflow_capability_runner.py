@@ -1693,12 +1693,20 @@ def resume_awaited(
             # Following the successor is the whole fix. It is the same work by construction —
             # `retry_code_task` starts a new attempt in the same lineage — so the step re-parks
             # on the live attempt rather than failing on the dead one.
-            successor = _successor_attempt(connection, project_id, awaited_id, run_id)
-            if kind == "code_task" and successor:
+            # BOTH KINDS, NOT ONE. The gate here used to read `kind == "code_task"`, which
+            # is why a retried panel was never followed — see `_meeting_successor`.
+            successor = (
+                _successor_attempt(connection, project_id, awaited_id, run_id)
+                if kind == "code_task"
+                else _meeting_successor(connection, project_id, awaited_id)
+                if kind == "meeting" else None
+            )
+            if successor:
+                noun = "build" if kind == "code_task" else "panel"
                 workflows.repoint_waiting_step(
                     connection, project_id=project_id, step_run_id=step["id"],
                     handle={**handle, "id": successor},
-                    note=(f"the build was retried; this step now follows {successor} "
+                    note=(f"the {noun} was retried; this step now follows {successor} "
                           f"(the earlier attempt {awaited_id} ended as '{status}')"),
                 )
                 done.append({"run_id": run_id, "step_id": step["step_id"],
@@ -1780,6 +1788,53 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
         except Exception:  # noqa: BLE001 — the status is still reportable without this
             pass
     return reason[:400]
+
+
+def _meeting_successor(
+    connection: Connection, project_id: str, awaited_id: str,
+) -> Optional[str]:
+    """A later attempt at the same panel, if one is under way.
+
+    THE HALF OF THE RETRY FIX THAT WAS NEVER WRITTEN.
+    -------------------------------------------------
+    `_successor_attempt` reads `code_task_runs` and its caller gated on
+    `kind == "code_task"`, so a retried MEETING was never followed: the step stayed parked on
+    the dead `mrun_`, and an operator who pressed "Try Convene a panel again" watched a new
+    panel run to completion while the workflow above it still read "the meeting it started
+    finished as 'cancelled'". Exactly the defect that was fixed for builds, left open for
+    panels — and exactly what Kiro Crew's Stage 4 critique predicts of a pipeline that cannot
+    re-plan when a result invalidates the plan.
+
+    The lineage key is `finalize_ctx->>'meeting_fingerprint'`: two runs of the same panel over
+    the same directive carry the same fingerprint, which is what makes "the same work, tried
+    again" decidable rather than guessed.
+
+    A successor that itself failed or was cancelled is not progress — following one would only
+    move the stuck point — so only live or completed runs count.
+    """
+    try:
+        return connection.execute(
+            text(
+                """
+                WITH target AS (
+                    SELECT finalize_ctx->>'meeting_fingerprint' AS fp
+                      FROM meeting_runs WHERE id = :awaited
+                )
+                SELECT r.id
+                  FROM meeting_runs r, target t
+                 WHERE r.project_id = :p
+                   AND r.id <> :awaited
+                   AND t.fp IS NOT NULL
+                   AND r.finalize_ctx->>'meeting_fingerprint' = t.fp
+                   AND r.status IN ('queued', 'running', 'completed')
+                 ORDER BY r.created_at DESC
+                 LIMIT 1
+                """
+            ),
+            {"awaited": awaited_id, "p": project_id},
+        ).scalar()
+    except Exception:  # noqa: BLE001 — a missing optional column must not stop the sweep
+        return None
 
 
 def _successor_attempt(

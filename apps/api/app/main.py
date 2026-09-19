@@ -11105,6 +11105,33 @@ def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
             ) from error
 
 
+@app.post("/v1/agent/wakeups/tick")
+def agent_wakeups_tick(payload: dict) -> dict:
+    """Wake every monitor and schedule whose time has come.
+
+    THE ONLY PATH THAT SPENDS MODEL BUDGET WITHOUT SOMEBODY TYPING, so the limit is low by
+    default and every wake is bounded by its own cycle cap, deadline and failure counter. A
+    sweep that fails on one loop records it against that loop and carries on: dying halfway
+    would leave the rest silently un-run, which looks exactly like them being stopped.
+    """
+    from boss_engine.services.agent_wakeups import run_due
+
+    return run_due(settings, engine,
+                   limit=int(payload.get("limit") or 5),
+                   project_id=str(payload.get("project_id") or "").strip() or None)
+
+
+@app.get("/v1/agent/wakeups")
+def list_agent_wakeups(project_id: str, active_only: bool = True) -> dict:
+    """What is watching or scheduled here, and when each next wakes."""
+    from boss_engine.services.agent_wakeups import list_wakeups
+
+    with begin(engine) as connection:
+        return {"project_id": project_id,
+                "wakeups": list_wakeups(connection, project_id=project_id,
+                                        active_only=active_only)}
+
+
 @app.get("/v1/memory")
 def list_memory_endpoint(
     project_id: str, actor: str = "", include_proposed: bool = True,

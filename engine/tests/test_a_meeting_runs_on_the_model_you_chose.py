@@ -77,3 +77,73 @@ def test_the_setting_that_promises_meetings_is_the_one_being_read():
 
     assert "meetings" in KNOBS["chat_llm_engine"]["label"].lower()
     assert "meetings" in KNOBS["chat_llm_engine"]["help"].lower()
+
+
+# -- a fallback that cannot work is not a fallback ---------------------------------------------
+
+def test_no_fallback_is_attached_when_it_could_not_answer():
+    """"exited 1" is in the unavailable list, so ANY hiccup from the CLI — codex printed
+    `failed to refresh available models` and exited 1 — sent the call to the OpenAI adapter,
+    which on an install with no key raises "OPENAI_API_KEY is not configured".
+
+    That is what the operator saw, twice, about a subscription that was connected and working,
+    while the real reason sat in a log nobody reads. Wrapping in a backend that cannot answer
+    does not add resilience; it replaces an actionable error with an unactionable one.
+    """
+    from boss_engine.services.claude_cli_adapter import (
+        ClaudeCliAdapter,
+        FallingBackAdapter,
+        make_agent_chat_adapter,
+    )
+
+    class _NoKey:
+        chat_llm_engine = "claude_code"
+        llm_engine = "auto"
+        openai_api_key = ""
+        azure_openai_key = ""
+        claude_cli_model = None
+        claude_cli_path = "claude"
+        repo_root = __import__("pathlib").Path("/tmp")
+
+    assert isinstance(make_agent_chat_adapter(_NoKey()), ClaudeCliAdapter)
+
+    class _WithKey(_NoKey):
+        openai_api_key = "sk-x"
+
+    assert isinstance(make_agent_chat_adapter(_WithKey()), FallingBackAdapter)
+
+
+def test_and_azure_counts_as_a_usable_fallback():
+    """The OpenAI adapter answers on either credential; checking only one would drop the
+    fallback for an Azure install that has a working one."""
+    from boss_engine.services.claude_cli_adapter import openai_fallback_usable
+
+    class _Azure:
+        openai_api_key = ""
+        azure_openai_key = "az-x"
+
+    assert openai_fallback_usable(_Azure()) is True
+
+
+def test_codex_gets_the_same_treatment():
+    import inspect
+
+    from boss_engine.services import codex_cli_adapter
+
+    source = inspect.getsource(codex_cli_adapter.make_codex_chat_adapter)
+    assert "openai_fallback_usable(settings)" in source
+    assert "return codex" in source
+
+
+def test_and_a_failed_fallback_reports_the_primary_failure():
+    """The first failure is the real one. Reporting the second hides a CLI that said exactly
+    what was wrong behind a backend the operator never chose."""
+    import inspect
+
+    from boss_engine.services.claude_cli_adapter import FallingBackAdapter
+
+    for method in (FallingBackAdapter.create_chat_completion,
+                   FallingBackAdapter.create_text_response):
+        source = inspect.getsource(method)
+        assert "and the fallback failed too" in source
+        assert "from exc" in source

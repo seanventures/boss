@@ -274,6 +274,20 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_agent_wakeups(self, project_id: str = "") -> dict[str, Any]:
+        """Fire monitors and schedules that are due.
+
+        Bounded per sweep: this is the one loop that spends model budget with nobody at the
+        keyboard, so it starts a handful of turns and comes back next tick rather than
+        draining the queue in one go.
+        """
+        response = self._client.post(
+            "/v1/agent/wakeups/tick",
+            json={"project_id": project_id, "limit": 5},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def tick_process_manager(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
         """Always-on Project Manager steward cycle. Fail-closed; never invents scores."""
         response = self._client.post(

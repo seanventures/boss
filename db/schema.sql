@@ -6120,3 +6120,63 @@ CREATE TABLE IF NOT EXISTS agent_session_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_session_ledger_open
   ON agent_session_ledger (project_id, finished_at);
+
+-- ── Work that starts without anybody asking (Kiro gaps A1.2 / A1.3) ───────────
+--
+-- BOSS could only ever act when someone typed. A question like "keep an eye on this PR and
+-- tell me when it is review-ready" had no answer except the operator remembering to come
+-- back, and "every weekday at 9, summarise the open work" had none at all: `scheduling.py`
+-- is about preemption between jobs, not about starting agent work on a clock.
+--
+-- ONE TABLE, TWO SHAPES, because they are the same mechanism pointed at different threads:
+--
+--   * `monitor` wakes IN an existing conversation. It carries the same context and history,
+--     so it does not have to be re-briefed each round, and it stops on an exit condition.
+--   * `schedule` opens a fresh conversation each time. Briefings, audits, sweeps.
+--
+-- EVERY WAKE SPENDS MODEL BUDGET, so nothing here starts by itself. A row exists only because
+-- an operator asked for it, every row carries a cap, and the caps are backstops against
+-- runaway rather than targets — a loop that reaches its cap ran out of rope, it did not finish.
+CREATE TABLE IF NOT EXISTS agent_wakeups (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('monitor', 'schedule')),
+  -- Set for a monitor: the conversation it wakes inside. Null for a schedule, which opens a
+  -- new one per run so a daily briefing does not grow one thread forever.
+  thread_id TEXT,
+  actor TEXT NOT NULL,
+  -- What to do on each wake, in the operator's own words.
+  prompt TEXT NOT NULL,
+  -- Monitors only. The condition that ENDS the loop, checked by the agent itself: "when the
+  -- PR is approved", "when the deploy is healthy". Without one a monitor is just a cron job
+  -- that never stops.
+  exit_condition TEXT,
+  interval_seconds INTEGER,
+  -- Schedules only. Deliberately not a cron expression: a half-implemented cron parser is a
+  -- worse answer than two explicit fields, and "every weekday at 9" is the shape people ask
+  -- for. Days are lowercase three-letter names; an empty list means every day.
+  at_time TEXT,
+  days JSONB NOT NULL DEFAULT '[]'::jsonb,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  next_wake_at TIMESTAMPTZ NOT NULL,
+  cycle INTEGER NOT NULL DEFAULT 0,
+  -- 0 means unlimited, which is worth asking for only deliberately.
+  max_cycles INTEGER NOT NULL DEFAULT 24,
+  -- A wall-clock bound, for a loop whose turns are slow or whose interval is long. Either
+  -- bound ends the loop; neither is required.
+  deadline_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'stopped', 'exhausted', 'completed', 'failed')),
+  last_ran_at TIMESTAMPTZ,
+  last_result TEXT,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- The sweeper's only query: what is due. Partial, because a stopped loop is most of the table
+-- after a while and none of it is ever due.
+CREATE INDEX IF NOT EXISTS idx_agent_wakeups_due
+  ON agent_wakeups (next_wake_at) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_agent_wakeups_thread
+  ON agent_wakeups (project_id, thread_id);

@@ -3836,6 +3836,147 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(error)}
 
     @reg.tool(
+        "watch",
+        "Keep THIS conversation checking something on an interval until a condition is met — "
+        "a pull request, a CI run, a deployment. Use it when the operator says 'keep an eye "
+        "on', 'let me know when', 'monitor', or 'tell me when it is done'. Each wake runs in "
+        "this same conversation, so you keep the context. It costs a model call per cycle, so "
+        "choose an interval matched to how fast the thing actually changes: a CI run that "
+        "takes eight minutes does not need a check every minute.",
+        _obj({"check": {"type": "string",
+                        "description": "what to do on each wake, in your own words"},
+              "until": {"type": "string",
+                        "description": "REQUIRED. The condition that means it can stop — "
+                                       "'the PR is approved', 'the deploy reports healthy'"},
+              "interval_seconds": {"type": "integer",
+                                   "description": "default 300; minimum 60"},
+              "max_cycles": {"type": "integer",
+                             "description": "default 24; 0 is unlimited and should be rare"},
+              "project_id": {"type": "string"}},
+             ["check", "until"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def watch(ctx, *, project_id, actor, args):
+        """The answer to "keep an eye on this", which BOSS simply did not have.
+
+        Before this, the only honest reply was "ask me again later": BOSS could act when
+        someone typed and at no other time.
+        """
+        from ..services.agent_wakeups import WakeupError, arm_monitor
+
+        thread_id = str(args.get("_thread_id") or "").strip()
+        if not thread_id:
+            return {"ok": False,
+                    "error": "a monitor runs inside a conversation, and this turn has none"}
+        try:
+            with ctx.begin() as c:
+                row = arm_monitor(
+                    c, project_id=args.get("project_id") or project_id, actor=actor,
+                    thread_id=thread_id, prompt=str(args.get("check") or ""),
+                    exit_condition=str(args.get("until") or ""),
+                    interval_seconds=int(args.get("interval_seconds") or 300),
+                    max_cycles=int(args.get("max_cycles", 24) or 0))
+        except WakeupError as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, **_json_safe(row),
+                "note": ("Armed. This conversation will wake itself and check; the operator "
+                         "does not need to stay. Tell them what you will watch for and how "
+                         "often, then stop.")}
+
+    @reg.tool(
+        "schedule_work",
+        "Run something on a clock, reporting into a NEW conversation each time — a morning "
+        "briefing, a nightly audit, a weekly sweep. Use it for 'every weekday at 9', 'each "
+        "morning', 'every Monday'. Times are in the operator's timezone, so ask which one if "
+        "you do not know it rather than assuming UTC.",
+        _obj({"prompt": {"type": "string", "description": "what to do on each run"},
+              "at_time": {"type": "string", "description": "24h clock, e.g. '09:00'"},
+              "days": {"type": "array", "items": {"type": "string"},
+                       "description": "mon..sun; omit for every day"},
+              "timezone": {"type": "string",
+                           "description": "IANA name, e.g. 'Europe/London'. Ask if unsure."},
+              "project_id": {"type": "string"}},
+             ["prompt", "at_time"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def schedule_work(ctx, *, project_id, actor, args):
+        from ..services.agent_wakeups import WakeupError, schedule as _schedule
+
+        try:
+            with ctx.begin() as c:
+                row = _schedule(
+                    c, project_id=args.get("project_id") or project_id, actor=actor,
+                    prompt=str(args.get("prompt") or ""),
+                    at_time=str(args.get("at_time") or "").strip(),
+                    days=[str(d) for d in (args.get("days") or [])],
+                    tz_name=str(args.get("timezone") or "UTC").strip() or "UTC")
+        except WakeupError as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, **_json_safe(row),
+                "note": "Scheduled. Say when the first run lands, in their timezone."}
+
+    @reg.tool(
+        "stop_watching",
+        "End a monitor or a schedule. Call it with finished=true from inside a monitor's own "
+        "wake when the exit condition has been met — that is how a loop finishes rather than "
+        "running to its cap. Without an id it stops whatever is watching THIS conversation.",
+        _obj({"wakeup_id": {"type": "string",
+                            "description": "omit to stop this conversation's monitor"},
+              "finished": {"type": "boolean",
+                           "description": "true when the thing you were waiting for happened"},
+              "reason": {"type": "string"},
+              "project_id": {"type": "string"}}),
+        kind="write",
+        reversibility="safe",
+    )
+    def stop_watching(ctx, *, project_id, actor, args):
+        from ..services.agent_wakeups import WakeupError, stop
+
+        pid = args.get("project_id") or project_id
+        wakeup_id = str(args.get("wakeup_id") or "").strip()
+        thread_id = str(args.get("_thread_id") or "").strip()
+        with ctx.begin() as c:
+            if not wakeup_id:
+                wakeup_id = c.execute(
+                    _text("SELECT id FROM agent_wakeups WHERE project_id=:p AND thread_id=:t "
+                          "  AND status='active' LIMIT 1"),
+                    {"p": pid, "t": thread_id}).scalar() or ""
+            if not wakeup_id:
+                return {"ok": False, "error": "nothing is watching this conversation"}
+            finished = bool(args.get("finished"))
+            try:
+                row = stop(
+                    c, project_id=pid, wakeup_id=wakeup_id, actor=actor,
+                    # COMPLETED AND STOPPED ARE DIFFERENT OUTCOMES. One means the thing being
+                    # waited for happened; the other means somebody called it off, and an
+                    # operator reading back later needs to know which.
+                    status="completed" if finished else "stopped",
+                    reason=str(args.get("reason") or
+                               ("the exit condition was met" if finished
+                                else "stopped by the operator")))
+            except WakeupError as error:
+                return {"ok": False, "error": str(error)}
+        return {"ok": True, **row}
+
+    @reg.tool(
+        "list_watches",
+        "What is currently watching or scheduled on this project: what each one checks, when "
+        "it next wakes, which cycle it is on, and what the last one found.",
+        _obj({"all": {"type": "boolean", "description": "include stopped and finished ones"},
+              "project_id": {"type": "string"}}),
+        kind="read",
+    )
+    def list_watches(ctx, *, project_id, actor, args):
+        from ..services.agent_wakeups import list_wakeups
+
+        with ctx.begin() as c:
+            rows = list_wakeups(c, project_id=args.get("project_id") or project_id,
+                                active_only=not bool(args.get("all")))
+        return {"ok": True, "count": len(rows), "watches": [_json_safe(r) for r in rows]}
+
+    @reg.tool(
         "remember",
         "Record something worth carrying into LATER sessions: a correction the operator gave "
         "you (kind='lesson'), a fact about how they like to work (kind='preference'), or "
@@ -6211,7 +6352,11 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # MEMORY IS WORTHLESS IF THE AGENT CANNOT REACH IT FROM A CONVERSATION. The moment an
     # operator corrects you is the only moment that correction exists — it has to be writable
     # from the turn in which it is said, not from a separate admin path.
-    "remember",
+        # "Keep an eye on this" is said in a conversation, so it has to be armable from one.
+    "watch",
+    "schedule_work",
+    "stop_watching",
+"remember",
     "forget",
     "update_ledger",
 "recheck_workflow_run",

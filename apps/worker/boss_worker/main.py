@@ -63,6 +63,11 @@ FOCUSED_AGENT_INTERVAL_SECONDS = 60
 AGENT_PROCESS_INTERVAL_SECONDS = 30
 PROCESS_MANAGER_INTERVAL_SECONDS = 60
 FACTORY_FLOW_INTERVAL_SECONDS = 45
+#: How often to look for monitors and schedules that are due. A minute is fine: the wakeups
+#: themselves carry the real timing, and this only decides how late a due one can be. Checking
+#: more often would not make anything happen sooner — the minimum interval is 60s — and this
+#: is the one sweep that can start model turns.
+AGENT_WAKEUPS_INTERVAL_SECONDS = 60
 _last_shepherd_watch_monotonic = 0.0
 _last_shepherd_autopilot_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
@@ -73,6 +78,7 @@ _last_focused_agent_monotonic = 0.0
 _last_agent_process_monotonic = 0.0
 _last_process_manager_monotonic = 0.0
 _last_factory_flow_monotonic = 0.0
+_last_agent_wakeups_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -255,6 +261,31 @@ def _tick_factory_flow(client: ControlPlaneClient, settings) -> None:
             )
     except Exception:  # noqa: BLE001
         LOGGER.debug("factory_flow_failed", exc_info=True)
+
+
+def _tick_agent_wakeups(client: ControlPlaneClient, settings) -> None:
+    """Fire monitors and schedules whose time has come.
+
+    Errors are swallowed like every other tick: a sweep that raises must not take the worker
+    down, and the wakeup itself records its own failure against its own row.
+    """
+    global _last_agent_wakeups_monotonic
+    now = time.monotonic()
+    if now - _last_agent_wakeups_monotonic < AGENT_WAKEUPS_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.tick_agent_wakeups(str(project_id))
+        _last_agent_wakeups_monotonic = now
+        if isinstance(result, dict) and result.get("ran"):
+            LOGGER.info("agent_wakeups due=%s ran=%s",
+                        result.get("due"), len(result.get("ran") or []))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("agent_wakeups_failed", exc_info=True)
 
 
 def _tick_process_manager(client: ControlPlaneClient, settings) -> None:
@@ -452,6 +483,7 @@ def main() -> None:
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)
+            _tick_agent_wakeups(client, settings)
             if _STOPPING:
                 break
             if not ran_job:

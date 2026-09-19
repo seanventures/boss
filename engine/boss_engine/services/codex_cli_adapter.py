@@ -182,7 +182,13 @@ def make_codex_chat_adapter(settings: Settings, *, model: Optional[str] = None):
     and falling back gets the operator a reply. A bad turn from the model is an answer of
     sorts and belongs to the caller's retry logic.
     """
-    from .claude_cli_adapter import FallingBackAdapter
+    from .claude_cli_adapter import FallingBackAdapter, openai_fallback_usable
     from .openai_adapter import OpenAIAdapter
 
-    return FallingBackAdapter(CodexCliAdapter(settings, model=model), OpenAIAdapter(settings))
+    codex = CodexCliAdapter(settings, model=model)
+    if not openai_fallback_usable(settings):
+        # See openai_fallback_usable: falling back to an adapter with no credential turns
+        # "codex exited 1" into "OPENAI_API_KEY is not configured", which is true of a
+        # provider the operator deliberately did not choose.
+        return codex
+    return FallingBackAdapter(codex, OpenAIAdapter(settings))

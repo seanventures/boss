@@ -89,6 +89,13 @@ _EXPECTED_TOOLS: set[str] = {
     # an agent was told: every thread started cold and every correction was spent the moment it
     # was given. `remember` is the write, `recall` the read, `forget` the retirement, and
     # `update_ledger` is the session's memory of its own goal across compaction.
+    # WORK THAT STARTS WITHOUT ANYBODY TYPING (Kiro gaps A1.2/A1.3). BOSS could only act when
+    # someone asked: "keep an eye on this PR" had no answer but the operator remembering to
+    # come back. Every wake spends budget, so each carries a cap and stops itself.
+    "watch",
+    "schedule_work",
+    "stop_watching",
+    "list_watches",
     "remember",
     "recall",
     "forget",
@@ -183,11 +190,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 102, (
+    assert len(reg.names()) == 106, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 60
-    assert len(write) == 42
+    assert len(read) == 61
+    assert len(write) == 45
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -435,6 +442,11 @@ _SAFE_WRITES = [
     "remember",
     "forget",
     "update_ledger",
+    # Arming a loop writes one row and spends nothing until its first wake; stopping one
+    # spends nothing at all.
+    "watch",
+    "schedule_work",
+    "stop_watching",
 ]
 
 
