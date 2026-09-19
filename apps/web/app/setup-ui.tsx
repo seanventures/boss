@@ -627,27 +627,12 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
           </p>
         </div>
       </div>
-      {/* WHAT IS ALREADY SAVED, BEFORE THE FORM. The form asks a question this list has
-          already answered, and reading the question first is what made an operator believe a
-          connection had been lost when it was sitting in the database the whole time. */}
-      {saved.length ? (
-        <p className="detail" data-testid="setup-model-saved">
-          Saved here:{" "}
-          {saved.map((m, i) => {
-            const label = providers.find((p) => p.provider === m.wizard_provider)?.label
-                          ?? m.source_id;
-            return (
-              <span key={m.source_id}>
-                {i ? ", " : ""}
-                <b>{label}</b>
-                {m.kind === "subscription" ? " (subscription)" : ""}
-                {m.saved_at ? ` — ${m.saved_at.slice(0, 16).replace("T", " ")}` : ""}
-              </span>
-            );
-          })}
-          . The picker starts on the most recent one.
-        </p>
-      ) : null}
+      {/* WHAT IS ALREADY CONNECTED, BEFORE THE FORM ASKS AGAIN.
+          This was one run-on sentence — "Saved here: OpenRouter — date, Claude Code
+          subscription (subscription) — date, …" — which is a list pretending to be prose: no
+          state, no colour, and no way to see which model does which job. Three connected
+          models and an operator who could not tell they were connected. */}
+      <ConnectedModels projectId={projectId} providers={providers} saved={saved} />
       <div className="setup-form">
         <label className="setup-field">
           <span>Provider</span>
@@ -867,6 +852,76 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
 }
 
 /**
+ * The models this project has, what each is, and what it is doing.
+ *
+ * A green dot means BOSS can use it right now. The roles beside a model are the jobs it
+ * currently holds — so "which model writes my code" is answered by looking, not by opening a
+ * picker and reading four dropdowns.
+ */
+function ConnectedModels(
+  { projectId, providers, saved }:
+  { projectId: string; providers: Provider[]; saved: SavedModel[] },
+) {
+  const [roles, setRoles] = useState<Array<{ key: string; label: string; value: string }>>([]);
+  const [connected, setConnected] = useState<string[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/settings?project_id=${encodeURIComponent(projectId)}`,
+                              { cache: "no-store" });
+        if (!r.ok || !alive) return;
+        const body = await r.json();
+        setConnected((body.connected_engines ?? []) as string[]);
+        setRoles(((body.knobs ?? []) as Array<{ key: string; label: string; kind: string;
+                                                value: unknown }>)
+          .filter((k) => k.kind === "choice")
+          .map((k) => ({ key: k.key, label: k.label, value: String(k.value ?? "") })));
+      } catch { /* the chips are a summary; the form below still works */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+
+  // One row per model this install can actually use. `saved` carries WHEN and WHAT KIND;
+  // `connected_engines` is the authority on whether it is usable at all, and it includes a
+  // model configured from the environment that was never "saved" through this screen.
+  const rows = connected.map((engine) => {
+    const from = saved.find((m) => m.wizard_provider === engine);
+    return {
+      engine,
+      label: providers.find((p) => p.provider === engine)?.label
+             ?? engine.replace(/_/g, " "),
+      kind: from?.kind === "subscription" ? "subscription" : from ? "API key" : "this install",
+      at: from?.saved_at ? from.saved_at.slice(0, 10) : "",
+      // The jobs it holds right now. Empty is a real answer and says so below.
+      jobs: roles.filter((r) => r.value === engine).map((r) => r.label),
+    };
+  });
+  if (!rows.length) return null;
+
+  return (
+    <div className="setup-models" data-testid="setup-connected-models">
+      <span className="setup-models-head">Connected models</span>
+      <ul>
+        {rows.map((row) => (
+          <li key={row.engine}>
+            <span className="setup-dot" aria-hidden />
+            <b>{row.label}</b>
+            <span className="setup-models-kind">
+              {row.kind}{row.at ? ` · ${row.at}` : ""}
+            </span>
+            <span className="setup-models-jobs">
+              {row.jobs.length ? row.jobs.join(" · ") : "no role yet"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * Which connected model fills which role.
  *
  * It belongs HERE, immediately after connecting one, because that is the moment the question
@@ -880,18 +935,24 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
 function RoleModels({ projectId, actor }: { projectId: string; actor: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="setup-roles" data-testid="setup-role-models">
-      <button type="button" className="cap-btn" aria-expanded={open}
-              data-testid="setup-role-models-toggle"
-              onClick={() => setOpen((v) => !v)}>
-        {open ? "Hide" : "Choose"} a model per role
-      </button>
+    // A SECTION, NOT A STRAY BUTTON. This was a bare `cap-btn` with a paragraph running into
+    // it — reported as "I cant figure out where that button, no style and it is not a great
+    // experience". A disclosure that owns its whole row, with the summary INSIDE it, reads as
+    // a thing you can open rather than an afterthought below the form.
+    <details className="setup-roles" data-testid="setup-role-models"
+             open={open}
+             onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary data-testid="setup-role-models-toggle" aria-expanded={open}>
+        <span className="setup-roles-title">Choose a model per role</span>
+        <span className="setup-roles-hint">
+          who implements, who reviews, who takes the hard ones
+        </span>
+      </summary>
       <p className="detail">
-        Who implements, who reviews it adversarially, and which model takes over when a task
-        escalates. Unset means the implementer does that job too. Saved per project and applied
-        on the next run — no restart.
+        Unset means the implementer does that job too. Saved per project and applied on the
+        next run — no restart.
       </p>
-      {open ? <SettingsKnobs projectId={projectId} actor={actor} only="choice" /> : null}
-    </div>
+      <SettingsKnobs projectId={projectId} actor={actor} only="choice" />
+    </details>
   );
 }

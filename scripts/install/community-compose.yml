@@ -94,6 +94,14 @@ services:
       BOSS_DEFAULT_ORG_ID: ${BOSS_DEFAULT_ORG_ID:-org_boss}
       BOSS_DEFAULT_WORKSPACE_ID: ${BOSS_DEFAULT_WORKSPACE_ID:-ws_boss}
       BOSS_DEFAULT_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
+      # THE PRODUCT'S OWN LOOP, ON. Both default to false in config.py, which is right for a
+      # library and wrong for an install whose entire purpose is to build software: pressing
+      # Build convened a panel, wrote a PRD, took an approval, and then answered
+      # "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false)" at step four of ten. A
+      # customer cannot be expected to find a flag they were never told about, in a file they
+      # did not write, after the product has already spent their model budget.
+      BOSS_ENABLE_CODE_TASK: ${BOSS_ENABLE_CODE_TASK:-true}
+      BOSS_GOVERNED_CODING_PIPELINE: ${BOSS_GOVERNED_CODING_PIPELINE:-true}
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
       BOSS_CONTROL_PLANE_URL: http://api:8000
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -157,6 +165,14 @@ services:
       BOSS_API_KEY: ${BOSS_API_KEY}
       BOSS_CONTROL_PLANE_URL: http://api:8000
       BOSS_WORKER_ID: community-worker-1
+      # THE PRODUCT'S OWN LOOP, ON. Both default to false in config.py, which is right for a
+      # library and wrong for an install whose entire purpose is to build software: pressing
+      # Build convened a panel, wrote a PRD, took an approval, and then answered
+      # "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false)" at step four of ten. A
+      # customer cannot be expected to find a flag they were never told about, in a file they
+      # did not write, after the product has already spent their model budget.
+      BOSS_ENABLE_CODE_TASK: ${BOSS_ENABLE_CODE_TASK:-true}
+      BOSS_GOVERNED_CODING_PIPELINE: ${BOSS_GOVERNED_CODING_PIPELINE:-true}
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}

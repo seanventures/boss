@@ -9243,7 +9243,47 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 /* The two quiet expanders — how to get a token, and which model does which job. Both are
    there for whoever wants them and out of the way of everybody who has done this before. */
-.setup-help, .setup-roles { margin-top: 14px; }
+.setup-help { margin-top: 14px; }
+
+/* CONNECTED MODELS. A list of facts with a state colour, not a sentence: which models this
+   install can use, what each one is, and the jobs it currently holds. */
+.setup-models { margin: 16px 0 4px; }
+.setup-models-head {
+  font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted, #B4C4E0);
+}
+.setup-models ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.setup-models li {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--border, #1C2740); background: var(--surface-2, #0F1830);
+}
+/* Green means BOSS can use it right now — the thing three connected models failed to say. */
+.setup-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--green, #3FB950); box-shadow: 0 0 0 3px rgba(63, 185, 80, .14);
+}
+.setup-models-kind { font-size: .78rem; color: var(--muted, #B4C4E0); }
+.setup-models-jobs { margin-left: auto; font-size: .8rem; color: var(--ink-soft, #D4E0F4); }
+
+/* THE ROLE PICKER IS A SECTION. It was a bare button with a paragraph running into it, which
+   nobody could find. */
+.setup-roles {
+  margin-top: 18px; border-top: 1px solid var(--border, #1C2740); padding-top: 14px;
+}
+.setup-roles > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border, #1C2740); background: var(--surface-2, #0F1830);
+}
+.setup-roles > summary::-webkit-details-marker { display: none; }
+.setup-roles > summary::before {
+  content: "▸"; color: var(--muted, #B4C4E0); transition: transform .12s ease;
+}
+.setup-roles[open] > summary::before { content: "▾"; }
+.setup-roles > summary:hover { border-color: var(--accent, #4C8DF6); }
+.setup-roles-title { font-weight: 600; }
+.setup-roles-hint { font-size: .8rem; color: var(--muted, #B4C4E0); }
 .setup-help ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 8px; max-width: 620px; }
 .setup-help ol li { line-height: 1.5; }
 .setup-help p { max-width: 620px; }

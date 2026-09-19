@@ -132,3 +132,51 @@ def test_and_the_name_it_imports_exists():
 
     assert hasattr(JobLeaseService, "cancel_queued_job")
     assert not hasattr(__import__("boss_engine.services.jobs", fromlist=["x"]), "JobQueue")
+
+
+def test_the_community_install_has_the_coding_pipeline_on():
+    """"Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false)" — at step four of ten, after
+    the panel had convened, written a PRD and taken a human approval.
+
+    Both flags default to false in config.py, which is right for a library and wrong for an
+    install whose entire purpose is to build software. A customer cannot be expected to find a
+    flag they were never told about, in a file they did not write, after the product has
+    already spent their model budget.
+    """
+    import pathlib
+
+    import yaml
+
+    compose = yaml.safe_load(
+        pathlib.Path("scripts/install/community-compose.yml").read_text())
+    services = compose["services"]
+
+    for name in ("api", "worker"):
+        env = services[name].get("environment") or {}
+        assert env.get("BOSS_ENABLE_CODE_TASK") == "${BOSS_ENABLE_CODE_TASK:-true}", name
+        assert env.get("BOSS_GOVERNED_CODING_PIPELINE") == \
+            "${BOSS_GOVERNED_CODING_PIPELINE:-true}", name
+
+
+def test_and_both_services_agree():
+    """The API creates the code task and the worker runs it. One with the flag and one without
+    is a task that is accepted and never executed."""
+    import pathlib
+
+    import yaml
+
+    compose = yaml.safe_load(
+        pathlib.Path("scripts/install/community-compose.yml").read_text())
+    api = (compose["services"]["api"].get("environment") or {})
+    worker = (compose["services"]["worker"].get("environment") or {})
+
+    for flag in ("BOSS_ENABLE_CODE_TASK", "BOSS_GOVERNED_CODING_PIPELINE"):
+        assert api.get(flag) == worker.get(flag), flag
+
+
+def test_the_operator_can_still_turn_it_off():
+    """Defaulted, not forced: `${…:-true}` means a value in .env still wins."""
+    import pathlib
+
+    text = pathlib.Path("scripts/install/community-compose.yml").read_text()
+    assert "${BOSS_ENABLE_CODE_TASK:-true}" in text

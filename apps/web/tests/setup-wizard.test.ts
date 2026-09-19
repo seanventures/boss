@@ -10,6 +10,7 @@ import { codeOnly } from "./_helpers/source";
  * call four endpoints in the right order. Every endpoint existed; the order did not.
  */
 const UI = codeOnly("app/setup-ui.tsx");
+const CSS = codeOnly("app/globals.css");
 const ROUTE = codeOnly("app/api/setup/route.ts");
 const SHELL = codeOnly("app/ConsoleShell.tsx");
 const EDITION = codeOnly("lib/edition.ts");
@@ -186,9 +187,31 @@ describe("the picker opens on what was last saved", () => {
 });
 
 describe("a connection that was made says so", () => {
-  it("the step shows what is saved before it shows the form", () => {
-    expect(UI).toContain('data-testid="setup-model-saved"');
-    expect(UI).toContain("Saved here:");
+  it("the step shows what is connected before it shows the form", () => {
+    // It used to be one run-on sentence — "Saved here: OpenRouter — date, Claude Code
+    // subscription (subscription) — date, …" — a list pretending to be prose, with no state
+    // and no way to see which model does which job. Reported as: three models connected and
+    // no way to tell they were connected.
+    expect(UI).toContain('data-testid="setup-connected-models"');
+    expect(UI).toContain("Connected models");
+  });
+
+  it("each one says what it is and which jobs it holds", () => {
+    expect(UI).toContain("setup-models-kind");
+    expect(UI).toContain("setup-models-jobs");
+    expect(UI).toContain('"no role yet"');
+  });
+
+  it("and a green dot means BOSS can use it now", () => {
+    expect(UI).toContain('className="setup-dot"');
+    expect(CSS).toContain("--green");
+  });
+
+  it("the role picker is a section you can find, not a stray button", () => {
+    // "I cant figure out where that button, no style and it is not a great experience."
+    expect(UI).toContain("<details className=\"setup-roles\"");
+    expect(UI).toContain("<summary");
+    expect(CSS).toContain(".setup-roles > summary");
   });
 
   it("a connected CLI is reported from the record, not only from a probe", () => {

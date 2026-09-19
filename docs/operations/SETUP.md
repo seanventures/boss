@@ -107,6 +107,20 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 
 # Part 2 — Connect a model
 
+## Before anything else: what a model has to cover
+
+BOSS spends models in three places, and they are configured separately:
+
+| | What it is | Where it is set |
+|---|---|---|
+| **Builds** | writing and reviewing code | Implementer / reviewer roles, Step two |
+| **The panel** | the meeting that writes your PRD | Console chat, agents and meetings |
+| **The chat** | asking BOSS questions in the console | the same row |
+
+A subscription covers all three. One CLI, one login, no key. An API key covers all three too.
+What does NOT work is assuming the build model answers the chat — they are different settings
+and an install that sets only the first has a chat and a panel that cannot answer.
+
 ## Which path is yours?
 
 | You have | And | Go to |
@@ -315,10 +329,16 @@ a model per role**. It takes effect on the next run. No restart, no `.env`.
 
 | Role | What it does | Unset means |
 |---|---|---|
-| Implementer | writes the code | `claude_code` |
+| Implementer | writes the code | a connected harness BOSS picks, preferring one it has proven |
 | Adversarial reviewer | reviews it and writes the line-by-line findings | the implementer reviews its own work |
 | Hard problems | takes over when a task escalates | the implementer |
 | Routine work | small, well-specified changes | the implementer |
+| Console chat, agents and meetings | answers in the chat, runs the panel that writes your PRD, speaks in meetings | a connected subscription, or the API key this install has |
+
+**The last row is not optional on an install with no API key.** The panel that produces the
+PRD is a model call like any other: leave it unset with nothing else configured and the
+meeting fails. It resolves to a connected subscription by itself — Claude first, because its
+token is made for unattended use — so an install that connected one is already answered.
 
 Worth making the reviewer a different model from the implementer: one that is the same model
 rarely disagrees with itself.
@@ -349,6 +369,52 @@ boss-engine call provider_audit --args '{"expect":"openai","dimension":"vendor"}
 
 `vendor` = whose model. `transport` = whose endpoint. Claude via OpenRouter is vendor
 `anthropic`, transport `openrouter`.
+
+## Moving this to a server
+
+Everything above works the same on a remote install, with three differences that are worth
+knowing before you are looking at a failure.
+
+**A subscription still travels, but not the same way for both.**
+
+| | On a server |
+|---|---|
+| Claude Code | `claude setup-token` on your own machine, paste the value into Step two. It is a separate long-lived credential — your own login is untouched. |
+| Codex | `docker exec -it <api-container> codex login --device-auth` and follow the URL. The container gets its own session, because one ChatGPT session cannot serve two machines. |
+
+**Nothing needs to be in the environment.** Credentials go through the console into this
+install's secret store, and every lane reads them from there — builds, the chat, and the panel.
+An install that keeps `.env` empty is fully configured; setting `CLAUDE_CODE_OAUTH_TOKEN` or
+`OPENAI_API_KEY` there still works and takes precedence, which is what you want while
+debugging and not what you want as the permanent arrangement.
+
+**The repository comes from the console, not from the environment.** `BOSS_TARGET_GITHUB_*` is
+a fallback for a project with no repository connected. Connect one in Step one and it wins —
+including on a project that used to have a different one, which is moved rather than refused.
+
+Before you trust a fresh server, check these four. Each one is a failure we have actually had:
+
+```bash
+# 1. the delivery catalogue installed itself (12 workflows, seeded at boot)
+curl -s "$BOSS_API/v1/delivery-workflows?view=installed&project_id=$PROJECT" \
+  -H "Authorization: Bearer $BOSS_API_KEY" | head -c 200
+
+# 2. a model answers the chat — not just builds
+curl -sS -X POST "$BOSS_API/v1/engine/agent/chat" \
+  -H "Authorization: Bearer $BOSS_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"project_id":"'"$PROJECT"'","actor":"executive_console","message":"Reply with OK."}'
+
+# 3. the repository is connected and pushable
+curl -s "$BOSS_API/v1/setup/status?project_id=$PROJECT" \
+  -H "Authorization: Bearer $BOSS_API_KEY"
+
+# 4. the coding agents are signed in where BOSS runs, not where you are
+curl -s "$BOSS_API/v1/setup/coding-agents?project_id=$PROJECT" \
+  -H "Authorization: Bearer $BOSS_API_KEY"
+```
+
+Then press Build. If the panel stalls, the answer is in the run's step error rather than in a
+container log — BOSS records the reason it stopped.
 
 ## Reference — other lanes
 

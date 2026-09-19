@@ -1,3 +1,4 @@
+import logging
 import re
 
 from sqlalchemy import text
@@ -17,6 +18,8 @@ from .services.specpack import SpecPackService
 from .services.toolchain_registry import ToolchainRegistryService
 from .services.workflows import seed_specpack_workflows
 from .services.work_orchestration import WorkOrchestrationService
+
+_log = logging.getLogger(__name__)
 
 
 # Built-in MCP servers BOSS ships with — idempotently registered so they're
@@ -90,6 +93,17 @@ def seed_project_defaults(
     members.seed_default_members(connection, project_id, actor)
     specpack.install_pack(connection, project_id, settings.core_pack_id, actor)
     specpack.install_default_agent_modules(connection, project_id, actor)
+    # THE WORKFLOWS A DIRECTIVE IS ROUTED TO. Without them `Build` answers 409 "No approved
+    # workflow mapping matched this class of work" — the core feature failing on a clean
+    # install, which is exactly what happened here. The API also seeds at boot for the default
+    # project; doing it HERE means any project that is ever seeded gets it, rather than only
+    # the one the container was told about.
+    try:
+        from .services.workflow_catalogue import seed as seed_workflows
+
+        seed_workflows(connection, project_id, actor=actor)
+    except Exception as exc:  # noqa: BLE001 — a project must still be created without it
+        _log.warning("delivery catalogue not seeded for %s: %s", project_id, exc)
     diagnostics = []
     for module_id in specpack.DEFAULT_AGENT_MODULE_IDS:
         module = specpack.load_agent_module_spec(module_id)

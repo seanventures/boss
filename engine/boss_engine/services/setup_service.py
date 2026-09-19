@@ -809,7 +809,12 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
     ).scalar() or 0
     connections = connection.execute(
         text("SELECT count(*) FROM github_connections "
-             "WHERE project_id = :p AND status = 'enabled'"),
+             # 'configured' and 'active' ARE the healthy states; 'enabled' is not a value this
+             # column's CHECK constraint permits, so this counted zero forever. With the env
+             # defaults emptied it stopped being masked: a project with a connected,
+             # push-tested repository was told "Connect a repository — not done", directly
+             # under a card saying CAN PUSH about that same repository.
+             "WHERE project_id = :p AND status IN ('configured', 'active')"),
         {"p": project_id},
     ).scalar() or 0
     # A CONNECTED SUBSCRIPTION IS A CONNECTED MODEL. Counting stored credentials alone meant
