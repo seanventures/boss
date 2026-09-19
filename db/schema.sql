@@ -6032,3 +6032,91 @@ CREATE TABLE IF NOT EXISTS project_agents (
 );
 CREATE INDEX IF NOT EXISTS idx_project_agents_app ON project_agents (project_id, app_key);
 CREATE INDEX IF NOT EXISTS idx_project_agents_role ON project_agents (project_id, role_key);
+
+-- ── The memory plane (Kiro gap A0.1 / A0.2) ────────────────────────────────────
+--
+-- BOSS had 249 tables and not one of them remembered anything an agent was told. Every
+-- session started cold, every correction was spent the moment it was given, and the same
+-- guidance had to be repeated in each new thread. Kiro Crew's own claim — and the reason it
+-- is the first thing in this plan — is that the memory step "is the one that pays".
+--
+-- THREE KINDS, ONE TABLE. Preferences (how this operator likes to work), project context
+-- (what is going on here), and lessons (a rule they taught us). They share a lifecycle and a
+-- scope model, so splitting them into three tables would triple the read path for no gain.
+--
+-- A LESSON IS A RULE, SO IT DOES NOT BIND UNTIL SOMEBODY SAYS SO. This is where BOSS should
+-- be stricter than Kiro Crew, which writes lessons straight to disk: a wrong rule quietly
+-- steering every future session is worse than having no memory at all. Lessons land as
+-- `proposed` and are inert until reviewed; preferences and project notes are `active` on
+-- arrival because they inform rather than bind.
+CREATE TABLE IF NOT EXISTS agent_memory (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('preference', 'project', 'lesson')),
+  -- Who it applies to. `actor`/`role` narrow it to one person or one seat; `project` is the
+  -- default because that is the unit an operator thinks in.
+  scope TEXT NOT NULL DEFAULT 'project'
+    CHECK (scope IN ('org', 'project', 'actor', 'role')),
+  -- EMPTY STRING, NOT NULL, and that is load-bearing. Postgres treats NULL as distinct from
+  -- NULL in a unique constraint, so a nullable scope_ref would make the dedupe below silently
+  -- never fire for project-scoped rows — which is most of them. Caught by a test that asserted
+  -- the same correction twice produced one row.
+  scope_ref TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  -- Where it came from, so a surprising rule can be traced to the conversation that set it.
+  source_thread_id TEXT,
+  created_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('proposed', 'active', 'retired', 'rejected')),
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  -- DECAY, MEASURED RATHER THAN GUESSED. An unbounded memory store is a context-window bomb;
+  -- Kiro Crew's answer is time-tiered fidelity. Ours is usage-aware: what gets injected and
+  -- then actually mattered is what survives, and `last_used_at` is what the pruner reads.
+  use_count INTEGER NOT NULL DEFAULT 0,
+  last_used_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  -- Dedupe. The same correction said twice must not become two rules that both get injected.
+  content_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, kind, scope, scope_ref, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_read
+  ON agent_memory (project_id, status, kind);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_scope
+  ON agent_memory (project_id, scope, scope_ref);
+
+-- ── The session ledger (Kiro gap A0.4) ─────────────────────────────────────────
+--
+-- A durable record of what a long-running session is DOING: the goal, the phase it reached,
+-- the concrete next step, the approaches already tried and rejected, and what it produced.
+--
+-- Its whole purpose is to outlive the conversation's own memory. A long thread has its early
+-- turns compacted away, and the first thing to fall out is usually the objective — so the
+-- session re-derives it from a transcript that no longer contains it. This is what it reads
+-- instead.
+--
+-- Entries are written as INTENT, NOT STATUS. "add the Windows branch to the permission
+-- helper, the test already fails" tells a cold resume what to do; "in progress" does not.
+--
+-- One row per thread, updated in place. `finished_at` stops a completed ledger being
+-- re-injected — a stale ledger quietly steering a session that has moved on is the failure
+-- this is built to avoid.
+CREATE TABLE IF NOT EXISTS agent_session_ledger (
+  thread_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  goal TEXT NOT NULL,
+  phase TEXT,
+  next_step TEXT,
+  -- What was tried and did not work, so a resume does not repeat it. The single most
+  -- expensive thing a cold session does is re-run a failed approach.
+  rejected JSONB NOT NULL DEFAULT '[]'::jsonb,
+  artifact_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  finished_at TIMESTAMPTZ,
+  updated_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_session_ledger_open
+  ON agent_session_ledger (project_id, finished_at);

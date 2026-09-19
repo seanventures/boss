@@ -1,8 +1,13 @@
 # Kiro Crew → BOSS: Feature Gap Analysis
 
-*Evidence gathered 2026-09-19. Companion to [`kiro-gap-architecture.md`](kiro-gap-architecture.md),
-which covers runtime shape. This document covers **capabilities an operator can name and ask
-for** — the things that show up in a demo, a changelog, or a competitive comparison.*
+*Evidence gathered 2026-09-19. Companion to [`kiro-gap-architecture.md`](kiro-gap-architecture.md).*
+
+**Ownership boundary.** That document owns storage schemas, lifetimes, injection contracts,
+runtime seams and enforcement planes — *what must exist*. This one owns **what an operator can
+do, see, or ask for**, with acceptance written in their words. Where a capability needs both, it
+appears once in each with different acceptance: the architecture row is satisfied by a schema
+and a passing service test, the feature row by an operator doing the thing. The full rule is in
+the architecture document; it is the authority if the two ever disagree.
 
 Sources: `kiro.dev/docs` (Specs, Steering, Hooks, MCP, Permissions, Custom agents, Agent
 Skills, Powers, Cloud sessions, Compaction, Kiroignore, Checkpoints and rewind),
@@ -193,7 +198,7 @@ The demo sentence: *"Tell BOSS once, and it holds."*
 | F0.2 | Preferences + project memory | A new thread opens already knowing the project |
 | F0.3 | Memory page: view, edit, delete, scope | A wrong lesson is removable in one click |
 | F0.4 | Lesson review gate | A lesson becomes binding only after review |
-| F0.5 | Compaction that preserves goal + ledger | A 200-turn thread still knows its objective |
+| F0.5 | Long threads stop losing the plot | After an hour of work, "what are we doing?" is answered correctly — mechanism owned by **A0.5** |
 
 ### Phase F1 — "It keeps working" `[with A1, 3–4 weeks]`
 

@@ -1257,6 +1257,39 @@ def _with_attachments(
     return body, [{"type": "text", "text": body}, *blocks]
 
 
+def _remembered_context(
+    connection,
+    project_id: str,
+    actor: Optional[str],
+    role: Optional[str],
+    thread_id: Optional[str],
+) -> str:
+    """Memory and the session ledger, rendered into the system prompt.
+
+    Two stores, one seam. `pack_for_turn` returns the rules, context and preferences recorded
+    in earlier SESSIONS; `pack_ledger` returns what THIS session was doing. Both are read from
+    the database on every turn rather than carried in the transcript, because the transcript is
+    exactly what gets compacted away.
+
+    NEVER FATAL. An agent that cannot answer because its memory lookup failed is strictly worse
+    than one that answers without memory, so any failure here degrades to no block at all.
+    """
+    try:
+        from .agent_memory import pack_for_turn, pack_ledger
+
+        # THE TURN'S OWN TRANSACTION, not a second connection. `pack_for_turn` writes
+        # `use_count`/`last_used_at` — the signal the pruner reads — and that write belongs in
+        # the same transaction as the turn that used it. A separate connection would also be
+        # one more handle held for the length of every turn, which is how a pool runs dry.
+        blocks = [pack_for_turn(connection, project_id=project_id, actor=actor, role=role)]
+        if thread_id:
+            blocks.append(pack_ledger(connection, thread_id=thread_id))
+        return "".join(b for b in blocks if b)
+    except Exception:  # noqa: BLE001 — see the docstring; memory is an aid, not a dependency
+        _log.warning("memory injection failed; answering without it", exc_info=True)
+        return ""
+
+
 def _role_identity(role: Optional[str]) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
@@ -1950,6 +1983,15 @@ class IntentRouter:
             "If something genuinely blocks the action, name that ONE thing and what would "
             "unblock it — do not re-derive the design around it."
             + _role_identity(role)
+            # WHAT THIS PROJECT ALREADY KNOWS, AND WHERE THIS SESSION HAD GOT TO.
+            #
+            # Before this, every thread started cold: a correction changed one turn and was
+            # then gone, and a long session that had its early turns compacted away lost the
+            # objective first. Both blocks come from storage rather than from the transcript,
+            # which is the whole point — they survive compaction, restarts, and a new thread.
+            #
+            # Budgeted, and silent when empty: a project with nothing recorded pays nothing.
+            + _remembered_context(connection, project_id, actor, role, thread_id)
             # THE GENERAL CONVERSATION, AND ONLY IT. A run-scoped thread is about that run and a
             # role thread is about that role's remit — neither is where somebody arrives with a
             # product idea, and both depend on the operating behaviour above being unqualified.

@@ -3797,6 +3797,168 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(error)}
 
     @reg.tool(
+        "remember",
+        "Record something worth carrying into LATER sessions: a correction the operator gave "
+        "you (kind='lesson'), a fact about how they like to work (kind='preference'), or "
+        "context about this project (kind='project'). Use it the moment someone corrects you "
+        "or tells you how things are done here — that is the only moment you have it. A "
+        "lesson is a RULE, so it is recorded as 'proposed' and does not bind until a human "
+        "reviews it; say so rather than claiming it is now in force.",
+        _obj({"kind": {"type": "string", "enum": ["lesson", "preference", "project"]},
+              "body": {"type": "string",
+                       "description": "one or two sentences, in the imperative for a lesson: "
+                                      "'always run the frontend checks before calling a "
+                                      "change done'"},
+              "scope": {"type": "string", "enum": ["org", "project", "actor", "role"],
+                        "description": "default 'project'; 'actor' or 'role' narrows it"},
+              "scope_ref": {"type": "string",
+                            "description": "required for scope 'actor' or 'role'"},
+              "project_id": {"type": "string"}},
+             ["kind", "body"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def remember(ctx, *, project_id, actor, args):
+        """The write half of the memory plane.
+
+        THE MOMENT A CORRECTION IS GIVEN IS THE ONLY MOMENT IT EXISTS. Before this tool, an
+        operator saying "always check X first" changed that one turn and nothing else: the
+        next thread started cold and they had to say it again. This is the gap the Kiro Crew
+        analysis put first, on their own evidence that it is the step that pays.
+        """
+        from ..services.agent_memory import MemoryError_, remember as _remember
+
+        pid = args.get("project_id") or project_id
+        try:
+            with ctx.begin() as c:
+                row = _remember(
+                    c, project_id=pid, actor=actor,
+                    kind=str(args.get("kind") or "").strip(),
+                    body=str(args.get("body") or ""),
+                    scope=str(args.get("scope") or "project").strip(),
+                    scope_ref=str(args.get("scope_ref") or "").strip() or None,
+                    source_thread_id=(ctx.ambient or {}).get("_thread_id"),
+                )
+        except MemoryError_ as error:
+            return {"ok": False, "error": str(error)}
+        note = ("Recorded and in force from now on."
+                if row["status"] == "active" else
+                "Recorded as PROPOSED. It does not bind anything until a human reviews it — "
+                "tell the operator it is waiting for review rather than saying it is done.")
+        return {"ok": True, **row, "note": note}
+
+    @reg.tool(
+        "recall",
+        "What this project already knows: the rules, context and preferences recorded in "
+        "earlier sessions. You normally do NOT need this — active memory is already in your "
+        "prompt. Use it to answer 'what do you know about me/this project', to check whether "
+        "something is already recorded before recording it again, or to see what is waiting "
+        "for review (include_proposed).",
+        _obj({"kinds": {"type": "array", "items": {"type": "string"},
+                        "description": "filter: lesson, preference, project"},
+              "include_proposed": {"type": "boolean",
+                                   "description": "also show what is awaiting review"},
+              "project_id": {"type": "string"}}),
+        kind="read",
+    )
+    def recall(ctx, *, project_id, actor, args):
+        from ..services.agent_memory import recall as _recall
+
+        pid = args.get("project_id") or project_id
+        kinds = tuple(str(k) for k in (args.get("kinds") or []) if str(k).strip())
+        with ctx.begin() as c:
+            rows = _recall(c, project_id=pid, actor=actor,
+                           role=(ctx.ambient or {}).get("_role"),
+                           kinds=kinds or None,
+                           include_proposed=bool(args.get("include_proposed")))
+        return {"ok": True, "count": len(rows), "memories": [_json_safe(r) for r in rows],
+                "note": ("nothing recorded yet for this project" if not rows else
+                         "these are already in your prompt; do not read them back verbatim")}
+
+    @reg.tool(
+        "forget",
+        "Retire a memory that is wrong or no longer true, by id (from recall). Retired, not "
+        "deleted — a rule that shaped past answers stays auditable.",
+        _obj({"memory_id": {"type": "string"}, "project_id": {"type": "string"}},
+             ["memory_id"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def forget(ctx, *, project_id, actor, args):
+        from ..services.agent_memory import MemoryError_, forget as _forget
+
+        pid = args.get("project_id") or project_id
+        try:
+            with ctx.begin() as c:
+                return {"ok": True,
+                        **_forget(c, project_id=pid,
+                                  memory_id=str(args.get("memory_id") or "").strip(),
+                                  actor=actor)}
+        except MemoryError_ as error:
+            return {"ok": False, "error": str(error)}
+
+    @reg.tool(
+        "update_ledger",
+        "Record where THIS long-running session has got to: its goal, the phase it has "
+        "reached, the concrete next step, and any approach you tried that did NOT work. "
+        "Write it as intent, not status — 'add the Windows branch, the test already fails' "
+        "tells a cold resume what to do; 'in progress' does not. Use it when a session will "
+        "outlive one turn: a long investigation, a multi-step build, anything you would have "
+        "to reconstruct after a restart. `rejected` APPENDS, and is the most valuable field: "
+        "it stops a resumed session repeating work that already failed.",
+        _obj({"goal": {"type": "string",
+                       "description": "required the first time; what this session is for"},
+              "phase": {"type": "string"},
+              "next_step": {"type": "string"},
+              "rejected": {"type": "string",
+                           "description": "one approach that was tried and did not work"},
+              "artifact_id": {"type": "string"},
+              "finished": {"type": "boolean",
+                           "description": "true when the work is done or abandoned, so this "
+                                          "stops being re-injected into later turns"},
+              "project_id": {"type": "string"}}),
+        kind="write",
+        reversibility="safe",
+    )
+    def update_ledger(ctx, *, project_id, actor, args):
+        """The session's own memory of itself.
+
+        A long thread has its early turns compacted away and the objective is usually the
+        first thing to fall out — so the session re-derives it from a transcript that no
+        longer contains it. This is what it reads instead.
+        """
+        from ..services.agent_memory import (
+            MemoryError_,
+            finish_ledger,
+            read_ledger,
+            write_ledger,
+        )
+
+        pid = args.get("project_id") or project_id
+        thread_id = str((ctx.ambient or {}).get("_thread_id") or "").strip()
+        if not thread_id:
+            return {"ok": False,
+                    "error": "no thread on this turn, so there is nothing to keep a ledger for"}
+        try:
+            with ctx.begin() as c:
+                if args.get("finished"):
+                    finish_ledger(c, thread_id=thread_id, actor=actor)
+                    return {"ok": True, "finished": True,
+                            "note": "ledger closed; it will not be re-injected"}
+                row = write_ledger(
+                    c, project_id=pid, thread_id=thread_id, actor=actor,
+                    goal=str(args.get("goal") or "").strip() or None,
+                    phase=str(args.get("phase") or "").strip() or None,
+                    next_step=str(args.get("next_step") or "").strip() or None,
+                    rejected=str(args.get("rejected") or "").strip() or None,
+                    artifact_id=str(args.get("artifact_id") or "").strip() or None)
+                _ = read_ledger(c, thread_id=thread_id)
+        except MemoryError_ as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, **_json_safe(row),
+                "note": "recorded; this is re-read at the start of later turns in this thread"}
+
+    @reg.tool(
         "retry_workflow_step",
         "Put ONE failed, dead-lettered or cancelled workflow step back in the queue, keeping "
         "everything the run already produced. This is the console's \"Try … again\" button. "
@@ -5998,6 +6160,12 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # so it ended with "tell me to go ahead" and no button. Reachable from chat means the
     # operator gets the button; it is still a write, so nothing runs until they press it.
     "retry_workflow_step",
+    # MEMORY IS WORTHLESS IF THE AGENT CANNOT REACH IT FROM A CONVERSATION. The moment an
+    # operator corrects you is the only moment that correction exists — it has to be writable
+    # from the turn in which it is said, not from a separate admin path.
+    "remember",
+    "forget",
+    "update_ledger",
 "recheck_workflow_run",
     # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
     # with hand-composed SQL — which BOSS took, against a schema it had to guess at.

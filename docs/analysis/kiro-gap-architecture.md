@@ -4,9 +4,23 @@
 `github.com/kirodotdev/KiroCrew` (Apache-2.0, cloned at ~3.1M LOC Python), and
 `github.com/kirodotdev/Kiro`. BOSS side verified against this repo at `49b4fc45`.*
 
-Companion document: [`kiro-gap-features.md`](kiro-gap-features.md). This one is about
-**runtime shape** — the primitives that decide what the platform can physically do. The other is
-about **capabilities an operator can name**.
+Companion document: [`kiro-gap-features.md`](kiro-gap-features.md).
+
+## Ownership boundary — read this before adding anything to either document
+
+The two documents were drafted in parallel and overlapped on Phase 0. They are now split by a
+single rule, so **every work item has exactly one owner** and neither plan double-counts.
+
+| | **This document (architecture)** | **`kiro-gap-features.md`** |
+|---|---|---|
+| Owns | Storage schemas, lifetimes and decay policy, injection contracts, runtime seams, enforcement planes | What an operator can do, see, or ask for; acceptance stated in their words |
+| Answers | *"What must exist for this to be possible?"* | *"What can someone now do?"* |
+| Example | `agent_memory` tables and the token budget for injection | "Say it once and it holds" |
+| Example | The compaction contract that preserves goal + ledger | The memory page where a wrong lesson is deleted |
+
+Where a capability needs both, it appears **once per document with different acceptance** — the
+architecture row is satisfied by a schema and a passing service test, the feature row by an
+operator doing the thing. Cross-reference; do not restate.
 
 ---
 
@@ -272,11 +286,12 @@ the current team shape.
 |---|---|---|---|
 | A0.1 | `agent_memory` tables + write/read path | A1 | A correction in one thread changes behaviour in the next |
 | A0.2 | Memory decay schedule (time-tiered fidelity) | A1 | Memory injection stays under a fixed token budget at 1,000 threads |
-| A0.3 | Lesson review gate (reuse the skill-approval path) | A1 | A lesson cannot silently become a rule |
 | A0.4 | `agent_session_ledger` + tool + injection | A2 | "Where are we on this?" answers from the ledger, not scrollback |
-| A0.5 | Compaction strategy that preserves goal + ledger | A2 | A 200-turn thread still knows its objective |
+| A0.5 | Compaction contract: goal + ledger survive window pressure | A2 | A synthetic 200-turn thread still carries its objective after compaction |
 
-**Risk:** memory that is wrong is worse than no memory. Ship A0.3 *with* A0.1, not after.
+**Risk:** memory that is wrong is worse than no memory. The governance answer to that lives in
+the feature plan as **F0.4 (lesson review gate)** and must ship in the same release as A0.1 —
+this document owns the store, that one owns who is allowed to write a binding rule into it.
 
 ### Phase A1 — Long-horizon execution `[3–4 weeks]`
 

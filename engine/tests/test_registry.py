@@ -85,6 +85,14 @@ _EXPECTED_TOOLS: set[str] = {
     # turn, and no answer for the operator. This also computes the way OUT of a failed run,
     # because reporting `deadlettered` and stopping is what "it drops the ball" means.
     "describe_workflow_run",
+    # THE MEMORY PLANE (Kiro gap A0). BOSS had 249 tables and none of them remembered anything
+    # an agent was told: every thread started cold and every correction was spent the moment it
+    # was given. `remember` is the write, `recall` the read, `forget` the retirement, and
+    # `update_ledger` is the session's memory of its own goal across compaction.
+    "remember",
+    "recall",
+    "forget",
+    "update_ledger",
     # THE RECOVERY THE AGENT COULD DIAGNOSE AND COULD NOT PERFORM. It traced a failed panel
     # step to its root cause and then said "tell me to go ahead", offering no button, because
     # the console's "Try … again" had no tool behind it. A correct diagnosis you cannot act on
@@ -175,11 +183,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 98, (
+    assert len(reg.names()) == 102, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 59
-    assert len(write) == 39
+    assert len(read) == 60
+    assert len(write) == 42
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -422,6 +430,11 @@ _SAFE_WRITES = [
     # Re-queues ONE already-failed step and keeps everything the run produced. It can only
     # move a step out of failed/deadlettered/cancelled, so it cannot start live work twice.
     "retry_workflow_step",
+    # Memory writes. `remember` cannot bind a rule on its own — a lesson lands `proposed` and
+    # inert — and `forget`/`update_ledger` retire or annotate rather than destroy.
+    "remember",
+    "forget",
+    "update_ledger",
 ]
 
 
