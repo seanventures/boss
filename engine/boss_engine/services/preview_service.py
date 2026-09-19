@@ -276,6 +276,81 @@ _STATIC_DIRS = (".", "web", "public", "dist", "site", "static")
 
 
 
+# The file a build writes to say WHICH app it produced, as "<kind>:<value>" (e.g.
+# "py:serve_scorecard.py", "node:bugbox", "static:web-nqueens"). See declare_app_entry.
+DECLARED_APP_FILE = "boss.preview.app"
+
+
+def declare_app_entry(paths, read=None) -> Optional[str]:
+    """The app entry a build produced, derived ONLY from the files that build wrote.
+
+    WHY THIS EXISTS — the fix for a bug fixed five times.
+
+    Every previous fix taught resolve_app_entry one more repo shape, and the next shape broke
+    it again: a task that added serve_nqueens.py previewed SUDOKU (PR #62); a task that wrote
+    bugbox/ previewed the repo root (PR #161); a Python task previewed a vite root that had no
+    entry module. The constant is not the shapes, it is that the preview RE-DERIVES a fact the
+    build already knew, from a repository that has accumulated one more app on every run — nine
+    runnable apps by the time the interview-scorecard build ran, ten by the next.
+
+    The signal is strongest at build time and decays afterwards. So the decision is made once,
+    here, against this run's OWN files, and committed to the branch. Later previews read it
+    instead of guessing, and no amount of accumulation in the repository can mislead them.
+
+    Returns None when this run's files do not clearly identify one app — a build that touched
+    only tests or docs, or one that somehow produced two servers. None means "say nothing and
+    let the existing resolver try", never "guess".
+    """
+    read = read or (lambda _p: "")
+    owned = [str(p).strip().lstrip("./") for p in (paths or []) if str(p).strip()]
+
+    def _dir_of(path: str) -> str:
+        head, _, _tail = path.rpartition("/")
+        return head or "."
+
+    # A server this run wrote outranks static assets the same run wrote: serving an app's
+    # index.html without its API is a page that loads and does nothing.
+    node_dirs, py_entries, static_dirs = [], [], []
+    for path in owned:
+        name = path.rpartition("/")[2]
+        if name == "package.json":
+            try:
+                scripts = (json.loads(read(path) or "{}") or {}).get("scripts") or {}
+            except (ValueError, TypeError):
+                scripts = {}
+            if str(scripts.get("start") or "").strip():
+                node_dirs.append(_dir_of(path))
+        elif "/" not in path and name.endswith(".py") and (
+            name in _PY_ENTRYPOINTS or name.startswith(("serve", "server"))
+        ):
+            # ROOT LEVEL ONLY, matching resolve_app_entry's own scope. Without this, an ordinary
+            # module like `myapp/server_helpers.py` reads as an entrypoint on a prefix match and
+            # gets declared as the app — a wrong declaration is worse than none, because every
+            # later preview trusts it instead of falling back to detection.
+            py_entries.append(path)
+        elif name == "index.html":
+            static_dirs.append(_dir_of(path))
+
+    for kind, found in (("node", node_dirs), ("py", py_entries), ("static", static_dirs)):
+        unique = sorted(set(found))
+        if not unique:
+            continue
+        # Two servers from one build is not a thing this can name. Stay silent rather than
+        # commit a declaration that sends every future preview to the wrong one.
+        if len(unique) > 1:
+            return None
+        return f"{kind}:{unique[0]}"
+    return None
+
+
+def parse_declared_app(text: str) -> Optional[tuple[str, str]]:
+    """Read back what declare_app_entry wrote. Unknown kinds are ignored, not trusted."""
+    kind, sep, value = (text or "").strip().partition(":")
+    if not sep or kind not in {"node", "py", "static"} or not value.strip():
+        return None
+    return kind, value.strip()
+
+
 class AmbiguousAppError(RuntimeError):
     """The repo holds several runnable apps and this task gave no signal which one is its own.
 
@@ -609,6 +684,21 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
     Resolution being right is worthless if the command ignores it. So the resolved directory is
     where the command is built AND where it runs.
     """
+    # WHAT THE BUILD DECLARED BEATS ANYTHING INFERRED LATER. The build knew which app it
+    # produced; everything below is this function trying to work that out again from a
+    # repository that has gained apps since. Read the declaration first and skip the guessing.
+    declared = workdir / DECLARED_APP_FILE
+    if declared.is_file():
+        entry = parse_declared_app(declared.read_text(errors="ignore"))
+        if entry:
+            command = command_for_entry(workdir, entry[0], entry[1])
+            if command:
+                logger.info("preview: using the app declared by the build: %s:%s", *entry)
+                return command
+            logger.warning(
+                "preview: build declared %s:%s but no command could be built for it — "
+                "falling back to detection", *entry)
+
     app_rel = "."
     try:
         kind, value = resolve_app_entry(workdir, changed)
@@ -752,6 +842,19 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
     # list at all. The preview faithfully launched the wrong application (PR #62).
     # ONE decision, shared with the container path (see resolve_app_entry).
     kind, value = resolve_app_entry(workdir, changed)
+    return command_for_entry(workdir, kind, value)
+
+
+def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str]]:
+    """The command that runs ONE resolved app entry. The only place an entry becomes a command.
+
+    Extracted so the app BOSS declared at build time and the app a heuristic resolved at
+    preview time go through identical construction. Two copies of this is the recurring bug in
+    this file, not a hypothetical: `_detect_command` once built its own command from the repo
+    root while `resolve_app_entry` was answering correctly, and every symptom of that — vite
+    building a directory with no entry, a preview launching another task's app — was a second
+    copy of this logic disagreeing with the first.
+    """
     if kind == "node":
         # Run the app's OWN server, from its OWN directory, so `npm install` and the start
         # script resolve that app's manifest rather than the repository root's. The root check

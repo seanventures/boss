@@ -1945,6 +1945,34 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             accumulated[fc.path] = fc.content
         guest_base = work_branch
 
+    def _declare_preview_app() -> None:
+        """Record WHICH app this build produced, so no later step has to work it out.
+
+        The preview used to re-derive this from the finished repository, and got it wrong five
+        times in five different ways — each fix teaching the resolver one more shape while the
+        shared sandbox repo gained another app on every run. The build is the only place that
+        knows the answer for certain: `accumulated` is exactly the files this run wrote, before
+        anything else is layered on top.
+
+        Never raises and never blocks the PR. A build that cannot name its app is the case that
+        already existed — the resolver still tries — so failing here would trade a working
+        fallback for a lost delivery.
+        """
+        try:
+            from .preview_service import DECLARED_APP_FILE, declare_app_entry
+            entry = declare_app_entry(list(accumulated.keys()), accumulated.get)
+            if not entry:
+                return
+            sf.github.upsert_file(
+                work_branch, DECLARED_APP_FILE, entry + "\n",
+                f"governed: declare preview app ({entry})")
+            accumulated[DECLARED_APP_FILE] = entry + "\n"
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.preview_app_declared", "boss",
+                           "code_task_run", run_id, {"entry": entry})
+        except Exception as exc:  # noqa: BLE001 — a declaration must never sink a finished build
+            logger.warning("could not declare the preview app for %s: %s", run_id, exc)
+
     _lease_owner_at_start: dict[str, Optional[str]] = {"v": None}
 
     def _lease_owner_now() -> Optional[str]:
@@ -4143,6 +4171,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         # GATE PASSED — open the PR via the existing software-factory path.
         _finish_vms(success=True)
+        _declare_preview_app()
         # ONE APPROVAL PER BUILD, not per slice. A decomposed build breaks a product into ordered
         # slices that all commit to the SAME lineage branch (via _commit_stage). Opening a PR +
         # human approval on every slice is what a customer never wants — 6 tasks, 6 PRs, 6 gates
