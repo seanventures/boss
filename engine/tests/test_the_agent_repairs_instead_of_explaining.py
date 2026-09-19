@@ -138,3 +138,46 @@ def test_and_neither_one_takes_a_credential():
         for field in schema:
             assert not any(word in field for word in ("token", "secret", "credential", "key")) \
                 or field == "key", (name, field)
+
+
+# -- connecting a different repository ---------------------------------------------------------
+
+def test_connecting_a_new_primary_replaces_the_old_one():
+    """The wizard says "Connecting something below replaces what is here for this project".
+    What it did was raise "Project already has an active primary repository" — the screen's
+    promise and the service's rule disagreeing, with the operator finding out. Same shape as
+    the connection-label collision."""
+    source = inspect.getsource(GitHubConnectionService.easy_connect)
+    assert "self._retire_primary_binding(" in source
+
+
+def test_and_the_old_one_is_disabled_not_deleted():
+    """Which repository this project used to build in is worth keeping, and re-enabling is a
+    row update rather than a re-connect."""
+    source = inspect.getsource(GitHubConnectionService._retire_primary_binding)
+    assert "status = 'disabled'" in source
+    # The STATEMENT, not the word: the docstring says "disabled rather than deleted", and an
+    # uppercased substring search finds that sentence and calls it a DELETE.
+    assert "DELETE FROM" not in source.upper()
+    assert "github.primary_repository_replaced" in source
+
+
+def test_reconnecting_the_same_repository_retires_nothing():
+    """That is a retry — the binding is reused, and disabling it would break the run that is
+    already pointed at it."""
+    source = inspect.getsource(GitHubConnectionService._retire_primary_binding)
+    assert 'if (row["full_name"] or "").lower() == full_name.lower():' in source
+    assert "continue" in source
+
+
+def test_and_only_a_primary_stands_down_a_primary():
+    """Binding a `source` or `mirror` must not disturb where the project builds."""
+    source = inspect.getsource(GitHubConnectionService._retire_primary_binding)
+    assert 'if (role or "primary").strip().lower() != "primary":' in source
+
+
+def test_the_guard_still_protects_the_general_api():
+    """A multi-repo customer binding a second primary by mistake should still be stopped —
+    only the wizard, where the intent is explicit, replaces."""
+    source = inspect.getsource(GitHubConnectionService.create_repository_binding)
+    assert "Project already has an active primary repository." in source

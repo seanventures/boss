@@ -134,6 +134,42 @@ class GitHubConnectionService:
             raise GitHubConnectionNotFoundError("GitHub connection not found.")
         return self._serialize_connection(row)
 
+    def _retire_primary_binding(
+        self, connection: Connection, *, project_id: str, repository: str, role: str,
+        actor: str,
+    ) -> None:
+        """Stand down the current primary, when a DIFFERENT one is being connected as primary.
+
+        Disabled rather than deleted: which repository this project used to build in is worth
+        keeping, and re-enabling is a row update instead of a re-connect. Does nothing when
+        the same repository is being reconnected — that is a retry, and its binding is reused.
+        """
+        if (role or "primary").strip().lower() != "primary":
+            return
+        try:
+            _owner, _name, full_name = self._normalize_repository(repository)
+        except ValueError:
+            return                                  # the binding call will report it properly
+        rows = connection.execute(
+            text("SELECT id, full_name FROM github_repository_bindings "
+                 " WHERE project_id = :p AND role = 'primary' AND status = 'active'"),
+            {"p": project_id},
+        ).mappings().all()
+        for row in rows:
+            if (row["full_name"] or "").lower() == full_name.lower():
+                continue                            # reconnecting the same repository
+            connection.execute(
+                text("UPDATE github_repository_bindings "
+                     "   SET status = 'disabled', updated_at = now() "
+                     " WHERE id = :id"),
+                {"id": row["id"]},
+            )
+            emit_event(
+                connection, project_id, "github.primary_repository_replaced", actor,
+                "github_repository_binding", row["id"],
+                {"was": row["full_name"], "now": full_name},
+            )
+
     def _connection_by_label(
         self, connection: Connection, project_id: str, label: str,
     ) -> Optional[dict[str, Any]]:
@@ -1110,6 +1146,19 @@ class GitHubConnectionService:
         binding = None
         test_result = None
         if repository and repository.strip():
+            # CONNECTING A REPOSITORY HERE REPLACES THE ONE THIS PROJECT BUILDS IN.
+            #
+            # That is what the wizard says — "Connecting something below replaces what is here
+            # for this project" — and what it did was raise "Project already has an active
+            # primary repository", a dead end with no control anywhere to resolve it. Same
+            # shape as the connection-label collision: the screen's promise and the service's
+            # rule disagreed, and the operator was the one who found out.
+            #
+            # The guard stays for the general binding API, where a multi-repo customer binding
+            # a second primary by mistake should be stopped. Here the intent is explicit.
+            self._retire_primary_binding(
+                connection, project_id=project_id, repository=repository,
+                role=role or "primary", actor=actor)
             binding = self.create_repository_binding(
                 connection,
                 project_id=project_id,
