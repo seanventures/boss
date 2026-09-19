@@ -15,6 +15,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
+import { MemoryHome } from "./memory-ui";
 
 type Skill = {
   skill_key: string; label: string; summary: string; behaviour_kind: string;
@@ -277,6 +278,13 @@ export function SkillsHome(
           catalogues — because connecting an account is setup you do once and the thing you
           came to do is above it. */}
       {children}
+
+      {/* WHAT AGENTS KNOW, beside what they can DO.
+          A rule recorded in an earlier session changes every later answer, so it belongs on
+          the page an operator already opens to see what their agents are capable of — not on
+          a settings tab nobody visits. It opens itself when something is waiting for review,
+          because a review queue behind a closed fold is one that never gets emptied. */}
+      <MemoryHome projectId={projectId} actor={actor} />
 
       <details className="stack-card" data-testid="skills-custom">
         <summary className="skill-form-summary">

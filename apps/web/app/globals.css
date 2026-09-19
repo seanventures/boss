@@ -9636,3 +9636,62 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .dw-draft-step[data-focused] {
   outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px;
 }
+
+/* ── What BOSS knows, and the rules waiting to bind ────────────────────────────
+   A lesson is a rule every future session follows. One that is wrong and invisible is worse
+   than no memory at all, so the review queue is styled to be noticed, not tucked away. */
+.mem-intro { margin: 0 0 14px; line-height: 1.55; }
+.mem-error {
+  margin: 0 0 12px; padding: 8px 10px; border-radius: 8px; font-size: .88rem;
+  border: 1px solid color-mix(in srgb, var(--warn, #d98324) 55%, transparent);
+  background: color-mix(in srgb, var(--warn, #d98324) 10%, transparent);
+}
+/* The count of rules waiting on a person. Carried in the summary so it is legible with the
+   section shut — the one number this panel exists to surface. */
+.mem-badge {
+  margin-left: 10px; padding: 2px 9px; border-radius: 999px; font-size: .74rem;
+  border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 60%, transparent);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+}
+.mem-queue, .mem-known { margin-top: 16px; }
+.mem-queue h3, .mem-known h3 { margin: 0 0 4px; font-size: .95rem; }
+.mem-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.mem-row {
+  display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 8px;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.mem-row:last-child { margin-bottom: 0; }
+/* Not yet in force. The left edge is the difference between a rule BOSS follows and one it
+   has merely asked for. */
+.mem-row[data-proposed] {
+  border-left: 3px solid var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 6%, transparent);
+}
+.mem-row-main { display: flex; align-items: baseline; gap: 10px; flex: 1 1 320px; min-width: 0; }
+.mem-row-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.mem-body { line-height: 1.5; overflow-wrap: anywhere; }
+.mem-kind {
+  flex: none; font-size: .7rem; letter-spacing: .05em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); opacity: .85;
+}
+/* A binding rule must not look like a note about tone. */
+.mem-kind[data-kind="lesson"] {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 60%, transparent); opacity: 1;
+}
+.mem-used { font-size: .78rem; opacity: .6; white-space: nowrap; }
+
+/* ── The session ledger, above a long conversation ─────────────────────────────
+   Storage the agent reads, shown to the operator so both are looking at one thing. */
+.ledger-strip {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px; padding: 7px 11px; border-radius: 8px; font-size: .84rem;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 5%, transparent);
+}
+.ledger-label {
+  font-size: .68rem; letter-spacing: .07em; text-transform: uppercase; opacity: .6;
+}
+.ledger-goal { font-weight: 500; }
+.ledger-next { opacity: .85; }
+.ledger-tried { margin-left: auto; cursor: help; }

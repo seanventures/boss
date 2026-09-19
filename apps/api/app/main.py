@@ -11105,6 +11105,86 @@ def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
             ) from error
 
 
+@app.get("/v1/memory")
+def list_memory_endpoint(
+    project_id: str, actor: str = "", include_proposed: bool = True,
+) -> dict:
+    """What this project knows, and what is waiting to be allowed to bind.
+
+    The store is useless to an operator they cannot see. A lesson is a rule an agent will
+    follow; one that is wrong and invisible is worse than no memory at all, so the review
+    queue and the browse view are the same read — proposed entries come back flagged rather
+    than hidden behind a second endpoint nobody opens.
+    """
+    from boss_engine.services.agent_memory import recall
+
+    with begin(engine) as connection:
+        rows = recall(connection, project_id=project_id, actor=actor or None,
+                      include_proposed=include_proposed, limit=500)
+    proposed = [r for r in rows if r["status"] == "proposed"]
+    return {
+        "project_id": project_id,
+        "memories": rows,
+        # Split out rather than left for the client to filter: "how many rules are waiting for
+        # me" is the question this page exists to answer, and a count is what a nav badge needs.
+        "awaiting_review": len(proposed),
+        "counts": {
+            kind: len([r for r in rows if r["kind"] == kind and r["status"] == "active"])
+            for kind in ("lesson", "project", "preference")
+        },
+    }
+
+
+@app.post("/v1/memory/{memory_id}/review")
+def review_memory_endpoint(memory_id: str, payload: dict) -> dict:
+    """Let a proposed rule bind, or refuse it. The gate that makes lessons safe."""
+    from boss_engine.services.agent_memory import MemoryError_, review
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
+    decision = str(payload.get("decision") or "").strip()
+    if not project_id or not actor:
+        raise HTTPException(status_code=400, detail="project_id and actor are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        try:
+            return review(connection, project_id=project_id, memory_id=memory_id,
+                          actor=actor, decision=decision)
+        except MemoryError_ as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/v1/memory/{memory_id}/forget")
+def forget_memory_endpoint(memory_id: str, payload: dict) -> dict:
+    """Retire a memory that is wrong or no longer true. Retired, never deleted."""
+    from boss_engine.services.agent_memory import MemoryError_, forget
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
+    if not project_id or not actor:
+        raise HTTPException(status_code=400, detail="project_id and actor are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        try:
+            return forget(connection, project_id=project_id, memory_id=memory_id, actor=actor)
+        except MemoryError_ as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/v1/agent/threads/{thread_id}/ledger")
+def thread_ledger_endpoint(thread_id: str) -> dict:
+    """Where this session had got to — goal, phase, next step, what was already rejected.
+
+    Read by the console so a long conversation shows its own spine above the scrollback. A
+    finished ledger returns `null`, which is what stops a completed one steering a session
+    that has moved on.
+    """
+    from boss_engine.services.agent_memory import read_ledger
+
+    with begin(engine) as connection:
+        return {"thread_id": thread_id, "ledger": read_ledger(connection, thread_id=thread_id)}
+
+
 @app.post("/v1/agent/threads/ensure")
 def ensure_agent_thread_endpoint(payload: dict, request: Request) -> dict:
     """A thread id BEFORE the first message, so progress can be watched from the first second.

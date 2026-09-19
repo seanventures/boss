@@ -11,6 +11,31 @@ import { API_URL, authHeaders } from "../../../lib/client";
  *
  *  Deliberately does nothing else: no message, no model call, no writes beyond the thread row.
  */
+/** Where a long conversation had got to.
+ *
+ *  Same record the agent re-reads each turn, so the operator and the agent are looking at one
+ *  thing rather than two descriptions of it. Returns `{ledger: null}` for the ordinary case of
+ *  a conversation with no long-horizon work, which the strip renders as nothing.
+ */
+export async function GET(req: Request) {
+  const threadId = new URL(req.url).searchParams.get("thread_id")?.trim() ?? "";
+  if (!threadId) {
+    return NextResponse.json({ error: "thread_id is required" }, { status: 400 });
+  }
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/agent/threads/${encodeURIComponent(threadId)}/ledger`,
+      { headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) {
+      return NextResponse.json({ error: `API returned ${r.status}` }, { status: r.status });
+    }
+    return NextResponse.json(await r.json());
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
 export async function POST(req: Request) {
   let body: { project_id?: string; actor?: string };
   try {

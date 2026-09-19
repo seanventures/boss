@@ -9,6 +9,7 @@ import {
   askBossAction,
   runAgentActionAction,
 } from "./actions";
+import { LedgerStrip } from "./memory-ui";
 
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
@@ -1053,6 +1054,12 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
              description of the general assistant. Two identities in one column reads as a
              template that nobody adapted, which is what it was. */
           <div className="agent-chat-intro">
+            {/* WHAT THIS SESSION IS ACTUALLY FOR, read from the ledger rather than from the
+                scrollback above it. A long conversation has its early turns compacted away
+                and the objective is usually the first thing to go — this is the same record
+                the agent re-reads each turn, so operator and agent see one thing. Renders
+                nothing when there is no long-horizon work, which is most conversations. */}
+            <LedgerStrip threadId={threadId} />
             <span className="eyebrow">{roleName ?? "BOSS Agent"}</span>
             <h2>{threadId
                    ? (roleName
