@@ -11105,6 +11105,41 @@ def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
             ) from error
 
 
+@app.post("/v1/agent/threads/ensure")
+def ensure_agent_thread_endpoint(payload: dict, request: Request) -> dict:
+    """A thread id BEFORE the first message, so progress can be watched from the first second.
+
+    THE PROGRESS INDICATOR WAS DEAD ON EVERY NEW CONVERSATION.
+    ---------------------------------------------------------
+    `agent_progress` is written per tool call and keyed by thread. The console polls it every
+    1.5s — but only once it HAS a thread id, and on a new chat it learned that from the
+    response to the turn. So for the entire turn there was nothing to poll, and the operator
+    watched one unchanging sentence:
+
+        "It displays same message for more than 3 mins - how can user wait and see same
+         message: Still working — this turn is running long."
+
+    Meanwhile BOSS had written a perfectly good trail — "reading the role's remit",
+    "querying the database — SELECT …" — into a table the page could not address yet.
+
+    Creating the thread first is the whole fix: one cheap call, then the poll has a key from
+    the moment the operator presses send.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
+    if not project_id or not actor:
+        raise HTTPException(status_code=400, detail="project_id and actor are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        thread = orchestration_agent.start_or_load_thread(
+            connection, project_id=project_id, actor=actor,
+            surface=str(payload.get("surface") or "chat"),
+            external_ref=(str(payload.get("external_ref")) or None
+                          if payload.get("external_ref") else None),
+        )
+    return {"thread_id": thread["id"]}
+
+
 @app.get("/v1/agent/threads/{thread_id}/progress")
 def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
     """What BOSS is doing in this thread right now.

@@ -4575,8 +4575,15 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
 
         return {"project_id": pid, "role": wanted, "matched_titles": titles,
                 "contributions": seen, "count": len(seen),
-                "note": ("nothing recorded for this role yet — answer from expertise and say "
-                         "it is not from experience on this project"
+                # AN EMPTY MEMORY IS NOT A TOPIC. The old note told the model to SAY that its
+                # answer was not from experience here — so every reply opened by disclosing an
+                # absence the operator had not asked about, and a question about a failed step
+                # became a paragraph about the role's own history. Answer from expertise; only
+                # mention the empty record if past positions were actually being asked for.
+                "note": ("no past contributions recorded for this role on this project. "
+                         "Answer the question from expertise. Do NOT make this absence the "
+                         "subject — mention it only if the operator asked what this role has "
+                         "argued before."
                          if not seen else "these are this role's own past words")}
 
     @reg.tool(
@@ -4699,9 +4706,24 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
             "definition_source": "spec",
             # Say it in the payload, because the model reads this before it answers and will
             # otherwise report the absence of an optional extension as a defect in itself.
-            "note": "This role is fully defined by the spec above. Answer AS this role, from "
-                    "its mission and boundaries. Do not tell the operator the role is "
-                    "undefined or lacks a lens — it is not and does not.",
+            # THE ROLE IS A LENS ON THE OPERATOR'S QUESTION, NOT THE SUBJECT OF THE ANSWER.
+            #
+            # This note used to say only "answer AS this role, from its mission and
+            # boundaries", which fixed one failure and caused a worse one. Asked to run two
+            # SQL queries and paste the rows, the Program Manager replied with several
+            # hundred words about never having been seated on a panel. It was not wrong about
+            # that, and it was not what anybody asked. Reported as "no recommendations, not
+            # identifying the right issue, the Agent quality is very bad".
+            #
+            # A real specialist brings their lens TO your question. They do not answer a
+            # question about a failing step with their own job description.
+            "note": "ANSWER THE OPERATOR'S ACTUAL QUESTION FIRST, in full. This role is a "
+                    "LENS you bring to it — its mission shapes what you notice and what you "
+                    "warn about, it is not the subject. Do not open with who you are, what "
+                    "you have or have not done on this project, or what is missing from your "
+                    "own configuration, unless the operator asked about the role itself or it "
+                    "directly changes the answer. If asked for data, give the data. The role "
+                    "is defined; never say it is not.",
         }
         if version is not None:
             # A published version OVERRIDES the pack: it is what an operator edited by hand.

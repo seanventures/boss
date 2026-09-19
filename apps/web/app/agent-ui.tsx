@@ -683,6 +683,38 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     else if (roleRef) fd.set("external_ref", roleRef);  // ...or to this role's own thread
     startTransition(async () => {
+      // A THREAD ID BEFORE THE TURN, OR THE PROGRESS LINE IS DEAD FOR THE WHOLE TURN.
+      //
+      // `agent_progress` is keyed by thread and the poll needs that key. On a NEW chat the
+      // console learned the id from the turn's RESPONSE — by which time the turn is over.
+      // So the first conversation with BOSS, every time, showed one frozen sentence:
+      // "Still working — this turn is running long", for minutes, while a perfectly good
+      // trail ("reading the role's remit", "querying the database — SELECT …") accumulated
+      // in a table the page could not yet address.
+      //
+      // Reported as "it displays same message for more than 3 mins — how can user wait and
+      // see same message". One cheap call fixes it: the thread exists before we send, so the
+      // poll has something to ask about from the first second.
+      let live = threadId;
+      if (!live) {
+        try {
+          const r = await fetch("/api/agent-thread", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project_id: projectId, actor }),
+          });
+          const body = (await r.json()) as { thread_id?: string };
+          if (r.ok && typeof body?.thread_id === "string") {
+            live = body.thread_id;
+            setThreadId(live);            // starts the progress poll immediately
+            fd.set("thread_id", live);    // and the turn lands in the same thread
+          }
+        } catch {
+          // An indicator must never cost the operator their message. Without an id the turn
+          // still runs exactly as before — the progress line just stays generic, which is the
+          // behaviour this replaced.
+        }
+      }
       // Bound the WAIT, not the work. If the server has not answered by STALL we stop pretending
       // it is imminent and say so in the transcript; whatever the turn did still stands, and
       // reopening the thread shows it.

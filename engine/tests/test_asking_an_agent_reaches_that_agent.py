@@ -89,7 +89,7 @@ class TestTheToolsThatMakeItReal:
         import inspect
 
         body = inspect.getsource(_tools()["recall_role_experience"].handler)
-        assert "nothing recorded for this role yet" in body
+        assert "no past contributions recorded for this role" in body
 
     def test_describe_role_reads_the_agent_definition_when_there_is_one(self):
         """Rules and skills live in agent_versions, apart from the panel lens, so one can be
@@ -138,7 +138,7 @@ class TestTheToolsThatMakeItReal:
         # rather than as an absence.
         assert '"definition_source": "spec"' in body
         assert '"definition_source": "agent_version"' in body
-        assert "Do not tell the operator the role is" in body
+        assert "never say it is not" in body
 
 
 class TestTheEndpointAndTheServiceAgree:
@@ -190,3 +190,54 @@ class TestTheEndpointAndTheServiceAgree:
 
         accepted = set(inspect.signature(IntentRouter.route_turn).parameters)
         assert "role" in accepted
+
+
+class TestTheRoleIsALensNotTheSubject:
+    """The over-correction, and what it cost.
+
+    Fixing "there is no Program Manager role defined on this project" meant telling the model
+    to answer AS the role, from its mission and boundaries. That instruction said nothing about
+    answering the QUESTION — so the pendulum swung all the way through. Asked to run two SQL
+    queries and paste the rows, the Program Manager replied with several hundred words about
+    never having been seated on a panel on this project. True, and not what was asked.
+
+    Reported as: "I dont see any recommendations or identifying the right issue, the Agent
+    quality is very bad and no one can work with it."
+
+    A specialist brings their lens TO your question. They do not answer a question about a
+    failing step with their own job description.
+    """
+
+    def _describe(self):
+        import inspect
+
+        return inspect.getsource(_tools()["describe_role"].handler)
+
+    def test_the_question_comes_first(self):
+        body = self._describe()
+        assert "ANSWER THE OPERATOR'S ACTUAL QUESTION FIRST" in body
+        assert "LENS" in body
+
+    def test_it_must_not_open_with_its_own_biography(self):
+        body = self._describe()
+        assert "Do not open with who you are" in body
+        # The specific failure: narrating gaps in its own configuration at the operator.
+        assert "missing from your" in body
+
+    def test_asked_for_data_it_gives_data(self):
+        assert "If asked for data, give the data" in self._describe()
+
+    def test_an_empty_memory_is_not_a_topic(self):
+        """`recall_role_experience` told the model to SAY its answer was not from experience
+        here, so every reply disclosed an absence nobody had asked about."""
+        import inspect
+
+        body = inspect.getsource(_tools()["recall_role_experience"].handler)
+        # Fragments that live inside ONE string literal: an assertion spanning a
+        # concatenation boundary fails on formatting rather than on meaning.
+        assert "Do NOT make this absence the" in body
+        assert "mention it only if the operator asked" in body
+
+    def test_it_still_never_claims_to_be_undefined(self):
+        """The original bug must not come back while fixing its cure."""
+        assert "never say it is not" in self._describe()

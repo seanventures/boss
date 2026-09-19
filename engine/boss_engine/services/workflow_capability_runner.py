@@ -1705,13 +1705,81 @@ def resume_awaited(
                              "outcome": "following_retry", "awaited": kind,
                              "was": awaited_id, "now": successor})
                 continue
+            # SAY WHY, NOT JUST WHAT. See `_why_it_ended`: the cause was already recorded
+            # one or two tables away and this line used to discard it, leaving the operator
+            # with a sentence that only restates the failure.
+            why = _why_it_ended(connection, table, awaited_id)
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                error=f"the {kind} it started finished as '{status}'",
+                error=(f"the {kind} it started finished as '{status}' — {why}"
+                       if why else f"the {kind} it started finished as '{status}'"),
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
-                         "outcome": "failed", "awaited": kind, "awaited_status": status})
+                         "outcome": "failed", "awaited": kind, "awaited_status": status,
+                         "because": why})
     return done
+
+
+def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
+    """The REASON the awaited run ended, not merely the state it ended in.
+
+    FOUR HOPS, AND EVERY ONE THREW THE REASON AWAY.
+    -----------------------------------------------
+    An operator's panel step read "the meeting it started finished as 'cancelled'" — a
+    sentence that says nothing except that something went wrong somewhere. Tracing it by hand
+    through the database took four queries:
+
+        1. `POST /v1/meetings/step` raised
+           `IntegrationConfigurationError: OPENAI_API_KEY is not configured` and returned 500.
+        2. The `meeting.step` job retried, then DEADLETTERED, keeping that message in
+           `jobs.last_error`.
+        3. The shepherd saw a run with no job in ('queued','running','leased') and closed it:
+           `cancelled — "abandoned: no job remains that could advance this run"`.
+        4. This function's caller reported the STATUS of that run and nothing else.
+
+    The true cause — a missing credential, which the operator can fix in a minute — survived
+    at step 2 and was discarded by steps 3 and 4. So the console offered "Try Convene a panel
+    again", a button guaranteed to fail identically forever, and BOSS itself could not say
+    why, because the system had destroyed the evidence before the agent ever looked.
+
+    This walks back down: the run's own error first, and — when that error is the shepherd's
+    tautology about missing jobs — one further hop into the job that actually failed.
+    """
+    reason = ""
+    try:
+        row = connection.execute(
+            text(f"SELECT error FROM {table} WHERE id = :id"),  # noqa: S608 - fixed set
+            {"id": awaited_id},
+        ).mappings().first()
+        reason = str((row or {}).get("error") or "").strip()
+    except Exception:  # noqa: BLE001 — a table without an `error` column is not fatal
+        reason = ""
+
+    # "No job remains" describes the SWEEP, not the failure. The job it is talking about
+    # recorded why it died before it was swept.
+    if not reason or "no job remains" in reason:
+        try:
+            job = connection.execute(
+                text("SELECT last_error FROM jobs "
+                     " WHERE payload->>'run_id' = :r "
+                     "   AND status IN ('deadlettered', 'failed') "
+                     " ORDER BY updated_at DESC LIMIT 1"),
+                {"r": awaited_id},
+            ).mappings().first()
+            raw = (job or {}).get("last_error")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except ValueError:
+                    raw = {"message": raw}
+            if isinstance(raw, dict):
+                detail = str(raw.get("message") or raw.get("reason") or "").strip()
+                kind_of = str(raw.get("type") or "").strip()
+                if detail:
+                    reason = f"{kind_of}: {detail}" if kind_of else detail
+        except Exception:  # noqa: BLE001 — the status is still reportable without this
+            pass
+    return reason[:400]
 
 
 def _successor_attempt(
