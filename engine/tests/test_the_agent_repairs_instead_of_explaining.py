@@ -23,6 +23,7 @@ from __future__ import annotations
 import inspect
 
 from boss_engine.services.github_connections import GitHubConnectionService
+from boss_engine.services import github_connections as github_connections_mod
 from boss_engine.tools import build_discuss_read_registry
 from boss_engine.tools.builtin import _DISCUSS_OPERATIONS_TOOLS, build_default_registry
 
@@ -35,6 +36,7 @@ def test_a_second_attempt_reuses_the_connection():
     source = inspect.getsource(GitHubConnectionService.easy_connect)
     assert "_connection_by_label(connection, project_id, connection_label)" in source
     assert "self.repoint_connection(" in source
+    assert "self._existing_repository_binding(" in source
 
 
 def test_and_keeps_the_id_the_bindings_and_the_history():
@@ -181,3 +183,144 @@ def test_the_guard_still_protects_the_general_api():
     only the wizard, where the intent is explicit, replaces."""
     source = inspect.getsource(GitHubConnectionService.create_repository_binding)
     assert "Project already has an active primary repository." in source
+
+
+def test_a_second_connect_keeps_the_binding_it_already_made(monkeypatch):
+    """The first Connect already bound the repository. Creating it again is how retry dies.
+
+    Trigger: paste a token that cannot see the repo → Connect creates the connection AND the
+    primary binding, then the access test fails (201, committed). Fix the token, press
+    Connect again. easy_connect repoints the connection, then calls create_repository_binding
+    for the same owner/name. That raises "Project already has an active primary repository."
+    The API wraps the whole call in one transaction, so the new credential rolls back too.
+    The operator is stuck: every subsequent Connect 422s, and the connection still holds
+    the token that cannot see the repo.
+
+    The comment on the retry promised it would keep the binding. The create after repoint
+    is what broke that promise.
+    """
+    from boss_engine.config import Settings
+
+    svc = GitHubConnectionService(Settings())
+    existing_connection = {
+        "id": "ghconn_retry",
+        "auth_method": "personal_access_token",
+        "status": "configured",
+    }
+    existing_binding = {
+        "id": "ghrepo_retry",
+        "full_name": "acme/app",
+        "connection_id": "ghconn_retry",
+        "status": "active",
+        "role": "primary",
+    }
+    created_bindings: list[str] = []
+
+    svc.store_token_credential = lambda *args, **kwargs: "infisical:github_retry"  # type: ignore[method-assign]
+    svc._connection_by_label = lambda *args, **kwargs: existing_connection  # type: ignore[method-assign]
+    svc.repoint_connection = lambda *args, **kwargs: existing_connection  # type: ignore[method-assign]
+    svc._retire_primary_binding = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    svc._existing_repository_binding = lambda *args, **kwargs: existing_binding  # type: ignore[method-assign]
+    svc.create_connection = (  # type: ignore[method-assign]
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("retry must not create a connection"))
+    )
+
+    def _create_binding(*args, **kwargs):
+        created_bindings.append(kwargs.get("repository") or "")
+        raise ValueError("Project already has an active primary repository.")
+
+    svc.create_repository_binding = _create_binding  # type: ignore[method-assign]
+    svc.test_connection = (  # type: ignore[method-assign]
+        lambda *args, **kwargs: {
+            "status": "passed",
+            "connection": existing_connection,
+            "repository_binding": existing_binding,
+        }
+    )
+    monkeypatch.setattr(github_connections_mod, "emit_event", lambda *args, **kwargs: None)
+
+    result = svc.easy_connect(
+        object(),
+        project_id="proj_1",
+        connection_label="GitHub",
+        auth_method="personal_access_token",
+        env_credential_key="",
+        app_id=None,
+        installation_id=None,
+        api_base_url="https://api.github.com",
+        required_permissions=["pull", "push"],
+        repository="acme/app",
+        role="primary",
+        test_after_link=True,
+        metadata={},
+        actor="ceo",
+        token="github_pat_new_token",
+    )
+
+    assert created_bindings == [], created_bindings
+    assert result["repository_binding"]["id"] == "ghrepo_retry"
+    assert result["connection"]["id"] == "ghconn_retry"
+    assert result["test"]["status"] == "passed"
+
+
+def test_a_first_connect_still_creates_the_binding(monkeypatch):
+    """Reuse is for a binding that exists. The first Connect still has to make one."""
+    from boss_engine.config import Settings
+
+    svc = GitHubConnectionService(Settings())
+    created_connection = {
+        "id": "ghconn_first",
+        "auth_method": "personal_access_token",
+        "status": "configured",
+    }
+    created_binding = {
+        "id": "ghrepo_first",
+        "full_name": "acme/app",
+        "connection_id": "ghconn_first",
+        "status": "active",
+        "role": "primary",
+    }
+    created: list[str] = []
+
+    svc.store_token_credential = lambda *args, **kwargs: "infisical:github_first"  # type: ignore[method-assign]
+    svc._connection_by_label = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    svc._retire_primary_binding = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    svc._existing_repository_binding = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    svc.create_connection = lambda *args, **kwargs: created_connection  # type: ignore[method-assign]
+
+    def _create_binding(*args, **kwargs):
+        created.append(kwargs.get("repository") or "")
+        return created_binding
+
+    svc.create_repository_binding = _create_binding  # type: ignore[method-assign]
+    svc.test_connection = (  # type: ignore[method-assign]
+        lambda *args, **kwargs: {
+            "status": "passed",
+            "connection": created_connection,
+            "repository_binding": created_binding,
+        }
+    )
+    monkeypatch.setattr(github_connections_mod, "emit_event", lambda *args, **kwargs: None)
+
+    result = svc.easy_connect(
+        object(),
+        project_id="proj_1",
+        connection_label="GitHub",
+        auth_method="personal_access_token",
+        env_credential_key="",
+        app_id=None,
+        installation_id=None,
+        api_base_url="https://api.github.com",
+        required_permissions=["pull", "push"],
+        repository="acme/app",
+        role="primary",
+        test_after_link=True,
+        metadata={},
+        actor="ceo",
+        token="github_pat_first_token",
+    )
+
+    assert created == ["acme/app"]
+    assert result["repository_binding"]["id"] == "ghrepo_first"
+    assert result["test"]["status"] == "passed"

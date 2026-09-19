@@ -181,6 +181,29 @@ class GitHubConnectionService:
         ).mappings().first()
         return self._serialize_connection(row) if row else None
 
+    def _existing_repository_binding(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        repository: str,
+    ) -> Optional[dict[str, Any]]:
+        """The binding this project already has for that repository, if any."""
+        _owner, _name, full_name = self._normalize_repository(repository)
+        row = connection.execute(
+            text(
+                """
+                SELECT id FROM github_repository_bindings
+                 WHERE project_id = :p AND lower(full_name) = lower(:fn)
+                 LIMIT 1
+                """
+            ),
+            {"p": project_id, "fn": full_name},
+        ).first()
+        if row is None:
+            return None
+        return self.get_repository_binding(connection, project_id, row[0])
+
     def repoint_connection(
         self,
         connection: Connection,
@@ -1159,16 +1182,31 @@ class GitHubConnectionService:
             self._retire_primary_binding(
                 connection, project_id=project_id, repository=repository,
                 role=role or "primary", actor=actor)
-            binding = self.create_repository_binding(
-                connection,
-                project_id=project_id,
-                connection_id=created_connection["id"],
-                repository=repository,
-                role=role or "primary",
-                default_branch=None,
-                metadata={"setup": "easy_connect"},
-                actor=actor,
+            # A RETRY ALREADY HAS THIS BINDING. The first Connect created it, then the
+            # access test failed — that is a committed 201, not a rollback. Creating it
+            # again raises "Project already has an active primary repository.", the API
+            # transaction rolls back the new credential, and Connect can never finish.
+            # Keeping the binding is what the retry promised.
+            binding = self._existing_repository_binding(
+                connection, project_id=project_id, repository=repository,
             )
+            if binding is not None and binding["status"] != "active":
+                binding = self.update_repository_binding(
+                    connection, project_id=project_id, binding_id=binding["id"],
+                    role=role or "primary", status="active", default_branch=None,
+                    metadata=None, actor=actor,
+                )
+            if binding is None:
+                binding = self.create_repository_binding(
+                    connection,
+                    project_id=project_id,
+                    connection_id=created_connection["id"],
+                    repository=repository,
+                    role=role or "primary",
+                    default_branch=None,
+                    metadata={"setup": "easy_connect"},
+                    actor=actor,
+                )
             if test_after_link:
                 test_result = self.test_connection(
                     connection,
