@@ -856,6 +856,41 @@ def _http_ok(port: int) -> bool:
     return _url_ok(f"http://127.0.0.1:{port}", check_body=True)
 
 
+def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
+    """Why a port that IS listening still failed the health check.
+
+    "app did not serve HTTP within timeout" describes two opposite situations and distinguishes
+    neither: nothing ever bound (the build failed), or the app bound fine and answered the probe
+    with something _http_ok rejects. The interview-scorecard app was the second — it serves
+    /api/* and /metrics and has no route at all for "/", so the probe's 404 read as dead. The
+    log said "Serving the interview scorecard app on http://0.0.0.0:47053" and the operator was
+    told it never served, which sent everyone looking at the wrong half of the system.
+
+    Returns a sentence naming the port and what "/" actually answered, or None when nothing is
+    listening (in which case the generic timeout really is the right description).
+    """
+    for port in _candidate_ports(log_path, port_hint):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(1.0)
+            if probe.connect_ex(("127.0.0.1", port)) != 0:
+                continue
+        try:
+            response = urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=2)
+            status, body = int(response.status), response.read(4096)
+            if not body.strip():
+                return (f"the app IS listening on port {port}, but GET / returned {status} with "
+                        f"an empty body, so there is no page to preview.")
+            return (f"the app IS listening on port {port} and GET / returned {status}, but the "
+                    f"health check rejected the page it served.")
+        except urllib.error.HTTPError as http_error:
+            return (f"the app IS listening on port {port}, but GET / returned "
+                    f"{http_error.code}. It serves no page at the site root — check that the "
+                    f"build produced a UI and not only an API.")
+        except Exception:  # noqa: BLE001 — a port that will not answer is a port that failed
+            return (f"the app IS listening on port {port} but GET / did not complete.")
+    return None
+
+
 def _classify_start_failure(message: str) -> tuple[str, str]:
     lowered = message.lower()
     if "clone" in lowered:
@@ -1162,7 +1197,12 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # answers, so this never slows the fast case).
     port = _discover_working_port(log_path, port_hint, timeout=180.0)
     if port is None:
+        # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
+        # difference between "never bound" and "bound and served the wrong thing" is gone.
+        listening = _diagnose_listening_port(log_path, port_hint)
         _kill(proc.pid)
+        if listening:
+            return _fail(listening + " " + _why_it_failed(log_path))
         return _fail("app did not serve HTTP within timeout. "
                      + _why_it_failed(log_path))
 
