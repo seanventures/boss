@@ -3837,7 +3837,12 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                     body=str(args.get("body") or ""),
                     scope=str(args.get("scope") or "project").strip(),
                     scope_ref=str(args.get("scope_ref") or "").strip() or None,
-                    source_thread_id=(ctx.ambient or {}).get("_thread_id"),
+                    # THE AGENT'S AMBIENT VALUES ARRIVE IN `args`, NOT ON `ctx`.
+                    # `engine_agent` merges them into the argument dict before invoking
+                    # (`args={**self.ambient, **args, ...}`); reading `ctx.ambient` raised
+                    # AttributeError on every call. Found in production by the agent itself,
+                    # which traced it to this line and declined to guess a workaround.
+                    source_thread_id=args.get("_thread_id"),
                 )
         except MemoryError_ as error:
             return {"ok": False, "error": str(error)}
@@ -3868,7 +3873,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         kinds = tuple(str(k) for k in (args.get("kinds") or []) if str(k).strip())
         with ctx.begin() as c:
             rows = _recall(c, project_id=pid, actor=actor,
-                           role=(ctx.ambient or {}).get("_role"),
+                           role=str(args.get("role") or "").strip() or None,
                            kinds=kinds or None,
                            include_proposed=bool(args.get("include_proposed")))
         return {"ok": True, "count": len(rows), "memories": [_json_safe(r) for r in rows],
@@ -3935,7 +3940,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         )
 
         pid = args.get("project_id") or project_id
-        thread_id = str((ctx.ambient or {}).get("_thread_id") or "").strip()
+        thread_id = str(args.get("_thread_id") or "").strip()
         if not thread_id:
             return {"ok": False,
                     "error": "no thread on this turn, so there is nothing to keep a ledger for"}

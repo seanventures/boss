@@ -311,3 +311,92 @@ class TestItReachesTheTurn:
                 raise RuntimeError("database is on fire")
 
         assert _remembered_context(Broken(), _pid(), "ceo", None, None) == ""
+
+
+class TestTheToolsThemselves:
+    """Invoked through the REGISTRY, which is the path that actually broke.
+
+    The service tests above all passed while `remember` raised `AttributeError:
+    'EngineContext' object has no attribute 'ambient'` on every real call. The tools read
+    `ctx.ambient`, but `engine_agent` merges ambient values into the ARGUMENT dict
+    (`args={**self.ambient, **args, ...}`) and never puts them on the context. Nothing between
+    the service and the model exercised that seam.
+
+    Found in production by BOSS itself, which traced it to the line and refused to invent a
+    workaround.
+    """
+
+    def _invoke(self, engine, name, args):
+        from apps.api.app.config import get_settings as _gs
+        from boss_engine.context import EngineContext
+        from boss_engine.tools import build_default_registry
+
+        ctx = EngineContext(settings=_gs(), engine=engine)
+        return build_default_registry().invoke(
+            name, ctx, project_id=_pid(), actor="ceo", args=args)
+
+    def test_remember_works_through_the_registry(self, engine):
+        result = self._invoke(engine, "remember", {
+            "kind": "project", "body": "the family channel is Makkal Sinthanai"})
+        assert result["ok"] is True, result
+        assert result["status"] == "active"
+
+    def test_it_keeps_the_thread_that_taught_it(self, engine):
+        """Provenance: a surprising rule has to be traceable to the conversation that set it.
+        The thread id arrives as an ambient `_thread_id` in args."""
+        self._invoke(engine, "remember", {
+            "kind": "project", "body": "drive is the handover point",
+            "_thread_id": "athr_source"})
+        with engine.begin() as c:
+            got = c.execute(text(
+                "SELECT source_thread_id FROM agent_memory WHERE body LIKE 'drive is%'"
+            )).scalar_one()
+        assert got == "athr_source"
+
+    def test_a_lesson_tool_call_says_it_is_not_yet_binding(self, engine):
+        """The model must not tell the operator a rule is in force when it is awaiting review."""
+        result = self._invoke(engine, "remember", {
+            "kind": "lesson", "body": "always run the frontend checks first"})
+        assert result["status"] == "proposed"
+        assert "does not bind" in result["note"]
+
+    def test_update_ledger_needs_a_thread(self, engine):
+        result = self._invoke(engine, "update_ledger", {"goal": "x"})
+        assert result["ok"] is False
+        assert "thread" in result["error"]
+
+    def test_update_ledger_writes_and_recall_reads(self, engine):
+        wrote = self._invoke(engine, "update_ledger", {
+            "_thread_id": "athr_tool", "goal": "ship phase A0",
+            "next_step": "wire injection", "rejected": "reading ctx.ambient"})
+        assert wrote["ok"] is True, wrote
+        with engine.begin() as c:
+            packed = mem.pack_ledger(c, thread_id="athr_tool")
+        assert "ship phase A0" in packed
+        assert "reading ctx.ambient" in packed
+
+    def test_recall_returns_what_was_remembered(self, engine):
+        self._invoke(engine, "remember", {"kind": "project", "body": "a recorded fact"})
+        result = self._invoke(engine, "recall", {})
+        assert result["count"] == 1
+        assert "a recorded fact" in result["memories"][0]["body"]
+
+    def test_forget_retires_it(self, engine):
+        made = self._invoke(engine, "remember", {"kind": "project", "body": "no longer true"})
+        gone = self._invoke(engine, "forget", {"memory_id": made["id"]})
+        assert gone["ok"] is True
+        assert self._invoke(engine, "recall", {})["count"] == 0
+
+    def test_no_memory_tool_reads_ctx_ambient(self):
+        """The specific mistake, pinned. Ambient values are arguments, not context."""
+        import inspect
+
+        from boss_engine.tools import builtin
+
+        for name in ("remember", "recall", "forget", "update_ledger"):
+            start = builtin.__file__  # noqa: F841 - readability
+        source = inspect.getsource(builtin)
+        for line in source.splitlines():
+            if "ctx.ambient" in line:
+                assert line.strip().startswith("#"), (
+                    f"a tool reads ctx.ambient again: {line.strip()}")
