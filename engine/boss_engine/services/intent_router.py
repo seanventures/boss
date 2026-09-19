@@ -1276,15 +1276,33 @@ def _role_identity(role: Optional[str]) -> str:
     return (
         "\n\n=== YOU ARE ANSWERING AS A NAMED MEMBER OF THIS WORKFORCE ===\n"
         f"The operator is asking {role}, not BOSS in general.\n"
-        f"FIRST call describe_role(role=\"{role}\") to read the lens that role argues from and "
-        "the rules and skills its agent definition carries. Then call "
-        f"recall_role_experience(role=\"{role}\") to read what it has actually argued on this "
-        "project's panels, in its own words.\n"
-        "Answer from THAT: the specifics this role has seen here, referring to the briefs and "
-        "positions by name. An SME's whole value is what it has lived through — a generic "
-        "answer from a named expert is worse than no expert, because it reads as authority.\n"
-        "If nothing is recorded for this role yet, say so plainly and answer from the lens and "
-        "rules instead. Do not imply experience you cannot point at.\n"
+        # ANSWERING THE QUESTION IS THE JOB. THE ROLE IS HOW YOU ANSWER IT.
+        #
+        # This block used to open by ordering two tool calls and then say "answer from THAT:
+        # the specifics this role has seen here" and "if nothing is recorded, SAY SO PLAINLY".
+        # Followed literally — which is the only way to follow it — that turns every reply
+        # into an essay about the role. Asked to run two SQL queries and paste the rows, the
+        # Program Manager wrote several hundred words about never having been seated on a
+        # panel; asked for a single row count, it opened "I have no recorded history on this
+        # project." Reported as "no recommendations, not identifying the right issue, the
+        # Agent quality is very bad and no one can work with it."
+        #
+        # The honesty rule underneath it was right and is kept: never imply experience you
+        # cannot point at. What was wrong was making the ABSENCE of experience the opening
+        # subject of answers that never asked about it.
+        "ANSWER THE OPERATOR'S QUESTION, FULLY AND FIRST. If they asked for data, give the "
+        "data. If they asked what is wrong, diagnose it and say what to do. The role is the "
+        "LENS you bring — it decides what you notice, what you warn about and where you push "
+        "back — it is not the subject of the answer.\n"
+        f"Call describe_role(role=\"{role}\") when you need the remit, and "
+        f"recall_role_experience(role=\"{role}\") when the question is about what this role "
+        "has argued or decided before. Neither is required on a question that is simply "
+        "asking you something factual.\n"
+        "Where this role HAS argued something relevant, cite it by name — that specificity is "
+        "the value of asking a named expert rather than BOSS in general.\n"
+        "Never imply experience you cannot point at. But do NOT open with, or dwell on, what "
+        "is missing from your own record or configuration: mention it only if the operator "
+        "asked what you have done before, or if it genuinely changes the answer.\n"
         "Stay in role: give the view that role is in the room to give, and name where you "
         "disagree with what the rest of the panel decided."
     )

@@ -45,8 +45,33 @@ class TestTheQuestionIsAddressed:
     def test_it_may_not_imply_experience_it_cannot_point_at(self):
         """The failure mode of a persona: sounding experienced without having been there."""
         block = _role_identity("QA / Test")
-        assert "Do not imply experience you cannot point at." in block
-        assert "say so plainly" in block
+        assert "Never imply experience you cannot point at." in block
+
+    def test_but_a_missing_record_is_not_the_opening_subject(self):
+        """The honesty rule was right; "say so plainly" as an OPENER was not.
+
+        It read "if nothing is recorded for this role yet, say so plainly", and followed
+        literally — the only way to follow it — every reply began with the role's own empty
+        history. Asked for a single row count, the Program Manager opened "I have no recorded
+        history on this project."
+        """
+        block = _role_identity("QA / Test")
+        assert "say so plainly" not in block
+        assert "do NOT open with" in block
+        assert "only if the operator" in block
+
+    def test_the_question_is_answered_first_and_the_role_is_the_lens(self):
+        block = _role_identity("QA / Test")
+        assert "ANSWER THE OPERATOR'S QUESTION, FULLY AND FIRST" in block
+        assert "LENS" in block
+        assert "If they asked for data, give the data" in block
+
+    def test_the_two_role_reads_are_not_mandatory_on_every_turn(self):
+        """"FIRST call describe_role… Then call recall_role_experience" ran two lookups before
+        every answer, including "how many rows are in this table"."""
+        block = _role_identity("QA / Test")
+        assert "FIRST call describe_role" not in block
+        assert "Neither is required" in block
 
     def test_it_is_told_to_stay_in_role_and_dissent(self):
         """A panel member who agrees with everything adds nothing."""
