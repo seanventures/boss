@@ -170,9 +170,11 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_previews",
         "App previews with their open URLs AND, for the failed ones, why they failed: "
-        "`failure_kind` (port_timeout / clone_failed / command_missing / boot_crash) and the "
-        "error, which usually names the real fault — a build error, a missing entry file, a "
-        "port the app did not honour. Read `read_preview_log` for the full startup log, then "
+        "`failure_kind` (port_timeout / no_page_at_root / clone_failed / command_missing / "
+        "boot_crash) and the error, which usually names the real fault — a build error, a "
+        "missing entry file, a port the app did not honour, or an app that started correctly "
+        "and serves no page at '/' because the build produced only an API. Read "
+        "`read_preview_log` for the full startup log, then "
         "repair: an app-side fault is fixed with extend_code_task or steer_code_task on the "
         "run, and start_preview tries again.",
         _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),

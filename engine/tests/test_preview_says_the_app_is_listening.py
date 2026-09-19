@@ -68,3 +68,34 @@ def test_nothing_listening_still_reads_as_a_plain_timeout(tmp_path):
     log = tmp_path / "_preview.log"
     log.write_text("error during build: Could not resolve entry module \"index.html\".\n")
     assert ps._diagnose_listening_port(str(log), 1) is None
+
+
+def test_a_listening_app_is_not_classified_as_a_port_timeout():
+    """port_timeout tells the operator to check HOST/PORT. This app honoured both."""
+    kind, action = ps._classify_start_failure(
+        "the app IS listening on port 49005, but GET / returned 404. It serves no page at the "
+        "site root — check that the build produced a UI and not only an API.")
+    assert kind == "no_page_at_root"
+    assert "HOST/PORT" not in action
+    assert "UI" in action
+
+
+def test_a_build_that_never_bound_is_still_a_port_timeout():
+    kind, _action = ps._classify_start_failure(
+        "app did not serve HTTP within timeout. log tail: Could not resolve entry module.")
+    assert kind == "port_timeout"
+
+
+def test_the_shepherd_files_it_as_a_preview_failure_not_an_infrastructure_retry():
+    """A missing UI is a property of the BUILD. Filed anywhere else, the prescribed repair is a
+    blind retry — and retrying cannot add a page the build never produced."""
+    from boss_engine.services import task_shepherd
+
+    listening = ("the app IS listening on port 49005, but GET / returned 404. It serves no page "
+                 "at the site root — check that the build produced a UI and not only an API.")
+    assert task_shepherd.classify(listening) == task_shepherd.PREVIEW_FAILED
+    # The phrase is what carries it there: without the wording this message has no other
+    # keyword in common with the preview bucket.
+    assert task_shepherd.classify(
+        "the app IS listening on port 49005, but GET / returned 404."
+    ) != task_shepherd.PREVIEW_FAILED

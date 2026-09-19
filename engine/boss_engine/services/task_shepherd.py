@@ -98,7 +98,12 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
     # Before INFRASTRUCTURE: a preview that never served HTTP is a property of the BUILD, and
     # filing it as infrastructure would prescribe a blind retry of a build that cannot succeed.
     (PREVIEW_FAILED, ("did not serve http", "could not resolve entry",
-                      "preview failed to start", "boot_crash", "port_timeout")),
+                      "preview failed to start", "boot_crash", "port_timeout",
+                      # An app that bound its port and serves nothing at "/" is the same class
+                      # of fault as one that never built: the repair is in the BUILD, not in a
+                      # retry. Without these it fell through to the generic buckets below and
+                      # would have been prescribed an infrastructure retry that cannot add a UI.
+                      "no page at the site root", "no_page_at_root")),
     (SPEND_CAP, ("spend limit", "usage limit", "rate limit exceeded", "quota exceeded",
                  "too many requests")),
     (TURN_CAP, ("error_max_turns", "max_turns_exhausted", "ran out of turns")),

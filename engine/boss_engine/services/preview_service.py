@@ -893,6 +893,14 @@ def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
 
 def _classify_start_failure(message: str) -> tuple[str, str]:
     lowered = message.lower()
+    # AN APP THAT IS LISTENING DID NOT TIME OUT. Checked before the generic "port" rule below,
+    # which matches the word in this message too and labelled it port_timeout — telling the
+    # operator to "ensure HOST/PORT are honored" about an app that honoured both and bound
+    # exactly as asked. The fix here is a UI, not a port.
+    if "no page at the site root" in lowered:
+        return ("no_page_at_root",
+                "The app started but serves nothing at '/'. Check that the build produced a UI "
+                "and not only an API, then preview it again.")
     if "clone" in lowered:
         return "clone_failed", "Check repository access and the task branch, then retry."
     if "detect" in lowered or "command" in lowered:
