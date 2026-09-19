@@ -102,4 +102,30 @@ export function previewOperatorHref(preview: PreviewRec): string | null {
   return operatorPreviewOpenHref(preview);
 }
 
+/**
+ * The preview record a workflow step recorded, as a thing with a REAL status.
+ *
+ * A step carries its preview in one of two shapes: `live_preview`, resolved per-step by the
+ * API, or the nested `{preview: {...}}` that the start_preview tool wrote. The caller used to
+ * build the second one by hand and hardcode `status: "running"`, which quietly defeated
+ * operatorPreviewOpenHref's refusal of expired/stopped/failed previews: a preview that died
+ * with "Could not resolve entry module index.html" still rendered a confident "Open preview"
+ * button, and the operator opened a dead URL.
+ *
+ * Exported and pure so it can be tested as itself. The console's own tests are source greps,
+ * which pass whether or not this rule is right.
+ */
+export function previewRecordFromStepOutput(
+  output: Record<string, unknown>,
+): { id: string; status: string; url: string | null } | null {
+  const live = output.live_preview as
+    { id: string; status: string; url: string | null } | undefined;
+  if (live) return live;
+  const nested = output.preview as
+    { id?: string; url?: string; status?: string } | undefined;
+  if (!nested?.id) return null;
+  // Absent means "not recorded yet", which is the only case that may assume it is running.
+  return { id: nested.id, status: String(nested.status || "running"), url: nested.url ?? null };
+}
+
 export type { PreviewFeed };

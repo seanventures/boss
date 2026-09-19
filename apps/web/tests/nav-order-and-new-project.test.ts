@@ -519,7 +519,14 @@ describe("managing runs, not just watching them", () => {
   it("reads the preview the tool recorded as a fallback", () => {
     // start_preview nests its result under `preview`, and that is what the step carries when
     // the API has resolved no live one — it still has to become a link the same way.
-    expect(DW2).toContain("output.preview as");
+    //
+    // The nested shape used to be unpacked inline here, and this asserted on that source text.
+    // Unpacking it by hand is what let `status: "running"` be hardcoded over a preview that had
+    // FAILED, so the rule now lives in lib/previews as previewRecordFromStepOutput and is
+    // tested on its behaviour in a-failed-preview-offers-no-link.test.ts. What this file can
+    // still say is that the step uses it rather than growing a second copy.
+    expect(DW2).toContain("previewRecordFromStepOutput(output)");
+    expect(DW2).not.toContain('status: "running"');
     expect(DW2).toContain("open the preview");
   });
 

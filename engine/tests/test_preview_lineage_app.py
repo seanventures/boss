@@ -174,3 +174,52 @@ def test_a_single_app_repo_still_runs_at_its_root(tmp_path):
     (tmp_path / "index.html").write_text("<html></html>")
     command = ps._detect_command(tmp_path, [])
     assert command is not None and "cd " not in command[2]
+
+
+# --------------------------------------------------------------------------------------- #
+# A SIBLING'S index.html DOES NOT VOUCH FOR THE ROOT.
+#
+# The guard above ("package.json declares vite but nothing to build") swept _STATIC_DIRS, so
+# ANY app in the repo satisfied it on the root's behalf. boss-sandbox holds web/index.html from
+# an older Sudoku task, which let its workspaces root — no index.html of its own — be treated
+# as a Vite app. The interview-scorecard task, built in Python as scorecard_core/ +
+# serve_scorecard.py, was previewed by running `vite build` at that root: "Build failed in 6ms
+# | Could not resolve entry module index.html", nothing listened, and the console reported
+# "app did not serve HTTP within timeout" about an app that was never started.
+# --------------------------------------------------------------------------------------- #
+
+def _python_app_beside_an_old_web_app(tmp_path):
+    """The real boss-sandbox shape: a vite-declaring root, a stale web app, a Python app."""
+    (tmp_path / "package.json").write_text(json.dumps({
+        "workspaces": ["web"],
+        "scripts": {"test": "python3 -m unittest discover -s tests",
+                    "preview": "npx --package=vite vite preview"},
+        "devDependencies": {"vite": "^5.3.1"},
+    }))
+    stale = tmp_path / "web"          # a previous task's app, with its own entry
+    stale.mkdir()
+    (stale / "index.html").write_text("<html></html>")
+    (tmp_path / "serve_scorecard.py").write_text("# the app this run built\n")
+    return tmp_path
+
+
+def test_a_python_app_is_not_previewed_by_building_vite_at_the_root(tmp_path):
+    command = ps._detect_command(_python_app_beside_an_old_web_app(tmp_path),
+                                 ["scorecard_core/scoring.py", "serve_scorecard.py"])
+    assert command is not None
+    assert "vite build" not in " ".join(command)
+
+
+def test_it_runs_the_python_entrypoint_this_run_actually_built(tmp_path):
+    command = ps._detect_command(_python_app_beside_an_old_web_app(tmp_path),
+                                 ["scorecard_core/scoring.py", "serve_scorecard.py"])
+    assert command == ["python3", "serve_scorecard.py"]
+
+
+def test_ambiguity_is_refused_rather_than_guessed_at_the_root(tmp_path):
+    """_detect_command swallowed AmbiguousAppError and guessed the root — the very directory
+    resolution had just declined to choose. The refusal names the apps and what to do."""
+    root = _python_app_beside_an_old_web_app(tmp_path)
+    (root / "serve_monitor.py").write_text("# another run's app\n")
+    with pytest.raises(ps.AmbiguousAppError):
+        ps._detect_command(root, [])          # no lineage signal: cannot tell which app

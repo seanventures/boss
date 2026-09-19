@@ -612,12 +612,29 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
     app_rel = "."
     try:
         kind, value = resolve_app_entry(workdir, changed)
+        # A RESOLVED PYTHON APP IS THE ANSWER, NOT A REASON TO GO READ THE ROOT MANIFEST.
+        #
+        # Only node/static were honoured here, so a task whose app is a Python service fell
+        # through to _detect_command_in(root) — and in a repo whose root package.json declares
+        # vite, the Vite branch fired before anything asked about Python. The interview-scorecard
+        # run built scorecard_core/ + serve_scorecard.py, resolution answered
+        # `py:serve_scorecard.py` correctly, and the preview ran `npx vite build` at the
+        # workspaces root: "Build failed in 6ms | Could not resolve entry module index.html",
+        # nothing listened, "app did not serve HTTP within timeout" — for an app that was never
+        # started. The whole point of this function is that resolution being right is worthless
+        # if the command ignores it; py was the case still ignoring it.
+        if kind == "py" and value:
+            return ["python3", value]
         if kind in {"node", "static"} and value not in {"", "."}:
             app_rel = value
     except AmbiguousAppError:
-        # Ambiguity is resolved (or refused) by the caller; here it just means "no better
-        # directory than the root", which is the behaviour that predates this.
-        app_rel = "."
+        # REFUSE, DO NOT FALL BACK TO THE ROOT. Swallowing this turned a precise, actionable
+        # refusal ("the repository contains 9 runnable apps and the run recorded no
+        # implementation files identifying one") into a silent guess at the repo root — and the
+        # root is exactly the directory resolution had just declined to choose. The callers
+        # already handle this: it is recorded as failure_kind 'ambiguous_app' with the message
+        # above, which tells the operator what to do. Fail closed and say why.
+        raise
     command = _detect_command_in(workdir if app_rel == "." else workdir / app_rel, changed)
     if command and app_rel != "." and command[:2] == ["sh", "-lc"]:
         # Run it where the app is. `npm install` in the wrong directory installs the wrong

@@ -11,6 +11,7 @@ import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
+import { previewRecordFromStepOutput } from "../lib/previews";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -1140,12 +1141,15 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
   // already encodes the whole rule (refuse expired, refuse loopback, else the API's own
   // /v1/previews/<id>/web/ proxy) and Factory has used it all along. Using it here is the fix;
   // writing a fourth version of it would not be.
-  const live = output.live_preview as
-    { id: string; status: string; url: string | null } | undefined;
-  const nested = output.preview as { id?: string; url?: string } | undefined;
-  const record = live ?? (nested?.id
-    ? { id: nested.id, status: "running", url: nested.url ?? null }
-    : null);
+  // THE STATUS IS IN THE RECORD. DO NOT INVENT ONE.
+  //
+  // This built the nested shape inline and hardcoded `status: "running"`, which defeated the
+  // one rule that matters: operatorPreviewOpenHref refuses expired/stopped/FAILED and was
+  // handed a fabricated "running" every time. start_preview records `{preview: {status:
+  // "failed", failure_kind: "port_timeout", ...}}` for a preview that never served, and the
+  // step still rendered a confident "Open preview" button pointing at a dead
+  // /v1/previews/<id>/web/ — the only thing on screen claiming to know how the preview went.
+  const record = previewRecordFromStepOutput(output);
   const href = record ? operatorPreviewOpenHref(record) : null;
   if (href) {
     out.push({ label: "open the preview", external: true,
