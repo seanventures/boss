@@ -119,3 +119,49 @@ def test_it_never_returns_a_credential():
     source = inspect.getsource(_tool("diagnose_setup").handler)
     for forbidden in ("credential_ref", "token", "secret_value", "api_key"):
         assert f'"{forbidden}"' not in source, forbidden
+
+
+# -- and it can read the history of a repository this project connected ------------------------
+
+def test_a_clone_uses_the_credential_the_project_connected():
+    """`settings.github_token` is the OLD way of naming a target repo, and it is empty on any
+    install that connected one through the wizard — the credential lives in the connection and
+    its value in a secret store. So reading a private repository's history died with git asking
+    for a username on a terminal nobody is at:
+
+        fatal: could not read Username for 'https://github.com': No such device or address
+    """
+    from boss_engine.tools.builtin import _github_token_for, _repo_root
+
+    assert "token" in inspect.signature(_repo_root).parameters
+    source = inspect.getsource(_github_token_for)
+    assert "github_connections" in source
+    assert "_resolve_secret(secret, connection)" in source
+
+
+def test_and_the_environment_still_wins_where_it_is_set():
+    """An install configured the old way must be unaffected."""
+    from boss_engine.tools.builtin import _github_token_for
+
+    source = inspect.getsource(_github_token_for)
+    at = source.index('getattr(ctx.settings, "github_token"')
+    assert "if configured:" in source[at:at + 160]
+
+
+def test_every_caller_passes_it():
+    """A resolver nothing calls is the same bug with more code."""
+    from boss_engine.tools import builtin
+
+    source = inspect.getsource(builtin)
+    assert source.count("_repo_root(ctx.settings, repo, ref,") == 4
+    assert source.count("token=_github_token_for(ctx, project_id)") == 4
+
+
+def test_and_a_missing_token_is_answered_not_raised():
+    """No connection, or an unreadable store, must leave the clone to report the real problem
+    rather than ending the turn in a traceback."""
+    from boss_engine.tools.builtin import _github_token_for
+
+    source = inspect.getsource(_github_token_for)
+    assert "except Exception" in source
+    assert 'return ""' in source

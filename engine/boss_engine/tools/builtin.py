@@ -3504,8 +3504,46 @@ def _role_name_candidates(wanted: str) -> list[str]:
     return out
 
 
+def _github_token_for(ctx: Any, project_id: str) -> str:
+    """The credential this project's repository is connected with.
+
+    Cloning used `settings.github_token`, which is the OLD way of configuring a target repo
+    and is empty on any install that connected one through the wizard — the credential lives
+    in the project's GitHub connection and its value in a secret store. So reading a private
+    repository's history failed with git asking for a username on a terminal nobody is at:
+
+        fatal: could not read Username for 'https://github.com': No such device or address
+
+    The environment still wins where it is set, so an install configured the old way is
+    unaffected.
+    """
+    configured = str(getattr(ctx.settings, "github_token", "") or "").strip()
+    if configured:
+        return configured
+    try:
+        from ..services.github_connections import GitHubConnectionService
+
+        service = GitHubConnectionService(ctx.settings)
+        with ctx.begin() as connection:
+            row = connection.execute(
+                _text("SELECT id FROM github_connections "
+                      " WHERE project_id = :p AND status IN ('configured', 'active') "
+                      " ORDER BY updated_at DESC LIMIT 1"),
+                {"p": project_id},
+            ).first()
+            if row is None:
+                return ""
+            ref = service._credential_ref(connection, project_id, row[0])
+            secret = service.secret_refs.require_usable(
+                connection, project_id=project_id, credential_ref=ref)
+            return service._resolve_secret(secret, connection) or ""
+    except Exception:  # noqa: BLE001 — no token is an answer; the clone reports it
+        return ""
+
+
 def _repo_root(settings: Any, repo: str,
-               ref: _Optional[str] = None) -> tuple[_Optional[str], _Optional[str]]:
+               ref: _Optional[str] = None,
+               token: str = "") -> tuple[_Optional[str], _Optional[str]]:
     """The local path for `repo` at `ref`, cloning it if we do not have it yet.
 
     `repo` is "boss" for BOSS's own source, or "owner/name" (or bare "name", which
@@ -3542,7 +3580,8 @@ def _repo_root(settings: Any, repo: str,
         from ..services.repo_host import clone_url_for
 
         url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
-                            owner, short, getattr(settings, "github_token", "") or "")
+                            owner, short,
+                            token or (getattr(settings, "github_token", "") or ""))
         if _os.path.isdir(_os.path.join(dest, ".git")):
             # Refresh, but never fail the read because the network is down — a slightly
             # stale checkout answers most questions; no checkout answers none.
@@ -5409,7 +5448,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         repo, ref, err = _resolve_source(ctx, args)
         if err:
             return {"ok": False, "error": err}
-        root, err = _repo_root(ctx.settings, repo, ref)
+        root, err = _repo_root(ctx.settings, repo, ref,
+                               token=_github_token_for(ctx, project_id))
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -5473,7 +5513,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         repo, ref, err = _resolve_source(ctx, args)
         if err:
             return {"ok": False, "error": err}
-        root, err = _repo_root(ctx.settings, repo, ref)
+        root, err = _repo_root(ctx.settings, repo, ref,
+                               token=_github_token_for(ctx, project_id))
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -5523,7 +5564,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         repo, ref, err = _resolve_source(ctx, args)
         if err:
             return {"ok": False, "error": err}
-        root, err = _repo_root(ctx.settings, repo, ref)
+        root, err = _repo_root(ctx.settings, repo, ref,
+                               token=_github_token_for(ctx, project_id))
         if root is None:
             return {"ok": False, "error": err}
         path = _safe_path(args["file"], root)
@@ -5984,7 +6026,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         repo, ref, err = _resolve_source(ctx, args)
         if err:
             return {"ok": False, "error": err}
-        root, err = _repo_root(ctx.settings, repo, ref)
+        root, err = _repo_root(ctx.settings, repo, ref,
+                               token=_github_token_for(ctx, project_id))
         if root is None:
             return {"ok": False, "error": err}
         # AN IMAGE IS NOT A CHECKOUT. BOSS's own source is COPYed into the container without
