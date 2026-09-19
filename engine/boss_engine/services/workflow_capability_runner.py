@@ -1698,7 +1698,7 @@ def resume_awaited(
             successor = (
                 _successor_attempt(connection, project_id, awaited_id, run_id)
                 if kind == "code_task"
-                else _meeting_successor(connection, project_id, awaited_id)
+                else _meeting_successor(connection, project_id, awaited_id, run_id)
                 if kind == "meeting" else None
             )
             if successor:
@@ -1792,6 +1792,7 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
 
 def _meeting_successor(
     connection: Connection, project_id: str, awaited_id: str,
+    workflow_run_id: Optional[str] = None,
 ) -> Optional[str]:
     """A later attempt at the same panel, if one is under way.
 
@@ -1811,13 +1812,29 @@ def _meeting_successor(
 
     A successor that itself failed or was cancelled is not progress — following one would only
     move the stuck point — so only live or completed runs count.
+
+    TWO GUARDS THAT THE FIRST VERSION LACKED, both found by an independent review:
+
+    * **It must be LATER than the run that failed.** Without `created_at >`, ordering the
+      fingerprint class by recency and taking the first live row adopts a run that PRE-DATES
+      the failure whenever the real retry is itself dead. The step then force-completes on a
+      stale panel's minutes — a silent wrong answer, which is worse than the stuck step it
+      replaced.
+    * **It must belong to THIS workflow run.** The fingerprint is (project, directive, url,
+      type), so every run of the same panel across every workflow shares one. Four rows in a
+      real database shared a fingerprint across four days and four different workflow runs,
+      and this would have adopted a panel another run commissioned a day later. The code-task
+      twin scopes by `workflow_run_id` for exactly this reason; this now does too, and falls
+      back to lineage only when the awaited run records no workflow.
     """
     try:
         return connection.execute(
             text(
                 """
                 WITH target AS (
-                    SELECT finalize_ctx->>'meeting_fingerprint' AS fp
+                    SELECT finalize_ctx->>'meeting_fingerprint' AS fp,
+                           finalize_ctx->>'workflow_run_id'     AS wfr,
+                           created_at                           AS born
                       FROM meeting_runs WHERE id = :awaited
                 )
                 SELECT r.id
@@ -1827,11 +1844,19 @@ def _meeting_successor(
                    AND t.fp IS NOT NULL
                    AND r.finalize_ctx->>'meeting_fingerprint' = t.fp
                    AND r.status IN ('queued', 'running', 'completed')
-                 ORDER BY r.created_at DESC
+                   -- A retry happens AFTER the thing it retries.
+                   AND r.created_at > t.born
+                   -- And belongs to the same run, when the awaited one says which run it is.
+                   AND (
+                        t.wfr IS NULL
+                     OR r.finalize_ctx->>'workflow_run_id' = t.wfr
+                     OR (:wfr <> '' AND r.finalize_ctx->>'workflow_run_id' = :wfr)
+                   )
+                 ORDER BY r.created_at ASC
                  LIMIT 1
                 """
             ),
-            {"awaited": awaited_id, "p": project_id},
+            {"awaited": awaited_id, "p": project_id, "wfr": workflow_run_id or ""},
         ).scalar()
     except Exception:  # noqa: BLE001 — a missing optional column must not stop the sweep
         return None

@@ -3014,6 +3014,32 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "decision": _json_safe(dict(dec)) if dec else None}
 
 
+def _declared_inputs(raw: Any) -> list[str]:
+    """The input names a workflow version declares, whichever shape it wrote them in.
+
+    TWO SHAPES EXIST IN ONE DATABASE and this read only understood the rarer one:
+
+      * ``{"media_artifact_id": "string", "title": "string"}`` — a name-to-type map, which is
+        what `draft_workflow` emits.
+      * ``{"required": ["project_id", "task_ref"], "properties": {...}}`` — JSON Schema, which
+        is what 21 of 45 real versions in one database carry.
+
+    Reading `.keys()` on the second yields ``["required"]``, so every failed run of those
+    workflows reported `missing_inputs: ["required"]` and told the operator to supply an input
+    called "required". Confidently wrong — and because the list was truthy it displaced the
+    step-level diagnosis that would have named the actual cause.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return []
+    if "required" in raw or "properties" in raw:
+        required = raw.get("required")
+        if isinstance(required, list):
+            return [str(x) for x in required]
+        properties = raw.get("properties")
+        return [str(k) for k in properties] if isinstance(properties, dict) else []
+    return [str(k) for k in raw]
+
+
 def _spec_from_steps(steps: Any, args: dict) -> Any:
     """A workflow spec from the plain list a model can actually produce.
 
@@ -4277,7 +4303,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 {"id": run_id}).mappings().all()
 
         spec = run["spec"] if isinstance(run["spec"], dict) else {}
-        declared = list((spec.get("input_schema") or {}).keys())
+        declared = _declared_inputs(spec.get("input_schema"))
         supplied = list((run["input"] or {}).keys())
         missing = [k for k in declared if k not in supplied]
         stopped = [dict(s) for s in steps
@@ -4286,6 +4312,17 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         # WHAT TO DO, COMPUTED — not left for the reader to infer from an error string.
         remedy: dict[str, Any] = {}
         if run["status"] in ("failed", "deadlettered", "cancelled"):
+            # NEITHER DIAGNOSIS MAY SUPPRESS THE OTHER.
+            #
+            # This was `if missing: … elif stopped: …`, so any non-empty `missing` list hid
+            # the step's own error. That was catastrophic while `missing` was mis-parsed —
+            # 21 of 45 real versions produced a phantom input named "required", which then
+            # displaced the true cause. The parsing is fixed (`_declared_inputs`), but the
+            # precedence was wrong on its own terms: a step can fail for a reason that has
+            # nothing to do with inputs.
+            #
+            # So missing inputs still lead when there are any — that is usually why the step
+            # died — and the step's recorded error is attached either way.
             if missing:
                 remedy = {
                     "diagnosis": (
@@ -4299,6 +4336,11 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                     "needs_from_operator": missing,
                     # Named so an agent does not reach for write_db to "fix" a dead run.
                     "do_not": "Do not edit workflow_runs directly; start a new run instead.",
+                    # Attached, never instead-of: if the step died of something unrelated to
+                    # inputs, this is the sentence that says so.
+                    **({"step_error": (f"{stopped[0]['step_id']}: "
+                                       f"{stopped[0].get('last_error') or 'no error recorded'}")}
+                       if stopped else {}),
                 }
             elif stopped:
                 remedy = {

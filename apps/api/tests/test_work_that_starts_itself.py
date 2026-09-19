@@ -273,6 +273,83 @@ class TestTheToolsThemselves:
         assert out["watches"][0]["exit_condition"] == "it is healthy"
 
 
+def _stub_agent_service(monkeypatch, chat_impl):
+    """A stub that BINDS THE REAL SIGNATURE, which is the whole point.
+
+    The first version of these tests patched in `class Stub: def chat(self, **kwargs)`, which
+    accepts literally any call. The suite passed while `run_due` was calling
+    `AgentService(...).chat(project_id=...)` — omitting `connection`, the first positional
+    parameter — so EVERY wake raised TypeError and the feature was 100% non-functional in
+    production. A stub that cannot fail is not a test; it is a second implementation that
+    agrees with you.
+
+    So the fake is bound against `inspect.signature(AgentService.chat)`: any call `run_due`
+    makes that the real method would reject, this rejects too.
+    """
+    import inspect
+
+    from boss_engine.services.agent_service import AgentService
+
+    real = inspect.signature(AgentService.chat)
+
+    class Bound:
+        def __init__(self, *a, **k):
+            pass
+
+        def chat(self, *args, **kwargs):
+            # Raises TypeError exactly as the real method would on a bad call.
+            real.bind(self, *args, **kwargs)
+            return chat_impl(*args, **kwargs)
+
+    monkeypatch.setattr("boss_engine.services.agent_service.AgentService", Bound)
+
+
+class TestTheSweepBindsTheRealSignature:
+    """The regression that shipped a dead feature green."""
+
+    def test_run_due_calls_chat_the_way_the_real_method_accepts(self, engine, monkeypatch):
+        from boss_engine.services import agent_wakeups as w
+
+        with engine.begin() as c:
+            w.arm_monitor(c, project_id=_pid(), actor="ceo", thread_id="athr_bind",
+                          prompt="p", exit_condition="e", interval_seconds=60)
+            c.execute(text("UPDATE agent_wakeups SET next_wake_at = now() - interval '1 min'"))
+
+        _stub_agent_service(monkeypatch, lambda *a, **k: {"reply": "ok"})
+        out = w.run_due(get_settings(), engine, limit=5)
+        assert out["ran"], "nothing ran"
+        assert not any("error" in r for r in out["ran"]), (
+            f"run_due does not call chat in a way the real signature accepts: {out['ran']}")
+
+    def test_a_schedule_gets_a_surface_the_schema_allows(self, engine, monkeypatch):
+        """`agent_threads.surface` is CHECK-constrained to ('chat','github'). A schedule has
+        no thread, so it CREATES one — and 'wakeup' violated the constraint."""
+        from boss_engine.services import agent_wakeups as w
+
+        seen = {}
+        with engine.begin() as c:
+            w.schedule(c, project_id=_pid(), actor="ceo", prompt="brief me",
+                       at_time="09:00", tz_name="UTC")
+            c.execute(text("UPDATE agent_wakeups SET next_wake_at = now() - interval '1 min'"))
+
+        def record(*args, **kwargs):
+            seen.update(kwargs)
+            return {"reply": "briefed"}
+
+        _stub_agent_service(monkeypatch, record)
+        w.run_due(get_settings(), engine, limit=5)
+        surface = seen.get("surface")
+        assert surface, "run_due did not pass a surface"
+        # PROVE IT AGAINST THE CONSTRAINT, not against a list copied into the test. A schedule
+        # has no thread, so the real run INSERTs one with this surface; if the CHECK rejects
+        # it the whole wake dies, which is exactly what happened with 'wakeup'.
+        with engine.begin() as c:
+            c.execute(text(
+                "INSERT INTO agent_threads (id, project_id, actor, surface) "
+                "VALUES ('athr_surfaceprobe', :p, 'ceo', :s)"), {"p": _pid(), "s": surface})
+            c.execute(text("DELETE FROM agent_threads WHERE id='athr_surfaceprobe'"))
+
+
 class TestTheSweepIsSafe:
     """`run_due` is the only path that spends model budget with nobody at the keyboard."""
 
@@ -287,17 +364,13 @@ class TestTheSweepIsSafe:
 
         calls = {"n": 0}
 
-        class Boom:
-            def __init__(self, *a, **k):
-                pass
+        def flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("model is down")
+            return {"reply": "nothing changed"}
 
-            def chat(self, **kwargs):
-                calls["n"] += 1
-                if calls["n"] == 2:
-                    raise RuntimeError("model is down")
-                return {"reply": "nothing changed"}
-
-        monkeypatch.setattr("boss_engine.services.agent_service.AgentService", Boom)
+        _stub_agent_service(monkeypatch, flaky)
         out = w.run_due(get_settings(), engine, limit=5)
         assert out["due"] == 3
         assert len(out["ran"]) == 3, "a failing loop stopped the sweep"
@@ -312,14 +385,7 @@ class TestTheSweepIsSafe:
                               prompt="p", exit_condition="e", interval_seconds=60)
             c.execute(text("UPDATE agent_wakeups SET next_wake_at = now() - interval '1 min'"))
 
-        class Quiet:
-            def __init__(self, *a, **k):
-                pass
-
-            def chat(self, **kwargs):
-                return {"reply": "ok"}
-
-        monkeypatch.setattr("boss_engine.services.agent_service.AgentService", Quiet)
+        _stub_agent_service(monkeypatch, lambda *a, **k: {"reply": "ok"})
         assert w.run_due(get_settings(), engine, limit=2)["due"] == 2
 
     def test_a_monitor_the_agent_ended_is_not_rescheduled(self, engine, monkeypatch):
@@ -331,17 +397,13 @@ class TestTheSweepIsSafe:
                                 prompt="p", exit_condition="e", interval_seconds=60)
             c.execute(text("UPDATE agent_wakeups SET next_wake_at = now() - interval '1 min'"))
 
-        class Finisher:
-            def __init__(self, *a, **k):
-                pass
+        def finish(*args, **kwargs):
+            with engine.begin() as c:
+                w.stop(c, project_id=_pid(), wakeup_id=row["id"], actor="ceo",
+                       status="completed", reason="the PR was approved")
+            return {"reply": "it is approved"}
 
-            def chat(self, **kwargs):
-                with engine.begin() as c:
-                    w.stop(c, project_id=_pid(), wakeup_id=row["id"], actor="ceo",
-                           status="completed", reason="the PR was approved")
-                return {"reply": "it is approved"}
-
-        monkeypatch.setattr("boss_engine.services.agent_service.AgentService", Finisher)
+        _stub_agent_service(monkeypatch, finish)
         out = w.run_due(get_settings(), engine, limit=5)
         assert out["ran"][0]["outcome"] == "completed"
         with engine.begin() as c:
@@ -353,18 +415,14 @@ class TestTheSweepIsSafe:
 
         seen = {}
 
-        class Recorder:
-            def __init__(self, *a, **k):
-                pass
-
-            def chat(self, **kwargs):
-                seen.update(kwargs)
-                return {"reply": "briefed"}
+        def recorder(*args, **kwargs):
+            seen.update(kwargs)
+            return {"reply": "briefed"}
 
         with engine.begin() as c:
             w.schedule(c, project_id=_pid(), actor="ceo", prompt="brief me",
                        at_time="09:00", tz_name="UTC")
             c.execute(text("UPDATE agent_wakeups SET next_wake_at = now() - interval '1 min'"))
-        monkeypatch.setattr("boss_engine.services.agent_service.AgentService", Recorder)
+        _stub_agent_service(monkeypatch, recorder)
         w.run_due(get_settings(), engine, limit=5)
         assert seen.get("thread_id") is None

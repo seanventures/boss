@@ -108,7 +108,25 @@ def remember(
             ON CONFLICT (project_id, kind, scope, scope_ref, content_hash) DO UPDATE
                SET updated_at = now(),
                    source_thread_id = COALESCE(EXCLUDED.source_thread_id,
-                                               agent_memory.source_thread_id)
+                                               agent_memory.source_thread_id),
+                   -- TEACHING IT AGAIN AFTER IT WAS RETIRED MUST REVIVE IT.
+                   --
+                   -- This clause only touched `updated_at`, so re-recording something the
+                   -- operator had retired left the row `retired` while the tool reported
+                   -- success — it entered no review queue and could never bind again. Saying
+                   -- a thing a second time is the clearest signal there is that it is wanted.
+                   -- A `rejected` rule comes back as `proposed`, not active: a human refused
+                   -- it once, so a human decides again.
+                   status = CASE
+                     WHEN agent_memory.status IN ('retired', 'rejected')
+                       THEN EXCLUDED.status
+                     ELSE agent_memory.status END,
+                   reviewed_by = CASE
+                     WHEN agent_memory.status IN ('retired', 'rejected') THEN NULL
+                     ELSE agent_memory.reviewed_by END,
+                   reviewed_at = CASE
+                     WHEN agent_memory.status IN ('retired', 'rejected') THEN NULL
+                     ELSE agent_memory.reviewed_at END
             RETURNING id, kind, scope, scope_ref, body, status, created_at
             """
         ),

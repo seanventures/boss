@@ -109,3 +109,158 @@ def test_a_missing_table_does_not_raise(engine):
     """Optional tables differ by edition; a diagnostic must not become the failure."""
     with engine.begin() as c:
         assert _why_it_ended(c, "table_that_does_not_exist", "x") == ""
+
+
+class TestARetriedPanelFollowsTheRightOne:
+    """Both guards were missing, and both produce a SILENT WRONG ANSWER.
+
+    Found by an independent review of the first version, which ordered the whole
+    fingerprint class by recency and took the first live row. Two consequences:
+
+      * when the real retry was itself dead, it adopted a run that PRE-DATED the failure;
+      * the fingerprint is (project, directive, url, type), so it could adopt a panel that a
+        DIFFERENT workflow run commissioned.
+
+    Either way the step force-completes on a stale panel's minutes, which is worse than the
+    stuck step it replaced: it looks like success.
+    """
+
+    def _meeting(self, engine, mid, *, status, fp, wfr=None, age_days=0):
+        with engine.begin() as c:
+            c.execute(text(
+                "INSERT INTO meeting_runs (id, project_id, status, phase, directive, "
+                "        finalize_ctx, created_at) "
+                "VALUES (:i, :p, :s, 'round1', 'd', CAST(:f AS JSONB), "
+                "        now() - (:a || ' days')::interval) "
+                "ON CONFLICT (id) DO NOTHING"),
+                {"i": mid, "p": get_settings().default_project_id, "s": status,
+                 "a": age_days,
+                 "f": json.dumps({"meeting_fingerprint": fp,
+                                  **({"workflow_run_id": wfr} if wfr else {})})})
+
+    def test_it_never_adopts_a_panel_older_than_the_failure(self, engine):
+        from boss_engine.services.workflow_capability_runner import _meeting_successor
+
+        pid = get_settings().default_project_id
+        self._meeting(engine, "mrun_old", status="completed", fp="fp1", age_days=2)
+        self._meeting(engine, "mrun_dead", status="cancelled", fp="fp1", age_days=1)
+        self._meeting(engine, "mrun_retry_failed", status="failed", fp="fp1", age_days=0)
+        with engine.begin() as c:
+            got = _meeting_successor(c, pid, "mrun_dead")
+        assert got != "mrun_old", "adopted a panel that pre-dates the failure"
+        assert got is None, f"nothing live is newer, so there is no successor (got {got})"
+
+    def test_it_follows_a_genuine_later_retry(self, engine):
+        from boss_engine.services.workflow_capability_runner import _meeting_successor
+
+        pid = get_settings().default_project_id
+        self._meeting(engine, "mrun_dead2", status="cancelled", fp="fp2", age_days=1)
+        self._meeting(engine, "mrun_new2", status="completed", fp="fp2", age_days=0)
+        with engine.begin() as c:
+            assert _meeting_successor(c, pid, "mrun_dead2") == "mrun_new2"
+
+    def test_it_does_not_adopt_another_workflow_runs_panel(self, engine):
+        """Four real rows shared one fingerprint across four days and four runs."""
+        from boss_engine.services.workflow_capability_runner import _meeting_successor
+
+        pid = get_settings().default_project_id
+        self._meeting(engine, "mrun_mine", status="cancelled", fp="fp3",
+                      wfr="wfr_mine", age_days=1)
+        self._meeting(engine, "mrun_theirs", status="completed", fp="fp3",
+                      wfr="wfr_theirs", age_days=0)
+        with engine.begin() as c:
+            got = _meeting_successor(c, pid, "mrun_mine", "wfr_mine")
+        assert got != "mrun_theirs", "adopted a panel commissioned by a different run"
+
+    def test_it_still_works_when_the_awaited_run_records_no_workflow(self, engine):
+        """Older rows carry no workflow_run_id; lineage alone must still function."""
+        from boss_engine.services.workflow_capability_runner import _meeting_successor
+
+        pid = get_settings().default_project_id
+        self._meeting(engine, "mrun_nowfr", status="cancelled", fp="fp4", age_days=1)
+        self._meeting(engine, "mrun_nowfr_new", status="running", fp="fp4", age_days=0)
+        with engine.begin() as c:
+            assert _meeting_successor(c, pid, "mrun_nowfr") == "mrun_nowfr_new"
+
+
+class TestDeclaredInputsReadsBothShapes:
+    """21 of 45 real workflow versions use JSON Schema, and this read only knew the other one.
+
+    Every failed run of those reported `missing_inputs: ["required"]` and told the operator to
+    supply an input called "required" — and because that list was truthy it SUPPRESSED the
+    step-level diagnosis that would have named the real cause.
+    """
+
+    def test_json_schema_required_list(self):
+        from boss_engine.tools.builtin import _declared_inputs
+
+        assert _declared_inputs({"required": ["project_id", "task_ref"]}) == [
+            "project_id", "task_ref"]
+
+    def test_json_schema_properties_only(self):
+        from boss_engine.tools.builtin import _declared_inputs
+
+        assert sorted(_declared_inputs({"properties": {"a": {}, "b": {}}})) == ["a", "b"]
+
+    def test_the_name_to_type_map_draft_workflow_emits(self):
+        from boss_engine.tools.builtin import _declared_inputs
+
+        assert sorted(_declared_inputs(
+            {"media_artifact_id": "string", "title": "string"})) == [
+            "media_artifact_id", "title"]
+
+    def test_nothing_declared(self):
+        from boss_engine.tools.builtin import _declared_inputs
+
+        assert _declared_inputs({}) == [] and _declared_inputs(None) == []
+
+    def test_a_step_error_is_never_suppressed_by_a_missing_input_list(self, engine):
+        """The `elif` that hid the real answer.
+
+        Asserted on BEHAVIOUR: when a run has both missing inputs and a step that recorded
+        why it died, the reply must carry both. Whichever leads, neither may vanish.
+        """
+        import hashlib
+
+        from boss_engine.context import EngineContext
+        from boss_engine.tools import build_default_registry
+
+        pid = get_settings().default_project_id
+        spec = {"entry_step": "go", "input_schema": {"required": ["media_artifact_id"]},
+                "steps": [{"id": "go", "kind": "capability", "next": [],
+                           "binding": {"capability": "video_edit"}}]}
+        with engine.begin() as c:
+            c.execute(text(
+                "INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
+                "  created_by) VALUES ('wfd_both', :p, 'both_demo', 'Both', 'ceo') "
+                "ON CONFLICT (id) DO NOTHING"), {"p": pid})
+            c.execute(text(
+                "INSERT INTO workflow_versions (id, project_id, workflow_definition_id, "
+                "  version, status, spec, content_hash, created_by) "
+                "VALUES ('wfv_both', :p, 'wfd_both', 1, 'published', CAST(:s AS JSONB), "
+                "  :h, 'ceo') ON CONFLICT (id) DO NOTHING"),
+                {"p": pid, "s": json.dumps(spec),
+                 "h": hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()})
+            c.execute(text(
+                "INSERT INTO workflow_runs (id, project_id, workflow_definition_id, "
+                "  workflow_version_id, actor, status, input) "
+                "VALUES ('wfr_both', :p, 'wfd_both', 'wfv_both', 'ceo', 'deadlettered', "
+                "  CAST('{}' AS JSONB)) ON CONFLICT (id) DO NOTHING"), {"p": pid})
+            c.execute(text(
+                "INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, "
+                "  step_kind, status, attempt, max_attempts, last_error) "
+                "VALUES ('wsr_both', :p, 'wfr_both', 'go', 'capability', 'deadlettered', "
+                "  3, 3, 'ffmpeg exited 1: no such codec') ON CONFLICT (id) DO NOTHING"),
+                {"p": pid})
+
+        ctx = EngineContext(settings=get_settings(), engine=engine)
+        out = build_default_registry().invoke(
+            "describe_workflow_run", ctx, project_id=pid, actor="ceo",
+            args={"run_id": "wfr_both", "project_id": pid})
+
+        # The JSON-Schema form parsed correctly — not a phantom input called "required".
+        assert out["declared_inputs"] == ["media_artifact_id"]
+        remedy = out["remedy"]
+        assert "media_artifact_id" in remedy["diagnosis"]
+        # And the step's own error survives alongside it.
+        assert "ffmpeg exited 1" in remedy["step_error"]

@@ -235,18 +235,56 @@ def stop(
     return dict(row)
 
 
-def due(connection: Connection, *, limit: int = 20) -> list[dict[str, Any]]:
-    """Everything whose time has come. Bounded, so one sweep cannot start fifty turns."""
+def due(
+    connection: Connection, *, limit: int = 20, project_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Everything whose time has come. Bounded, so one sweep cannot start fifty turns.
+
+    THE EXHAUSTION CHECKS BELONG HERE, NOT AFTER THE TURN. They used to live only in
+    `advance()`, which runs once the model has already been paid: a monitor whose wall-clock
+    budget had expired, or which had already reached its cycle cap, was still handed to the
+    sweeper and cost one more turn before being closed. Cheap to test in SQL, and the whole
+    point of a budget is that it is not exceeded by one.
+
+    THE PROJECT FILTER IS IN THE QUERY for the same class of reason: applied afterwards, other
+    projects' wakeups consumed the limit and the caller's project ran nothing at all.
+    """
     rows = connection.execute(
         text("SELECT id, project_id, kind, thread_id, actor, prompt, exit_condition, "
              "       interval_seconds, at_time, days, timezone, cycle, max_cycles, "
              "       deadline_at, next_wake_at "
              "  FROM agent_wakeups "
              " WHERE status='active' AND next_wake_at <= now() "
+             "   AND (deadline_at IS NULL OR deadline_at > now()) "
+             "   AND (max_cycles = 0 OR cycle < max_cycles) "
+             "   AND (:p = '' OR project_id = :p) "
              " ORDER BY next_wake_at LIMIT :l"),
-        {"l": max(1, int(limit))},
+        {"l": max(1, int(limit)), "p": project_id or ""},
     ).mappings().all()
     return [dict(r) for r in rows]
+
+
+def close_spent(connection: Connection, *, project_id: Optional[str] = None) -> int:
+    """Close loops that ran out of rope, without paying for a turn to discover it.
+
+    `due()` now refuses to return them, which is what stops the spend — but a row left
+    `active` forever would sit in the operator's list claiming to be watching something.
+    """
+    rows = connection.execute(
+        text("UPDATE agent_wakeups SET status='exhausted', updated_at=now(), "
+             "       last_result = CASE "
+             "         WHEN deadline_at IS NOT NULL AND deadline_at <= now() "
+             "           THEN 'its time budget ran out before the exit condition was met' "
+             "         ELSE 'reached its cycle cap without the exit condition being met — "
+             "it ran out of rope rather than finishing' END "
+             " WHERE status='active' "
+             "   AND ((deadline_at IS NOT NULL AND deadline_at <= now()) "
+             "        OR (max_cycles > 0 AND cycle >= max_cycles)) "
+             "   AND (:p = '' OR project_id = :p) "
+             "RETURNING id"),
+        {"p": project_id or ""},
+    ).scalars().all()
+    return len(rows)
 
 
 def _exhausted(row: dict[str, Any]) -> Optional[str]:
@@ -363,9 +401,10 @@ def run_due(
     from .agent_service import AgentService
 
     with engine.begin() as connection:
-        pending = due(connection, limit=limit)
-        if project_id:
-            pending = [row for row in pending if row["project_id"] == project_id]
+        # Retire what is already spent before looking for work, so an expired loop is closed
+        # by bookkeeping rather than by paying for one last turn.
+        close_spent(connection, project_id=project_id)
+        pending = due(connection, limit=limit, project_id=project_id)
 
     ran: list[dict[str, Any]] = []
     for row in pending:
@@ -378,13 +417,29 @@ def run_due(
             else SCHEDULE_BRIEF.format(prompt=row["prompt"])
         )
         try:
-            result = AgentService(settings).chat(
-                project_id=row["project_id"], actor=row["actor"], message=brief,
-                # A MONITOR CONTINUES ITS OWN CONVERSATION; a schedule starts a fresh one, so
-                # a daily briefing does not grow one thread forever.
-                thread_id=row["thread_id"] if row["kind"] == "monitor" else None,
-                surface="wakeup",
-            )
+            # THE CONNECTION IS THE FIRST POSITIONAL ARGUMENT, and omitting it meant every
+            # single wake raised TypeError before any model call — the feature was 100%
+            # non-functional while its tests passed, because those tests replaced
+            # AgentService with a stub whose `chat(**kwargs)` accepted anything. A stub that
+            # cannot fail is not a test. `test_the_sweep_binds_the_real_signature` now checks
+            # the call against the real method.
+            #
+            # Its OWN transaction, deliberately: a turn that fails must not roll back the
+            # bookkeeping for the wake that ran it, and a turn that succeeds must be durable
+            # before this loop moves to the next wakeup.
+            with engine.begin() as connection:
+                result = AgentService(settings).chat(
+                    connection,
+                    project_id=row["project_id"], actor=row["actor"], message=brief,
+                    # A MONITOR CONTINUES ITS OWN CONVERSATION; a schedule starts a fresh one,
+                    # so a daily briefing does not grow one thread forever.
+                    thread_id=row["thread_id"] if row["kind"] == "monitor" else None,
+                    # 'chat', NOT 'wakeup'. `agent_threads.surface` is CHECK-constrained to
+                    # ('chat','github'), so a schedule — which has no thread and therefore
+                    # creates one — failed on the constraint. An unattended turn IS a chat
+                    # turn; what makes it unattended is the wakeup row, not a surface label.
+                    surface="chat",
+                )
             reply = str((result or {}).get("reply") or "")
             # The agent ends a monitor by calling `stop_watching`, which flips the row itself.
             # Re-reading is how this loop learns that happened rather than rescheduling a

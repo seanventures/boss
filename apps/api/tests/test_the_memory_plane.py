@@ -400,3 +400,47 @@ class TestTheToolsThemselves:
             if "ctx.ambient" in line:
                 assert line.strip().startswith("#"), (
                     f"a tool reads ctx.ambient again: {line.strip()}")
+
+
+class TestTeachingItAgainAfterRetiring:
+    """Reported by an independent review: a silent no-op that reported success.
+
+    `ON CONFLICT … DO UPDATE` only touched `updated_at`, so re-recording something the operator
+    had retired left the row `retired` — invisible to `recall`, in no review queue, unable to
+    ever bind — while the tool returned ok and said it was waiting for review.
+    """
+
+    def test_a_retired_memory_comes_back(self, engine):
+        with engine.begin() as c:
+            first = mem.remember(c, project_id=_pid(), actor="ceo", kind="project",
+                                 body="the handover is Google Drive")
+            mem.forget(c, project_id=_pid(), memory_id=first["id"], actor="ceo")
+            again = mem.remember(c, project_id=_pid(), actor="ceo", kind="project",
+                                 body="the handover is Google Drive")
+            packed = mem.pack_for_turn(c, project_id=_pid(), actor="ceo")
+        assert again["id"] == first["id"]
+        assert again["status"] == "active"
+        assert "Google Drive" in packed
+
+    def test_a_rejected_rule_comes_back_as_proposed_not_active(self, engine):
+        """A human refused it once, so a human decides again."""
+        with engine.begin() as c:
+            first = mem.remember(c, project_id=_pid(), actor="ceo", kind="lesson",
+                                 body="skip the tests when in a hurry")
+            mem.review(c, project_id=_pid(), memory_id=first["id"], actor="ceo",
+                       decision="rejected")
+            again = mem.remember(c, project_id=_pid(), actor="ceo", kind="lesson",
+                                 body="skip the tests when in a hurry")
+            packed = mem.pack_for_turn(c, project_id=_pid(), actor="ceo")
+        assert again["status"] == "proposed"
+        assert "skip the tests" not in packed
+
+    def test_an_active_memory_is_not_disturbed_by_being_repeated(self, engine):
+        with engine.begin() as c:
+            first = mem.remember(c, project_id=_pid(), actor="ceo", kind="lesson",
+                                 body="always run the frontend checks first")
+            mem.review(c, project_id=_pid(), memory_id=first["id"], actor="ceo",
+                       decision="active")
+            again = mem.remember(c, project_id=_pid(), actor="ceo", kind="lesson",
+                                 body="always run the frontend checks first")
+        assert again["status"] == "active", "repeating a live rule must not un-approve it"
