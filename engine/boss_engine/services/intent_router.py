@@ -2147,7 +2147,32 @@ class IntentRouter:
                         for message in (messages or [])
                         for call in (message.get("tool_calls") or [])
                     )
-                    if role and reply and not read_before and not any(
+                    # ...AND UNLESS THE TURN GROUNDED ITSELF IN SOMETHING ELSE REAL.
+                    #
+                    # The guard above is right about the case it was built for: Operations
+                    # called ONLY describe_role, then invented a port number and claimed to
+                    # have inspected records. But the trigger was "did recall_role_experience
+                    # run", which fires on every role turn — including ones with nothing to do
+                    # with the role's history.
+                    #
+                    # Live, after the prompt fix: asked "how many rows are in the artifacts
+                    # table? One number, nothing else", the Program Manager called query_db,
+                    # got the number — and this block threw that answer away and re-asked with
+                    # an instruction that MANDATES the opener ("say plainly that you have no
+                    # history here"). So the operator got a biography instead of a number, and
+                    # paid for two model turns to get it. Reported as "no recommendations, not
+                    # identifying the right issue, the Agent quality is very bad".
+                    #
+                    # An answer built on query_db, factory_briefing or describe_workflow_run is
+                    # not invented — it is evidenced, just not from the PANEL record. That is
+                    # an objective property of the trace, not a judgement about the prose,
+                    # which is what the reasoning above rightly refused to rely on.
+                    _ROLE_READS = {"describe_role", "recall_role_experience"}
+                    grounded_otherwise = any(
+                        str(c.get("tool") or "") not in _ROLE_READS and c.get("ok", True)
+                        for c in tool_calls
+                    )
+                    if role and reply and not read_before and not grounded_otherwise and not any(
                         c.get("tool") == "recall_role_experience" for c in tool_calls
                     ):
                         try:
@@ -2155,12 +2180,19 @@ class IntentRouter:
                                 project_id=project_id, actor=actor,
                                 message=(
                                     f"You answered as {role} without calling "
-                                    "recall_role_experience, so nothing you said about this "
-                                    "project came from its record. Call it NOW, then give the "
-                                    "answer again: cite the briefs and positions you actually "
-                                    "find, and if there are none, say plainly that you have no "
-                                    "history here and are answering from the lens alone. Do "
-                                    "not repeat any specific number or record you did not read."
+                                    "recall_role_experience and without reading anything else, "
+                                    "so any specific claim you made about this project came "
+                                    "from nowhere. Call it NOW and give the answer again.\n"
+                                    "Cite the briefs and positions you actually find. DROP any "
+                                    "number, record or event you did not read — silently, by "
+                                    "not repeating it.\n"
+                                    # The removed sentence ordered the model to announce an
+                                    # empty record up front. That turned a correction into an
+                                    # opener the operator never asked for, on every role turn.
+                                    "If the record is empty, that is not the answer and not "
+                                    "the opening line: answer the question from the lens, and "
+                                    "mention the empty record only if the operator asked what "
+                                    "you have argued before."
                                 ),
                                 history=[{"role": "assistant", "content": reply}],
                                 system=system, allow_writes=False, max_steps=4,

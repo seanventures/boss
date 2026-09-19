@@ -104,3 +104,56 @@ class TestItDoesNotFireOnAGroundedConversation:
             for call in (message.get("tool_calls") or [])
         )
         assert read_before is False
+
+
+class TestTheGuardDoesNotFireOnAnEvidencedAnswer:
+    """The guard is right about invention and was wrong about everything else.
+
+    It exists because Operations called only describe_role and then invented a port number
+    while claiming to have inspected records. Real, and worth catching. But the trigger was
+    "did recall_role_experience run", which fires on EVERY role turn.
+
+    Live, after the role prompt was already fixed: asked "how many rows are in the artifacts
+    table? One number, nothing else", the Program Manager called query_db, got the number —
+    and this block discarded that answer and re-asked with an instruction that MANDATES the
+    opener. The operator got a biography instead of a number, and paid for two model turns.
+
+    An answer built on query_db or factory_briefing is not invented. It is evidenced, just not
+    from the panel record — an objective property of the trace, not a judgement about prose.
+    """
+
+    def _source(self):
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        return inspect.getsource(intent_router)
+
+    def test_another_real_tool_call_counts_as_grounding(self):
+        body = self._source()
+        assert "grounded_otherwise" in body
+        assert "not grounded_otherwise" in body
+
+    def test_the_two_role_reads_do_not_count_as_grounding_themselves(self):
+        """describe_role returns the role's own spec — reading it grounds nothing about the
+        project, which is exactly the hole the original failure went through."""
+        body = self._source()
+        assert '_ROLE_READS = {"describe_role", "recall_role_experience"}' in body
+
+    def test_a_failed_tool_call_does_not_count(self):
+        """A query that errored produced no evidence; treating it as grounding would reopen
+        the invention hole."""
+        body = self._source()
+        assert 'c.get("ok", True)' in body
+
+    def test_the_reask_no_longer_mandates_the_opener(self):
+        body = self._source()
+        # The sentence that produced the biography, gone.
+        assert "say plainly that you have no history here" not in body
+        assert "that is not the answer and not" in body
+
+    def test_the_reask_still_drops_unread_specifics(self):
+        """The actual point of the guard survives: an invented number must not be repeated."""
+        body = self._source()
+        assert "DROP any" in body
+        assert "you did not read" in body
