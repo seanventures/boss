@@ -85,6 +85,11 @@ _EXPECTED_TOOLS: set[str] = {
     # turn, and no answer for the operator. This also computes the way OUT of a failed run,
     # because reporting `deadlettered` and stopping is what "it drops the ball" means.
     "describe_workflow_run",
+    # THE RECOVERY THE AGENT COULD DIAGNOSE AND COULD NOT PERFORM. It traced a failed panel
+    # step to its root cause and then said "tell me to go ahead", offering no button, because
+    # the console's "Try … again" had no tool behind it. A correct diagnosis you cannot act on
+    # is still a dead end.
+    "retry_workflow_step",
     # THE PLAN, BEFORE THE RUN. The builder drew four labels and four dropdowns; what each
     # step does, what it produces, and which agent captains it were all known and none of it
     # was shown. "I want to see the workflow and its definition, what it will do."
@@ -170,11 +175,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 97, (
+    assert len(reg.names()) == 98, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 59
-    assert len(write) == 38
+    assert len(write) == 39
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -414,6 +419,9 @@ _SAFE_WRITES = [
     "recheck_workflow_run",
     "redeploy", "register_repository", "retarget_app", "send_feedback", "set_job_priority",
     "start_preview", "steer_code_task", "stop_preview",
+    # Re-queues ONE already-failed step and keeps everything the run produced. It can only
+    # move a step out of failed/deadlettered/cancelled, so it cannot start live work twice.
+    "retry_workflow_step",
 ]
 
 

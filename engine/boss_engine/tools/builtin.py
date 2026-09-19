@@ -3797,6 +3797,83 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(error)}
 
     @reg.tool(
+        "retry_workflow_step",
+        "Put ONE failed, dead-lettered or cancelled workflow step back in the queue, keeping "
+        "everything the run already produced. This is the console's \"Try … again\" button. "
+        "Use it after describe_workflow_run shows a step failed for a reason that has since "
+        "been dealt with — a missing credential now configured, a service now up. "
+        "`recheck_workflow_run` is a different thing: it only re-tests deployment-target "
+        "blockers and cannot recover a failed meeting or panel step.",
+        _obj({"run_id": {"type": "string", "description": "the wfr_... the step belongs to"},
+              "step_id": {"type": "string",
+                          "description": "the step's id, e.g. 'meeting' — NOT its label"},
+              "project_id": {"type": "string"}},
+             ["run_id", "step_id"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def retry_workflow_step(ctx, *, project_id, actor, args):
+        """The recovery the agent could diagnose and could not perform.
+
+        Asked why a panel step failed, BOSS traced it correctly — a 500 from the meeting job,
+        deadlettered, swept as "abandoned", root-caused to meetings ignoring the configured
+        model — and then said "tell me to go ahead and I will run it", offering no button,
+        because there was no tool for the one action that follows. The operator reported it as
+        "the panel retry endpoint currently has no exposed BOSS tool", which was exactly right.
+
+        A correct diagnosis with no way to act on it is still a dead end. The console has had
+        this button the whole time; this is the same operation, reachable by the agent.
+        """
+        from ..services.core import emit_event
+
+        pid = args.get("project_id") or project_id
+        run_id = str(args.get("run_id") or "").strip()
+        step_id = str(args.get("step_id") or "").strip()
+        if not run_id or not step_id:
+            return {"ok": False, "error": "run_id and step_id are required"}
+        with ctx.begin() as c:
+            row = c.execute(
+                _text("SELECT id, status FROM workflow_step_runs "
+                      " WHERE workflow_run_id=:r AND project_id=:p AND step_id=:s "
+                      " ORDER BY created_at DESC LIMIT 1"),
+                {"r": run_id, "p": pid, "s": step_id}).mappings().first()
+            if not row:
+                # NAME WHAT IS THERE. A step is addressed by id ('meeting'), and the console
+                # shows its LABEL ('Convene a panel') — so the obvious guess is the wrong one,
+                # and "step not found" sends the reader hunting for a typo they did not make.
+                available = c.execute(
+                    _text("SELECT step_id, status FROM workflow_step_runs "
+                          " WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at"),
+                    {"r": run_id, "p": pid}).mappings().all()
+                return {"ok": False,
+                        "error": f"no step {step_id!r} on {run_id}",
+                        "steps_on_this_run": [
+                            {"step_id": s["step_id"], "status": s["status"]}
+                            for s in available]}
+            if row["status"] not in ("failed", "deadlettered", "cancelled"):
+                # Re-queueing a live step would run it twice.
+                return {"ok": False,
+                        "error": (f"'{step_id}' is {row['status']}, so there is nothing to "
+                                  "retry.")}
+            c.execute(
+                _text("UPDATE workflow_step_runs SET status='ready', attempt=0, "
+                      "       last_error=NULL, lease_owner=NULL, lease_expires_at=NULL, "
+                      "       updated_at=now() WHERE id=:id"),
+                {"id": row["id"]})
+            # The RUN has to come back too, or a re-queued step sits ready under a dead run.
+            c.execute(
+                _text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, "
+                      "       error=NULL, updated_at=now() WHERE id=:r AND project_id=:p"),
+                {"r": run_id, "p": pid})
+            emit_event(c, pid, "workflow.step_retried", actor, "workflow_run", run_id,
+                       {"step_id": step_id, "was": row["status"]})
+        return {"ok": True, "run_id": run_id, "step_id": step_id, "status": "ready",
+                "was": row["status"],
+                "note": ("Re-queued. The worker picks it up on its next sweep; everything the "
+                         "run already produced is kept. Check back with "
+                         "describe_workflow_run.")}
+
+    @reg.tool(
         "describe_workflow_run",
         "THE ONE CALL for 'what happened to this workflow run' (wfr_...): its status, the "
         "inputs it was started with, every step with attempts and its error, and — when it "
