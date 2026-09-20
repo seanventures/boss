@@ -545,6 +545,43 @@ class StallTracker:
         return list(self._events)
 
 
+def start_stall_watch(report, *, interval: float = 20.0, name: str = "api") -> Any:
+    """Time a heartbeat IN THIS PROCESS and report when it is not scheduled.
+
+    THE HALF-RIGHT VERSION OF THIS WATCHED THE WRONG PROCESS. The first stall detector timed
+    the worker's poll loop — but coding agents run inside the API container, so on
+    2026-09-20 the worker polled contentedly every 20 seconds for 67 minutes while the API was
+    wedged and a build produced nothing. The measurement said "0 stalls" during a total stall.
+
+    A loop that should wake every `interval` and wakes minutes late was starved, and that has
+    to be measured in EVERY process that does work, not in whichever one was convenient. This
+    is the API's own clock; the worker keeps its own.
+
+    Returns the thread so a caller can keep a reference; it is a daemon and needs no shutdown.
+    """
+    import threading
+    import time as _time
+
+    tracker = StallTracker()
+
+    def _watch() -> None:
+        last = _time.monotonic()
+        while True:
+            _time.sleep(interval)
+            now = _time.monotonic()
+            late = tracker.observe(interval, now - last, at=_time.time(), source=name)
+            last = now
+            if late:
+                try:
+                    report(late)
+                except Exception:  # noqa: BLE001 — never kill the watch over a failed report
+                    pass
+
+    thread = threading.Thread(target=_watch, name=f"stall-watch-{name}", daemon=True)
+    thread.start()
+    return thread
+
+
 def host_is_degraded(summary: dict[str, Any], *, elapsed_seconds: float = 0.0) -> dict[str, Any]:
     """Turn stall measurements into a verdict an operator can act on.
 
@@ -573,4 +610,59 @@ def host_is_degraded(summary: dict[str, Any], *, elapsed_seconds: float = 0.0) -
                    f"stalls, longest {longest:.0f}s"
                    + (f", {share:.0%} of elapsed time" if share else "")),
         "not_boss": True,
+    }
+
+
+# --------------------------------------------------------------------------------------- #
+# WHAT TO TELL THE PERSON LOOKING AT THE SCREEN.
+# --------------------------------------------------------------------------------------- #
+#
+# "I got the system issue from you but there will be no one to give that info to customer."
+#
+# Exactly the point. Two runs were read as BOSS degrading when the machine was thrashing, and
+# both times the diagnosis came from someone reading container logs by hand. A customer has
+# nobody to do that. The verdict has to say what THEY should do, in words that do not assume
+# they know what swap is.
+
+#: Elapsed share above which a run's time is mostly not BOSS's doing.
+_MOSTLY_THE_MACHINE = 0.4
+
+
+def operator_advice(host: dict[str, Any], *, elapsed_minutes: float = 0.0,
+                    working_minutes: float = 0.0) -> dict[str, Any]:
+    """The host verdict as an instruction, not a metric.
+
+    Returns {"show": bool, "severity": ..., "headline": ..., "detail": ..., "action": ...}.
+    `show` is false on a healthy machine: an indicator that is always on is an indicator
+    nobody reads.
+    """
+    state = str(host.get("state") or "ok")
+    if state == "ok":
+        return {"show": False}
+
+    stalled_min = float(host.get("stalled_seconds") or 0) / 60
+    share = float(host.get("share_of_elapsed") or 0)
+    severe = state == "critical" or share >= _MOSTLY_THE_MACHINE
+
+    if elapsed_minutes and working_minutes:
+        detail = (f"This run took {elapsed_minutes:.0f} minutes, and about "
+                  f"{working_minutes:.0f} of those were BOSS actually working. The rest is "
+                  f"time the computer spent unable to run it.")
+    else:
+        detail = (f"The computer stopped running BOSS for about {stalled_min:.0f} minutes "
+                  f"in total, in stretches, while this was going on.")
+
+    return {
+        "show": True,
+        "severity": "critical" if severe else "warning",
+        # Deliberately about the MACHINE, so nobody reads it as the product failing.
+        "headline": ("This computer is out of memory — BOSS is waiting on it"
+                     if severe else "This computer is struggling to keep up"),
+        "detail": detail,
+        "action": ("Restart the computer before the next run. Closing other applications "
+                   "helps, but a restart is what reliably clears it."
+                   if severe else
+                   "Close what you are not using. If it keeps happening, restart."),
+        "not_a_boss_fault": True,
+        "stalled_minutes": round(stalled_min, 1),
     }

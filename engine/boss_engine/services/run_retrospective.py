@@ -308,3 +308,26 @@ def preflight(connection: Connection, project_id: str) -> dict[str, Any]:
         "last_run": row["entity_id"] if row is not None else None,
         "stalled_seconds_last_hour": round(stalled_recently, 1),
     }
+
+
+def host_advice(connection: Connection, project_id: str) -> dict[str, Any]:
+    """Should the person at the screen be told their machine needs attention, and what to do.
+
+    Looks at the recent past rather than one run: a customer opening the console wants to know
+    whether to start work now, and the last hour is the honest window for that.
+    """
+    from .self_observability import operator_advice
+
+    rows = connection.execute(
+        text("SELECT data FROM events WHERE event_type = 'host.stalled' "
+             "   AND created_at > now() - interval '1 hour'"),
+    ).mappings().all()
+    seconds = [float(_as_dict(r["data"]).get("stalled_seconds") or 0) for r in rows]
+    if not seconds:
+        return {"show": False}
+
+    host = host_is_degraded(
+        {"stalled_seconds": round(sum(seconds), 2), "stall_events": len(seconds),
+         "longest_stall_seconds": max(seconds)},
+        elapsed_seconds=3600.0)
+    return operator_advice(host)

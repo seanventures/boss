@@ -1205,6 +1205,23 @@ async def lifespan(_: FastAPI):
     # Self-migrate on startup: schema.sql is fully idempotent (CREATE/ALTER … IF NOT EXISTS), so
     # every deploy converges the managed Postgres to the shipped schema with no separate migration
     # step. Guarded so a transient DB blip at boot can't crash-loop the API.
+    # WATCH THIS PROCESS'S OWN CLOCK. Coding agents run in THIS container, so this is where a
+    # starved host stops the work. The first version of this watched only the worker, and on
+    # 2026-09-20 the worker polled contentedly every 20 seconds for 67 minutes while the API
+    # was wedged and a build produced nothing: "0 stalls" recorded during a total stall.
+    try:
+        from boss_engine.services.self_observability import start_stall_watch
+
+        def _report_api_stall(seconds: float) -> None:
+            with begin(engine) as connection:
+                emit_event(connection, settings.default_project_id, "host.stalled", "boss",
+                           "host", "api", {"stalled_seconds": round(seconds, 2),
+                                           "source": "api"})
+
+        start_stall_watch(_report_api_stall, name="api")
+        print("[lifespan] stall watch armed (api)")
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must never stop the API booting
+        print(f"[lifespan] stall watch not armed: {exc}")
     try:
         ensure_schema(engine, settings)
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
@@ -7413,6 +7430,17 @@ def project_preflight_endpoint(project_id: str) -> dict:
     from boss_engine.services.run_retrospective import preflight
     with begin(engine) as connection:
         return preflight(connection, project_id)
+
+
+@app.get("/v1/projects/{project_id}/host-advice")
+def project_host_advice_endpoint(project_id: str) -> dict:
+    """Whether to tell the person at the screen that their machine needs attention.
+
+    `show: false` on a healthy machine — an indicator that is always on is one nobody reads.
+    """
+    from boss_engine.services.run_retrospective import host_advice
+    with begin(engine) as connection:
+        return host_advice(connection, project_id)
 
 
 @app.post("/v1/self/host-stall")
