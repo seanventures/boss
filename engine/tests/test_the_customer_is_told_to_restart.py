@@ -58,3 +58,65 @@ def test_a_large_share_is_critical_even_when_the_verdict_was_only_degraded():
 def test_it_works_without_the_per_run_numbers():
     advice = operator_advice({"state": "critical", "stalled_seconds": 600.0})
     assert advice["show"] is True and "10 minutes" in advice["detail"]
+
+
+# --------------------------------------------------------------------------------------- #
+# Pressure bands: yellow at 85%, red at 95%.
+# --------------------------------------------------------------------------------------- #
+
+from boss_engine.services.self_observability import (  # noqa: E402
+    PRESSURE_CRITICAL, PRESSURE_WARN, pressure,
+)
+
+_HEALTHY_CPU = {"load_per_core": 0.4}
+_HEALTHY_DISK = {"used_pct": 40}
+
+
+def _mem(total_mb: int, available_mb: int, swap_mb: float = 0.0) -> dict:
+    return {"host_total_mb": total_mb, "host_available_mb": available_mb,
+            "host_swap_used_mb": swap_mb}
+
+
+def test_a_comfortable_machine_is_ok():
+    assert pressure(_mem(16000, 9000), _HEALTHY_CPU, _HEALTHY_DISK)["state"] == "ok"
+
+
+def test_eighty_five_percent_memory_is_the_yellow_line():
+    """The line is inclusive: AT 85% it warns, just under it does not."""
+    assert pressure(_mem(16000, 2560), _HEALTHY_CPU, _HEALTHY_DISK)["state"] == "ok"      # 84%
+    assert pressure(_mem(16000, 2400), _HEALTHY_CPU, _HEALTHY_DISK)["state"] == "warning"  # 85%
+
+
+def test_ninety_five_percent_memory_is_the_red_line():
+    assert pressure(_mem(16000, 800), _HEALTHY_CPU, _HEALTHY_DISK)["state"] == "critical"
+
+
+def test_cpu_is_load_per_core_not_a_utilisation_percent():
+    """Load 12 on 12 cores is saturated; the same load on 48 cores is idle."""
+    assert pressure(_mem(16000, 9000), {"load_per_core": 0.9}, _HEALTHY_DISK)["state"] == "warning"
+    assert pressure(_mem(16000, 9000), {"load_per_core": 1.4}, _HEALTHY_DISK)["state"] == "critical"
+
+
+def test_a_full_disk_raises_the_alarm_too():
+    assert pressure(_mem(16000, 9000), _HEALTHY_CPU, {"used_pct": 96})["state"] == "critical"
+
+
+def test_the_worst_gauge_decides():
+    p = pressure(_mem(16000, 9000), _HEALTHY_CPU, {"used_pct": 97})
+    assert p["state"] == "critical" and p["bands"]["memory"]["band"] == "ok"
+
+
+def test_every_failing_gauge_is_named():
+    p = pressure(_mem(16000, 300, swap_mb=15000), {"load_per_core": 1.2}, {"used_pct": 97})
+    joined = ", ".join(p["reasons"])
+    for expected in ("memory", "swapping", "cpu", "disk"):
+        assert expected in joined
+
+
+def test_missing_readings_degrade_to_ok_rather_than_guessing():
+    """macOS has no /proc: absent numbers must not invent a verdict."""
+    assert pressure({}, {}, {})["state"] == "ok"
+
+
+def test_the_thresholds_are_the_ones_that_were_asked_for():
+    assert (PRESSURE_WARN, PRESSURE_CRITICAL) == (0.85, 0.95)

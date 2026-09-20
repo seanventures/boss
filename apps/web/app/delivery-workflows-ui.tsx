@@ -12,6 +12,7 @@ import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
+import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -1830,6 +1831,9 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   targets: DeployTarget[];
   hosts: DeployHost[];
 }) {
+  // Polled, not fetched once: a machine degrades DURING a run, which is exactly when the
+  // operator is staring at the screen wondering why it is slow.
+  const hostAdvice = useHostAdvice(projectId);
   const [bucket, setBucket] = useState<Bucket | "all">("all");
   if (runs.length === 0) {
     return (
@@ -1895,6 +1899,11 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
           // the left cannot separate two hundred lines of step detail from the row beneath it.
           <article key={run.id} className="dw-run" data-status={run.status}
                    data-open={open ? "true" : undefined} data-testid="dw-run">
+            {/* WHY THIS RUN IS SLOW, NEXT TO THE NUMBER THAT MISLEADS. The elapsed time is
+                what gets read as "BOSS is regressing"; if the machine took that time, it has
+                to say so in the same place. Renders nothing on a healthy host. */}
+            {run.status === "running" || run.status === "waiting"
+              ? <HostAdviceBanner advice={hostAdvice} compact /> : null}
             <button type="button" className="dw-run-head" aria-expanded={open}
                     onClick={() => setOpenRun(open ? null : run.id)}>
               <span className="dw-badge" data-tone={tone(run.status)}>{run.status}</span>

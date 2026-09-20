@@ -9735,3 +9735,20 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .ledger-goal { font-weight: 500; }
 .ledger-next { opacity: .85; }
 .ledger-tried { margin-left: auto; cursor: help; }
+
+/* THE MACHINE, NOT THE PRODUCT.
+   Shown only when the host is the reason a run is slow — never on a healthy machine, because
+   an indicator that is always on is one nobody reads. Amber warns; red says restart. */
+.host-advice {
+  display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline;
+  margin: 0 0 10px; padding: 9px 12px; border-radius: 8px;
+  border: 1px solid var(--amber, #d29922); background: rgba(210, 153, 34, 0.10);
+  font-size: 0.8rem; line-height: 1.45;
+}
+.host-advice[data-severity="critical"] {
+  border-color: var(--red, #f85149); background: rgba(248, 81, 73, 0.10);
+}
+.host-advice-head { font-weight: 700; color: var(--amber, #d29922); }
+.host-advice[data-severity="critical"] .host-advice-head { color: var(--red, #f85149); }
+.host-advice-detail { opacity: 0.88; }
+.host-advice-action { font-weight: 600; }

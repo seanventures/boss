@@ -316,18 +316,36 @@ def host_advice(connection: Connection, project_id: str) -> dict[str, Any]:
     Looks at the recent past rather than one run: a customer opening the console wants to know
     whether to start work now, and the last hour is the honest window for that.
     """
-    from .self_observability import operator_advice
+    from .self_observability import operator_advice, pressure_now
+
+    # TWO SIGNALS, AND THEY ANSWER DIFFERENT QUESTIONS. Pressure says what is wrong with the
+    # machine right now and is only trustworthy where the container shares the host's kernel —
+    # true on a Linux VM, false on Docker Desktop for Mac, where it read 51% used through a
+    # total freeze. Stalls say whether BOSS was scheduled at all, which is true everywhere.
+    # Pressure explains; stalls prove. Either can raise the alarm.
+    gauges = pressure_now()
 
     rows = connection.execute(
         text("SELECT data FROM events WHERE event_type = 'host.stalled' "
              "   AND created_at > now() - interval '1 hour'"),
     ).mappings().all()
     seconds = [float(_as_dict(r["data"]).get("stalled_seconds") or 0) for r in rows]
-    if not seconds:
+    if not seconds and gauges.get("state") == "ok":
         return {"show": False}
 
     host = host_is_degraded(
         {"stalled_seconds": round(sum(seconds), 2), "stall_events": len(seconds),
-         "longest_stall_seconds": max(seconds)},
+         "longest_stall_seconds": max(seconds, default=0.0)},
         elapsed_seconds=3600.0)
-    return operator_advice(host)
+    if host.get("state") == "ok" and gauges.get("state") != "ok":
+        # Nothing has stalled YET, but the gauges say it is about to. Warning the operator
+        # before the first slow run is the whole point of having gauges as well as evidence.
+        host = {"state": gauges["state"], "stalled_seconds": 0.0, "share_of_elapsed": 0.0,
+                "detail": "the machine is running low on " + " and ".join(gauges["reasons"])}
+    advice = operator_advice(host)
+    if advice.get("show"):
+        advice["gauges"] = gauges.get("bands", {})
+        if gauges.get("reasons"):
+            advice["detail"] = (advice.get("detail", "") + " Right now: "
+                                + ", ".join(gauges["reasons"]) + ".")
+    return advice

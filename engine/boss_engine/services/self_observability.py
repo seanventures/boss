@@ -666,3 +666,85 @@ def operator_advice(host: dict[str, Any], *, elapsed_minutes: float = 0.0,
         "not_a_boss_fault": True,
         "stalled_minutes": round(stalled_min, 1),
     }
+
+
+# --------------------------------------------------------------------------------------- #
+# PRESSURE THRESHOLDS — yellow at 85%, red at 95%.
+# --------------------------------------------------------------------------------------- #
+#
+# WHERE THESE ARE TRUE, AND WHERE THEY LIE.
+#
+# /proc/meminfo inside a container reports the KERNEL the container shares. On a Linux VM —
+# which is where BOSS is deployed — that kernel IS the host, so these percentages are the real
+# thing and thresholds on them are exactly right.
+#
+# On Docker Desktop for Mac it is the Docker VM's kernel, not the Mac's. Measured 2026-09-20
+# while the Mac had 0.1 GB free and 23 GB of swap in use: the container read 3.8 GB available
+# of 7.8 GB — 51% used, comfortably "green" — through a total freeze. So these numbers must
+# never be the ONLY signal. `stall_seconds` measures whether BOSS was scheduled at all, which
+# is true everywhere, and the two are reported together: pressure explains, stalls prove.
+
+PRESSURE_WARN = 0.85
+PRESSURE_CRITICAL = 0.95
+
+
+def _band(fraction: float) -> str:
+    if fraction >= PRESSURE_CRITICAL:
+        return "critical"
+    return "warning" if fraction >= PRESSURE_WARN else "ok"
+
+
+def pressure(memory: dict[str, Any], cpu: dict[str, Any],
+             disk: dict[str, Any]) -> dict[str, Any]:
+    """Memory, CPU and disk as bands, from snapshots this module already takes.
+
+    CPU is load PER CORE rather than a utilisation percentage: a box with load 12 on 12 cores
+    is saturated, and the same load on 48 cores is idle. 1.0 per core is full, so the same
+    85/95 bands apply to it directly.
+    """
+    out: dict[str, Any] = {"bands": {}, "state": "ok", "reasons": []}
+
+    total = float(memory.get("host_total_mb") or 0)
+    available = float(memory.get("host_available_mb") or 0)
+    if total > 0:
+        used = max(0.0, min(1.0, 1 - available / total))
+        out["bands"]["memory"] = {"used_pct": round(used * 100, 1), "band": _band(used)}
+        if _band(used) != "ok":
+            out["reasons"].append(f"memory {used:.0%} used")
+
+    per_core = memory.get("host_swap_used_mb")
+    if per_core is not None and total > 0:
+        swap = float(per_core)
+        # Swap in use at all is a symptom; the size of it relative to RAM is the severity.
+        if swap > 0:
+            out["bands"]["swap"] = {"used_mb": round(swap, 1),
+                                    "band": _band(min(1.0, swap / total))}
+            if out["bands"]["swap"]["band"] != "ok":
+                out["reasons"].append(f"swapping ({swap:.0f} MB)")
+
+    load = cpu.get("load_per_core")
+    if load is not None:
+        out["bands"]["cpu"] = {"load_per_core": round(float(load), 2),
+                               "band": _band(float(load))}
+        if _band(float(load)) != "ok":
+            out["reasons"].append(f"cpu load {float(load):.2f} per core")
+
+    used_pct = disk.get("used_pct")
+    if used_pct is not None:
+        out["bands"]["disk"] = {"used_pct": round(float(used_pct), 1),
+                                "band": _band(float(used_pct) / 100)}
+        if _band(float(used_pct) / 100) != "ok":
+            out["reasons"].append(f"disk {float(used_pct):.0f}% full")
+
+    bands = [b["band"] for b in out["bands"].values()]
+    out["state"] = ("critical" if "critical" in bands
+                    else "warning" if "warning" in bands else "ok")
+    return out
+
+
+def pressure_now(preview_root: Optional[str] = None) -> dict[str, Any]:
+    """Current pressure, read fresh. Never raises: every reader degrades to absent."""
+    try:
+        return pressure(memory_snapshot(), cpu_snapshot(), disk_snapshot(preview_root))
+    except Exception:  # noqa: BLE001
+        return {"bands": {}, "state": "ok", "reasons": []}

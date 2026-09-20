@@ -1,8 +1,10 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { PROJECT_ID } from "../lib/client";
 
 import { consoleHref } from "./console-href";
+import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { onChanged, notifyChanged } from "./changed";
 import { appIdentity, groupIdentity } from "./app-identity";
 
@@ -2050,6 +2052,7 @@ function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs
   /** This run was re-delivered: an earlier attempt lost its lease and its work was replayed. */
   redelivered: boolean;
 }) {
+  const hostAdvice = useHostAdvice(PROJECT_ID);
   const [calls, setCalls] = useState<LlmCallRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -2096,6 +2099,11 @@ function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs
 
   return (
     <div className="ct-block ct-steps" data-testid="ct-steps">
+      {/* WHY THIS BUILD IS SLOW, WHERE ITS TIMINGS ARE READ. The stage durations below are
+          what get read as the pipeline being slow; when the machine took that time it has to
+          say so in the same block. Only while the build is live, and only on an unhealthy
+          host — it renders nothing otherwise. */}
+      {live ? <HostAdviceBanner advice={hostAdvice} /> : null}
       <div className="ct-steps-head">
         <span className="ct-block-title">Steps — who ran what</span>
         <span className="ct-steps-total">
