@@ -76,15 +76,14 @@ def test_verification_profile_shape():
 
 
 def test_pipeline_resolves_web_target_for_web_spec():
-    # the governed entry uses default_test_commands as the fallback (line ~470)
+    # the governed entry uses resolve_authoritative_test_commands — the whole
+    # list, not [0]. [0] is npm install after the && split.
     from apps.api.app.services import governed_code_task_service as g
     assert hasattr(g, "verification_target")
-    # explicit test_commands still win over the resolver
     spec = {"project_kind": "web", "test_commands": ["custom cmd"]}
-    resolved = (spec.get("test_commands") or vt.default_test_commands(spec))[0]
-    assert resolved == "custom cmd"
-    # A LIST, NOT A CHAIN. This took [0] back when the web target was one `&&`
-    # string; [0] is now `npm install`, and the build step is its own entry.
-    resolved_web = [] or vt.default_test_commands({"project_kind": "web"})
+    resolved = vt.resolve_authoritative_test_commands(spec)
+    assert resolved == ["custom cmd"]
+    resolved_web = vt.resolve_authoritative_test_commands({"project_kind": "web"})
     assert "npm run build" in resolved_web
     assert resolved_web[0].startswith("npm install")
+    assert len(resolved_web) > 1

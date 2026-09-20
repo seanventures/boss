@@ -160,6 +160,21 @@ def default_test_commands(spec: dict[str, Any], title: str = "") -> list[str]:
             else [PYTHON_TEST_CMD])
 
 
+def resolve_authoritative_test_commands(spec: dict[str, Any], title: str = "") -> list[str]:
+    """The command list the quality gate must run, in order.
+
+    ``test_commands`` is a list. Taking ``[0]`` was correct only when the web
+    target was one ``&&`` string. After it was split so the sandbox could run
+    it, ``[0]`` is ``npm install`` and the rest of the suite never ran.
+    """
+    raw = spec.get("test_commands")
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    if isinstance(raw, (list, tuple)) and raw:
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return list(default_test_commands(spec, title))
+
+
 def verification_profile(spec: dict[str, Any], title: str = "") -> dict[str, Any]:
     """Human-readable profile for the console / run evidence: the kind and the resolved steps."""
     kind = detect_kind(spec, title)

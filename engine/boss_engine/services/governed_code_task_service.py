@@ -1638,8 +1638,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
     # web/TS gets build/typecheck/lint/e2e (the scaffold's scripts) so the repair loop optimizes a
     # web-native signal; Python still defaults to unittest. Explicit test_commands always win.
-    test_cmd = (spec.get("test_commands")
-                or verification_target.default_test_commands(spec, title))[0]
+    #
+    # THE WHOLE LIST. Taking [0] was leftover from when the web target was one
+    # `&&` string. After 262d3482 split it so the sandbox could run it, [0] is
+    # `npm install` and `_run_verify` treated a successful install as verified.
+    verify_commands = verification_target.resolve_authoritative_test_commands(spec, title)
+    # Display / prompts only. Never pass this joined string to sandbox.run —
+    # the sandbox refuses `&&` and would otherwise execute only argv[0].
+    test_cmd = " && ".join(verify_commands) if verify_commands else ""
     instructions = spec.get("instructions", "")
     criteria = spec.get("acceptance_criteria", [])
     # Infrastructure persona (spec 05 §3.2 / T4): IaC tasks get Terraform-aware role
@@ -2468,10 +2474,31 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
             except Exception as exc:  # noqa: BLE001
                 prep_note += f"[boss] pre-verify restore failed: {type(exc).__name__}: {exc}\n"
-            result = sandbox.run(test_cmd, cwd=str(cwd))
+            class _CwdSandbox:
+                def run(self, command):
+                    return sandbox.run(command, cwd=str(cwd))
+
+            results = verification_target.run_until_failure(_CwdSandbox(), verify_commands)
+            if not results:
+                from .sandbox import CommandResult
+
+                result = CommandResult(
+                    command="",
+                    argv=[],
+                    exit_code=1,
+                    duration_ms=0,
+                    timed_out=False,
+                    stdout="",
+                    stderr="no verification commands",
+                )
+            else:
+                result = results[-1]
             output = (
                 prep_note
-                + ((result.stdout or "") + "\n" + (result.stderr or ""))
+                + "".join(
+                    ((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
+                    for item in results
+                )
             )[-4000:]
             if record:
                 last_verify_output = output
@@ -2967,7 +2994,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if use_microvm:
                 res2 = _guest_stage(
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
-                    test_cmds=[test_cmd],
+                    test_cmds=list(verify_commands),
                     stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""),
                     engine_override=(settings.code_agent_strong_engine if escalate_impl else ""))
                 r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
@@ -3163,7 +3190,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 if use_microvm:
                     qres = _guest_stage(
-                        "quality", "implement", q_prompt, test_cmds=[test_cmd],
+                        "quality", "implement", q_prompt, test_cmds=list(verify_commands),
                         stage_title=f"SE: quality — {title}",
                     )
                     q_changes = [fc for fc in qres.diff if not _is_test_path(fc.path)]
@@ -3313,7 +3340,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="regression")
                     rr = _guest_stage("run_all_tests", "regression", "Run the full test suite.",
-                                      test_cmds=[test_cmd],   # APP-3: web-aware regression target
+                                      test_cmds=list(verify_commands),   # APP-3: web-aware regression target
                                       stage_title=f"Regression — {title}",
                                       engine_override="echo")
                     panel["full"] = bool(rr.tests_passed)
@@ -3467,7 +3494,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if use_microvm:
                     if impl_files:
                         res5 = _guest_stage("check_tests", "check_tests",
-                                            _mutate_prompt(impl_files), test_cmds=[test_cmd],
+                                            _mutate_prompt(impl_files), test_cmds=list(verify_commands),
                                             stage_title=f"Mutation probe — {title}")
                         r5 = {"cost_usd_micros": res5.cost_usd_micros,
                               "summary": res5.summary, "model": stage_routes["check_tests"]["model"]}
