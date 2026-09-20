@@ -972,7 +972,12 @@ class Settings(BaseSettings):
     # Read-only stages (adversarial/security/consistency review) don't edit code and don't
     # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
     # rigor (they read the diff + relevant files + judge).
-    code_agent_review_max_turns: int = Field(default=16, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
+    # 48, not 16. Measured 2026-09-20 on a 39-file build: review_code took 17 turns and did
+    # not finish, security_check 17, consistency_check 20 — ALL THREE over a 16-turn cap. The
+    # cap was sized when a build was a handful of files; once the panel's PRD reached the
+    # builder the apps got materially larger and the reviewers did not get the budget to read
+    # them. Escalation doubles from here when a check still does not finish.
+    code_agent_review_max_turns: int = Field(default=48, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
     # How many times a check that DID NOT FINISH (turn cap/timeout/crash) is re-run with
     # a doubled budget before the run ships with "not reviewed" recorded. Escalating the
     # CHECK is the only coherent remedy for a check that never judged the code.

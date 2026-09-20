@@ -454,6 +454,20 @@ def resolve_gate_failure_action(
     """
     if not failing:
         return "ship"
+    # A CHECK THAT NEVER RAN IS NOT AN OPINION TO SHIP PAST — checked BEFORE advisory.
+    #
+    # This sat below the advisory branch, which returns "ship" for anything outside the hard
+    # floor. review_code is outside it, so a reviewer that ran out of turns and judged nothing
+    # took the same path as a reviewer that read the diff and had a view. The escalation built
+    # for exactly this case — re-run the CHECK with a doubled budget — could never fire,
+    # because the action was decided before the question was asked.
+    #
+    # Measured: a 39-file build shipped with adversarial_verdict "not_run", review_confidence
+    # 0.0 and no review comment on the pull request, while three gates were recorded as
+    # advisory. Advisory means a reviewer's OPINION cannot withhold the PR. It cannot mean the
+    # opinion was never needed.
+    if faults and all(faults.get(g) == "HARNESS" for g in failing):
+        return "inconclusive"
     if advisory_gate:
         # Advisory means a REVIEWER'S OPINION cannot withhold the PR. It does not mean
         # "ignore the gates". Two failures are facts, not opinions, and still get the full
@@ -470,6 +484,8 @@ def resolve_gate_failure_action(
     # check ran out of turns, timed out, or was skipped — then nothing has been said about the
     # code, and repairing it re-derives the whole pipeline to reach the same non-answer. This
     # single conflation produced repeated ~35-minute, ~$12 loops on changes whose tests passed.
+    # Still needed: the advisory branch above may have NARROWED `failing` to the hard floor,
+    # and those remaining gates can themselves be harness faults.
     if faults and failing and all(faults.get(g) == "HARNESS" for g in failing):
         return "inconclusive"
     if rounds_used < max_repair_rounds and open_pr:
@@ -870,12 +886,41 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
                            ("security_check", "security_summary"),
                            ("consistency_check", "consistency_summary")):
             comments += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
+    # WHAT THE REVIEWERS ACTUALLY WROTE, even when it will not parse.
+    #
+    # This returned here, silently — no event, no log, nothing on any screen. On a 39-file
+    # build the security and consistency reviewers each produced a substantial review in PROSE
+    # ("## Security Review — Documentation Freshness Board...", "I reviewed the implementation
+    # (serve_freshness.py, freshness_core/*, ...)"), none of it in the graded form
+    # parse_findings expects. So the pull request carried nothing at all, and the operator had
+    # no way to tell "the reviewers found nothing" from "the reviewers were never asked".
+    #
+    # An unparseable review is worth less than an anchored one and far more than silence.
+    summaries: list[str] = []
     if not comments:
-        return {"posted": False, "reason": "no structured findings"}
+        for stage, key in (("review_code", "review_summary"),
+                           ("security_check", "security_summary"),
+                           ("consistency_check", "consistency_summary")):
+            text_out = str(evidence.get(key) or "").strip()
+            if text_out:
+                summaries.append(f"### {stage}\n\n{text_out[:4000]}")
+        if not summaries:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.review_comments_absent", "boss",
+                           "code_task_run", run_id,
+                           {"pull_request_number": number,
+                            "reason": "no reviewer produced findings or a summary",
+                            "stages": ["review_code", "security_check",
+                                       "consistency_check"]})
+            return {"posted": False, "reason": "no structured findings"}
     inline = review_comments.to_github_comments(comments)
     loose = review_comments.unanchored_body(comments)
     body = ("BOSS review panel — findings from the independent reviewers.\n\n"
             + (loose + "\n\n" if loose else "")
+            + ("\n\n".join(summaries) + "\n\n"
+               + "_These are the reviewers' own summaries: nothing in them could be anchored "
+                 "to a line, so they are reproduced in full rather than dropped._\n\n"
+               if summaries else "")
             + "Severity decides the gate; MINOR and NIT are recorded as follow-up work.")
     try:
         # COMMENT, never REQUEST_CHANGES: the gate already decided whether this ships, and a
@@ -886,7 +931,8 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
             emit_event(c, project_id, "code_task.review_comments_posted", "boss",
                        "code_task_run", run_id,
                        {"pull_request_number": number, "anchored": len(inline),
-                        "unanchored": len(comments) - len(inline)})
+                        "unanchored": len(comments) - len(inline),
+                        "prose_summaries": len(summaries)})
         return {"posted": True, "anchored": len(inline),
                 "unanchored": len(comments) - len(inline),
                 "review_url": getattr(result, "url", None)}
