@@ -448,7 +448,7 @@ ui_step "Verifying Community independence"
 
 set +e
 EDITION_CODE="$(curl -sS -o /tmp/boss-edition.json -w '%{http_code}' \
-  -H "X-API-Key: ${BOSS_API_KEY}" \
+  -H "Authorization: Bearer ${BOSS_API_KEY}" \
   "${API_URL}/v1/edition?project_id=boss-dogfood" 2>/dev/null || echo 000)"
 set -e
 if [[ "$EDITION_CODE" == "200" ]]; then
@@ -462,7 +462,7 @@ fi
 
 set +e
 PROV_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
-  -H "X-API-Key: ${BOSS_API_KEY}" \
+  -H "Authorization: Bearer ${BOSS_API_KEY}" \
   "${API_URL}/v1/providers?project_id=boss-dogfood" 2>/dev/null || echo 000)"
 set -e
 if [[ "$PROV_CODE" == "200" ]]; then
@@ -492,7 +492,7 @@ echo "  # Load env for this shell"
 echo "  source $INSTALL_DIR/boss-community.env.sh"
 echo ""
 echo "  # Health check"
-echo "  curl -sS -H \"X-API-Key: \$BOSS_API_KEY\" \$BOSS_API_URL/health"
+echo "  curl -sS -H \"Authorization: Bearer \$BOSS_API_KEY\" \$BOSS_API_URL/health"
 echo ""
 echo "  # Logs"
 echo "  cd $INSTALL_DIR && docker compose -f scripts/install/community-compose.yml --env-file .env logs -f"

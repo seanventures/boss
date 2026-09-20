@@ -52,10 +52,21 @@ bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; }
 
 printf "\n${B}BOSS doctor${N}  (%s)\n\n" "$API"
 
-# 1. containers
+# 1. containers. FOUR are required; web and the bundled secret store are profiles, and a
+# healthy install that runs neither is still a healthy install. The first version of this
+# check hardcoded "expected 6" and failed a correct install — exactly the kind of wrong
+# confident answer a doctor must not give.
+missing=""
+for svc in db api worker; do
+  docker ps --filter "name=boss-community-${svc}-" --format '{{.Names}}' 2>/dev/null \
+    | grep -q . || missing="$missing $svc"
+done
 running=$(docker ps --filter "name=boss-community" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
-if [ "$running" -ge 5 ]; then ok "containers: $running running"
-else bad "containers: only $running running — expected 6 (docker compose up -d)"; fi
+if [ -z "$missing" ]; then
+  ok "containers: $running running (db, api, worker required; web and secrets are optional)"
+else
+  bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)"
+fi
 
 # 2. the API answers
 if curl -fsS --max-time 10 "$API/health" >/dev/null 2>&1; then ok "api: /health answers on $API"
@@ -75,7 +86,11 @@ else ok "console: $compiled"; fi
 models=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/settings?project_id=$PROJECT" 2>/dev/null)
 engines=$(printf '%s' "$models" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(d.get("connected_engines") or []))' 2>/dev/null || echo "")
 if [ -n "$engines" ]; then ok "models connected: $engines"
-else bad "models: none connected — open Mission Control and connect one"; fi
+else
+  # NOT A FAILURE ON A FRESH INSTALL — it is the next step, and saying "FAIL" to someone who
+  # has just installed correctly teaches them to distrust this output.
+  warn "models: none connected yet — open Mission Control (http://127.0.0.1:${WEB_PORT}) and connect one"
+fi
 
 advice=$(curl -fsS --max-time 10 "${AUTH[@]}" "$API/v1/projects/$PROJECT/host-advice" 2>/dev/null)
 blocked=$(printf '%s' "$advice" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("headline") or "")' 2>/dev/null || echo "")

@@ -162,9 +162,24 @@ improve it.
 
 ```bash
 source ~/boss/boss-community.env.sh
-curl -sS -H "X-API-Key: $BOSS_API_KEY" "$BOSS_API_URL/health"
+curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 # Mission Control: http://127.0.0.1:3000
 ```
+
+### Uninstall / reinstall
+
+```bash
+./scripts/install/uninstall.sh                 # asks before destroying anything
+./scripts/install/uninstall.sh --yes           # scripted
+./scripts/install/uninstall.sh --yes --keep-images   # reinstall in ~80s instead of rebuilding
+```
+
+Removes containers, volumes (**including the database**), images and `.env`. `--keep-env`
+preserves the secret-store encryption key and your API key so a reinstall reuses the same
+credentials; without it they are gone and unrecoverable, which is why it asks first.
+
+An installer you cannot undo can only be tested once — this is what makes "install it again
+from nothing" a thing you can actually do.
 
 Stop:
 
