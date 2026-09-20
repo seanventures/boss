@@ -392,6 +392,27 @@ debugging and not what you want as the permanent arrangement.
 a fallback for a project with no repository connected. Connect one in Step one and it wins —
 including on a project that used to have a different one, which is moved rather than refused.
 
+**The console's API address is baked in at IMAGE BUILD TIME, and it must be the address the
+BROWSER will use.** This is the one that bites hardest on a remote VM. `NEXT_PUBLIC_BOSS_API_URL`
+is compiled into the web bundle, so a value of `127.0.0.1` means the browser tries to reach the
+API on the machine it is running on — yours, not the server. Every preview link then points at
+nothing, and a preview that is running perfectly looks broken.
+
+```bash
+# on the VM, before building web
+NEXT_PUBLIC_BOSS_API_URL=https://boss.example.internal:8000   # what YOUR BROWSER will type
+docker compose -f scripts/install/community-compose.yml --profile web build web
+```
+
+It defaults to `http://127.0.0.1:${BOSS_API_PORT}`, which is right for a laptop and wrong for
+every server. Changing `BOSS_API_PORT` alone is not enough: rebuild `web`, or the old address
+stays compiled in.
+
+**Size the box so it never swaps.** A host that swaps stops scheduling BOSS for minutes at a
+time, and the symptom is an 85-minute build that should have taken 20, with nothing in any log
+saying why. 8 GB RAM minimum and 100 GB disk — see the installer README for the measured
+figures.
+
 Before you trust a fresh server, check these four. Each one is a failure we have actually had:
 
 ```bash
@@ -413,8 +434,29 @@ curl -s "$BOSS_API/v1/setup/coding-agents?project_id=$PROJECT" \
   -H "Authorization: Bearer $BOSS_API_KEY"
 ```
 
+```bash
+# 5. the machine is fit to run — no unresolved blockers, no recent host stalls
+curl -s "$BOSS_API/v1/projects/$PROJECT/preflight" \
+  -H "Authorization: Bearer $BOSS_API_KEY"
+
+# 6. a preview link actually resolves from where the BROWSER is, not from the VM
+#    (run this in the browser, not on the server — that is the whole point)
+#    $BOSS_API/v1/previews/${PREVIEW_ID:?from the console}/web/  -> expect 200 and a page
+```
+
 Then press Build. If the panel stalls, the answer is in the run's step error rather than in a
 container log — BOSS records the reason it stopped.
+
+**Afterwards, ask the run how it went.** The retrospective is deterministic and costs nothing:
+
+```bash
+curl -s "$BOSS_API/v1/code-tasks/${RUN_ID:?the run id, from the console}/retrospective" \
+  -H "Authorization: Bearer $BOSS_API_KEY"
+```
+
+Three separate grades — delivery, efficiency, host. They are separate on purpose: a slow run on
+a thrashing machine is a `host` problem, and reading it as the pipeline degrading is a day
+spent fixing something that was never broken.
 
 ## Reference — other lanes
 
