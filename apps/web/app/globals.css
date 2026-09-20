@@ -9265,6 +9265,34 @@ a.agent-chip-name:hover { text-decoration: underline; }
   color: var(--muted, #B4C4E0);
 }
 .setup-models ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+
+/* Columns, so three rows with the same fields line up with each other. */
+.setup-models-table {
+  width: 100%; margin-top: 8px; border-collapse: collapse; table-layout: auto;
+}
+.setup-models-table th,
+.setup-models-table td {
+  text-align: left; vertical-align: top; padding: 9px 12px;
+  border-bottom: 1px solid var(--border, #263149);
+}
+.setup-models-table thead th {
+  font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
+  font-weight: 700; color: var(--muted, #B4C4E0);
+  border-bottom: 1px solid var(--border, #263149);
+  padding-block: 6px;
+}
+.setup-models-table tbody tr:last-child th,
+.setup-models-table tbody tr:last-child td { border-bottom: 0; }
+.setup-models-table tbody th {
+  font-weight: 700; white-space: nowrap;
+  display: flex; align-items: center; gap: 8px;
+}
+/* The roles column is the one that wraps — give it the room and let it. */
+.setup-models-table td.setup-models-jobs {
+  width: 100%; font-size: .8rem; color: var(--ink-soft, #D4E0F4); margin: 0;
+}
+.setup-models-table td.setup-models-jobs[data-empty] { color: var(--muted, #B4C4E0); }
+.setup-models-table td.setup-models-kind { white-space: nowrap; }
 .setup-models li {
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
   padding: 7px 10px; border-radius: 8px;

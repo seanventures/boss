@@ -898,23 +898,38 @@ function ConnectedModels(
   });
   if (!rows.length) return null;
 
+  // A TABLE, BECAUSE THESE ARE ROWS WITH THE SAME FIELDS. As a flex list the roles column was
+  // pushed right by `margin-left: auto`, so a model holding five roles wrapped onto its own
+  // line while the two beside it sat flush right saying "no role yet" — three rows that never
+  // lined up with each other. Columns make the comparison the eye is actually trying to do.
   return (
     <div className="setup-models" data-testid="setup-connected-models">
       <span className="setup-models-head">Connected models</span>
-      <ul>
-        {rows.map((row) => (
-          <li key={row.engine}>
-            <span className="setup-dot" aria-hidden />
-            <b>{row.label}</b>
-            <span className="setup-models-kind">
-              {row.kind}{row.at ? ` · ${row.at}` : ""}
-            </span>
-            <span className="setup-models-jobs">
-              {row.jobs.length ? row.jobs.join(" · ") : "no role yet"}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <table className="setup-models-table">
+        <thead>
+          <tr>
+            <th scope="col">Model</th>
+            <th scope="col">Connected</th>
+            <th scope="col">Roles it holds</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.engine}>
+              <th scope="row">
+                <span className="setup-dot" aria-hidden />
+                {row.label}
+              </th>
+              <td className="setup-models-kind">
+                {row.kind}{row.at ? ` · ${row.at}` : ""}
+              </td>
+              <td className="setup-models-jobs" data-empty={row.jobs.length ? undefined : "true"}>
+                {row.jobs.length ? row.jobs.join(" · ") : "no role yet"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
