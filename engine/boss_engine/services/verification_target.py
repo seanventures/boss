@@ -60,6 +60,26 @@ WEB_TEST_COMMANDS = [NPM_INSTALL_CMD, *_WEB_STEPS]
 #: Display only — the console shows the sequence as one line. Never execute this.
 WEB_TEST_CMD = " && ".join(WEB_TEST_COMMANDS)
 
+def run_until_failure(sandbox, commands):
+    """Run verification commands in order and STOP at the first failure.
+
+    These used to be one `&&` chain, which short-circuits for free. Splitting them into a list
+    — necessary, because the sandbox refuses shell operators — dropped that property silently:
+    `[sandbox.run(c) for c in commands]` runs all of them however badly the first one goes. A
+    web build whose compile failed still paid for a typecheck, a lint and a full Playwright
+    suite, and buried the one real error under the cascade of a build that produced nothing.
+
+    Returns the results actually run, so `all(t.ok for t in tests)` reads the same as before.
+    """
+    results = []
+    for command in commands:
+        result = sandbox.run(command)
+        results.append(result)
+        if not getattr(result, "ok", False):
+            break
+    return results
+
+
 # Live official BugBox/HookWatch/ApproveIt failed because the model rewrote
 # package.json away from the scaffold: echo stubs, ESLint 6, bare `playwright
 # test` (image-global CLI has no `test` command), and `vite` not listed so

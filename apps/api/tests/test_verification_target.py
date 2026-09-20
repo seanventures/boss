@@ -21,8 +21,35 @@ def test_web_commands_cover_build_typecheck_lint_e2e():
     joined = " ".join(cmds)
     for step in ("npm run build", "npm run typecheck", "npm run lint", "npm run test:e2e"):
         assert step in joined
-    # && so it short-circuits on the earliest failure (compile before e2e)
-    assert "&&" in joined
+    # NO SHELL OPERATORS. These are a LIST now, because the sandbox refuses `&&` outright —
+    # passing the old one-line chain to it failed the whole verification step. The
+    # short-circuit the `&&` used to provide is a property of the RUNNER, asserted below.
+    assert "&&" not in joined
+    assert cmds[0].startswith("npm install"), "install has to come first"
+
+
+def test_verification_stops_at_the_first_failing_command():
+    """Splitting the `&&` chain into a list silently dropped short-circuiting: every call site
+    ran the whole list regardless, so a web build whose compile failed still paid for a
+    typecheck, a lint and a full Playwright suite — and buried the real error underneath."""
+    class _Result:
+        def __init__(self, ok): self.ok = ok
+
+    class _Sandbox:
+        def __init__(self, fail_at): self.fail_at, self.ran = fail_at, []
+        def run(self, cmd):
+            self.ran.append(cmd)
+            return _Result(len(self.ran) - 1 != self.fail_at)
+
+    cmds = vt.default_test_commands({"project_kind": "web"})
+    box = _Sandbox(fail_at=1)                       # the build fails
+    results = vt.run_until_failure(box, cmds)
+    assert len(box.ran) == 2, box.ran               # install, build, then stop
+    assert "npm run test:e2e" not in box.ran
+    assert not results[-1].ok
+
+    everything = _Sandbox(fail_at=-1)               # nothing fails
+    assert len(vt.run_until_failure(everything, cmds)) == len(cmds)
 
 
 def test_python_stays_the_default():
@@ -36,7 +63,9 @@ def test_web_target_matches_scaffold_scripts():
     import json
     scripts = json.loads(sc.scaffold_project("x")["files"]["package.json"])["scripts"]
     for step in ("build", "typecheck", "lint", "test:e2e"):
+        # WEB_TEST_CMD is the display string; WEB_TEST_COMMANDS is what actually runs.
         assert step in scripts and f"npm run {step}" in vt.WEB_TEST_CMD
+        assert f"npm run {step}" in vt.WEB_TEST_COMMANDS
 
 
 def test_verification_profile_shape():
@@ -54,5 +83,8 @@ def test_pipeline_resolves_web_target_for_web_spec():
     spec = {"project_kind": "web", "test_commands": ["custom cmd"]}
     resolved = (spec.get("test_commands") or vt.default_test_commands(spec))[0]
     assert resolved == "custom cmd"
-    resolved_web = ([] or vt.default_test_commands({"project_kind": "web"}))[0]
+    # A LIST, NOT A CHAIN. This took [0] back when the web target was one `&&`
+    # string; [0] is now `npm install`, and the build step is its own entry.
+    resolved_web = [] or vt.default_test_commands({"project_kind": "web"})
     assert "npm run build" in resolved_web
+    assert resolved_web[0].startswith("npm install")

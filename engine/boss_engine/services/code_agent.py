@@ -28,6 +28,7 @@ from typing import Callable, Optional, Protocol
 
 from ..config import Settings
 from ..schemas import FileChange
+from .verification_target import run_until_failure
 from .agent_turns import StreamParser, capture_enabled, parse_stream
 from .llm_telemetry import record_agent_turns, record_llm_call
 
@@ -1071,7 +1072,7 @@ class ClaudeCodeAgent:
                            model=usage.get("model"), prompt=prompt)
 
         # Authoritative verification: BOSS re-runs the test commands itself.
-        tests = [sandbox.run(cmd) for cmd in spec.test_commands]
+        tests = run_until_failure(sandbox, spec.test_commands)
         tests_passed = all(t.ok for t in tests) if tests else False
 
         diff_summary = sandbox.diff_summary()
@@ -1474,14 +1475,14 @@ class NativeCodeAgent:
             summary = r["summary"] or summary
             total_cost += int(r.get("cost_usd_micros") or 0)
             usage_last = r.get("usage") or usage_last
-            tests = [sandbox.run(cmd) for cmd in spec.test_commands]
+            tests = run_until_failure(sandbox, spec.test_commands)
             if (all(t.ok for t in tests) if tests else False):
                 break
             feedback = "\n\n".join(
                 f"$ {t.command} (exit {t.exit_code})\n{((t.stdout or '') + (t.stderr or ''))[-1500:]}"
                 for t in tests if not t.ok
             )[:6000]
-        tests = [sandbox.run(cmd) for cmd in spec.test_commands]
+        tests = run_until_failure(sandbox, spec.test_commands)
         tests_passed = all(t.ok for t in tests) if tests else False
         return CodeAgentResult(
             summary=summary or "(no summary)", diff=sandbox.diff(),

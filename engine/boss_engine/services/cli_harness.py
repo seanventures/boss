@@ -1067,7 +1067,8 @@ class GenericCliCodeAgent:
               "git, the pull request and the merge gate.\n"
         )
         out = self.run_role(prompt, sandbox.path)
-        results = [sandbox.run(cmd) for cmd in spec.test_commands]
+        from .verification_target import run_until_failure
+        results = run_until_failure(sandbox, spec.test_commands)
         return CodeAgentResult(
             summary=out["summary"], diff=sandbox.diff(), diff_summary=sandbox.diff_summary(),
             tests=results, tests_passed=all(r.ok for r in results) if results else False,
