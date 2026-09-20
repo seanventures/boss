@@ -208,7 +208,14 @@ services:
       dockerfile: Dockerfile
       target: web
       args:
-        NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:8000}
+        # THE PORT IS DECLARED ONCE, ABOVE, AND EVERYTHING DERIVES FROM IT.
+        #
+        # This defaulted to a literal :8000 while the api publishes on ${BOSS_API_PORT}. An
+        # install that moved the port — which the installer does routinely, to avoid a clash —
+        # baked 127.0.0.1:8000 into the console at BUILD time, so every preview link it handed
+        # the operator pointed at a port with nothing behind it. The preview was running and
+        # correct, and the only way in was unreachable.
+        NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:${BOSS_API_PORT:-8000}}
         NEXT_PUBLIC_BOSS_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
     image: boss-community-web:local
     restart: unless-stopped
@@ -218,7 +225,7 @@ services:
     environment:
       BOSS_API_URL: http://api:8000
       BOSS_API_KEY: ${BOSS_API_KEY}
-      NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:8000}
+      NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:${BOSS_API_PORT:-8000}}
       NEXT_PUBLIC_BOSS_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
     ports:
       - "${BOSS_WEB_PORT:-3000}:3000"
