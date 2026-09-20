@@ -9855,3 +9855,15 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   .bx-shell.nav-docked .bx-sidebar-foot { display: revert; }
   .bx-dock-toggle { display: none; }
 }
+
+/* What a chosen workflow needs supplied before it can start. Absent for every workflow that
+   declares nothing, which is all twelve catalogue ones. */
+.dw-wiz-inputs { display: grid; gap: 12px; margin-top: 18px; }
+.dw-wiz-input { display: grid; gap: 5px; }
+.dw-wiz-input input {
+  width: 100%; padding: 9px 11px; border-radius: 8px;
+  background: #101725; color: var(--ink, #e8edf7);
+  border: 1px solid var(--border, #263149); font: inherit;
+}
+.dw-wiz-input input:focus { outline: 2px solid var(--accent, #5b8cff); border-color: transparent; }
+.dw-req { font-style: normal; font-size: .72rem; color: var(--amber, #d29922); margin-left: 6px; }

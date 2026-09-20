@@ -12,6 +12,7 @@ import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
+import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
@@ -102,6 +103,9 @@ type Installed = {
    *  definition with no published version has neither. */
   step_count?: number;
   active_version?: number | null;
+  /** What starting it will ask for. Absent on a workflow that declares nothing, which is
+   *  every catalogue workflow today. */
+  input_schema?: unknown;
 };
 
 export type RunStep = {
@@ -1173,11 +1177,14 @@ type NewProjectDraft = {
   links: string[];
   /** Who will be on it. Empty means "whatever BOSS seeds" — see the wizard's agents step. */
   agents: string[];
+  /** What THIS workflow declared it needs — a video to fetch, a clip to trim, a channel to
+   *  publish to. Keyed by field name; only filled-in values are sent. */
+  inputs: Record<string, string>;
 };
 
 const EMPTY_DRAFT: NewProjectDraft = {
   title: "", directive: "", audience: "", criteria: [""],
-  workflowKey: "", repository: "", links: [], agents: [],
+  workflowKey: "", repository: "", links: [], agents: [], inputs: {},
 };
 
 const STEPS = ["What you are building", "How it gets built", "Where it lives", "Review"] as const;
@@ -1307,7 +1314,19 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
   const describe = (key: string): CatalogueEntry | undefined =>
     catalogue.find((c) => c.key === key);
 
-  const blocked = blockingReason(step, draft);
+  // WHAT THE CHOSEN WORKFLOW WILL ASK FOR. Read from the installed definition rather than
+  // hardcoded: a custom workflow declares its own, and the form has to draw whatever that is.
+  const selectedWorkflowSchema = workflows.find(
+    (w) => w.workflow_key === draft.workflowKey)?.input_schema;
+  const declaredInputs = workflowInputFields(selectedWorkflowSchema);
+
+  const blocked = blockingReason(step, draft)
+    // A required input still blank blocks the start, and says which one — the run would be
+    // refused by the runtime anyway, and being told at the form is the difference between a
+    // correction and a failed run.
+    ?? (missingRequired(declaredInputs, draft.inputs).length
+        ? `Needs ${missingRequired(declaredInputs, draft.inputs).join(", ")}`
+        : null);
 
   const start = async () => {
     const text = briefFrom(draft).trim();
@@ -1331,6 +1350,10 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
           ...(criteria.length ? { acceptance_criteria: criteria } : {}),
           ...(links.length ? { reference_links: links } : {}),
           ...(draft.repository ? { repository: draft.repository } : {}),
+          // WHAT THIS WORKFLOW DECLARED IT NEEDS. from_input resolves any field name, so a
+          // step binding `video_url` reads it straight from here. Only filled-in values are
+          // sent: an empty string would read further down as a deliberate choice of empty.
+          ...suppliedInputs(workflowInputFields(selectedWorkflowSchema), draft.inputs),
         },
       });
       if (!r.ok) { setError(r.error ?? "Could not start it."); return; }
@@ -1513,6 +1536,42 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
               );
             })}
           </div>
+
+          {/* WHAT THIS WORKFLOW NEEDS SUPPLIED.
+              Rendered FROM the chosen workflow's declaration, not hardcoded: a custom workflow
+              that fetches a video, trims a clip and publishes to a channel declares those, and
+              until now was startable only by a caller that already knew the field names.
+              Nothing renders for a workflow that declares none, which is every catalogue one. */}
+          {declaredInputs.length ? (
+            <div className="dw-wiz-inputs" data-testid="dw-workflow-inputs">
+              <span className="dw-field-label">What this path needs</span>
+              <span className="dw-field-hint">
+                Values these steps read when the run starts. Settings that do not change
+                between runs — a channel, an icon, a house style — belong in the skill or the
+                agent, not here.
+              </span>
+              {declaredInputs.map((field) => (
+                <label className="dw-wiz-input" key={field.name}>
+                  <span className="dw-field-label">
+                    {field.label}
+                    {field.required ? <em className="dw-req" aria-hidden> required</em> : null}
+                  </span>
+                  {field.help ? <span className="dw-field-hint">{field.help}</span> : null}
+                  <input
+                    type={field.kind === "number" ? "number" : "text"}
+                    inputMode={field.kind === "number" ? "numeric" : undefined}
+                    value={draft.inputs[field.name] ?? ""}
+                    placeholder={field.example}
+                    data-testid={`dw-workflow-input-${field.name}`}
+                    aria-required={field.required || undefined}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d,
+                        inputs: { ...d.inputs, [field.name]: e.target.value } }))}
+                  />
+                </label>
+              ))}
+            </div>
+          ) : null}
 
           {/* WHO WILL BE ON IT. The wizard collected a title, a directive, criteria, a workflow
               and a repository, and never once mentioned agents — so a project was created with

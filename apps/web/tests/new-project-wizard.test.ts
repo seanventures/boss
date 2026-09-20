@@ -22,7 +22,9 @@ const draft = (over: Partial<Parameters<typeof briefFrom>[0]> = {}) => ({
   // `agents` joined NewProjectDraft with the wizard's agents step and this helper was not
   // updated, so every call here was a type error while vitest (which does not typecheck) went
   // on passing. Empty means "whatever BOSS seeds", which is what the wizard starts from.
-  workflowKey: "", repository: "", links: [], agents: [], ...over,
+  // Same lesson as `agents` above, one field later: a draft field added without updating this
+  // helper is a type error vitest never sees, because it does not typecheck.
+  workflowKey: "", repository: "", links: [], agents: [], inputs: {}, ...over,
 });
 
 describe("the brief the pipeline receives", () => {

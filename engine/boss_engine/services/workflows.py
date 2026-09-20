@@ -718,7 +718,14 @@ def list_definitions(
                              FROM workflow_versions v
                              WHERE v.id = d.active_version_id), 0) AS step_count,
                    (SELECT v.version FROM workflow_versions v
-                     WHERE v.id = d.active_version_id) AS active_version
+                     WHERE v.id = d.active_version_id) AS active_version,
+                   -- WHAT STARTING IT WILL ASK FOR. The console's start form renders FROM
+                   -- this; without it a workflow whose steps read `from_input` is startable
+                   -- only by a caller that already knows the field names.
+                   COALESCE((SELECT v.spec->'input_schema'
+                             FROM workflow_versions v
+                             -- Doubled braces: this SQL is an f-string ({clause} above).
+                             WHERE v.id = d.active_version_id), '{{}}'::jsonb) AS input_schema
             FROM workflow_definitions d
             WHERE d.project_id=:project_id {clause}
             ORDER BY d.updated_at DESC, d.workflow_key
