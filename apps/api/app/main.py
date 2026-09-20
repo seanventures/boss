@@ -7393,6 +7393,28 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
     return live_activity(run_id, limit=limit)
 
 
+@app.get("/v1/code-tasks/{run_id}/retrospective")
+def run_retrospective_endpoint(run_id: str, project_id: str = "") -> dict:
+    """What this run cost, delivered and lost — assembled from evidence, no model involved."""
+    from boss_engine.services.run_retrospective import assemble
+    resolved_project = project_id or settings.default_project_id
+    with begin(engine) as connection:
+        return assemble(connection, resolved_project, run_id)
+
+
+@app.get("/v1/projects/{project_id}/preflight")
+def project_preflight_endpoint(project_id: str) -> dict:
+    """Should the next run start now, and what did the last one leave unresolved?
+
+    Advisory by design: it informs, it never refuses. The failure it prevents is starting an
+    expensive run into a machine already known to be thrashing, then reading the result as the
+    pipeline degrading — which cost a full day before this existed.
+    """
+    from boss_engine.services.run_retrospective import preflight
+    with begin(engine) as connection:
+        return preflight(connection, project_id)
+
+
 @app.post("/v1/self/host-stall")
 def record_host_stall_endpoint(payload: dict) -> dict:
     """Record that the MACHINE stopped scheduling BOSS for this long.

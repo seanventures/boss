@@ -4397,6 +4397,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
         plane_sync.on_event(engine, settings, run_id, "code_task.pr_opened")  # P2: comment the PR link
+        # WHAT THIS RUN COST, DELIVERED AND LOST — recorded now, while every fact is fresh.
+        #
+        # Answering "what went wrong" on an 85-minute build took two hours of reading container
+        # logs, job leases, sandbox file mtimes and gate events by hand, and every fact needed
+        # was already in the database. Deterministic and read-only, so it is a summary of
+        # evidence rather than a second opinion about it, and wrapped because a retrospective
+        # that can fail the run it describes is worse than none.
+        try:
+            from .run_retrospective import record as _record_retrospective
+            with _transaction(engine) as c:
+                _record_retrospective(c, project_id, run_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("retrospective not recorded for %s", run_id, exc_info=True)
 
         # AUTO-PREVIEW FOR APPS. Operator: previews matter for an APP — a service can be
         # exercised by its tests or a container deploy in CI/CD instead. A browsable app whose
