@@ -376,7 +376,7 @@ function GitHubStep({ projectId, actor, onDone }: {
     <article className="stack-card" data-testid="setup-github">
       <div className="section-head">
         <div>
-          <h2>Repository</h2>
+          <h2 className="eyebrow">Repository</h2>
           <p className="detail">
             BOSS writes code on a branch and opens a pull request — it never pushes to your
             default branch. It needs a token that can do those two things.
@@ -618,7 +618,7 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
     <article className="stack-card" data-testid="setup-model">
       <div className="section-head">
         <div>
-          <h2>Model</h2>
+          <h2 className="eyebrow">Model</h2>
           <p className="detail">
             An API key, anything that speaks the OpenAI API, or a subscription you already pay
             for. BOSS spends one token proving it works before saving it.
