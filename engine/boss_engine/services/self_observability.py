@@ -469,3 +469,108 @@ def in_flight(connection, project_id: str, *, limit: int = 8) -> list[dict]:
             "active": status not in ("completed", "failed", "cancelled"),
         })
     return out
+
+
+# --------------------------------------------------------------------------------------- #
+# STALL DETECTION — whether BOSS was able to RUN, which is not what the numbers above answer.
+# --------------------------------------------------------------------------------------- #
+#
+# WHY THE SNAPSHOTS ABOVE ARE NOT ENOUGH.
+#
+# On 2026-09-20 a build took 85 minutes that had taken under 20 the day before, and the
+# operator reasonably concluded BOSS had regressed. It had not. The API process froze twice —
+# once for 13m56s — serving nothing at all, not even /health, because the MAC hosting Docker
+# was thrashing: 21.4 GB of 22.5 GB swap in use, 23 million pageouts.
+#
+# Every reader above would have said "healthy" throughout. They see the Docker Desktop VM —
+# 3.8 GB available, 1 GB swap, 281 GB free disk — and the VM was fine. The machine underneath
+# it was not, and nothing inside a container can see that directly.
+#
+# So do not measure the host. Measure whether OUR OWN CODE GOT TO RUN. A loop that should wake
+# every 20 seconds and wakes 14 minutes late was starved, and that conclusion holds whatever
+# the cause — host swap, VM pause, CPU steal, a suspended laptop. It is the one signal that
+# survives the container boundary, and it is exactly the thing an operator needs to know
+# before blaming the pipeline.
+
+#: A wake-up later than its due time by more than this is a stall, not jitter. Generous on
+#: purpose: ordinary scheduling noise and a slow query are not what this is looking for.
+STALL_THRESHOLD_SECONDS = 30.0
+
+
+def stall_seconds(expected_interval: float, actual_elapsed: float) -> float:
+    """How much longer than scheduled a wake-up took. 0.0 when it was on time.
+
+    Pure so it can be tested without waiting: the caller owns the clock.
+    """
+    if expected_interval <= 0 or actual_elapsed <= 0:
+        return 0.0
+    late = actual_elapsed - expected_interval
+    return round(late, 2) if late > STALL_THRESHOLD_SECONDS else 0.0
+
+
+class StallTracker:
+    """Records how long BOSS was unable to run, from inside BOSS.
+
+    Fed by any loop with a known cadence. Keeps a bounded recent history so a run can be asked
+    "how much of your elapsed time was the host, not you" — the question that would have
+    settled an entire day of investigation in one line.
+    """
+
+    def __init__(self, keep: int = 50) -> None:
+        self._keep = max(1, keep)
+        self._events: list[dict[str, Any]] = []
+
+    def observe(self, expected_interval: float, actual_elapsed: float,
+                *, at: Optional[float] = None, source: str = "") -> float:
+        """Record one wake-up. Returns the stall in seconds (0.0 if on time)."""
+        late = stall_seconds(expected_interval, actual_elapsed)
+        if late:
+            self._events.append({"stalled_seconds": late, "at": at, "source": source,
+                                 "expected_interval": expected_interval})
+            del self._events[:-self._keep]
+        return late
+
+    def since(self, at: Optional[float]) -> dict[str, Any]:
+        """Stalls recorded since a point in time — for attributing ONE run's lost minutes."""
+        rows = [e for e in self._events
+                if at is None or (e.get("at") is not None and e["at"] >= at)]
+        total = round(sum(e["stalled_seconds"] for e in rows), 2)
+        return {
+            "stalled_seconds": total,
+            "stall_events": len(rows),
+            "longest_stall_seconds": max((e["stalled_seconds"] for e in rows), default=0.0),
+        }
+
+    def recent(self) -> list[dict[str, Any]]:
+        return list(self._events)
+
+
+def host_is_degraded(summary: dict[str, Any], *, elapsed_seconds: float = 0.0) -> dict[str, Any]:
+    """Turn stall measurements into a verdict an operator can act on.
+
+    Deliberately NOT a judgement about BOSS. It answers one question — was this machine able
+    to run the work — so a slow run can be attributed honestly instead of being read as the
+    pipeline degrading.
+    """
+    stalled = float(summary.get("stalled_seconds") or 0.0)
+    longest = float(summary.get("longest_stall_seconds") or 0.0)
+    share = round(stalled / elapsed_seconds, 3) if elapsed_seconds > 0 else 0.0
+
+    if longest >= 300 or share >= 0.25:
+        state, why = "critical", "the host stopped scheduling BOSS for minutes at a time"
+    elif stalled > 0:
+        state, why = "degraded", "the host intermittently stopped scheduling BOSS"
+    else:
+        return {"state": "ok", "stalled_seconds": 0.0, "share_of_elapsed": 0.0,
+                "detail": "BOSS ran whenever it was due to"}
+
+    return {
+        "state": state,
+        "stalled_seconds": stalled,
+        "longest_stall_seconds": longest,
+        "share_of_elapsed": share,
+        "detail": (f"{why}: {stalled:.0f}s lost across {summary.get('stall_events', 0)} "
+                   f"stalls, longest {longest:.0f}s"
+                   + (f", {share:.0%} of elapsed time" if share else "")),
+        "not_boss": True,
+    }

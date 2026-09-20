@@ -5,6 +5,7 @@ import threading
 import time
 
 from apps.api.app.db import database_is_reachable, get_engine
+from boss_engine.services.self_observability import StallTracker
 
 from .config import get_worker_settings
 from .control_plane import ControlPlaneClient
@@ -164,6 +165,18 @@ def _watch_running_tasks(client: ControlPlaneClient) -> None:
                         result.get("in_flight"))
     except Exception:  # noqa: BLE001
         LOGGER.debug("shepherd_watch_failed", exc_info=True)
+
+
+def _report_host_stall(client, stalled_seconds: float) -> None:
+    """Record that the machine stopped scheduling BOSS, so a slow run can be explained.
+
+    Best effort and silent on failure: a diagnostic that breaks the loop it is diagnosing is
+    worse than no diagnostic — and this fires precisely when the host is already in trouble.
+    """
+    try:
+        client.report_host_stall(round(stalled_seconds, 2))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
@@ -467,7 +480,25 @@ def main() -> None:
         threading.Thread(target=_run_background_sweeps, args=(settings,),
                          name="boss-worker-sweeps", daemon=True).start()
 
+        # WAS BOSS ABLE TO RUN? This loop has a known cadence, which makes it the one clock
+        # that can answer that from inside a container. A cycle that should come round every
+        # poll interval and comes round fourteen minutes later was starved — and on 2026-09-20
+        # that is exactly what happened, twice, while every memory and disk reading said
+        # "healthy" because they see the Docker VM rather than the machine under it. An 85
+        # minute build looked like a BOSS regression and was 62% host stall.
+        _stalls = StallTracker()
+        _last_cycle = time.monotonic()
         while not _STOPPING:
+            _now = time.monotonic()
+            _late = _stalls.observe(float(settings.poll_interval_seconds), _now - _last_cycle,
+                                    at=time.time(), source="worker.poll")
+            if _late:
+                LOGGER.warning(
+                    "host_stall worker_id=%s stalled_seconds=%.0f — BOSS was not scheduled; "
+                    "this time is the machine's, not the pipeline's",
+                    settings.worker_id, _late)
+                _report_host_stall(client, _late)
+            _last_cycle = _now
             try:
                 ran_job = run_worker_cycle(client, settings)
             except Exception:

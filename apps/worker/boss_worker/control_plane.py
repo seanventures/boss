@@ -118,6 +118,13 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def report_host_stall(self, stalled_seconds: float) -> dict[str, Any]:
+        """Record that the machine stopped scheduling BOSS for this long."""
+        response = self._client.post(
+            "/v1/self/host-stall", json={"stalled_seconds": stalled_seconds})
+        response.raise_for_status()
+        return response.json()
+
     def create_openai_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/openai/plans", json=payload)
         response.raise_for_status()

@@ -7393,6 +7393,29 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
     return live_activity(run_id, limit=limit)
 
 
+@app.post("/v1/self/host-stall")
+def record_host_stall_endpoint(payload: dict) -> dict:
+    """Record that the MACHINE stopped scheduling BOSS for this long.
+
+    Not a health metric — an attribution. On 2026-09-20 a build took 85 minutes that had taken
+    under 20 the day before, and the reasonable conclusion was that BOSS had regressed. It had
+    not: the API process froze twice, once for 13m56s, serving nothing at all, because the Mac
+    hosting Docker was thrashing 21.4 GB of 22.5 GB swap. Every memory and disk reading BOSS
+    already had said "healthy" — they see the Docker VM, and the VM was fine.
+
+    So the worker times its own poll loop, and a cycle that comes round minutes late is
+    reported here. Stored as an event so any run overlapping it can be asked the only question
+    that matters: how much of this was the machine, and how much was us.
+    """
+    stalled = float(payload.get("stalled_seconds") or 0.0)
+    if stalled <= 0:
+        return {"recorded": False, "reason": "not a stall"}
+    with begin(engine) as connection:
+        emit_event(connection, settings.default_project_id, "host.stalled", "boss",
+                   "host", "self", {"stalled_seconds": round(stalled, 2)})
+    return {"recorded": True, "stalled_seconds": round(stalled, 2)}
+
+
 @app.post("/v1/code-tasks/{run_id}/redelivered")
 def code_task_redelivered_endpoint(run_id: str, payload: dict) -> dict:
     """Record that an attempt of this run is a REPLAY of interrupted work.
