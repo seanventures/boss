@@ -1095,6 +1095,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "they do not want the research repeated. Look the id up "
                                    "with list_discovery; never guess one.",
                 },
+                "inputs": {
+                    "type": "object",
+                    "description": "Values this workflow's steps read with from_input — a "
+                                   "video to fetch, a clip to trim, a channel to publish to. "
+                                   "Check the workflow's input_schema for what it declares; "
+                                   "a required one that is absent refuses the run rather than "
+                                   "failing three steps in. Stable settings — a channel, an "
+                                   "icon, a house style — belong in the skill or the agent's "
+                                   "knowledge instead, not here: these are the values that "
+                                   "differ every run.",
+                },
                 "project_id": {"type": "string"},
             },
             ["directive", "workflow_key"],
@@ -1138,7 +1149,14 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # CARRY FINISHED RESEARCH FORWARD. Checked here rather than trusted: the adopt key
             # says "this work already happened", and a model must not be able to assert that.
             adopted = (args.get("from_discovery") or "").strip()
-            run_input = {"directive": directive, "title": title}
+            # WHAT THE STEPS WILL READ. `from_input` resolves any field name, so a custom
+            # workflow's steps can bind a video to fetch or a channel to publish to — and
+            # until now nothing could pass one. Supplied values go in first so the two BOSS
+            # always sets cannot be shadowed by a caller: a run whose "directive" was quietly
+            # replaced would be governed under a description of work it is not doing.
+            supplied = args.get("inputs")
+            run_input = dict(supplied) if isinstance(supplied, dict) else {}
+            run_input.update({"directive": directive, "title": title})
             if adopted:
                 found = c.execute(
                     _text("SELECT project_id, status FROM discovery_runs WHERE id = :d"),

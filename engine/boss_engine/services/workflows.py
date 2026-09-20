@@ -168,6 +168,82 @@ def _targets(step: dict[str, Any]) -> list[str]:
     return [target for target in targets if target]
 
 
+#: The shapes an input_schema is written in. BOTH already exist in real databases and a third
+#: would make the reconciliation worse, not better:
+#:
+#:   * ``{"video_url": "string"}``                  — name-to-type, what draft_workflow emits
+#:   * ``{"required": [...], "properties": {...}}`` — JSON Schema, 21 of 45 versions in one DB
+#:
+#: So this VALIDATES both and invents neither. Richer description — a label, a hint, an
+#: example — belongs in JSON Schema's own `title`, `description` and `examples`, which is what
+#: those keys are for and what any other tool already understands.
+
+
+def declared_input_names(raw: Any) -> list[str]:
+    """The input names a spec declares, in whichever shape it wrote them.
+
+    Reading `.keys()` on the JSON Schema shape yields ["required"], which told operators to
+    supply an input called "required" — confidently wrong, and truthy enough to displace the
+    real diagnosis. Kept here beside the validator so the runtime and the tools agree.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return []
+    if "required" in raw or "properties" in raw:
+        required = raw.get("required")
+        if isinstance(required, list):
+            return [str(x) for x in required]
+        properties = raw.get("properties")
+        return [str(k) for k in properties] if isinstance(properties, dict) else []
+    return [str(k) for k in raw]
+
+
+def validate_input_schema(raw: Any) -> dict[str, Any]:
+    """What this workflow needs supplied when a run is started.
+
+    WHY IT MATTERS. `from_input` has always resolved ANY field from a run's input — the
+    resolver looks the name up in a dict — so a step could already read `video_url`. What no
+    entry point could do was PASS one: start_workflow accepted directive, workflow_key, title
+    and from_discovery and nothing else, so a workflow needing a file to fetch or a channel to
+    publish to had nowhere to receive them.
+
+    Returned unchanged when it is one of the two known shapes. This is a check, not a
+    rewrite: versions already published carry these values, and normalising them into a third
+    shape would strand every one of them.
+    """
+    if raw in (None, "", {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise WorkflowValidationError("input_schema must be an object.")
+    for name in declared_input_names(raw):
+        if not _STEP_ID.fullmatch(str(name)):
+            raise WorkflowValidationError(
+                f"declared input '{name}' must use letters, numbers, dot, underscore, or dash.")
+    return raw
+
+
+def missing_required_inputs(spec: dict[str, Any], input_data: dict[str, Any]) -> list[str]:
+    """Declared inputs a run was started without. Empty when it can proceed.
+
+    Only JSON Schema distinguishes required from optional — the name-to-type shape says
+    nothing about it, so nothing there is treated as mandatory. Guessing would refuse runs
+    that have always been legal.
+
+    Checked at START rather than when the step that needs it runs: a workflow that fails on
+    its third step because nobody supplied a video URL has already paid for the first two.
+    """
+    schema = (spec or {}).get("input_schema") or {}
+    if not isinstance(schema, dict):
+        return []
+    required = schema.get("required")
+    if not isinstance(required, list):
+        return []
+    supplied = input_data or {}
+    return sorted(
+        str(name) for name in required
+        if not str(supplied.get(str(name)) or "").strip()
+    )
+
+
 def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec, dict):
         raise WorkflowValidationError("workflow spec must be an object.")
@@ -324,7 +400,7 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
     normalized = {
         **spec,
         "entry_step": entry,
-        "input_schema": spec.get("input_schema") or {},
+        "input_schema": validate_input_schema(spec.get("input_schema")),
         "output_schema": spec.get("output_schema") or {},
         "steps": normalized_steps,
     }
@@ -1226,6 +1302,18 @@ def start_run(
         {"definition_id": version["workflow_definition_id"]},
     ).scalar() or SYSTEM_NAMESPACE
     _validate_bindings(connection, project_id, version["id"], spec, str(version_namespace))
+
+    # REFUSED HERE, NOT FOUR STEPS IN. A workflow that fails on its third step because nobody
+    # supplied a video URL has already paid for the first two, and the error it gives is about
+    # a missing binding rather than about the thing the operator forgot.
+    absent = missing_required_inputs(spec, input_data)
+    if absent:
+        declared = spec.get("input_schema") or {}
+        named = ", ".join(
+            f"{name} ({declared[name].get('label') or name})" if declared.get(name) else name
+            for name in absent)
+        raise WorkflowValidationError(
+            f"this workflow needs {len(absent)} input(s) it was not given: {named}")
 
     run_id = make_id("wfr")
     root_run_id = run_id
