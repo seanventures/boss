@@ -551,6 +551,48 @@ _DEFAULT_MAPPINGS: tuple[tuple[str, str], ...] = (
 _DEFAULT_MAPPING_PRIORITY = 10
 
 
+def _repoint_default(
+    connection: Connection, mapping_id: str, project_id: str, workflow_key: str,
+) -> bool:
+    """Move BOSS's own default mapping onto the newest published version of its workflow.
+
+    Returns True when it moved. An operator's mapping is never touched: it is identified by
+    NOT being at the seeded priority, or by pointing at a workflow other than this catalogue
+    entry. Both are decisions, and a decision outranks a default.
+    """
+    row = connection.execute(
+        text("SELECT m.priority, m.workflow_version_id, d.workflow_key, d.is_catalogue "
+             "  FROM workflow_mappings m "
+             "  JOIN workflow_versions v ON v.id = m.workflow_version_id "
+             "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+             " WHERE m.id = :m"),
+        {"m": mapping_id},
+    ).mappings().first()
+    if not row:
+        return False
+    if (row["priority"] != _DEFAULT_MAPPING_PRIORITY
+            or row["workflow_key"] != workflow_key
+            or not row["is_catalogue"]):
+        return False                       # the operator's, not ours
+
+    newest = connection.execute(
+        text("SELECT v.id FROM workflow_versions v "
+             "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+             " WHERE v.project_id = :p AND d.workflow_key = :k AND v.status = 'published' "
+             " ORDER BY v.created_at DESC LIMIT 1"),
+        {"p": project_id, "k": workflow_key},
+    ).first()
+    if not newest or newest[0] == row["workflow_version_id"]:
+        return False                       # already current
+
+    connection.execute(
+        text("UPDATE workflow_mappings SET workflow_version_id = :v, updated_at = now() "
+             " WHERE id = :m"),
+        {"v": newest[0], "m": mapping_id},
+    )
+    return True
+
+
 def _seed_default_mappings(
     connection: Connection, project_id: str, *, actor: str = "boss",
 ) -> list[dict[str, Any]]:
@@ -570,7 +612,21 @@ def _seed_default_mappings(
             {"p": project_id, "sv": work_class},
         ).first()
         if existing:
-            continue                       # somebody has already chosen for this class
+            # A DEFAULT THAT NEVER MOVES PINS THE PROJECT TO THE DAY IT WAS INSTALLED.
+            #
+            # This returned here unconditionally, so a mapping seeded on first boot stayed
+            # pointed at version 1 for the life of the project — and workflow_mappings pins a
+            # VERSION, not a definition. Every catalogue improvement after that first boot was
+            # published, became the definition's active version, and was never reached by a
+            # single run. The PRD-to-builder binding was inert for exactly this reason: v2 was
+            # published and active, and `project.new` still resolved to v1.
+            #
+            # The rule this protects is still right — never overwrite a slot the operator owns.
+            # So only BOSS's OWN default moves: the seeded priority, pointing at a version of
+            # this same catalogue workflow. Anything else is somebody's decision and is left
+            # exactly where it is.
+            _repoint_default(connection, existing[0], project_id, key)
+            continue
         version = connection.execute(
             text("SELECT v.id FROM workflow_versions v "
                  "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
