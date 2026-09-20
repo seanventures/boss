@@ -41,6 +41,7 @@ class CodexCliAdapter(CliChatBrain):
     """OpenAI Codex (`codex exec`) as a completion backend."""
 
     _session_default = "codex-cli"
+    _engine_name = "codex"
 
     def _codex_bin(self) -> str:
         return (getattr(self.settings, "codex_cli_path", "") or "codex").strip() or "codex"

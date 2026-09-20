@@ -97,6 +97,11 @@ class CliChatBrain:
     #: What `create_text_response` calls the session when the CLI does not name one.
     _session_default = "cli"
 
+    #: The harness name this backend spends against — the key connected_engines and the role
+    #: knobs use. Declared so capacity observations land on the right entitlement source
+    #: without a second map from class to engine somewhere else.
+    _engine_name = ""
+
     def _invoke(self, prompt: str) -> dict:  # pragma: no cover - subclass responsibility
         raise NotImplementedError
 
@@ -299,14 +304,45 @@ class CliChatBrain:
         model: Optional[str] = None,
     ) -> Tuple[str, str, dict]:
         full = (f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
-        data = self._invoke(full)
+        # EVERY CLI CHAT ENGINE PASSES THROUGH HERE, which is why the capacity observation
+        # sits on the base rather than in each adapter's own raise. The chat and panel path
+        # reports no llm_calls row at all, so the hook in record_llm_call — which covers the
+        # BUILD path — never saw a panel failure: a subscription hit its weekly cap, the
+        # meeting stalled for fifteen minutes, and nothing anywhere recorded why.
+        try:
+            data = self._invoke(full)
+        except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
+            self._observe_capacity(ok=False, error=str(exc))
+            raise
+        self._observe_capacity(ok=True, error=None)
         return (data.get("session_id", self._session_default),
                 (data.get("result") or ""), self._usage(data))
+
+    def _observe_capacity(self, *, ok: bool, error: Optional[str]) -> None:
+        """Fold this call's outcome into what BOSS knows about the provider's capacity.
+
+        Never raises: an adapter must not fail a call because a bookkeeping write did.
+        """
+        try:
+            from .llm_telemetry import get_llm_context
+            from .provider_limits import record_call_outcome
+            engine_name = getattr(self, "_engine_name", "")
+            ctx = get_llm_context()
+            db_engine, project_id = ctx.get("db_engine"), ctx.get("project_id")
+            if not engine_name or not db_engine or not project_id:
+                return
+            with db_engine.begin() as connection:
+                record_call_outcome(connection, getattr(self, "settings", None),
+                                    str(project_id), engine_name,
+                                    ok=ok, error=error)
+        except Exception:  # noqa: BLE001
+            return
 
 class ClaudeCliAdapter(CliChatBrain):
     """Claude Code (`claude -p`) as a raw completion backend."""
 
     _session_default = "claude-cli"
+    _engine_name = "claude_code"
 
     # ---------------------------------------------------------------- cli
     def _claude_bin(self) -> str:
