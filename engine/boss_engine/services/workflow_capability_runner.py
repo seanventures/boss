@@ -1312,7 +1312,17 @@ def execute_step(
                 f"{spec}"
             )}
 
-    output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
+    # WHOSE WORK THIS IS. A step may name a captain, overriding the capability's default —
+    # the console already shows it as "the captain this WORKFLOW named for this step", and
+    # validate_captain already refuses one the workforce does not have. Nothing read it at
+    # execution, so a workflow that said "the publisher agent runs this step" was recorded,
+    # validated, displayed, and then ignored: the tool ran as whoever started the run.
+    #
+    # That is the whole point of naming one. An agent holds the connection, the knowledge and
+    # the standing to act — a step that names the publisher and then publishes as the operator
+    # has authorised nothing and attributed the act to the wrong party.
+    step_actor = str(step.get("captain") or "").strip().lower() or actor
+    output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
 
     # STARTED IS NOT FINISHED.
