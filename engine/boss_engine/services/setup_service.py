@@ -296,7 +296,22 @@ def build_engine_for(
     set the variable themselves is never second-guessed. What it removes is the case where the
     default points at a harness this installation has no credential for.
     """
-    configured = (getattr(settings, "code_agent_engine", "") or "").strip().lower()
+    # THE OPERATOR'S CHOICE LIVES IN THE PROJECT, NOT IN THE ENVIRONMENT.
+    #
+    # This read `settings.code_agent_engine` — the env default — so the console's
+    # "Implementer" picker had no effect on a build at all. Setting it to openrouter and
+    # pressing save wrote `project_settings.code_agent_engine = "openrouter"`, the screen
+    # showed openrouter, and every build still ran on the env's claude_code. A control that
+    # cannot change what happens is worse than no control: it spends the operator's trust and
+    # returns nothing. `chat_engine_for` two functions below has always read the knob; this is
+    # the same `effective()`, not a second way of asking.
+    from .project_settings import effective
+
+    try:
+        configured = (effective(connection, project_id, settings, "code_agent_engine")
+                      or "").strip().lower()
+    except Exception:  # noqa: BLE001 — an unreachable settings table falls back to the env
+        configured = (getattr(settings, "code_agent_engine", "") or "").strip().lower()
     try:
         connected = connected_engines(connection, settings, project_id)
     except Exception:  # noqa: BLE001 — a lookup must not decide the pipeline cannot run
