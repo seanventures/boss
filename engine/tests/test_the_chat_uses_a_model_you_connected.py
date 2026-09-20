@@ -46,15 +46,10 @@ class _Settings:
 
 
 @pytest.fixture()
-def connection():
+def connection(entitlement_tables):
     engine = create_engine("sqlite+pysqlite:///:memory:")
     with engine.begin() as conn:
-        conn.execute(text(
-            "CREATE TABLE entitlement_sources ("
-            " project_id TEXT, source_id TEXT, provider TEXT, connection_status TEXT,"
-            " credential_secret_ref_id TEXT, updated_at TIMESTAMP)"))
-        conn.execute(text("CREATE TABLE project_settings (project_id TEXT, key TEXT,"
-                          " value TEXT)"))
+                entitlement_tables(conn)
     with engine.begin() as conn:
         yield conn
 

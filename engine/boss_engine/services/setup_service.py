@@ -212,7 +212,7 @@ def connected_engines(
 
     rows = connection.execute(
         text("SELECT source_id, provider, connection_status, updated_at, "
-             "       credential_secret_ref_id "
+             "       credential_secret_ref_id, observed_capacity, limit_shape, cost_mode "
              "FROM entitlement_sources WHERE project_id = :p "
              "ORDER BY updated_at DESC"),
         {"p": project_id},
@@ -228,8 +228,21 @@ def connected_engines(
             if source_id.startswith("setup-") else None)
         if not engine:
             continue
+        # CAPACITY TRAVELS WITH THE CONNECTION. An engine that is connected and out of
+        # quota is not the same as one that is ready, and every caller that picks a lane —
+        # the role pickers, the console's model panel, an operator deciding whether to wait
+        # — needs to be able to tell them apart. Recorded by provider_limits from the one
+        # place every engine reports through.
+        from .provider_limits import is_available
+        capacity = row["observed_capacity"] if isinstance(row["observed_capacity"], dict) else {}
         offer(engine, "subscription" if connected else "api key",
               source_id=source_id,
+              plan={"cost_mode": row["cost_mode"] or "",
+                    "limits": row["limit_shape"] if isinstance(row["limit_shape"], dict) else {}},
+              capacity={"available": is_available(capacity),
+                        "exhausted": bool(capacity.get("exhausted")),
+                        "retry_at": capacity.get("retry_at"),
+                        "detail": capacity.get("detail") or ""},
               saved_at=(row["updated_at"].isoformat()
                         if hasattr(row["updated_at"], "isoformat")
                         else str(row["updated_at"] or "")) or None)

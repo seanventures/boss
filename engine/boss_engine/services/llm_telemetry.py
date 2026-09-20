@@ -150,6 +150,18 @@ def record_llm_call(
                     "err": (error or None) and str(error)[:500],
                 },
             )
+            # A PROVIDER'S CAPACITY IS A GOVERNED FACT, AND THIS IS WHERE IT IS OBSERVED.
+            #
+            # Every engine already reports here, which makes it the one place that can know
+            # "codex is out of capacity until Saturday" without a copy per adapter. Until this
+            # existed, that sentence lived only in a container log: a subscription hit its
+            # weekly cap mid-run, the panel stalled, a build filled with red crosses, and the
+            # operator — who could have switched models in ten seconds — never saw it at all.
+            project_id = ctx.get("project_id")
+            if project_id:
+                from .provider_limits import record_call_outcome
+                record_call_outcome(c, ctx.get("settings"), str(project_id), engine_name,
+                                    ok=bool(ok), error=error)
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
 
