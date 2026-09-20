@@ -84,6 +84,47 @@ Everything derives from these; set them once in `.env`:
 when the API is reached at a different hostname than the browser uses — a remote VM, for
 instance, where it must be the address **the browser** will use, not `127.0.0.1`.
 
+### Installing on a server (not a laptop)
+
+One extra flag, and it is the one that decides whether the console works:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash -s -- \
+  --public-url boss.example.internal      # the address YOUR BROWSER will use
+```
+
+`NEXT_PUBLIC_BOSS_API_URL` is compiled into the web bundle at image build time. Without this
+flag it is `127.0.0.1`, which is right on a laptop and wrong on every server: the browser then
+tries to reach the API on the machine it is running on — yours — and every preview link points
+at nothing while the previews themselves are fine. A bare host, `host:port`, or a full URL are
+all accepted.
+
+### Did it work?
+
+```bash
+./scripts/install/doctor.sh
+```
+
+Seven checks, each one a failure that has actually happened here: containers running, the API
+answering, the address compiled into the console, a model connected, **a model that actually
+answers**, the repository pushable, and whether this machine can schedule BOSS at all. Exits 0
+when BOSS can do its job.
+
+```
+  ok    containers: 6 running
+  ok    api: /health answers on http://127.0.0.1:8000
+  ok    console: http://boss.example.internal:8000
+  ok    models connected: claude_code
+  ok    chat: a model answered
+  ok    repository: connected
+  ok    host: scheduling BOSS normally
+
+  BOSS is ready.  Mission Control: http://127.0.0.1:3000
+```
+
+"Connected" and "working" are different claims, and the chat check is the one that separates
+them: a subscription can be connected and out of quota, and only asking it a question finds out.
+
 ### Before the first run
 
 ```bash
