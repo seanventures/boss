@@ -15,7 +15,24 @@
 #   host         whether this machine can schedule BOSS at all
 #
 # Exit 0 when BOSS can work, 1 when it cannot. Advisory checks never fail the run.
+#
+# NAMING follows `consensus doctor` / `consensus doctor --probe` — Sean's own convention in the
+# sibling product, so an operator who has used one already knows what this is and what --probe
+# costs them. Without it, only free checks run; with it, a model is actually asked a question,
+# which is the difference between "configured" and "working" and takes a few seconds and a few
+# tokens to establish.
 set -uo pipefail
+
+PROBE=0
+for arg in "$@"; do
+  case "$arg" in
+    --probe) PROBE=1 ;;
+    -h|--help)
+      echo "usage: doctor.sh [--probe]"
+      echo "  --probe   also ask a model a question (costs a few tokens; proves it works)"
+      exit 0 ;;
+  esac
+done
 
 ENV_FILE="${BOSS_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
@@ -63,12 +80,16 @@ else bad "models: none connected — open Mission Control and connect one"; fi
 advice=$(curl -fsS --max-time 10 "${AUTH[@]}" "$API/v1/projects/$PROJECT/host-advice" 2>/dev/null)
 blocked=$(printf '%s' "$advice" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("headline") or "")' 2>/dev/null || echo "")
 
-# 5. a model actually answers — configured is not working
-reply=$(curl -fsS --max-time 120 -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
-  "$API/v1/engine/agent/chat" \
-  -d "{\"project_id\":\"$PROJECT\",\"actor\":\"executive_console\",\"message\":\"Reply with the single word OK.\"}" 2>/dev/null)
-if printf '%s' "$reply" | grep -qi "ok"; then ok "chat: a model answered"
-else bad "chat: no usable answer — a model is connected but not working"; fi
+# 5. a model actually answers — configured is not working. Costs tokens, so --probe only.
+if [ "$PROBE" -eq 1 ]; then
+  reply=$(curl -fsS --max-time 120 -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+    "$API/v1/engine/agent/chat" \
+    -d "{\"project_id\":\"$PROJECT\",\"actor\":\"executive_console\",\"message\":\"Reply with the single word OK.\"}" 2>/dev/null)
+  if printf '%s' "$reply" | grep -qi "ok"; then ok "chat: a model answered"
+  else bad "chat: no usable answer — a model is connected but not working"; fi
+else
+  warn "chat: not asked (run with --probe to prove a model actually answers)"
+fi
 
 # 6. repository, pushable
 setup=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/setup/status?project_id=$PROJECT" 2>/dev/null)

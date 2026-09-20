@@ -367,6 +367,29 @@ EOF
 chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 
 # ---- build & start ---------------------------------------------------------
+# THE TWO KEYS INFISICAL REFUSES TO START WITHOUT.
+#
+# scripts/install/gen_infisical_keys.sh has existed since the secret store was bundled and
+# nothing called it, so every fresh install died here:
+#
+#   error while interpolating services.infisical.environment.AUTH_SECRET:
+#   required variable INFISICAL_AUTH_SECRET is missing a value
+#
+# They have no defaults on purpose — a shipped default encryption key is the same key on every
+# installation that forgot to change it — so they are generated per install, once. Regenerating
+# ENCRYPTION_KEY would strand every secret already stored under the old one, which is why the
+# generator refuses when the value is already there.
+if ! grep -qs '^INFISICAL_ENCRYPTION_KEY=' "$ENV_FILE"; then
+  if [ -x "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" ]; then
+    sh "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" "$ENV_FILE" >/dev/null 2>&1 \
+      && ui_ok "Generated the secret-store keys (back up $ENV_FILE — they are unrecoverable)"
+  else
+    { echo "INFISICAL_ENCRYPTION_KEY=$(openssl rand -hex 16)"
+      echo "INFISICAL_AUTH_SECRET=$(openssl rand -base64 32)"; } >> "$ENV_FILE"
+    ui_ok "Generated the secret-store keys (back up $ENV_FILE — they are unrecoverable)"
+  fi
+fi
+
 ui_step "Building and starting Community stack (this can take several minutes the first time)"
 ui_info "Services: Postgres · API · worker$( [[ $WITH_WEB -eq 1 ]] && echo ' · Mission Control' )"
 

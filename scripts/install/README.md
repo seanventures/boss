@@ -4,6 +4,15 @@ Idiot-proof, one-line Community edition setup — OpenClaw style.
 
 ## One-liner
 
+> **While `seanheiney/boss` is private this URL returns 404.** Until the repo is public, clone
+> it with your own credentials and run the installer from the checkout:
+>
+> ```bash
+> git clone https://github.com/seanheiney/boss.git ~/boss && cd ~/boss && ./install.sh
+> ```
+>
+> `BOSS_REPO_URL` also accepts a token-bearing URL if you would rather the installer fetch it.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
 ```
@@ -102,13 +111,17 @@ all accepted.
 ### Did it work?
 
 ```bash
-./scripts/install/doctor.sh
+./scripts/install/doctor.sh            # free checks only
+./scripts/install/doctor.sh --probe    # also ask a model a question
 ```
+
+Named to match `consensus doctor` / `consensus doctor --probe`, so an operator who has used
+that already knows what this is and what `--probe` costs them.
 
 Seven checks, each one a failure that has actually happened here: containers running, the API
 answering, the address compiled into the console, a model connected, **a model that actually
-answers**, the repository pushable, and whether this machine can schedule BOSS at all. Exits 0
-when BOSS can do its job.
+answers** (`--probe`), the repository pushable, and whether this machine can schedule BOSS at
+all. Exits 0 when BOSS can do its job.
 
 ```
   ok    containers: 6 running
