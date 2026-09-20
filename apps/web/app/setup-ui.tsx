@@ -938,7 +938,11 @@ function RoleModels({ projectId, actor }: { projectId: string; actor: string }) 
     <article className="stack-card" data-testid="setup-role-models">
       <div className="section-head">
         <div>
-          <h2>Who does what</h2>
+          {/* The eyebrow TYPE, on a real heading. Matching "Already on this install" is a
+              font choice, and dropping to a <span> to get it would cost the card its heading
+              landmark for a screen reader — so the element stays an h2 and only the type
+              changes. */}
+          <h2 className="eyebrow">Who does what</h2>
           <p className="detail">
             Which model implements, which reviews, and which takes the hard ones. Unset means
             the implementer does that job too. Saved per project and applied on the next run —

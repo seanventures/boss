@@ -217,7 +217,8 @@ describe("a connection that was made says so", () => {
     expect(body).not.toContain("<details");
     expect(body).toContain('data-testid="setup-role-models"');
     expect(body).toContain('className="stack-card"');   // the same card as every other section
-    expect(body).toContain("<h2>Who does what</h2>");
+    // The heading element is the contract; its type treatment is a design choice.
+    expect(body).toMatch(/<h2[^>]*>Who does what<\/h2>/);
   });
 
   it("a connected CLI is reported from the record, not only from a probe", () => {
