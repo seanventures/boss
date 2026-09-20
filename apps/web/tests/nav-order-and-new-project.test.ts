@@ -27,7 +27,7 @@ describe("the Run group order", () => {
       "workforce",           // Agents
       "org_chart",
       "decisions",           // Approvals
-      "delivery",            // Infra and Models
+      "delivery",            // Infra
       "monitoring",          // Observability
     ]);
   });
@@ -55,7 +55,7 @@ describe("the Run group order", () => {
 describe("the renamed areas", () => {
   it.each([
     ["workforce", "Agents"],
-    ["delivery", "Infra and Models"],
+    ["delivery", "Infra"],
     ["delivery_workflows", "Workflow"],
     ["code_tasks", "Projects"],
   ])("%s is labelled %s", (id, label) => {

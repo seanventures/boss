@@ -207,11 +207,17 @@ describe("a connection that was made says so", () => {
     expect(CSS).toContain("--green");
   });
 
-  it("the role picker is a section you can find, not a stray button", () => {
-    // "I cant figure out where that button, no style and it is not a great experience."
-    expect(UI).toContain("<details className=\"setup-roles\"");
-    expect(UI).toContain("<summary");
-    expect(CSS).toContain(".setup-roles > summary");
+  it("the role picker is visible, not hidden behind a disclosure", () => {
+    // Twice reported: "I cant figure out where that button", then "this is hiding somewhere
+    // which I cannot find it". A <details> that defaults shut answers the question only for
+    // people who already suspect it exists — and which model does the implementing is the
+    // second thing anybody asks after connecting one, not an advanced setting.
+    const picker = UI.slice(UI.indexOf("function RoleModels"));
+    const body = picker.slice(0, picker.indexOf("\n}"));
+    expect(body).not.toContain("<details");
+    expect(body).toContain('data-testid="setup-role-models"');
+    expect(body).toContain('className="stack-card"');   // the same card as every other section
+    expect(body).toContain("<h2>Who does what</h2>");
   });
 
   it("a connected CLI is reported from the record, not only from a probe", () => {

@@ -209,9 +209,12 @@ const AREAS: AreaDef[] = [
   { id: "workforce", label: "Agents", sub: "Every agent, what it has produced, and how well", group: "Run", icon: ICONS.org },
   { id: "org_chart", label: "Org Chart", sub: "Who actually passes work to whom — observed, not declared", group: "Run", icon: ICONS.processes },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
-  { id: "delivery", label: "Infra and Models", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
-  { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring, parent: "observability" },
-  { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity, parent: "observability" },
+  { id: "delivery", label: "Infra", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
+  // TOP LEVEL, NOT NESTED. Grouping these under an "Observability" heading put the two screens
+  // an operator opens most often one click deeper than everything else, behind a heading that
+  // was not itself a destination. Monitoring IS the observability screen, so it takes the name.
+  { id: "monitoring", label: "Observability", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring },
+  { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist
@@ -227,7 +230,7 @@ const AREAS: AreaDef[] = [
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
-  { id: "skills", label: "Skills and MCP", sub: "What agents and steps can do — skills you author, and the MCP servers they reach", group: "Platform", icon: ICONS.capabilities },
+  { id: "skills", label: "Skills and MCP", sub: "What agents and steps can do — skills you author, and the MCP servers they reach", group: "Settings", icon: ICONS.capabilities },
   { id: "setup", label: "Setup", sub: "Connect a repository and a model — the two things a working install needs", group: "Settings", icon: ICONS.infra },
   { id: "budget", label: "Govern", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Settings", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
@@ -843,8 +846,24 @@ export default function ConsoleShell({
 
   const labelFor = (area: AreaDef): string => area.label;
 
+  // A DOCK, NOT A DISAPPEARANCE. Collapsing to icons keeps every destination one click away;
+  // hiding the sidebar entirely trades screen width for having to remember what was in it.
+  // Remembered per browser, because a width preference that resets every visit is not a
+  // preference.
+  const [docked, setDocked] = useState(false);
+  useEffect(() => {
+    try { setDocked(localStorage.getItem("boss.nav.docked") === "1"); } catch { /* private mode */ }
+  }, []);
+  const toggleDock = () => {
+    setDocked((wasDocked) => {
+      const next = !wasDocked;
+      try { localStorage.setItem("boss.nav.docked", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
   return (
-    <div className={`bx-shell${navOpen ? " nav-open" : ""}`}>
+    <div className={`bx-shell${navOpen ? " nav-open" : ""}${docked ? " nav-docked" : ""}`}>
       <a className="skip-link" href="#decision-inbox">Skip to decision inbox</a>
 
       <aside className="bx-sidebar">
@@ -859,6 +878,17 @@ export default function ConsoleShell({
             <span className="bx-brand-name">BOSS</span>
             <span className="bx-brand-tag">Orchestration OS</span>
           </span>
+          <button
+            type="button"
+            className="bx-dock-toggle"
+            data-testid="nav-dock-toggle"
+            aria-pressed={docked}
+            aria-label={docked ? "Expand the sidebar" : "Collapse the sidebar to icons"}
+            title={docked ? "Expand the sidebar" : "Collapse to icons"}
+            onClick={toggleDock}
+          >
+            <CaretRight size={14} weight="bold" aria-hidden />
+          </button>
         </div>
 
         <nav
@@ -945,6 +975,8 @@ export default function ConsoleShell({
                     className={`bx-nav-item${a.id === selected ? " active" : ""}`}
                     aria-current={a.id === selected ? "page" : undefined}
                     data-area-nav={a.id}
+                    // The label survives docking as a tooltip — icons alone are a memory test.
+                    data-label={labelFor(a)}
                     data-paid-badge={paidBadge ? "true" : undefined}
                     data-sso-visible={a.id === "enterprise" ? "true" : undefined}
                     onClick={() => go(a.id)}

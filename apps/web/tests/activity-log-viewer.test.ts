@@ -121,18 +121,16 @@ describe("scoping to one work task", () => {
 });
 
 describe("where it lives", () => {
-  it("sits INSIDE Observability, not beside it", () => {
-    // Observability is not one screen. It is a place you go with a question — is it up, and
-    // what happened — and those are two screens. Listed as unrelated siblings, the log read as
-    // a separate product rather than the thing you open when a dashboard says something is
-    // wrong.
+  it("sits at the top level, beside Observability rather than under it", () => {
+    // REVERSED DELIBERATELY. Nesting these under a heading that was not itself a destination
+    // put the two screens an operator opens most often one click deeper than everything else.
+    // Monitoring IS the observability screen, so it takes the name and the heading goes away.
     const monitoring = SHELL.slice(SHELL.indexOf('id: "monitoring"'));
-    expect(monitoring.slice(0, monitoring.indexOf("},"))).toContain('parent: "observability"');
+    expect(monitoring.slice(0, monitoring.indexOf("},"))).not.toContain('parent:');
     const activity = SHELL.slice(SHELL.indexOf('id: "activity"'));
-    expect(activity.slice(0, activity.indexOf("},"))).toContain('parent: "observability"');
-    // The old top-level "Observability" label moved to the section; the area is Monitoring.
-    expect(SHELL).toContain('observability: { label: "Observability"');
-    expect(SHELL).toContain('id: "monitoring", label: "Monitoring"');
+    expect(activity.slice(0, activity.indexOf("},"))).not.toContain('parent:');
+    expect(SHELL).toContain('id: "monitoring", label: "Observability"');
+    expect(SHELL).toContain('id: "activity", label: "Activity log"');
   });
 
   it("the section is a disclosure, not a destination", () => {

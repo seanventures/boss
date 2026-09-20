@@ -376,8 +376,7 @@ function GitHubStep({ projectId, actor, onDone }: {
     <article className="stack-card" data-testid="setup-github">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Step one</span>
-          <h2>Connect a repository</h2>
+          <h2>Repository</h2>
           <p className="detail">
             BOSS writes code on a branch and opens a pull request — it never pushes to your
             default branch. It needs a token that can do those two things.
@@ -619,8 +618,7 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
     <article className="stack-card" data-testid="setup-model">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Step two</span>
-          <h2>Connect a model</h2>
+          <h2>Model</h2>
           <p className="detail">
             An API key, anything that speaks the OpenAI API, or a subscription you already pay
             for. BOSS spends one token proving it works before saving it.
@@ -928,31 +926,27 @@ function ConnectedModels(
  * arises — and because these knobs first shipped under "Govern", beside concurrency and spend,
  * where nobody looking to change a model would think to look.
  *
- * Collapsed by default: an installation with one provider has nothing to decide, and a wizard
- * that opens four pickers in front of somebody who has just connected their first model makes
- * a simple setup look like a configuration exercise.
+ * VISIBLE, NOT COLLAPSED. It was a <details> that defaulted shut, on the reasoning that an
+ * install with one provider has nothing to decide. Twice now the response has been the same —
+ * "this is hiding somewhere which I cannot find it" — and the reasoning was wrong in a way
+ * worth naming: which model does the implementing is not an advanced setting, it is the
+ * second question anybody asks after connecting one, and a disclosure answers it only for
+ * people who already suspect it exists.
  */
 function RoleModels({ projectId, actor }: { projectId: string; actor: string }) {
-  const [open, setOpen] = useState(false);
   return (
-    // A SECTION, NOT A STRAY BUTTON. This was a bare `cap-btn` with a paragraph running into
-    // it — reported as "I cant figure out where that button, no style and it is not a great
-    // experience". A disclosure that owns its whole row, with the summary INSIDE it, reads as
-    // a thing you can open rather than an afterthought below the form.
-    <details className="setup-roles" data-testid="setup-role-models"
-             open={open}
-             onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary data-testid="setup-role-models-toggle" aria-expanded={open}>
-        <span className="setup-roles-title">Choose a model per role</span>
-        <span className="setup-roles-hint">
-          who implements, who reviews, who takes the hard ones
-        </span>
-      </summary>
-      <p className="detail">
-        Unset means the implementer does that job too. Saved per project and applied on the
-        next run — no restart.
-      </p>
+    <article className="stack-card" data-testid="setup-role-models">
+      <div className="section-head">
+        <div>
+          <h2>Who does what</h2>
+          <p className="detail">
+            Which model implements, which reviews, and which takes the hard ones. Unset means
+            the implementer does that job too. Saved per project and applied on the next run —
+            no restart.
+          </p>
+        </div>
+      </div>
       <SettingsKnobs projectId={projectId} actor={actor} only="choice" />
-    </details>
+    </article>
   );
 }
