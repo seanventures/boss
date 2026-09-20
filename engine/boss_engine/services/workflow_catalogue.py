@@ -77,7 +77,7 @@ def _from(step_id: str, field: str) -> dict[str, str]:
     return {"from_step": step_id, "field": field}
 
 
-def _build_inputs() -> dict[str, Any]:
+def _build_inputs(after_meeting: bool = False) -> dict[str, Any]:
     """What the build step reads from the run's input.
 
     Title and instructions are what the work IS. The other three are what the New Project
@@ -86,14 +86,32 @@ def _build_inputs() -> dict[str, Any]:
     on the capability. An absent optional input resolves to absent rather than failing the run,
     which is what makes one catalogue serve both the wizard and a one-line directive typed into
     a chat.
+
+    THE PANEL'S PRD REACHES THE BUILDER. `after_meeting` binds it.
+
+    This workflow's own objective says "the panel's PRD is the build brief: it is handed
+    straight to an engineering agent". It was not. The build bound `instructions` to the
+    original one-line directive and nothing else, so an interview-scorecard build received 745
+    characters — the operator's sentence plus the deployability boilerplate — after 7m49s of
+    research and a 22m48s panel whose UX role had specified a rubric, behavioural anchors and
+    per-interviewer submission status. None of it was in the brief. The agent built exactly
+    what it was asked for: a JSON API with no UI, which no model could have avoided, because
+    nothing told it a screen was wanted.
+
+    This is the same wiring bug as the one fixed one step earlier, recorded in this file at the
+    meeting step: "the panel that followed it debated the original one-line directive as though
+    none of it had happened". Research→meeting was wired then. Meeting→build was not.
     """
-    return {
+    inputs = {
         "title": _in("title"),
         "instructions": _in("directive"),
         "repository": _in("repository"),
         "acceptance_criteria": _in("acceptance_criteria"),
         "reference_links": _in("reference_links"),
     }
+    if after_meeting:
+        inputs["spec_markdown"] = _from("meeting", "prd_markdown")
+    return inputs
 
 
 def _chain(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -141,7 +159,7 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="product_owner"),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             # READINESS BEFORE PRODUCTION, NOT AFTER IT.
             #
@@ -179,7 +197,7 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "feature.minor",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
@@ -205,7 +223,7 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="product_owner"),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             _step("ux_review", "ux_review", approver_role="design_lead"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
@@ -262,7 +280,7 @@ CATALOGUE: list[dict[str, Any]] = [
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("spec_review", "spec_review", approver_role="tech_lead"),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -282,7 +300,7 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "feature.major",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             _step("ux_review", "ux_review", approver_role="design_lead"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
@@ -324,7 +342,7 @@ CATALOGUE: list[dict[str, Any]] = [
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("spec_review", "spec_review", approver_role="data_owner"),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="data_owner"),
             _step("monitor", "monitor"),
@@ -350,7 +368,7 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="product_owner"),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("security_review", "security_review", approver_role="security_lead"),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
@@ -378,7 +396,7 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="tech_lead"),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", _build_inputs(after_meeting=True)),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -401,7 +419,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # The one control step in the catalogue: a real grace period, not a promise of one.
             {"id": "grace", "kind": "timer", "wait_seconds": 604800, "binding": {},
              "next": ["build"]},
-            _step("build", "build", _build_inputs(), nxt=["deploy"]),
+            _step("build", "build", _build_inputs(after_meeting=True), nxt=["deploy"]),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   nxt=["document"], approver_role="release_manager"),
             _step("document", "document", {"title": _in("title")}),

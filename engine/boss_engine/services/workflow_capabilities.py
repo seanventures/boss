@@ -141,8 +141,11 @@ CAPABILITIES: dict[str, Capability] = {
             tool="create_code_task",
             risk_tier=1,
             required_inputs=("title", "instructions"),
+            # spec_markdown is the PRD the panel wrote. Optional, because a build reached
+            # directly from a one-line directive has no panel behind it — but when there IS
+            # one, this is the whole point of having held it.
             optional_inputs=("acceptance_criteria", "test_commands", "task_id", "repository",
-                             "reference_links"),
+                             "reference_links", "spec_markdown"),
             produces=("code_task_run_id", "pull_request_url"),
             requires_project=("repository",),
             skills=("github.create_pr_real", "software_factory.sandbox_validation"),

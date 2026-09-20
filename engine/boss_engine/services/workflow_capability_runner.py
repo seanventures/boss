@@ -1289,6 +1289,29 @@ def execute_step(
             inputs = {**inputs, "objective": objective,
                       "workflow_name": str(context.get("workflow_name") or "").strip()}
 
+    # THE PANEL'S PRD IS THE BUILD BRIEF — the objective of Standard Product Delivery says so
+    # in those words. It was not: `build` bound `instructions` to the original one-line
+    # directive, so an engineering agent received the operator's sentence and nothing the
+    # research or the panel had produced. The interview-scorecard build got 745 characters
+    # after a 7m49s research sweep and a 22m48s panel, and shipped exactly what its brief
+    # described — an API, no screen — because no screen had been asked for anywhere it could
+    # see. Folded in here rather than in the catalogue because a binding carries a value and
+    # this needs two of them joined; `instructions` stays the field create_code_task owns.
+    if key == "build":
+        spec = str(inputs.get("spec_markdown") or "").strip()
+        inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}
+        if spec:
+            directive = str(inputs.get("instructions") or "").strip()
+            inputs = {**inputs, "instructions": (
+                f"{directive}\n\n"
+                f"---\n\n"
+                f"THE PRODUCT SPEC BELOW IS THE BRIEF. The directive above is the one-line\n"
+                f"request that started this; what follows is the specification a panel of\n"
+                f"agents produced from it, and it is what you are building. Where the two\n"
+                f"differ in detail, the spec is the decision.\n\n"
+                f"{spec}"
+            )}
+
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
 
