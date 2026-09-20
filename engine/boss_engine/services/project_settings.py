@@ -79,6 +79,34 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "implementer handles those too.",
         "kind": "choice", "choices": "harnesses",
     },
+    # WHICH MODEL, not just which provider. The engine pickers above say Claude Code; they
+    # cannot say Opus for review and Sonnet for routine work, so every lane ran whatever the
+    # CLI defaulted to. The settings existed — code_agent_strong_model, code_agent_low_cost_model
+    # and claude_cli_model — and none was reachable from the console, which is the same "built
+    # and unwired" shape as the rest of this file's history.
+    "code_agent_strong_model": {
+        "attr": "code_agent_strong_model",
+        "label": "Model for hard problems",
+        "help": "Which model the hard-problems lane uses — adversarial review, security and "
+                "consistency checks all run here. Opus is the one worth paying for on review. "
+                "Empty means the engine's own default.",
+        "kind": "choice", "choices": "claude_models",
+    },
+    "code_agent_low_cost_model": {
+        "attr": "code_agent_low_cost_model",
+        "label": "Model for routine work",
+        "help": "Which model the routine lane uses — implement, write_tests and the design "
+                "stages. Sonnet is the measured default; Haiku is cheaper and weaker. "
+                "Empty means the engine's own default.",
+        "kind": "choice", "choices": "claude_models",
+    },
+    "claude_cli_model": {
+        "attr": "claude_cli_model",
+        "label": "Model for chat and meetings",
+        "help": "Which model answers in the console, agent chat and panels. Empty means the "
+                "engine's own default.",
+        "kind": "choice", "choices": "claude_models",
+    },
     # AND THE MODEL THAT TALKS. Separate from the four above because it is a separate
     # question: an operator who connected a subscription for BUILDS was told "OPENAI_API_KEY
     # is not configured" by the chat, which is true and unhelpful — the subscription they had
@@ -100,6 +128,18 @@ KNOBS: dict[str, dict[str, Any]] = {
 #: else to the OpenAI adapter, so "openrouter" in this box would silently mean "OpenAI".
 CHAT_ENGINES = ("claude_code", "codex", "native")
 
+#: Model aliases the Claude CLI resolves to its current release, verified against the binary
+#: rather than written from memory: `claude --help` documents "an alias for the latest model
+#: (e.g. 'fable', 'opus', or 'sonnet')", and each was confirmed through BOSS's own adapter —
+#: opus -> claude-opus-5, sonnet -> claude-sonnet-5, fable -> claude-fable-5-1,
+#: haiku -> claude-haiku-4-5-20251001.
+#:
+#: Aliases, deliberately, not pinned ids. A pinned id is a decision that rots: it keeps a
+#: project on last quarter's model until somebody notices, and the noticing is the part that
+#: never happens. "" means the engine's own default, which is what every install had before
+#: this knob existed.
+CLAUDE_MODELS = ("", "opus", "sonnet", "fable", "haiku")
+
 
 def _allowed_choices(spec: dict[str, Any]) -> list[str]:
     """The values a choice knob will accept, asked of the registry rather than hardcoded.
@@ -109,6 +149,8 @@ def _allowed_choices(spec: dict[str, Any]) -> list[str]:
     """
     if spec.get("choices") == "chat_engines":
         return list(CHAT_ENGINES)
+    if spec.get("choices") == "claude_models":
+        return list(CLAUDE_MODELS)
     if spec.get("choices") != "harnesses":
         return list(spec.get("choices") or [])
     try:
