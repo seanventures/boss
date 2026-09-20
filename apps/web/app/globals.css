@@ -9758,9 +9758,12 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
    the same position it was in when expanded, so the muscle memory survives — which
    is the whole reason to dock rather than hide. Labels are removed from the flow
    rather than merely transparent, so nothing reserves width it no longer draws. */
-.bx-shell.nav-docked { grid-template-columns: 68px minmax(0, 1fr); }
+.bx-shell.nav-docked { grid-template-columns: 84px minmax(0, 1fr); }
 
-.bx-shell.nav-docked .bx-sidebar { padding: 20px 8px; }
+/* Breathing room, not a rail. At 68px with 8px of padding the icons sat almost against the
+   window edge, which reads as clipped rather than compact. The column is wider, the sidebar
+   keeps real side padding, and each icon gets a square target inside it. */
+.bx-shell.nav-docked .bx-sidebar { padding: 20px 14px; }
 .bx-shell.nav-docked .bx-brand-copy,
 .bx-shell.nav-docked .bx-nav-label,
 .bx-shell.nav-docked .bx-nav-item span,
@@ -9770,9 +9773,14 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .bx-shell.nav-docked .bx-brand { justify-content: center; gap: 0; }
 .bx-shell.nav-docked .bx-nav-item {
   justify-content: center;
-  padding-inline: 0;
+  padding: 11px 0;
   position: relative;
 }
+/* A BIGGER TARGET, NOT JUST A BIGGER GLYPH. Docked, the icon IS the control, so it gets the
+   size the label used to carry — and a square hit area, because a 17px icon in a full-width
+   row is a small thing to aim at with no text beside it. */
+.bx-shell.nav-docked .bx-nav-item svg { width: 21px; height: 21px; }
+.bx-shell.nav-docked .bx-nav-item.active { background: rgba(255, 255, 255, 0.07); }
 /* The label as a tooltip: docking costs you the name, so give it back on hover
    rather than making the icons a memory test. */
 .bx-shell.nav-docked .bx-nav-item::after {

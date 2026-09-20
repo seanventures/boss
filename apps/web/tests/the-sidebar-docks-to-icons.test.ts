@@ -37,7 +37,16 @@ describe("the sidebar docks to icons", () => {
   });
 
   it("narrows the shell instead of hiding the column", () => {
-    expect(CSS).toContain(".bx-shell.nav-docked { grid-template-columns: 68px");
+    // The WIDTH is a design choice that will change; that the column still exists, and is
+    // narrower than the expanded one, is the contract. Pinning the pixel value made a
+    // legitimate spacing fix look like a regression.
+    const docked = CSS.match(/\.bx-shell\.nav-docked \{ grid-template-columns: (\d+)px/);
+    const expanded = CSS.match(/\.bx-shell \{[^}]*grid-template-columns: (\d+)px/s);
+    expect(docked).not.toBeNull();
+    expect(expanded).not.toBeNull();
+    const dockedPx = Number(docked![1]);
+    expect(dockedPx).toBeGreaterThan(48);                 // room for an icon and its padding
+    expect(dockedPx).toBeLessThan(Number(expanded![1]));  // and still a collapse
   });
 
   it("keeps the icons — the labels are what go", () => {
