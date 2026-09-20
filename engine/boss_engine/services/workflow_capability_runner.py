@@ -1499,6 +1499,44 @@ def _terminal_evidence(
                 return {}
             return {"discovery_id": awaited_id,
                     "dossier": _dossier_brief(row["title"], row["state"] or {})}
+        if kind == "meeting":
+            # WHAT THE PANEL DECIDED, not just that it finished.
+            #
+            # The meeting capability declares it produces `prd_markdown`, and nothing ever put
+            # one on the step: a finished meeting contributed `meeting_run_id` and a status,
+            # so `build`'s binding to meeting.prd_markdown resolved to nothing at all. An
+            # 18,979-character PRD — behavioural anchors, a visible rubric, per-interviewer
+            # submission status, all argued out over 22 minutes — sat in meeting_runs.state
+            # and reached no one, while the engineering agent built from a one-line directive.
+            #
+            # Exactly the gap the `discovery` branch above was written to close, one step
+            # later. Binding the input without producing the output would have looked fixed
+            # and changed nothing.
+            row = connection.execute(
+                text("SELECT state, task_id FROM meeting_runs WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            state = row["state"] or {}
+            # JSONB decodes to a dict; some drivers and paths hand back the raw string.
+            # resume_awaited already guards the same way for the same reason.
+            if isinstance(state, str):
+                try:
+                    state = json.loads(state)
+                except ValueError:
+                    state = {}
+            prd = str((state or {}).get("prd_markdown") or "").strip()
+            evidence: dict[str, Any] = {"meeting_run_id": awaited_id}
+            if row["task_id"]:
+                evidence["task_id"] = row["task_id"]
+            if prd:
+                # THE PRD IS THE BRIEF, so it travels far more fully than a dossier does. A
+                # dossier is evidence a panel argues FROM and is capped to leave room for the
+                # directive; this is the specification being implemented, and a requirement
+                # dropped by truncation is a requirement the build silently will not meet.
+                evidence["prd_markdown"] = prd[:_PRD_CHARS]
+            return evidence
     except Exception as error:  # noqa: BLE001 — never fail a step over its own evidence
         log.warning("cannot read the result of %s: %s", awaited_id, error)
     return {}
@@ -1507,6 +1545,12 @@ def _terminal_evidence(
 #: How much of a dossier travels into the next step's prompt. Enough to change what a panel
 #: argues about; not so much that it crowds out the directive itself.
 _DOSSIER_CHARS = 4000
+
+#: How much of a PRD travels into the build. Far more than a dossier, because this is not
+#: evidence to argue from — it is the specification being implemented, and a requirement lost
+#: to truncation is one the build will silently not meet. Real panels have produced 19k and
+#: 25k characters; this leaves headroom above both without being unbounded.
+_PRD_CHARS = 40000
 
 
 #: The sections a dossier actually stores, in the order a reader wants them, with the heading
