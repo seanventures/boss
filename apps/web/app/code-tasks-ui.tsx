@@ -2928,8 +2928,11 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                   <span className="detail ct-run-item-meta">
                     {m.pull_request_number ? `PR #${m.pull_request_number}` : "no PR"}
                     {(() => {
+                      // fmtUsd TAKES MICROS. Dividing here divided it twice, so every run
+                      // that cost less than a million dollars rendered "$0.00" — this build
+                      // cost $1.55 and the card said nothing was spent.
                       const micros = Number((m.usage as Record<string, unknown> | undefined)?.cost_usd_micros ?? 0);
-                      return micros ? ` · ${fmtUsd(micros / 1e6)}` : "";
+                      return micros ? ` · ${fmtUsd(micros)}` : "";
                     })()}
                   </span>
                 </button>

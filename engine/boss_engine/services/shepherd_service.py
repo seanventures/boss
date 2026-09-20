@@ -1369,11 +1369,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                     instructions=spec.get("instructions") or "")
         fps[row["id"]] = fp
 
-    first_by_fp: dict[str, str] = {}
-    for row in rows:
-        fp = fps.get(row["id"])
-        if fp and fp not in first_by_fp:
-            first_by_fp[fp] = row["id"]
+    first_by_fp = keepers_by_fingerprint(rows, fps)
 
     median, samples = _latency_baseline(connection, project_id)
     since_lease = _minutes_since_any_lease(connection, project_id)
@@ -1453,6 +1449,37 @@ def _minutes_since_any_lease(connection, project_id: str):
             "  AND status NOT IN ('completed','failed','cancelled')"),
         {"p": project_id}).mappings().first()
     return float(row["mins"]) if row and row["mins"] is not None else None
+
+
+IN_FLIGHT_STATUSES = ("running", "queued")
+
+
+def keepers_by_fingerprint(rows, fps: dict) -> dict:
+    """For each piece of work, the run that is ALREADY DOING IT. Later ones are redundant.
+
+    ONLY WORK THAT IS ACTUALLY IN FLIGHT CAN BE A KEEPER. The cancel this feeds says "identical
+    work is already RUNNING", and its safety argument is that the earlier run has more banked
+    and is still producing. Both are true only of a run in flight.
+
+    This used to take the oldest row of each fingerprint, which was correct while the sweep
+    selected `status IN ('running','queued')` and nothing else. When the query was widened so
+    the shepherd could WATCH failures, this was left alone — and a failed run is usually the
+    oldest. A dead run became the keeper, and every retry was cancelled on sight as a duplicate
+    of work that had finished hours before.
+
+    Retries are exactly what this breaks: a retry has the same fingerprint as the attempt it
+    repeats, by construction. The button did nothing, five times in a row, and the reason
+    appeared only in the cancelled row's error. Anything terminal — failed, completed,
+    cancelled — is history, not a keeper.
+    """
+    first: dict = {}
+    for row in rows:
+        if row["status"] not in IN_FLIGHT_STATUSES:
+            continue
+        fp = fps.get(row["id"])
+        if fp and fp not in first:
+            first[fp] = row["id"]
+    return first
 
 
 def _latency_baseline(connection, project_id: str) -> tuple:
