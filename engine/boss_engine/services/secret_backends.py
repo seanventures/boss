@@ -318,11 +318,22 @@ class InfisicalBackend:
         payload = {**self._scope(), "secretValue": value}
         try:
             self._request("POST", self._secret_url(key), payload=payload, token=token)
-        except SecretUnavailable:
+        except SecretUnavailable as create_error:
             # Already there. Infisical separates create from update, so an upsert is two calls
             # and the second one is not an error path — a rotated credential takes this branch
             # every single time.
-            self._request("PATCH", self._secret_url(key), payload=payload, token=token)
+            #
+            # BUT NOT EVERY FAILED CREATE IS A DUPLICATE. Treating any failure as "already
+            # there" turned a malformed key into a PATCH that failed the same way, and the
+            # operator was shown the PATCH — so the message named the wrong verb, the wrong
+            # cause, and implied the secret existed. Both are reported now, in the order they
+            # happened, because the FIRST one is the real one.
+            try:
+                self._request("PATCH", self._secret_url(key), payload=payload, token=token)
+            except SecretUnavailable as update_error:
+                raise SecretUnavailable(
+                    f"could not store {key}: create failed with {create_error}; "
+                    f"update then failed with {update_error}") from create_error
 
     def list_keys(self) -> list[str]:
         data = self._request("GET", f"{self._secret_url()}?{self._query()}",

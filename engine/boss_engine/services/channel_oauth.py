@@ -208,7 +208,21 @@ def _http():
 #: because they are only ever used together and a project with half a client is not a state
 #: worth being able to represent.
 def _client_ref_key(project_id: str) -> str:
-    return f"channel/{project_id}/google/oauth_client"
+    """The key this client is stored under, in the same shape as every other secret.
+
+    IT USED TO CONTAIN SLASHES. `channel/{project}/google/oauth_client` reads like a path and
+    is not one: the backend percent-encodes the key into a single URL segment, Infisical
+    decodes %2F back into separators before routing, and the request no longer matches the
+    one-segment :secretName route. Every store of a Google OAuth client 404'd, and the error
+    said PATCH because put() had already masked the POST.
+
+    Every key that has ever stored successfully here is flat — BOSS_SUBSCRIPTION_CODEX_AUTH_JSON,
+    BOSS_BOSS_DOGFOOD_GITHUB_GITHUB — so this uses the same builder rather than a second
+    convention that happens to work.
+    """
+    from .secrets_service import ref_key_for
+
+    return ref_key_for(f"channel_{project_id}", "google_oauth_client")
 
 
 def save_oauth_client(
