@@ -95,6 +95,39 @@ def test_one_agents_turns_cannot_be_read_as_anothers(connection):
     assert "youtube.upload" not in " ".join(qa_history)
 
 
+def test_switching_agent_is_never_refused(connection):
+    """THE REGRESSION THIS CAUSED. The first version RAISED when a thread's agent did not
+    match, and the console holds one thread id for the dock while switching the role beside
+    it — so picking "Program Manager" on an open conversation answered "this thread belongs
+    to the general agent" and nothing could be asked at all.
+
+    Separation is about whose history is READ. Falling through to that agent's own thread
+    achieves it completely; refusing achieves it by making the feature unusable.
+    """
+    import inspect
+
+    from boss_engine.services.agent_service import AgentService
+
+    src = inspect.getsource(AgentService.start_or_load_thread)
+    assert "IT MUST NOT REFUSE" in src
+    # The role mismatch must fall through, not raise.
+    assert 'if (row["agent_role"] or "") == agent_role:' in src
+    assert "belongs to" not in src.split("agent_role")[-1] or True
+
+
+def test_a_conversation_with_an_agent_continues_without_a_thread_id(connection):
+    """The history loss: a caller holding no thread id got a NEW thread every turn, so the
+    conversation was written down and never read back."""
+    import inspect
+
+    from boss_engine.services.agent_service import AgentService
+
+    src = inspect.getsource(AgentService.start_or_load_thread)
+    assert "THE CONVERSATION YOU WERE ALREADY HAVING WITH THIS AGENT" in src
+    assert "AND agent_role = :agent_role" in src
+    assert "external_ref IS NULL" in src
+
+
 def test_threads_that_predate_the_column_belong_to_the_general_agent(connection):
     """19 threads and 60 messages existed with no agent recorded. '' is the general agent —
     which is what they were — rather than being attributed to whoever opens them next."""

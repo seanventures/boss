@@ -63,16 +63,19 @@ class AgentService:
                 )
             if row["status"] != "active":
                 raise AgentThreadOwnershipError("Agent thread is closed.")
-            # A THREAD BELONGS TO THE AGENT THAT HAS BEEN SPEAKING IN IT. Handing a PM thread
-            # to QA because the caller kept the same id is the overlap this exists to prevent
-            # — and it would be invisible, because the reply would simply be well-informed
-            # about a conversation QA never had.
-            if (row["agent_role"] or "") != agent_role:
-                raise AgentThreadOwnershipError(
-                    f"this thread belongs to '{row['agent_role'] or 'the general agent'}', "
-                    f"not '{agent_role or 'the general agent'}' — start a new one to ask a "
-                    f"different agent.")
-            return dict(row)
+            # A THREAD BELONGS TO THE AGENT THAT HAS BEEN SPEAKING IN IT — so asking a
+            # DIFFERENT agent falls through to that agent's own thread rather than reading
+            # this one's history.
+            #
+            # IT MUST NOT REFUSE. The first version raised here, and the console does exactly
+            # what it forbade: it holds one thread id for the dock and switches the role
+            # beside it, so picking "Program Manager" on an open conversation answered "this
+            # thread belongs to the general agent" and the operator could not ask anything at
+            # all. Separation is about whose history is READ, and starting a fresh thread for
+            # the new agent achieves it completely — refusing achieves it by making the
+            # feature unusable.
+            if (row["agent_role"] or "") == agent_role:
+                return dict(row)
 
         if external_ref:
             row = connection.execute(
@@ -97,6 +100,34 @@ class AgentService:
                 # Shared per-task thread (unique per project+surface+external_ref). Any authorized
                 # project actor may post — do NOT reject on actor mismatch (that broke task chat when
                 # the thread was first created by a different console actor).
+                return dict(row)
+
+        # THE CONVERSATION YOU WERE ALREADY HAVING WITH THIS AGENT.
+        #
+        # Without this, a caller that did not hold a thread id got a NEW thread every turn —
+        # so the history was written down and never read back, which is why chat appeared to
+        # persist on task threads (they carry an external_ref) and nowhere else. Keyed on who
+        # is asking and who is being asked, so switching agent in the console lands in that
+        # agent's own conversation rather than the previous one's.
+        if not external_ref:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, actor, surface, external_ref, status,
+                           agent_role, pending_plan_id, pending_plan_summary,
+                           created_at, updated_at
+                    FROM agent_threads
+                    WHERE project_id = :project_id AND actor = :actor
+                      AND surface = :surface AND agent_role = :agent_role
+                      AND external_ref IS NULL AND status = 'active'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"project_id": project_id, "actor": actor, "surface": surface,
+                 "agent_role": agent_role},
+            ).mappings().first()
+            if row:
                 return dict(row)
 
         new_id = make_id("athr")
