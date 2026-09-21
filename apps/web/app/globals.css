@@ -1669,6 +1669,30 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--muted); font-size: 0.72rem; cursor: pointer;
 }
 
+/* The streams, as independent switches. Same chip vocabulary as the levels above, one row
+   lower: level is "how loud", stream is "from where", and an operator reaches for them in that
+   order. Wraps rather than scrolls -- ten of these on a narrow console is two tidy rows, and a
+   horizontal scroller hides the toggle you are looking for. */
+.alog-sources {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.alog-source {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); font-size: 0.7rem;
+  transition: color .14s ease, border-color .14s ease, background .14s ease, opacity .14s ease;
+}
+.alog-source:hover { color: var(--ink); border-color: var(--border-strong); }
+/* OFF is the state that has to be obvious. Everything starts on, so a dimmed chip is the only
+   thing telling the operator that rows are being withheld. */
+.alog-source[data-active="false"] { opacity: .45; }
+.alog-source[data-active="true"] {
+  color: var(--ink); background: var(--surface-3); border-color: var(--border-strong);
+}
+.alog-source-n { font-size: 0.6rem; opacity: .65; font-family: var(--mono, monospace); }
+
 /* The level, in the scan column. Colour is the fast signal and the word is the reliable one --
    a screenshot, a printout and a colour-blind reader all keep the word. */
 .alog-tag {
@@ -1707,6 +1731,7 @@ tr[data-expanded] { background: var(--surface-2); }
 
 @media (prefers-reduced-motion: reduce) {
   .alog-level { transition: none; }
+  .alog-source { transition: none; }
 }
 
 /* ── Project strip ────────────────────────────────────────────────────────────

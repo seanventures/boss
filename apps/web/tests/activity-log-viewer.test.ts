@@ -23,9 +23,13 @@ describe("it reaches the new streams", () => {
     expect(UI).toContain('"agent_turn"');
   });
 
-  it("offers BOSS's own infrastructure as one filter", () => {
-    // "Is BOSS healthy" and "is my project healthy" are different questions.
-    expect(UI).toContain('value: "infra"');
+  it("offers BOSS's own queue as its own switchable streams", () => {
+    // "Is BOSS healthy" and "is my project healthy" are different questions. This used to be
+    // one grouped choice called "infra", which meant these three; with the streams switchable
+    // independently the group is redundant in the console — the API still accepts it.
+    for (const value of ["job", "deadletter", "receipt"]) {
+      expect(UI).toContain(`value: "${value}"`);
+    }
   });
 
   it("forwards every filter through the route handler", () => {

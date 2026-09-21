@@ -34,28 +34,40 @@ const ACTIVITY_KINDS = [
  *  piece of work — and the one a log viewer is organised around. */
 const LEVELS = ["error", "warn", "info", "verbose"] as const;
 
-/** The streams, in the words an operator uses. "Infra" is three sources at once because
- *  "is BOSS healthy" and "is my project healthy" are different questions. */
-const SOURCE_CHOICES: Array<{ value: string; label: string; hint: string }> = [
-  { value: "", label: "Everything", hint: "all streams" },
-  { value: "agent_turn", label: "Agent conversation", hint: "what the agents said and ran" },
-  { value: "llm_call", label: "Model calls", hint: "which agent used which model" },
-  // The lines BOSS writes about its OWN machinery. A phase reading "27m46s — no model call"
-  // says the model was not the cost without saying what was; this is where what-was lives.
-  { value: "app_log", label: "BOSS internals", hint: "commands, timings, warnings from the engine" },
+/** EVERY STREAM, EACH ONE INDEPENDENTLY SWITCHABLE.
+ *
+ *  This was a one-of dropdown, so the log could show you one stream or all of them and nothing
+ *  in between. "The workflow and the deploys, but not the model chatter" is an ordinary
+ *  question and it could only be answered by looking twice.
+ *
+ *  All ticked is the default. The API still accepts the `queue` and `platform` GROUPS, but the
+ *  console no longer needs them: a set of toggles says the same thing and says it visibly.
+ */
+const SOURCE_FILTERS: Array<{ value: string; label: string; hint: string }> = [
   { value: "event", label: "Events", hint: "the audit stream" },
-  { value: "process_step", label: "Process steps", hint: "the PRD pipeline" },
   // THE WORKFLOW, at step resolution. Workflow lifecycle was always in "Events", which says a
   // step became ready and never how long it took or why it failed. This is the source that
   // carries the duration, the attempt count and the error text.
   { value: "workflow_step", label: "Workflow steps", hint: "each step, its duration and error" },
-  // THE APP'S INFRASTRUCTURE, not BOSS's queue. These two were one filter called "BOSS infra",
+  { value: "process_step", label: "Process steps", hint: "the PRD pipeline" },
+  { value: "agent_turn", label: "Agent conversation", hint: "what the agents said and ran" },
+  { value: "llm_call", label: "Model calls", hint: "which agent used which model" },
+  // BOSS's own machinery AND the container output of the apps it builds. A phase reading
+  // "27m46s — no model call" says the model was not the cost without saying what was; this is
+  // where what-was lives, now including the app's own stdout.
+  { value: "app_log", label: "App & BOSS output", hint: "container output, commands, timings" },
+  // THE APP'S INFRASTRUCTURE, not BOSS's queue. These were one filter called "BOSS infra",
   // which meant jobs+deadletters+receipts — so an operator asking "did the deploy fail" was
   // shown the work queue and concluded the log knew nothing about deploys.
-  { value: "platform", label: "Deploys & containers", hint: "deployments and app output" },
   { value: "deployment", label: "Deployments", hint: "what shipped where, and if it came up" },
-  { value: "infra", label: "BOSS queue", hint: "jobs, deadletters, receipts" },
+  { value: "job", label: "Jobs", hint: "BOSS's work queue" },
+  { value: "deadletter", label: "Deadletters", hint: "work that gave up" },
+  { value: "receipt", label: "Receipts", hint: "recorded effects" },
 ];
+
+/** The value sent when every stream is ticked: nothing at all. Spelling out all ten names
+ *  would mean the same thing and cost the request its unfiltered fast path. */
+const ALL_SOURCES = SOURCE_FILTERS.map((choice) => choice.value);
 
 const API_SORTS = new Set(["created_at", "status", "kind"]);
 
@@ -219,7 +231,11 @@ export function ActivityLog({
   // something is being hidden.
   const [level, setLevel] = useState("");
   const [hideVerbose, setHideVerbose] = useState(true);
-  const [source, setSource] = useState("");
+  // EVERY STREAM ON, until the operator says otherwise. The set holds what is SHOWN, so the
+  // default is all of them and unticking one is the act of filtering.
+  const [enabledSources, setEnabledSources] = useState<Set<string>>(
+    () => new Set(ALL_SOURCES),
+  );
   const [agentFilter, setAgentFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -265,8 +281,25 @@ export function ActivityLog({
   const serverSort = API_SORTS.has(sort) ? sort : undefined;
   const serverOrder = API_SORTS.has(sort) ? order : undefined;
 
+  const allSourcesOn = enabledSources.size === ALL_SOURCES.length;
+  const noSourcesOn = enabledSources.size === 0;
+  // Ticked-everything sends NOTHING. Listing all ten names would mean the same thing to the
+  // API and would cost the request its unfiltered fast path, which is what keeps the first
+  // page of a large project quick.
+  const sourceParam = allSourcesOn
+    ? undefined
+    : ALL_SOURCES.filter((value) => enabledSources.has(value)).join(",");
+
   useEffect(() => {
     let alive = true;
+    // NOTHING TICKED IS NOT "EVERYTHING". An empty `source` means every stream to the API, so
+    // sending one here would answer "show me none of them" with the whole log. The request is
+    // skipped instead and the panel says what happened.
+    if (noSourcesOn) {
+      setFeed({ ...EMPTY_FEED, projectId, apiReachable: true });
+      setLoading(false);
+      return;
+    }
     startTransition(async () => {
       // A ROUTE HANDLER, NOT A SERVER ACTION. This call took 25.3 seconds on the live
       // console -- about 14s of query and the rest a full re-render of the route, which is
@@ -277,7 +310,7 @@ export function ActivityLog({
         status: status || undefined,
         actor: actorFilter || undefined,
         level: level || undefined,
-        source: source || undefined,
+        source: sourceParam,
         agent: agentFilter || undefined,
         service: serviceFilter || undefined,
         run_id: scopedRun || undefined,
@@ -294,8 +327,9 @@ export function ActivityLog({
     return () => {
       alive = false;
     };
-  }, [projectId, debouncedSearch, kind, status, actorFilter, level, source, agentFilter,
-      serviceFilter, scopedRun, scopedWorkflowRun, serverSort, serverOrder]);
+  }, [projectId, debouncedSearch, kind, status, actorFilter, level, agentFilter,
+      serviceFilter, scopedRun, scopedWorkflowRun, serverSort, serverOrder,
+      sourceParam, noSourcesOn]);
 
   const items = useMemo(() => {
     const rows = feed.items ?? [];
@@ -313,6 +347,17 @@ export function ActivityLog({
     const counts: Record<string, number> = { error: 0, warn: 0, info: 0, verbose: 0 };
     for (const item of feed.items ?? []) {
       counts[item.level] = (counts[item.level] ?? 0) + 1;
+    }
+    return counts;
+  }, [feed.items]);
+
+  /** How many rows on this page came from each stream. A toggle with a count says whether
+   *  unticking it will actually change anything — and, when a stream reads 0 across a long
+   *  window, that BOSS is not writing it rather than that the filter is wrong. */
+  const sourceCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const item of feed.items ?? []) {
+      counts[item.source] = (counts[item.source] ?? 0) + 1;
     }
     return counts;
   }, [feed.items]);
@@ -350,7 +395,9 @@ export function ActivityLog({
   // excludes every source that does not record a process.
   const hasFilters = Boolean(
     debouncedSearch || status || kind || actorFilter ||
-    level || source || agentFilter || serviceFilter || scopedRun,
+    // `!allSourcesOn` rather than a truthy string: the streams filter is a SET now, and it is
+    // active precisely when something has been switched off.
+    level || !allSourcesOn || agentFilter || serviceFilter || scopedRun || scopedWorkflowRun,
   );
   const stuckCount = items.filter((item) => item.status === "stuck").length;
   const unavailable = !loading && !feed.apiReachable;
@@ -501,6 +548,62 @@ export function ActivityLog({
         ) : null}
       </div>
 
+      {/* THE STREAMS, EACH ONE SWITCHABLE.
+          Everything is on by default, because a log's job is to show what happened and a
+          viewer that starts filtered hides things nobody asked it to hide. Unticking is the
+          act of filtering, and each toggle carries the count it would remove so the operator
+          can see whether it is worth doing. */}
+      <div className="alog-sources" role="group" aria-label="Filter by log source">
+        <button
+          type="button"
+          className="alog-source"
+          data-active={allSourcesOn}
+          aria-pressed={allSourcesOn}
+          onClick={() => setEnabledSources(new Set(ALL_SOURCES))}
+          data-testid="activity-source-all"
+        >
+          ALL STREAMS
+        </button>
+        {SOURCE_FILTERS.map((choice) => {
+          const on = enabledSources.has(choice.value);
+          return (
+            <button
+              type="button"
+              key={choice.value}
+              className="alog-source"
+              title={choice.hint}
+              data-source={choice.value}
+              data-active={on}
+              aria-pressed={on}
+              onClick={() =>
+                setEnabledSources((current) => {
+                  const next = new Set(current);
+                  // ISOLATE, don't start from nothing. Clicking one stream while every stream
+                  // is on means "just this one" — the alternative, unticking it, is nine more
+                  // clicks to reach the view they obviously wanted.
+                  if (current.size === ALL_SOURCES.length) return new Set([choice.value]);
+                  if (next.has(choice.value)) next.delete(choice.value);
+                  else next.add(choice.value);
+                  return next;
+                })
+              }
+              data-testid={`activity-source-${choice.value}`}
+            >
+              {choice.label}
+              <span className="alog-source-n">{sourceCounts[choice.value] ?? 0}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Says plainly that the operator switched everything off, rather than rendering an
+          empty table that reads as "this project has done nothing". */}
+      {noSourcesOn ? (
+        <p className="empty-state" data-testid="activity-no-sources">
+          No streams selected. Pick at least one above, or choose ALL STREAMS.
+        </p>
+      ) : null}
+
       <form
         className="composer compact compact-grid"
         data-testid="activity-log-filters"
@@ -535,22 +638,6 @@ export function ActivityLog({
             {ACTIVITY_STATUSES.map((value) => (
               <option key={value} value={value}>
                 {labelize(value)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Stream</span>
-          <select
-            className="input"
-            name="source"
-            value={source}
-            onChange={(event) => setSource(event.target.value)}
-            data-testid="activity-log-source-filter"
-          >
-            {SOURCE_CHOICES.map((choice) => (
-              <option key={choice.value || "all"} value={choice.value}>
-                {choice.label} — {choice.hint}
               </option>
             ))}
           </select>

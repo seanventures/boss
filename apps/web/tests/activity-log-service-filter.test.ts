@@ -77,7 +77,10 @@ describe("an empty result says which kind of empty it is", () => {
     // an empty result more often than any other — and claiming BOSS had recorded nothing at
     // all would be flatly untrue.
     const line = UI.slice(UI.indexOf("const hasFilters"), UI.indexOf("const stuckCount"));
-    for (const facet of ["level", "source", "agentFilter", "serviceFilter", "scopedRun"]) {
+    // `allSourcesOn` rather than `source`: the streams filter is a SET of toggles now, and it
+    // is active precisely when one has been switched off.
+    for (const facet of ["level", "allSourcesOn", "agentFilter", "serviceFilter",
+                         "scopedRun"]) {
       expect(line).toContain(facet);
     }
   });

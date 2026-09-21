@@ -54,13 +54,57 @@ describe("the streams an operator asked for are offered", () => {
 
   it("offers deployments and container output, separately from the queue", () => {
     expect(UI).toContain('value: "deployment"');
-    expect(UI).toContain('value: "platform"');
+    expect(UI).toContain('value: "app_log"');
   });
 
-  it("no longer calls the work queue 'infra'", () => {
-    // The value stays `infra` — it is a documented value of the public API and callers link to
-    // it — but what the operator READS must say what it actually is.
-    expect(UI).toContain('value: "infra", label: "BOSS queue"');
+  it("no longer calls the work queue 'infra' in the console", () => {
+    // The API keeps `infra` as a group — it is a documented value and callers link to it — but
+    // the console offers the three sources it stood for as their own toggles, so nothing an
+    // operator READS calls a work queue "infra" any more.
     expect(UI).not.toContain('label: "BOSS infra"');
+  });
+
+  it("offers every source the API knows about", () => {
+    // A source added to the engine and not to this list is a stream nobody can reach.
+    for (const value of ["event", "process_step", "job", "deadletter", "receipt",
+                         "llm_call", "agent_turn", "app_log", "workflow_step",
+                         "deployment"]) {
+      expect(UI).toContain(`value: "${value}"`);
+    }
+  });
+});
+
+describe("every stream is on until the operator says otherwise", () => {
+  /**
+   * A log's job is to show what happened. A viewer that opens already filtered hides things
+   * nobody asked it to hide — so the default is everything, and unticking is the act of
+   * filtering.
+   */
+  it("starts with all of them enabled", () => {
+    expect(UI).toContain("useState<Set<string>>(\n    () => new Set(ALL_SOURCES),\n  )");
+  });
+
+  it("sends nothing at all when everything is on", () => {
+    // Listing all ten names would mean the same thing to the API and would cost the request
+    // its unfiltered fast path, which is what keeps the first page of a large project quick.
+    expect(UI).toContain("allSourcesOn\n    ? undefined");
+  });
+
+  it("does not answer 'none of them' with the whole log", () => {
+    // An empty `source` means EVERY stream to the API, so sending one when nothing is ticked
+    // would show the operator the opposite of what they asked for.
+    expect(UI).toContain("if (noSourcesOn)");
+    expect(UI).toContain('data-testid="activity-no-sources"');
+  });
+
+  it("has a way back to everything", () => {
+    expect(UI).toContain('data-testid="activity-source-all"');
+    expect(UI).toContain("setEnabledSources(new Set(ALL_SOURCES))");
+  });
+
+  it("shows how many rows each stream contributed", () => {
+    // A toggle with a count says whether unticking it will change anything — and a stream
+    // reading 0 over a long window says BOSS is not writing it, not that the filter is wrong.
+    expect(UI).toContain("sourceCounts");
   });
 });

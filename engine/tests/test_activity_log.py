@@ -892,3 +892,70 @@ def test_the_workflow_run_scope_is_not_the_work_task_scope(service):
     conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_mine"))
 
     assert _items(_call_list(service, conn, PROJECT_A, run_id="wfr_one")) == []
+
+
+# ---------------------------------------------------------------------------
+# Choosing several streams at once
+#
+# `source=` was one-of: the log could show one stream or all of them and nothing in between.
+# "The workflow and the deploys, but not the model chatter" is an ordinary question and could
+# only be answered by looking twice. The console now offers the streams as toggles, so this
+# arrives as a set.
+# ---------------------------------------------------------------------------
+
+
+def test_several_sources_can_be_asked_for_at_once(service):
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_1"))
+    conn.add("deployment_runs", _deployment(deployment_id="dpr_1"))
+    conn.add("jobs", {"id": "job_1", "project_id": PROJECT_A, "kind": "build",
+                      "status": "queued", "task_id": None, "lease_owner": None,
+                      "created_at": T_OLD})
+
+    ids = set(_ids(_items(_call_list(
+        service, conn, PROJECT_A, source="workflow_step,deployment"))))
+
+    assert ids == {"wsr_1", "dpr_1"}
+
+
+def test_a_set_may_mix_groups_and_single_sources(service):
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_1"))
+    conn.add("jobs", {"id": "job_1", "project_id": PROJECT_A, "kind": "build",
+                      "status": "queued", "task_id": None, "lease_owner": None,
+                      "created_at": T_OLD})
+    conn.add("receipts", {"id": "rcp_1", "project_id": PROJECT_A, "effect_kind": "write",
+                          "status": "recorded", "created_at": T_OLD})
+
+    ids = set(_ids(_items(_call_list(
+        service, conn, PROJECT_A, source="workflow_step,queue"))))
+
+    assert ids == {"wsr_1", "job_1", "rcp_1"}
+
+
+def test_whitespace_and_repeats_in_the_set_are_tolerated(service):
+    """The console joins a set; a human pasting a URL will not be so tidy."""
+    module = _load_module()
+
+    assert module._resolve_sources(" workflow_step , workflow_step ,, deployment ") == [
+        "workflow_step", "deployment"]
+
+
+def test_naming_every_source_means_the_same_as_naming_none(service):
+    """The console sends nothing when everything is ticked, which keeps the request on the
+    unfiltered fast path. Spelling them all out must not mean something different."""
+    module = _load_module()
+
+    assert module._resolve_sources(",".join(module.SOURCES)) == list(module.SOURCES)
+    assert module._resolve_sources("") == list(module.SOURCES)
+
+
+def test_an_unknown_source_in_the_set_is_refused_by_name(service):
+    """Named, not swallowed: a typo that silently returned everything would look like the
+    filter was working and quietly show rows the operator excluded."""
+    conn = FakeActivityConn()
+
+    with pytest.raises(ValueError) as caught:
+        _call_list(service, conn, PROJECT_A, source="workflow_step,nonsense")
+
+    assert "nonsense" in str(caught.value)

@@ -54,6 +54,14 @@ INFRA_SOURCES = QUEUE_SOURCES
 #: here because it is the only source that carries a preview's or a deployed app's own stdout
 #: (see `log_capture` and `preview_log_ingest`), alongside BOSS's own records.
 PLATFORM_SOURCES = ("deployment", "app_log")
+
+#: Names that stand for SEVERAL sources at once, because an operator asks for them in one word.
+#: Every other accepted name is a single source from `SOURCES`.
+SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
+    "infra": QUEUE_SOURCES,
+    "queue": QUEUE_SOURCES,
+    "platform": PLATFORM_SOURCES,
+}
 SORTS = ("created_at", "status", "kind")
 ORDERS = ("asc", "desc")
 STATUSES = ("ok", "failed", "waiting", "stuck", "info")
@@ -232,6 +240,38 @@ def _iso(value: Any) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def _resolve_sources(source_filter: str) -> list[str]:
+    """Turn the `source=` filter into the list of loaders to run.
+
+    Accepts one source, a GROUP name, or a comma-separated set of either — so the console can
+    offer the streams as independent toggles rather than a one-of dropdown. "Show me the
+    workflow and the deploys but not the model chatter" is a real question, and a single-select
+    could only answer it by making the operator look twice.
+
+    An empty filter means every source. So does a set naming all of them, which matters: the
+    console sends nothing at all when everything is ticked, and that keeps the request on the
+    unfiltered fast path instead of spelling out ten names that mean the same thing.
+    """
+    if not source_filter:
+        return list(SOURCES)
+    wanted: list[str] = []
+    for raw in source_filter.split(","):
+        name = raw.strip().lower()
+        if not name:
+            continue
+        for resolved in SOURCE_GROUPS.get(name, (name,)):
+            if resolved not in SOURCES:
+                raise ValueError(
+                    f"source must be one of: {', '.join(SOURCES)}, "
+                    f"{', '.join(sorted(SOURCE_GROUPS))} — got {name!r}"
+                )
+            if resolved not in wanted:
+                wanted.append(resolved)
+    # A filter that resolved to nothing is a filter that was only separators. Treating it as
+    # "everything" matches the empty case rather than silently returning an empty log.
+    return wanted or list(SOURCES)
 
 
 def _duration_seconds(started: Any, finished: Any) -> Optional[float]:
@@ -1182,26 +1222,14 @@ class ActivityLogService:
         service_filter = _text(service)
         if level_filter and level_filter not in LEVELS:
             raise ValueError(f"level must be one of: {', '.join(LEVELS)}")
-        # GROUPS, NOT SOURCES. Two of these names stand for several sources at once, because
-        # they answer one question an operator asks in one word.
+        # ONE NAME, A GROUP, OR A SET OF EITHER — see `_resolve_sources`. The console offers
+        # the streams as independent toggles, so this arrives as a comma-separated set.
         #
         #   queue / infra — BOSS's own work queue. `infra` is kept as the historical spelling
         #                   of this group; it was always the queue, and callers link to it.
         #   platform      — the INFRASTRUCTURE the work runs on: deployments, and the
         #                   container output of the apps BOSS builds and ships.
-        if source_filter in ("infra", "queue"):
-            selected_sources = list(QUEUE_SOURCES)
-        elif source_filter == "platform":
-            selected_sources = list(PLATFORM_SOURCES)
-        elif source_filter:
-            if source_filter not in SOURCES:
-                raise ValueError(
-                    f"source must be one of: {', '.join(SOURCES)}, "
-                    "queue (a.k.a. infra), platform"
-                )
-            selected_sources = [source_filter]
-        else:
-            selected_sources = list(SOURCES)
+        selected_sources = _resolve_sources(source_filter)
 
         # HOW MANY ROWS EACH SOURCE MAY RETURN.
         #

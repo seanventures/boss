@@ -109,10 +109,12 @@ def list_activity(
     level: Optional[str] = Query(default=None, description="verbose | info | warn | error"),
     source: Optional[str] = Query(
         default=None,
-        description="event | process_step | job | deadletter | receipt | llm_call | "
-                    "agent_turn | app_log | workflow_step | deployment | "
-                    "queue (jobs+deadletters+receipts together; 'infra' is the historical "
-                    "spelling) | platform (deployments + app/container output)",
+        description="Which streams to include. One name, a group, or a comma-separated set "
+                    "of either — e.g. 'workflow_step,deployment'. Omit for every stream. "
+                    "Names: event | process_step | job | deadletter | receipt | llm_call | "
+                    "agent_turn | app_log | workflow_step | deployment. "
+                    "Groups: queue (jobs+deadletters+receipts; 'infra' is the historical "
+                    "spelling) | platform (deployments + app/container output).",
     ),
     run_id: Optional[str] = Query(default=None, description="one work task (crun_...)"),
     workflow_run_id: Optional[str] = Query(
