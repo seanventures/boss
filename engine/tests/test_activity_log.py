@@ -215,6 +215,8 @@ class FakeActivityConn:
             "receipts": [],
             "agent_process_steps": [],
             "process_steps": [],
+            "workflow_step_runs": [],
+            "deployment_runs": [],
         }
         self.missing = set(missing or ())
         self.statements: list[tuple[str, dict[str, Any]]] = []
@@ -239,6 +241,8 @@ class FakeActivityConn:
                 "receipts",
                 "events",
                 "jobs",
+                "workflow_step_runs",
+                "deployment_runs",
             )
             if _mentions(sql, table)
         ]
@@ -663,3 +667,228 @@ def test_every_source_is_bounded():
     bounded = [sql for sql, p in conn.statements if "cap" in p]
     for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts"):
         assert any(f"FROM {table}" in sql for sql in bounded), f"{table} is unbounded"
+
+
+# ---------------------------------------------------------------------------
+# Workflow steps, deployments, and the workflow-run scope
+#
+# Three gaps this screen had, all found by an operator who opened the Activity log to answer a
+# question it could not answer:
+#
+#   * workflow lifecycle reached it as `workflow.*` EVENTS, which say a step became ready and
+#     never how long it took, which attempt it was, or why it failed;
+#   * "BOSS infra" meant jobs + deadletters + receipts — the work QUEUE — so "did the deploy
+#     fail?" was answered with deadletters;
+#   * a console URL carries `wfr=` and nothing consumed it, so arriving from a workflow run
+#     showed the project's entire history.
+# ---------------------------------------------------------------------------
+
+
+def _workflow_step(
+    *,
+    step_run_id: str,
+    project_id: str = PROJECT_A,
+    workflow_run_id: str = "wfr_one",
+    step_id: str = "build",
+    step_kind: str = "code_task",
+    status: str = "succeeded",
+    attempt: int = 0,
+    last_error: str | None = None,
+    started_at: datetime | None = T_OLD,
+    completed_at: datetime | None = T_MID,
+    created_at: datetime = T_MID,
+) -> dict[str, Any]:
+    return {
+        "id": step_run_id,
+        "project_id": project_id,
+        "workflow_run_id": workflow_run_id,
+        "step_id": step_id,
+        "step_kind": step_kind,
+        "status": status,
+        "iteration": 0,
+        "attempt": attempt,
+        "max_attempts": 3,
+        "last_error": last_error,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "created_at": created_at,
+    }
+
+
+def _deployment(
+    *,
+    deployment_id: str,
+    project_id: str = PROJECT_A,
+    app_name: str = "checkout",
+    environment: str = "production",
+    status: str = "succeeded",
+    failure_reason: str | None = None,
+    created_at: datetime = T_NEW,
+) -> dict[str, Any]:
+    return {
+        "id": deployment_id,
+        "project_id": project_id,
+        "app_name": app_name,
+        "environment": environment,
+        "status": status,
+        "target_kind": "docker",
+        "target_ref": "goldeneye",
+        "commit_ref": "abc1234",
+        "repo": "acme/checkout",
+        "failure_reason": failure_reason,
+        "created_by": "deployer",
+        "created_at": created_at,
+        "started_at": T_OLD,
+        "finished_at": T_MID,
+    }
+
+
+def test_workflow_steps_are_a_source_with_duration_and_attempt(service):
+    """The detail the run rail had and the log did not."""
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_ok"))
+
+    items = _items(_call_list(service, conn, PROJECT_A, source="workflow_step"))
+
+    assert _ids(items) == ["wsr_ok"]
+    item = items[0]
+    assert item["source"] == "workflow_step"
+    assert item["status"] == "ok"
+    assert item["workflow_run_id"] == "wfr_one"
+    # One hour between started_at and completed_at. A duration is the whole reason to read a
+    # step row rather than the event that announced it.
+    assert item["data"]["duration_seconds"] == 3600.0
+    assert item["data"]["attempt"] == 0
+
+
+def test_a_step_that_never_finished_has_no_duration_rather_than_zero(service):
+    """None, not 0. A step still running and a step that took no time are different facts —
+    and reading the second as the first is how `plrr` looked green for weeks."""
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_running", status="running", completed_at=None))
+
+    items = _items(_call_list(service, conn, PROJECT_A, source="workflow_step"))
+
+    assert items[0]["data"]["duration_seconds"] is None
+
+
+def test_a_failed_step_carries_its_error_as_the_body(service):
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_bad", status="failed", attempt=2,
+        last_error="pytest exited 1: 3 failed"))
+
+    items = _items(_call_list(service, conn, PROJECT_A, source="workflow_step"))
+
+    item = items[0]
+    assert item["status"] == "failed"
+    assert item["level"] == "error"
+    # Searchable and expandable like a log line, not buried in `data`.
+    assert "pytest exited 1" in item["body"]
+
+
+def test_a_retry_speaks_louder_than_a_clean_run(service):
+    """A step that succeeded on its third attempt is not the same event as one that succeeded
+    first time; reading them identically is how a flaky step stays invisible."""
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_clean"))
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_retried", attempt=2, last_error="timed out, retried"))
+
+    items = {item["id"]: item for item in
+             _items(_call_list(service, conn, PROJECT_A, source="workflow_step"))}
+
+    assert items["wsr_clean"]["level"] == "info"
+    assert items["wsr_retried"]["level"] == "warn"
+
+
+def test_deployments_are_a_source(service):
+    """The question "BOSS infra" did not answer."""
+    conn = FakeActivityConn()
+    conn.add("deployment_runs", _deployment(deployment_id="dpr_ok"))
+
+    items = _items(_call_list(service, conn, PROJECT_A, source="deployment"))
+
+    assert _ids(items) == ["dpr_ok"]
+    item = items[0]
+    assert item["source"] == "deployment"
+    assert item["status"] == "ok"
+    assert item["data"]["environment"] == "production"
+    # The app is the service, so `service=` means "whose infrastructure" for a deployment.
+    assert item["service"] == "checkout"
+
+
+def test_a_failed_deploy_reads_as_an_error_with_its_reason(service):
+    conn = FakeActivityConn()
+    conn.add("deployment_runs", _deployment(
+        deployment_id="dpr_bad", status="failed",
+        failure_reason="health check never passed"))
+
+    items = _items(_call_list(service, conn, PROJECT_A, source="deployment"))
+
+    assert items[0]["status"] == "failed"
+    assert items[0]["level"] == "error"
+    assert "health check never passed" in items[0]["body"]
+
+
+def test_infra_still_means_the_queue_and_platform_means_the_infrastructure(service):
+    """`source=infra` is a documented value of a public API and stays pointing at the queue.
+    The infrastructure question gets its own word rather than quietly stealing that one."""
+    module = _load_module()
+
+    assert set(module.QUEUE_SOURCES) == {"job", "deadletter", "receipt"}
+    assert set(module.INFRA_SOURCES) == set(module.QUEUE_SOURCES)
+    assert "deployment" in module.PLATFORM_SOURCES
+    # The container output of the apps BOSS builds lands in app_logs, so it is part of the
+    # platform answer, not of the queue.
+    assert "app_log" in module.PLATFORM_SOURCES
+
+
+def test_platform_group_selects_deployments_not_the_queue(service):
+    conn = FakeActivityConn()
+    conn.add("deployment_runs", _deployment(deployment_id="dpr_ok"))
+    conn.add("jobs", {"id": "job_1", "project_id": PROJECT_A, "kind": "build",
+                      "status": "queued", "task_id": None, "lease_owner": None,
+                      "created_at": T_OLD})
+
+    items = _items(_call_list(service, conn, PROJECT_A, source="platform"))
+
+    assert "dpr_ok" in _ids(items)
+    assert "job_1" not in _ids(items)
+
+
+def test_workflow_run_scope_narrows_to_one_run_across_sources(service):
+    """`?wfr=` used to be dropped on the floor. Every `workflow.*` event is emitted against
+    entity_type 'workflow_run' with the run as its id, so the scope is exact for events as
+    well as for the step rows."""
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_mine", workflow_run_id="wfr_one"))
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_theirs", workflow_run_id="wfr_two"))
+    conn.add("events", _event(
+        event_id="evt_mine", project_id=PROJECT_A, event_type="workflow.run_started",
+        actor="ceo", entity_type="workflow_run", entity_id="wfr_one",
+        created_at=T_NEW, data={}))
+    conn.add("events", _event(
+        event_id="evt_theirs", project_id=PROJECT_A, event_type="workflow.run_started",
+        actor="ceo", entity_type="workflow_run", entity_id="wfr_two",
+        created_at=T_NEW, data={}))
+
+    ids = set(_ids(_items(_call_list(
+        service, conn, PROJECT_A, workflow_run_id="wfr_one"))))
+
+    assert "wsr_mine" in ids
+    assert "evt_mine" in ids
+    assert "wsr_theirs" not in ids
+    assert "evt_theirs" not in ids
+
+
+def test_the_workflow_run_scope_is_not_the_work_task_scope(service):
+    """Two different handles. A row belonging to a workflow run must not answer a `run_id`
+    query just because both are called "run"."""
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_mine"))
+
+    assert _items(_call_list(service, conn, PROJECT_A, run_id="wfr_one")) == []

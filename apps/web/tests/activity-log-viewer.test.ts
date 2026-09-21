@@ -102,8 +102,17 @@ describe("scoping to one work task", () => {
     // The Factory links here with pushState, which never re-runs the server component that
     // renders this one — a prop threaded from there would work on reload and do nothing on the
     // click that matters.
-    expect(UI).toContain('new URLSearchParams(window.location.search).get("run")');
+    expect(UI).toContain("new URLSearchParams(window.location.search)");
+    expect(UI).toContain('params.get("run")');
     expect(UI).toContain('window.addEventListener("popstate", read)');
+  });
+
+  it("reads the WORKFLOW run from the URL too", () => {
+    // A console link carries both (`?run=crun_…&wfr=wfr_…`) and they scope different things:
+    // one work task, versus the governed run that task was a step of. Arriving from a workflow
+    // run used to drop that scope and show the project's entire log.
+    expect(UI).toContain('params.get("wfr")');
+    expect(UI).toContain("workflow_run_id: scopedWorkflowRun");
   });
 
   it("announces a filter the operator did not set here", () => {

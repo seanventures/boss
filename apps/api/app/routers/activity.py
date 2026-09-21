@@ -110,9 +110,16 @@ def list_activity(
     source: Optional[str] = Query(
         default=None,
         description="event | process_step | job | deadletter | receipt | llm_call | "
-                    "agent_turn | app_log | infra (jobs+deadletters+receipts together)",
+                    "agent_turn | app_log | workflow_step | deployment | "
+                    "queue (jobs+deadletters+receipts together; 'infra' is the historical "
+                    "spelling) | platform (deployments + app/container output)",
     ),
     run_id: Optional[str] = Query(default=None, description="one work task (crun_...)"),
+    workflow_run_id: Optional[str] = Query(
+        default=None,
+        description="one workflow run (wfr_...). Not the same scope as run_id: a workflow "
+                    "run is the governed run a coding task was one step of.",
+    ),
     agent: Optional[str] = Query(default=None, description="one AI agent, by role key"),
     service: Optional[str] = Query(
         default=None,
@@ -161,6 +168,7 @@ def list_activity(
                 level=_clean(level),
                 source=_clean(source),
                 run_id=_clean(run_id),
+                workflow_run_id=_clean(workflow_run_id),
                 agent=_clean(agent),
                 service=_clean(service),
                 since=_clean(since),

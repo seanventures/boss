@@ -26,6 +26,8 @@ const ACTIVITY_KINDS = [
   "llm_call",
   "agent_turn",
   "app_log",
+  "workflow_step",
+  "deployment",
 ] as const;
 
 /** How loudly a row speaks. A different question from `status`, which says what happened to a
@@ -43,7 +45,16 @@ const SOURCE_CHOICES: Array<{ value: string; label: string; hint: string }> = [
   { value: "app_log", label: "BOSS internals", hint: "commands, timings, warnings from the engine" },
   { value: "event", label: "Events", hint: "the audit stream" },
   { value: "process_step", label: "Process steps", hint: "the PRD pipeline" },
-  { value: "infra", label: "BOSS infra", hint: "jobs, deadletters, receipts" },
+  // THE WORKFLOW, at step resolution. Workflow lifecycle was always in "Events", which says a
+  // step became ready and never how long it took or why it failed. This is the source that
+  // carries the duration, the attempt count and the error text.
+  { value: "workflow_step", label: "Workflow steps", hint: "each step, its duration and error" },
+  // THE APP'S INFRASTRUCTURE, not BOSS's queue. These two were one filter called "BOSS infra",
+  // which meant jobs+deadletters+receipts — so an operator asking "did the deploy fail" was
+  // shown the work queue and concluded the log knew nothing about deploys.
+  { value: "platform", label: "Deploys & containers", hint: "deployments and app output" },
+  { value: "deployment", label: "Deployments", hint: "what shipped where, and if it came up" },
+  { value: "infra", label: "BOSS queue", hint: "jobs, deadletters, receipts" },
 ];
 
 const API_SORTS = new Set(["created_at", "status", "kind"]);
@@ -96,6 +107,8 @@ const KIND_LABELS: Record<ActivityKind, string> = {
   llm_call: "Model call",
   agent_turn: "Agent turn",
   app_log: "BOSS internals",
+  workflow_step: "Workflow step",
+  deployment: "Deployment",
 };
 
 /** The first meaningful line of a turn, for the row that summarises it.
@@ -174,6 +187,7 @@ export function ActivityLog({
   projectId,
   actor,
   runId,
+  workflowRunId,
   runTitles = {},
 }: {
   projectId: string;
@@ -184,6 +198,8 @@ export function ActivityLog({
   /** Scope every query to ONE work task. Normally arrives as `?run=` instead — see below —
    *  but a caller that already knows the run can pass it directly. */
   runId?: string;
+  /** Scope every query to ONE workflow run (`wfr_…`). Normally arrives as `?wfr=`. */
+  workflowRunId?: string;
 }) {
   const [feed, setFeed] = useState<ActivityLogFeed>({
     ...EMPTY_FEED,
@@ -213,13 +229,23 @@ export function ActivityLog({
   // server component that renders this one — so a prop threaded from there would work on a
   // reload and do nothing on the click that matters.
   const [urlRun, setUrlRun] = useState("");
+  // `wfr=` is the WORKFLOW run, read the same way and for the same reason. The console links
+  // here carrying both (`?run=crun_…&wfr=wfr_…`) and they scope different things: one work
+  // task, versus the whole governed run that task was a step of. Arriving from a workflow run
+  // used to drop that scope on the floor and show the project's entire log.
+  const [urlWorkflowRun, setUrlWorkflowRun] = useState("");
   useEffect(() => {
-    const read = () => setUrlRun(new URLSearchParams(window.location.search).get("run") ?? "");
+    const read = () => {
+      const params = new URLSearchParams(window.location.search);
+      setUrlRun(params.get("run") ?? "");
+      setUrlWorkflowRun(params.get("wfr") ?? "");
+    };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
   const scopedRun = runId || urlRun;
+  const scopedWorkflowRun = workflowRunId || urlWorkflowRun;
   const [sort, setSort] = useState<SortKey>("created_at");
   const [order, setOrder] = useState<SortOrder>("desc");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -255,6 +281,7 @@ export function ActivityLog({
         agent: agentFilter || undefined,
         service: serviceFilter || undefined,
         run_id: scopedRun || undefined,
+        workflow_run_id: scopedWorkflowRun || undefined,
         sort: serverSort,
         order: serverOrder,
         // A transcript is dense. Fifty rows is barely a minute of a build.
@@ -268,7 +295,7 @@ export function ActivityLog({
       alive = false;
     };
   }, [projectId, debouncedSearch, kind, status, actorFilter, level, source, agentFilter,
-      serviceFilter, scopedRun, serverSort, serverOrder]);
+      serviceFilter, scopedRun, scopedWorkflowRun, serverSort, serverOrder]);
 
   const items = useMemo(() => {
     const rows = feed.items ?? [];
@@ -394,6 +421,29 @@ export function ActivityLog({
               window.dispatchEvent(new PopStateEvent("popstate"));
             }}
             data-testid="activity-scope-clear"
+          >
+            Show the whole project
+          </button>
+        </p>
+      ) : null}
+
+      {scopedWorkflowRun && !scopedRun ? (
+        // The same announcement for the workflow scope. Shown only when it is the ONLY scope:
+        // with both set, the work-task banner above already says the view is narrowed, and two
+        // stacked banners saying "showing only" read as a bug rather than as more precision.
+        <p className="alog-scope" data-testid="activity-scope-workflow">
+          <span>Showing only this workflow run</span>
+          <code className="mono">{scopedWorkflowRun}</code>
+          <button
+            type="button"
+            className="cap-btn"
+            onClick={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete("wfr");
+              window.history.pushState({}, "", url.toString());
+              window.dispatchEvent(new PopStateEvent("popstate"));
+            }}
+            data-testid="activity-scope-workflow-clear"
           >
             Show the whole project
           </button>

@@ -2240,6 +2240,23 @@ def start_preview_async(engine, settings: Settings, run_id: str, *,
             except Exception:  # noqa: BLE001
                 logger.exception("preview %s failed and could not be recorded", preview_id)
 
+        # THE APP'S OWN OUTPUT, not only BOSS's record of it.
+        #
+        # Everything above writes what BOSS observed: a status, a failure_kind, a 500-char
+        # error. The container's actual log — the stack trace, the missing module, the port it
+        # tried to bind — stayed on the preview host behind `read_preview_log`, reachable by an
+        # agent with a prev_ id and by no one reading the Activity log. This copies the tail
+        # into app_logs so it lands on that screen next to the step that caused it.
+        #
+        # Outside the try/except above ON PURPOSE: it must run whether the preview succeeded or
+        # crashed, and a failed build is exactly the case whose log is worth having.
+        try:
+            from .preview_log_ingest import ingest_preview_log
+
+            ingest_preview_log(engine, preview_id, project_id=project_id, run_id=run_id)
+        except Exception:  # noqa: BLE001 — never let log capture break the preview
+            logger.debug("preview %s: log ingest failed", preview_id, exc_info=True)
+
     threading.Thread(target=_finish, name=f"preview-{preview_id}", daemon=True).start()
     return {"id": preview_id, "status": "starting", "run_id": run_id,
             "message": "Preview is building. It appears in the previews list as it progresses."}

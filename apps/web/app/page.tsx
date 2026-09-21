@@ -87,7 +87,6 @@ import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
 import { ActivityLog } from "./activity-log-ui";
 import { DeliveryWorkflows } from "./delivery-workflows-ui";
-import { FactoryFlowBoard } from "./factory-flow-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
@@ -7400,8 +7399,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("activity") ? (
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
-          <FactoryFlowBoard projectId={activeProjectId} actor={activeActorId} />
-          {/* The viewer reads `?run=` itself. It cannot be passed from here: this is a server
+          {/* NO WORK BOARD HERE. The Factory flow board ("where official work is, and why it
+              stalled") used to sit above this log. It is a status board, not a log: it answers
+              where work stands, while this screen exists to answer what the machinery actually
+              emitted — BOSS's own records, the workflow's steps, the deploys, and the
+              containers' output. Mixing the two made the log look like a dashboard and pushed
+              the first log line below the fold. */}
+          {/* The viewer reads `?run=` and `?wfr=` itself. Neither can be passed from here: this is a server
               component, and the Factory links across with pushState — a client-side navigation
               that never re-runs it. Threading it through props would have worked on a reload
               and silently done nothing on the click that matters. */}

@@ -28,7 +28,7 @@ ActivityStatus = str  # ok | failed | waiting | stuck | info
 ActivitySeverity = str  # info | warn | error
 
 SOURCES = ("event", "process_step", "job", "deadletter", "receipt",
-           "llm_call", "agent_turn", "app_log")
+           "llm_call", "agent_turn", "app_log", "workflow_step", "deployment")
 
 #: The four levels an operator reads at, coarsest last.
 #:
@@ -38,10 +38,22 @@ SOURCES = ("event", "process_step", "job", "deadletter", "receipt",
 #: filter on, turning per-turn capture on would have buried the events people actually read.
 LEVELS = ("verbose", "info", "warn", "error")
 
-#: Sources that describe BOSS operating ITSELF rather than building a customer's app. The
-#: console offers this as one filter because "is BOSS healthy" and "is my project healthy" are
-#: separate questions asked by separate people.
-INFRA_SOURCES = ("job", "deadletter", "receipt")
+#: BOSS's own WORK QUEUE — the three sources that describe BOSS operating itself. This is
+#: deliberately NOT called "infra": it is a queue, and offering it under that name was the
+#: reason an operator asking "did the deploy fail, is the host degraded" was shown
+#: deadletters. The queue question and the infrastructure question are different, and they
+#: now have different filters.
+QUEUE_SOURCES = ("job", "deadletter", "receipt")
+
+#: Backwards-compatible alias. `source=infra` has been a documented value of the public API
+#: and is linked to from saved views, so it keeps resolving to the queue rather than 422-ing.
+INFRA_SOURCES = QUEUE_SOURCES
+
+#: The INFRASTRUCTURE the work runs on, as opposed to the work: what was deployed where and
+#: whether it came up, and the container output of the apps BOSS builds. `app_log` belongs
+#: here because it is the only source that carries a preview's or a deployed app's own stdout
+#: (see `log_capture` and `preview_log_ingest`), alongside BOSS's own records.
+PLATFORM_SOURCES = ("deployment", "app_log")
 SORTS = ("created_at", "status", "kind")
 ORDERS = ("asc", "desc")
 STATUSES = ("ok", "failed", "waiting", "stuck", "info")
@@ -222,6 +234,21 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
+def _duration_seconds(started: Any, finished: Any) -> Optional[float]:
+    """How long a step or a deploy took, or None when it has not finished.
+
+    None rather than 0: a step still running and a step that took no time are different
+    facts, and the console reads a blank duration as "still going" while a zero reads as
+    "did nothing" — the exact confusion that made `plrr` look green for weeks.
+    """
+    if started is None or finished is None:
+        return None
+    try:
+        return round((finished - started).total_seconds(), 3)
+    except (TypeError, AttributeError):
+        return None
+
+
 def _timestamp_param(value: Any) -> Any:
     if value is None:
         return None
@@ -381,6 +408,7 @@ def _item(
     classify_row: Mapping[str, Any],
     level: Optional[str] = None,
     run_id: Optional[str] = None,
+    workflow_run_id: Optional[str] = None,
     agent: Optional[str] = None,
     service: Optional[str] = None,
     body: str = "",
@@ -402,6 +430,11 @@ def _item(
         # The work task and the AI agent, as first-class filters. Both were reachable only by
         # knowing which `entity_id` convention a given source happened to use.
         "run_id": run_id or "",
+        # THE WORKFLOW RUN, which is not the work task. A console URL carries both
+        # (`?run=crun_…&wfr=wfr_…`) and they scope different things: `run_id` is one coding
+        # task, `workflow_run_id` is the whole governed run that task was one step of. Without
+        # this, arriving from a workflow run left no way to ask "show me only this run's log".
+        "workflow_run_id": workflow_run_id or "",
         "agent": agent or "",
         # WHICH PROCESS SAID THIS. The API and the worker do different jobs — one serves the
         # console, the other runs the pipeline — so "the API is noisy" and "the worker is
@@ -470,6 +503,12 @@ def _load_events(
                 # An event about a run IS activity for that run — that is what makes the
                 # per-project log on the run page complete rather than transcript-only.
                 run_id=entity_id if entity_id.startswith("crun_") else "",
+                # Every `workflow.*` event is emitted against entity_type "workflow_run" with
+                # the run as its id (see workflows._emit_step_event), so the scope is exact
+                # here rather than dug out of the payload.
+                workflow_run_id=(
+                    entity_id if _text(row.get("entity_type")) == "workflow_run" else ""
+                ),
                 sql_matched=bool(q),
             )
         )
@@ -789,6 +828,168 @@ def _load_app_logs(
     return items
 
 
+def _load_workflow_steps(
+    connection: Connection,
+    project_id: str,
+    *,
+    since: Any,
+    until: Any,
+    cap: int,
+    q: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """One row per workflow STEP attempt — the detail the run rail shows and the log did not.
+
+    Workflow lifecycle already reached this screen as `workflow.*` events, which say a step
+    became ready or succeeded but carry none of what an operator opens a log to find: how long
+    the step actually took, which attempt this was, and the error text when it failed. That
+    lives on `workflow_step_runs` and was readable only through the run page.
+
+    The column is `last_error`, not `error` — `workflow_runs` has `error` and these two have
+    been confused before (see apps/api/tests/test_describe_workflow_run_against_real_columns).
+    """
+    extra, params = _time_clauses(since, until)
+    rows = _fetch_rows(
+        connection,
+        f"""
+        SELECT id, workflow_run_id, step_id, step_kind, status, iteration, attempt,
+               max_attempts, last_error, started_at, completed_at, created_at
+        FROM workflow_step_runs
+        WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
+        """,
+        {"project_id": project_id, "cap": cap, **params},
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        status = _text(row.get("status"))
+        step_id = _text(row.get("step_id"))
+        step_kind = _text(row.get("step_kind"))
+        attempt = int(row.get("attempt") or 0)
+        last_error = _text(row.get("last_error"))
+        # A RETRY IS NOT A CLEAN RUN. A step that succeeded on its third attempt is not the
+        # same event as one that succeeded first time, and reading them identically is how a
+        # flaky step stays invisible until it finally fails for good.
+        if status in ("failed", "deadlettered"):
+            level = "error"
+        elif attempt > 0 or last_error:
+            level = "warn"
+        elif status in ("succeeded", "skipped", "cancelled"):
+            level = "info"
+        else:
+            level = "verbose"
+        items.append(
+            _item(
+                id=_text(row.get("id")),
+                source="workflow_step",
+                kind=f"step.{step_kind}" if step_kind else "step",
+                actor="workflow",
+                entity_type="workflow_step_run",
+                entity_id=_text(row.get("id")),
+                created_at=row.get("created_at"),
+                data={
+                    "step_id": step_id,
+                    "step_kind": step_kind,
+                    "status": status,
+                    "iteration": int(row.get("iteration") or 0),
+                    "attempt": attempt,
+                    "max_attempts": int(row.get("max_attempts") or 0),
+                    "duration_seconds": _duration_seconds(
+                        row.get("started_at"), row.get("completed_at")
+                    ),
+                    "started_at": _iso(row.get("started_at")),
+                    "completed_at": _iso(row.get("completed_at")),
+                    "last_error": last_error,
+                },
+                classify_row={
+                    "action": f"step {step_id} {status}" if step_id else f"step {status}",
+                    "status": status,
+                    "kind": step_kind,
+                    "stage": step_id,
+                },
+                level=level,
+                workflow_run_id=_text(row.get("workflow_run_id")),
+                # The error text is the body so it is searchable and expandable like a log
+                # line, rather than folded into `data` where the table cannot show it.
+                body=last_error,
+            )
+        )
+    return items
+
+
+def _load_deployments(
+    connection: Connection,
+    project_id: str,
+    *,
+    since: Any,
+    until: Any,
+    cap: int,
+    q: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """What was deployed where, and whether it came up.
+
+    "BOSS infra" used to mean jobs, deadletters and receipts — BOSS's own work queue. An
+    operator asking the infrastructure question ("did the deploy fail? is the host degraded?")
+    was shown the queue and concluded the log had nothing. This is the source that answers it.
+    """
+    extra, params = _time_clauses(since, until)
+    rows = _fetch_rows(
+        connection,
+        f"""
+        SELECT id, app_name, environment, status, target_kind, target_ref, commit_ref,
+               repo, failure_reason, created_by, created_at, started_at, finished_at
+        FROM deployment_runs
+        WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
+        """,
+        {"project_id": project_id, "cap": cap, **params},
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        status = _text(row.get("status"))
+        environment = _text(row.get("environment"))
+        failure = _text(row.get("failure_reason"))
+        app_name = _text(row.get("app_name"))
+        items.append(
+            _item(
+                id=_text(row.get("id")),
+                source="deployment",
+                kind=f"deploy.{environment}" if environment else "deploy",
+                actor=_text(row.get("created_by")) or "deployer",
+                entity_type="deployment_run",
+                entity_id=_text(row.get("id")),
+                created_at=row.get("created_at"),
+                data={
+                    "app": app_name,
+                    "environment": environment,
+                    "status": status,
+                    "target_kind": _text(row.get("target_kind")),
+                    "target_ref": _text(row.get("target_ref")),
+                    "commit": _text(row.get("commit_ref")),
+                    "repo": _text(row.get("repo")),
+                    "duration_seconds": _duration_seconds(
+                        row.get("started_at"), row.get("finished_at")
+                    ),
+                    "failure_reason": failure,
+                },
+                classify_row={
+                    "action": f"deploy {app_name} to {environment} {status}".strip(),
+                    "status": status,
+                    "kind": "deployment",
+                    "stage": environment,
+                },
+                level="error" if failure or status == "failed" else "info",
+                # The app is the service here. It makes `service=` mean "which app's
+                # infrastructure" for deployments, the same way it means "which BOSS process"
+                # for BOSS's own records.
+                service=app_name,
+                body=failure,
+            )
+        )
+    return items
+
+
 def _load_agent_turns(
     connection: Connection,
     project_id: str,
@@ -887,7 +1088,7 @@ def _count_all(connection: Connection, project_id: str, *, since: Any, until: An
     # Every source the loaders read, or the count and the list disagree — and a total that is
     # smaller than the rows on screen is worse than no total.
     for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts",
-                  "llm_calls", "agent_turns"):
+                  "llm_calls", "agent_turns", "workflow_step_runs", "deployment_runs"):
         rows = _fetch_rows(
             connection,
             f"SELECT count(*) AS n FROM {table} WHERE project_id = :project_id{extra}",
@@ -921,6 +1122,8 @@ _LOADERS_BY_SOURCE = {
     "llm_call": _load_llm_calls,
     "agent_turn": _load_agent_turns,
     "app_log": _load_app_logs,
+    "workflow_step": _load_workflow_steps,
+    "deployment": _load_deployments,
 }
 
 
@@ -949,6 +1152,7 @@ class ActivityLogService:
         level: Optional[str] = None,
         source: Optional[str] = None,
         run_id: Optional[str] = None,
+        workflow_run_id: Optional[str] = None,
         agent: Optional[str] = None,
         service: Optional[str] = None,
         since: Any = None,
@@ -973,18 +1177,28 @@ class ActivityLogService:
         level_filter = _text(level).lower()
         source_filter = _text(source).lower()
         run_filter = _text(run_id)
+        workflow_run_filter = _text(workflow_run_id)
         agent_filter = _text(agent)
         service_filter = _text(service)
         if level_filter and level_filter not in LEVELS:
             raise ValueError(f"level must be one of: {', '.join(LEVELS)}")
-        # "infra" is not a source; it is the THREE sources that describe BOSS operating itself.
-        # Offered as one word because "is BOSS healthy" is a different question from "is my
-        # project healthy", asked by a different person.
-        if source_filter == "infra":
-            selected_sources = list(INFRA_SOURCES)
+        # GROUPS, NOT SOURCES. Two of these names stand for several sources at once, because
+        # they answer one question an operator asks in one word.
+        #
+        #   queue / infra — BOSS's own work queue. `infra` is kept as the historical spelling
+        #                   of this group; it was always the queue, and callers link to it.
+        #   platform      — the INFRASTRUCTURE the work runs on: deployments, and the
+        #                   container output of the apps BOSS builds and ships.
+        if source_filter in ("infra", "queue"):
+            selected_sources = list(QUEUE_SOURCES)
+        elif source_filter == "platform":
+            selected_sources = list(PLATFORM_SOURCES)
         elif source_filter:
             if source_filter not in SOURCES:
-                raise ValueError(f"source must be one of: {', '.join(SOURCES)}, infra")
+                raise ValueError(
+                    f"source must be one of: {', '.join(SOURCES)}, "
+                    "queue (a.k.a. infra), platform"
+                )
             selected_sources = [source_filter]
         else:
             selected_sources = list(SOURCES)
@@ -1007,7 +1221,8 @@ class ActivityLogService:
         #             project that has them, which is worse than being slow.
         filters_active = bool(
             needle or kind_filter or status_filter or actor_filter or entity_type_filter
-            or level_filter or run_filter or agent_filter or service_filter
+            or level_filter or run_filter or workflow_run_filter or agent_filter
+            or service_filter
         )
         exact = (
             not filters_active
@@ -1038,6 +1253,10 @@ class ActivityLogService:
             items = [item for item in items if item["level"] == level_filter]
         if run_filter:
             items = [item for item in items if item["run_id"] == run_filter]
+        if workflow_run_filter:
+            items = [
+                item for item in items if item["workflow_run_id"] == workflow_run_filter
+            ]
         if agent_filter:
             items = [item for item in items if item["agent"] == agent_filter]
         if service_filter:

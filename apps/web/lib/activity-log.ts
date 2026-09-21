@@ -46,6 +46,9 @@ export type ActivityLogQuery = {
   source?: string;
   /** One work task. */
   run_id?: string;
+  /** One workflow run (`wfr_…`) — the governed run a work task was one step of. A different
+   *  scope from `run_id`, and the console URL can carry both. */
+  workflow_run_id?: string;
   /** One AI agent, by role key. */
   agent?: string;
   /** Which BOSS process said it: "api" | "worker". Rows from sources that do not record a
@@ -74,6 +77,7 @@ export type ActivityLogItem = {
   stage: string;
   /** The work task this row belongs to, when it belongs to one. */
   runId: string;
+  workflowRunId: string;
   /** The AI agent that produced it, by role key. */
   agent: string;
   /** Which BOSS process emitted it: "api" | "worker". Empty for sources that do not record a
@@ -127,6 +131,7 @@ export function activityLogSearchParams(
   setIfPresent(params, "level", query.level);
   setIfPresent(params, "source", query.source);
   setIfPresent(params, "run_id", query.run_id);
+  setIfPresent(params, "workflow_run_id", query.workflow_run_id);
   setIfPresent(params, "agent", query.agent);
   setIfPresent(params, "service", query.service);
   setIfPresent(params, "since", query.since);
@@ -187,6 +192,7 @@ function mapActivityLogItem(value: unknown): ActivityLogItem[] {
       entityId: asText(value.entity_id),
       stage: asText(value.stage),
       runId: asText(value.run_id),
+      workflowRunId: asText(value.workflow_run_id),
       agent: asText(value.agent),
       service: asText(value.service),
       body: asText(value.body),
