@@ -1,6 +1,9 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+// The icon set both callers already use. A hand-drawn triangle would have been one more
+// warning glyph to keep in step with the rest of the console for no gain.
+import { Warning } from "@phosphor-icons/react";
 
 /**
  * "This computer is out of memory" — said to the person who can fix it.
@@ -56,9 +59,19 @@ export function HostAdviceBanner(
   return (
     <div className="host-advice" data-severity={advice.severity ?? "warning"}
          data-testid="host-advice" role="status">
-      <b className="host-advice-head">{advice.headline}</b>
-      {compact ? null : <span className="host-advice-detail">{advice.detail}</span>}
-      <span className="host-advice-action">{advice.action}</span>
+      {/* aria-hidden because the banner says what it is in words, and role="status"
+          above already carries it. An icon that announces "warning" before a headline
+          saying the computer is struggling has said the same thing twice. */}
+      <Warning className="host-advice-icon" size={16} weight="bold"
+               aria-hidden data-testid="host-advice-icon" />
+      {/* The text keeps the layout it already had — a wrapping row — and the icon takes a
+          column beside it. Adding the icon as a plain sibling would have let it wrap onto a
+          line of its own once the detail got long, which is exactly the case that matters. */}
+      <div className="host-advice-body">
+        <b className="host-advice-head">{advice.headline}</b>
+        {compact ? null : <span className="host-advice-detail">{advice.detail}</span>}
+        <span className="host-advice-action">{advice.action}</span>
+      </div>
     </div>
   );
 }

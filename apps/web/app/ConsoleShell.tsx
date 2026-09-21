@@ -231,7 +231,10 @@ const AREAS: AreaDef[] = [
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
   { id: "skills", label: "Skills and MCP", sub: "What agents and steps can do — skills you author, and the MCP servers they reach", group: "Settings", icon: ICONS.capabilities },
-  { id: "setup", label: "Setup", sub: "Connect a repository and a model — the two things a working install needs", group: "Settings", icon: ICONS.infra },
+  // NAMED FOR WHAT IS IN IT. "Setup" is a stage of the product's life — it reads as something
+  // you do once and never open again, so the page an operator needs when a model runs out of
+  // credit or a repo token expires was filed under a name that says "already done".
+  { id: "setup", label: "Repo and model", sub: "Connect a repository and a model — the two things a working install needs", group: "Settings", icon: ICONS.infra },
   { id: "budget", label: "Govern", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Settings", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },

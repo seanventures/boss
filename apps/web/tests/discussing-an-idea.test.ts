@@ -219,7 +219,19 @@ describe("what a turn offered survives the conversation being reopened", () => {
   });
 
   it("and they are read back with the history", () => {
-    expect(SERVICE).toContain('SELECT id, role, content, tool_calls, actions, proposed_actions, created_at');
+    // MATCHED BY COLUMN, NOT BY SPELLING. This asserted the whole SELECT on one line, so it
+    // broke the moment per-agent history added `agent_role` and the list wrapped -- a passing
+    // test turned red without anything being wrong, which teaches people to ignore it.
+    const from = SERVICE.indexOf("SELECT id, role, content");
+    expect(from).toBeGreaterThan(-1);
+    // Bound the slice by the FROM that follows THIS select. An earlier query in the same file
+    // also reads agent_messages, so an unanchored indexOf finds it and the slice runs
+    // backwards into an empty string -- which then passes every `toContain` after it.
+    const select = SERVICE.slice(from, SERVICE.indexOf("FROM agent_messages", from));
+    expect(select).toContain("SELECT");
+    for (const column of ["tool_calls", "actions", "proposed_actions", "created_at"]) {
+      expect(select).toContain(column);
+    }
     expect(SERVICE).toContain('"proposed_actions": value("proposed_actions")');
     expect(API).toContain('"proposed_actions": offers');
   });

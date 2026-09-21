@@ -114,6 +114,23 @@ else warn "repository: not connected — builds cannot open a pull request"; fi
 # 7. can this machine run BOSS at all
 if [ -n "$blocked" ]; then warn "host: $blocked"; else ok "host: scheduling BOSS normally"; fi
 
+# 8. configuration drift — how far this install has wandered from a stock one.
+#
+# ADVISORY, NEVER A FAILURE. Most drift is correct: an install needs its own credentials, its
+# own repo, its own caps. The point is that it be VISIBLE. Every "works there, not here" bug
+# this install has had was a line in this list that nobody knew was there — a CI timeout of 20
+# seconds, a reviewer turn cap, three coding agents on a box that fits one.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if drift=$(python3 "$HERE/drift.py" 2>/dev/null); then
+  n=$(printf '%s' "$drift" | sed 's/\x1b\[[0-9;]*m//g' | grep -c '^  ~ ' || true)
+  unread=$(printf '%s' "$drift" | sed 's/\x1b\[[0-9;]*m//g' | grep -c '^  ? ' || true)
+  if [ "$n" -eq 0 ]; then ok "config: identical to a stock install"
+  else ok "config: $n setting(s) differ from stock — scripts/install/drift.py to see which"; fi
+  [ "$unread" -gt 0 ] && warn "config: $unread BOSS_ variable(s) set that nothing reads (drift.py names them)"
+else
+  warn "config: could not compare against a stock install"
+fi
+
 printf "\n"
 if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: http://127.0.0.1:%s\n\n" "$WEB_PORT"
 else printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"; fi

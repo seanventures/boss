@@ -118,6 +118,28 @@ def cpu_snapshot() -> dict[str, Any]:
     return out
 
 
+def measures_the_real_machine() -> bool:
+    """Is /proc/meminfo the operator's machine, or a virtual machine standing in front of it?
+
+    WHY THIS EXISTS. On a Linux server, a container's /proc/meminfo is the host's, and the
+    memory bands mean what they say. On Docker Desktop there is a Linux VM in between, so the
+    numbers describe the VM's slice and NOTHING about the machine the operator is sitting at.
+    Measured on a Mac whose swap was 23,708 MB of 24,576 used -- 96.5%, minutes from unusable:
+
+        BOSS reported   memory 42.4% ok   swap 2 MB ok   state: ok
+
+    Both readings were correct about the VM and useless about the Mac. A green band that is
+    read as "my machine is fine" is worse than no band, so the scope has to travel with the
+    number.
+
+    Detects Docker Desktop, whose kernel is linuxkit. Other VM-backed runtimes may present as
+    an ordinary Linux kernel and are NOT detected -- this returns True for them, which keeps
+    today's behaviour rather than inventing a claim about a setup we cannot identify.
+    """
+    version = _read_text(Path("/proc/version")) or ""
+    return "linuxkit" not in version.lower()
+
+
 def memory_snapshot() -> dict[str, Any]:
     """Memory ceiling, current use, and — the point of the whole exercise — the OOM count.
 
@@ -162,6 +184,9 @@ def memory_snapshot() -> dict[str, Any]:
         if host.get("SwapTotal"):
             out["host_swap_used_mb"] = round(
                 (host.get("SwapTotal", 0) - host.get("SwapFree", 0)) / 1024, 1)
+    # The `host_*` keys above are named for what they are on a server. On Docker Desktop they
+    # describe a VM, so the reading has to say which it is or it will be read as the machine.
+    out["host_is_the_machine"] = measures_the_real_machine()
     return out
 
 
@@ -739,6 +764,22 @@ def pressure(memory: dict[str, Any], cpu: dict[str, Any],
     bands = [b["band"] for b in out["bands"].values()]
     out["state"] = ("critical" if "critical" in bands
                     else "warning" if "warning" in bands else "ok")
+
+    # WHAT THESE NUMBERS ARE ABOUT. Read from the memory snapshot rather than taken as an
+    # argument, so every existing caller of pressure() keeps working unchanged.
+    #
+    # Memory and swap come from /proc/meminfo, which behind Docker Desktop belongs to a VM.
+    # Those two bands are then about BOSS's slice and not about the operator's machine, and
+    # they will read `ok` while the machine underneath is out of swap. Disk and CPU load are
+    # equally the VM's. Saying so is the whole fix: the thresholds were never wrong.
+    out["scope"] = "machine" if memory.get("host_is_the_machine", True) else "vm"
+    if out["scope"] == "vm":
+        out["scope_note"] = (
+            "These are BOSS's virtual machine, not this computer — Docker Desktop sits in "
+            "between, so a green band here says nothing about the machine you are using. "
+            "Whether BOSS is being starved is measured separately, by how late its own loop "
+            "runs."
+        )
     return out
 
 

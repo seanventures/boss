@@ -26,8 +26,25 @@ def _map() -> dict:
     return yaml.safe_load(PARITY.read_text(encoding="utf-8"))
 
 
+#: `github`, `knowledge-graph` and `observability-suite` render their own <section data-area>
+#: from app/<name>-ui.tsx. Reading page.tsx alone missed all three; `github` surfaced only
+#: because a COMMENT there quoted the attribute, which is evidence of a mention, not of an
+#: area. Scan the whole app directory, and strip line comments first so a mention can never
+#: stand in for a rendered area again.
+V1_SOURCES = sorted((REPO / "apps/web/app").glob("*.tsx"))
+
+_COMMENT = re.compile(r"^\s*(//|\*|/\*).*$", re.MULTILINE)
+#: Only literal attribute values are areas. `data-area={`${area}`}` and the regex fragments
+#: that live in url-intent helpers are not.
+_AREA = re.compile(r'data-area="([a-z0-9][a-z0-9-]*)"')
+
+
 def _v1_areas() -> set[str]:
-    return set(re.findall(r'data-area="([^"]+)"', PAGE.read_text(encoding="utf-8")))
+    areas: set[str] = set()
+    for path in V1_SOURCES:
+        text = _COMMENT.sub("", path.read_text(encoding="utf-8"))
+        areas.update(_AREA.findall(text))
+    return areas
 
 
 def _v2_screens() -> set[str]:

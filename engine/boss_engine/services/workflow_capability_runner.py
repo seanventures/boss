@@ -29,6 +29,9 @@ from sqlalchemy.engine import Connection
 
 from . import change_record, workflow_custom_steps as custom_steps, workflows
 from .core import create_blocking_decision, emit_event, now_utc
+# Named import so "who approved this" is compared against one constant rather than a
+# string literal repeated wherever the question is asked.
+from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -785,6 +788,75 @@ def rebuild_record(connection: Connection, project_id: str, artifact_id: str) ->
                     + (f" {len(defects)} check(s) still flag it." if defects else "")}
 
 
+def _write_the_run_report(
+    connection: Connection, project_id: str, context: dict[str, Any]
+) -> dict[str, Any]:
+    """This run's own report: what each step cost, who did it, and what went wrong.
+
+    A STEP, so that it is produced rather than merely available. The report could always be
+    assembled on demand, and an operator still had to know to ask for it. Asked for by name:
+
+        "I want this report to be added before the Preview"
+
+    Placed after the build and before the preview because that is the moment the expensive,
+    failure-prone part is over and the numbers are worth reading — not at the very end, where a
+    run parked on a deploy approval would never reach it. It reads what has happened SO FAR;
+    steps after it are listed as pending, which is part of the answer rather than a gap.
+
+    Never fails the run. A report is a description of the work, and a description that cannot
+    be written is not a reason to stop work that already succeeded.
+    """
+    from ..config import get_settings
+    from .core import create_artifact
+    from .run_retrospective import assemble_workflow, workflow_markdown
+
+    run_id = str(context.get("run_id") or "")
+    if not run_id:
+        return {"capability": "report", "status": "recorded",
+                "note": "no run to report on."}
+
+    report = assemble_workflow(connection, project_id, run_id)
+    if not report.get("ok"):
+        return {"capability": "report", "status": "recorded",
+                "note": str(report.get("error") or "nothing to report yet.")}
+
+    markdown = workflow_markdown(report)
+    title = f"Run report — {report.get('workflow') or run_id}"
+    artifact_id = create_artifact(
+        connection, get_settings(), project_id,
+        _from_any_step(context, "task_id") or (context.get("input") or {}).get("task_id"),
+        "workflow_report", title,
+        {"markdown": markdown, "run_id": run_id, "report": report},
+    )
+
+    blockers = [f for f in report["findings"] if f["severity"] == "blocker"]
+    warnings = [f for f in report["findings"] if f["severity"] == "warn"]
+    done = len([s for s in report["steps"]
+                if s["status"] in {"succeeded", "skipped"}])
+    # The note is what the step card shows without expanding anything, so it carries the
+    # three numbers somebody would otherwise open the report to find.
+    note = (f"{done} of {len(report['steps'])} steps, "
+            f"{report['working_minutes']} min working, "
+            f"${report['total_usd']:.2f}.")
+    if blockers or warnings:
+        note += f" {len(blockers)} blocker(s), {len(warnings)} warning(s)."
+    else:
+        note += " Nothing went wrong that was recorded."
+
+    return {
+        "capability": "report",
+        "tool": None,
+        "status": "recorded",
+        "artifact_id": artifact_id,
+        "report": report,
+        "total_usd": report["total_usd"],
+        "working_minutes": report["working_minutes"],
+        "blockers": len(blockers),
+        "warnings": len(warnings),
+        "note": note,
+    }
+
+
 def _observed_from_the_build(
     connection: Connection, key: str, project_id: str, context: dict[str, Any]
 ) -> Optional[dict[str, Any]]:
@@ -1172,8 +1244,34 @@ def execute_step(
         # `document` has no tool because it commissions nothing — it WRITES, from what the run
         # already produced. Falling through to the no-op below made the one step whose entire
         # job is to leave an artefact behind the only step that left nothing.
+        # PRODUCTION LAUNCH READINESS, WHICH HAS NEVER RUN.
+        #
+        # `plrr` declares `tool=None` -- it has no single tool, because it reads the run's own
+        # spec and then starts the repair that closes what the app is missing. Its dispatch sat
+        # AFTER this branch, which returns unconditionally, so it was unreachable from the day
+        # it was written. Every run recorded the step as:
+        #
+        #     "'Production launch readiness' is recorded from the work it accompanies."
+        #
+        # started and completed in the same second, green, having done nothing. It is declared
+        # to produce `findings`, `gaps_closed` and `code_task_run_id` and produced none of
+        # them, so the one step that exists to ask whether anyone can operate the thing at 3am
+        # was the step that never ran.
+        if key == "plrr":
+            return _plrr_step(ctx, connection, project_id, actor, context)
         if key == "document":
             return _write_the_record(connection, project_id, context, inputs)
+        # Same shape as `document`: no tool because it commissions nothing — it READS what the
+        # run has already recorded and leaves a document behind.
+        if key == "report":
+            try:
+                return _write_the_run_report(connection, project_id, context)
+            except Exception as error:  # noqa: BLE001
+                # A report is a description of the work. One that cannot be written is not a
+                # reason to fail a build that succeeded.
+                log.warning("run report not written for %s: %s", context.get("run_id"), error)
+                return {"capability": "report", "status": "recorded",
+                        "note": f"the report could not be assembled: {error}"}
         # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
         # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
         # "recorded from the work it accompanies" left three of the nine steps saying nothing
@@ -1265,11 +1363,9 @@ def execute_step(
 
     # A BUILD THIS RUN STARTS BELONGS TO THIS RUN. Without saying so, start_code_task would
     # open a second workflow run for the task, nesting a pipeline inside the step that made it.
-    if key == "plrr":
-        # Has no single tool: it reads the run's own spec, then starts the repair that closes
-        # what the app is missing. Handled before _invoke_tool for that reason.
-        return _plrr_step(ctx, connection, project_id, actor, context)
-
+    #
+    # `plrr` was dispatched HERE and could never reach it: the capability declares `tool=None`,
+    # and that branch above returns for every key it handles. Moved up rather than duplicated.
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
 
@@ -2290,7 +2386,8 @@ def _resume_answered_gates(
     rows = connection.execute(
         text(
             """
-            SELECT s.id, s.step_id, s.binding_snapshot, s.iteration, d.status AS decision_status
+            SELECT s.id, s.step_id, s.binding_snapshot, s.iteration,
+                   d.status AS decision_status, d.approved_by AS decision_approved_by
             FROM workflow_step_runs s
             JOIN decisions d ON d.id = s.decision_id
             WHERE s.workflow_run_id = :run_id
@@ -2314,6 +2411,26 @@ def _resume_answered_gates(
                           "outcome": f"gate_{row['decision_status']}"})
             continue
 
+        # WHO ACTUALLY APPROVED IT — read, never assumed.
+        #
+        # This wrote `"person"` unconditionally, for every approved decision, including the
+        # ones no person touched. BOSS auto-approves the PRD gate when
+        # BOSS_MEETING_PRD_AUTO_APPROVE is on, and the code that does it promises:
+        #
+        #     "the audit trail records `auto_approval` as the actor, so a reader can always
+        #      tell which approvals a human made."
+        #
+        # The decision row kept that promise. This function then broke it, by stamping
+        # `decided_by: "person"` onto the step evidence -- which is the record the run card
+        # shows and the one an auditor reads. Observed on wfr_a1ac0748e42742d38256, where
+        # dec_1b70bd99cca141488f8b was approved by `auto_approval` and the step said a person
+        # decided it.
+        #
+        # For a product whose claim is that every change can be traced to whoever approved it,
+        # an approval record naming the wrong kind of approver is the worst defect available.
+        approved_by = str(row["decision_approved_by"] or "").strip() or "unknown"
+        decided_automatically = approved_by == DECISION_SYSTEM_ACTOR
+
         if snapshot.get("gate_completes_step", True):
             # The approval was the work. Same direct UPDATE the timeout sweep uses, and for the
             # same reason: this step is leased by nobody, so `complete_step` would refuse it.
@@ -2330,8 +2447,15 @@ def _resume_answered_gates(
                 ),
                 {
                     "id": row["id"],
-                    "output": json.dumps({"approved_by": "person", "outcome": "approved"}),
-                    "evidence": json.dumps([{"kind": "approval", "decided_by": "person"}]),
+                    "output": json.dumps({
+                        "approved_by": approved_by,
+                        "outcome": "approved",
+                    }),
+                    "evidence": json.dumps([{
+                        "kind": "auto_approval" if decided_automatically else "approval",
+                        "decided_by": approved_by,
+                        "automatic": decided_automatically,
+                    }]),
                 },
             ).rowcount
 

@@ -840,6 +840,7 @@ from .services import terraform_export as terraform_export_service
 from .services import iac_verify as iac_verify_service
 from .services.autonomy_engine import AutonomyEngine
 from boss_engine.services.worker_registry import WorkerRegistryService
+from boss_engine.services.workflows import waiting_on_label
 from .services.role_governance import RoleGovernanceService
 from .services.router_health import RouterHealthService
 from .services.skill_runtime import (
@@ -1222,6 +1223,35 @@ async def lifespan(_: FastAPI):
         print("[lifespan] stall watch armed (api)")
     except Exception as exc:  # noqa: BLE001 — a diagnostic must never stop the API booting
         print(f"[lifespan] stall watch not armed: {exc}")
+
+    # Name the drift, don't enforce it. See boss_engine.config.unread_boss_variables.
+    #
+    # In a thread: the check scans the source tree for readers, which costs about a second.
+    # A diagnostic that delays every boot by a second to say nothing on almost every boot has
+    # the cost and benefit the wrong way round.
+    async def _report_unread_variables() -> None:
+        try:
+            import asyncio as _asyncio
+            import os as _os
+
+            from boss_engine.config import unread_boss_variables
+
+            unread = await _asyncio.to_thread(unread_boss_variables, _os.environ)
+            if unread:
+                print(
+                    f"[lifespan] {len(unread)} BOSS_ variable(s) set that nothing reads "
+                    f"— they have no effect here: {', '.join(unread)}"
+                )
+        except Exception as exc:  # noqa: BLE001 — a diagnostic must never affect the API
+            print(f"[lifespan] could not check for unread BOSS_ variables: {exc}")
+
+    try:
+        import asyncio as _asyncio
+
+        _unread_task = _asyncio.create_task(_report_unread_variables())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] unread-variable check not scheduled: {exc}")
+
     try:
         ensure_schema(engine, settings)
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
@@ -7417,6 +7447,78 @@ def run_retrospective_endpoint(run_id: str, project_id: str = "") -> dict:
     resolved_project = project_id or settings.default_project_id
     with begin(engine) as connection:
         return assemble(connection, resolved_project, run_id)
+
+
+@app.get("/v1/workflow-runs/{run_id}/report")
+def workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
+    """The whole workflow, end to end: research, panel, build — what each cost and who did it.
+
+    `/v1/code-tasks/{id}/retrospective` answers for the build alone, which is the answer to a
+    narrower question than anyone asks at the end of a run. The console could show $2.29 for a
+    build while the research and the panel that produced its spec, $1.74 between them, were
+    recorded in two other tables and shown nowhere.
+
+    Deterministic and read-only. No model is asked to narrate it: a report that runs after
+    every workflow and occasionally invents a cause is worse than no report.
+    """
+    from boss_engine.services.run_retrospective import assemble_workflow, workflow_markdown
+
+    resolved_project = project_id or settings.default_project_id
+    with begin(engine) as connection:
+        report = assemble_workflow(connection, resolved_project, run_id)
+    if report.get("ok"):
+        report["markdown"] = workflow_markdown(report)
+    return report
+
+
+@app.post("/v1/workflow-runs/{run_id}/report")
+def publish_workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
+    """Keep the report as a document, so it can be downloaded, mailed, or filed.
+
+    Stored as an ordinary artifact with a markdown body, which is what makes
+    `/v1/artifacts/{id}/pdf` render it without a second renderer existing anywhere.
+
+    ONE ARTIFACT PER RUN, REFRESHED IN PLACE. Publishing twice must not fill the project with
+    near-identical copies — but it must not hand back a stale one either, which is what the
+    first version did: the report was rewritten to describe the product rather than the spend,
+    and re-publishing returned the old document unchanged because an artifact already existed.
+    A run's report also legitimately changes while the run is still going.
+
+    So the row is updated and the id is kept, which is what makes a link to a report keep
+    working after the run moves on.
+    """
+    from boss_engine.services.core import create_artifact
+    from boss_engine.services.run_retrospective import assemble_workflow, workflow_markdown
+
+    resolved_project = project_id or settings.default_project_id
+    with begin(engine) as connection:
+        report = assemble_workflow(connection, resolved_project, run_id)
+        if not report.get("ok"):
+            raise HTTPException(status_code=404, detail=report.get("error") or "no such run")
+        markdown = workflow_markdown(report)
+        title = "Run report — " + str(
+            (report.get("product") or {}).get("name") or report.get("workflow") or run_id
+        )
+        content = {"markdown": markdown, "run_id": run_id, "report": report}
+
+        existing = connection.execute(
+            text("SELECT id FROM artifacts WHERE project_id = :p "
+                 "   AND artifact_type = 'workflow_report' "
+                 "   AND content->>'run_id' = :r ORDER BY created_at DESC LIMIT 1"),
+            {"p": resolved_project, "r": run_id},
+        ).mappings().first()
+        if existing:
+            connection.execute(
+                text("UPDATE artifacts SET title = :t, content = CAST(:c AS JSONB) "
+                     " WHERE id = :a"),
+                {"t": title, "c": json.dumps(content), "a": existing["id"]},
+            )
+            return {"ok": True, "artifact_id": existing["id"], "created": False}
+
+        artifact_id = create_artifact(
+            connection, settings, resolved_project, None, "workflow_report", title, content,
+        )
+    return {"ok": True, "artifact_id": artifact_id, "created": True}
 
 
 @app.get("/v1/projects/{project_id}/preflight")
@@ -21821,9 +21923,11 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "step_count": len(run_steps),
             "steps_done": done,
             "current_step": current["step_id"] if current else None,
-            # Says what it is waiting FOR, not just that it is waiting.
+            # Says what it is waiting FOR, not just that it is waiting — and says nothing
+            # rather than inventing "a decision" for a step that is waiting on a child run.
+            # See boss_engine.services.workflows.waiting_on_label.
             "waiting_on": (
-                current.get("approval", {}).get("approver_role") or "a decision"
+                waiting_on_label(current)
                 if current and current["status"] == "waiting" else None
             ),
             "created_at": run["created_at"].isoformat() if run["created_at"] else None,

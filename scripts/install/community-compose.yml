@@ -122,6 +122,34 @@ services:
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
+      # PIPELINE KNOBS AN OPERATOR CAN ACTUALLY TURN.
+      #
+      # This file passes a NAMED LIST into the container, so anything not listed here sits in
+      # .env having no effect at all. An operator sets BOSS_CODE_AGENT_MAX_CONCURRENCY, sees
+      # the same behaviour, and concludes BOSS ignores its own configuration -- while the
+      # long-lived install, whose .env is applied differently, honours the very same key. That
+      # asymmetry is where "it works there but not here" comes from.
+      #
+      # Only HOST-INDEPENDENT settings belong here. BOSS_CLAUDE_CLI_PATH, for instance, must
+      # NOT be forwarded: its value on a laptop is /Users/<someone>/.local/bin/claude, which
+      # does not exist in the container, so passing it would break the CLI it configures.
+      #
+      # Defaults match config.py, so an unset key behaves exactly as a stock install.
+      BOSS_CODE_AGENT_MAX_CONCURRENCY: ${BOSS_CODE_AGENT_MAX_CONCURRENCY:-1}
+      BOSS_CODE_AGENT_MAX_TURNS: ${BOSS_CODE_AGENT_MAX_TURNS:-90}
+      BOSS_CODE_AGENT_REVIEW_MAX_TURNS: ${BOSS_CODE_AGENT_REVIEW_MAX_TURNS:-48}
+      BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS: ${BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS:-420}
+      BOSS_CODE_REPAIR_MAX_RETRIES: ${BOSS_CODE_REPAIR_MAX_RETRIES:-0}
+      BOSS_SANDBOX_CI_TIMEOUT_SECONDS: ${BOSS_SANDBOX_CI_TIMEOUT_SECONDS:-120}
+      BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS: ${BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS:-5}
+      # Mirror config.py's default, never empty: an unset compose variable still SETS the
+      # variable to "", which would override the real default with nothing.
+      BOSS_CODE_AGENT_ENGINE: ${BOSS_CODE_AGENT_ENGINE:-claude_code}
+      BOSS_LLM_ENGINE: ${BOSS_LLM_ENGINE:-auto}
+      BOSS_CHAT_LLM_ENGINE: ${BOSS_CHAT_LLM_ENGINE:-}
+      BOSS_CLAUDE_CLI_MODEL: ${BOSS_CLAUDE_CLI_MODEL:-}
+      BOSS_CODE_AGENT_LOW_COST_MODEL: ${BOSS_CODE_AGENT_LOW_COST_MODEL:-}
+      BOSS_CODE_AGENT_STRONG_MODEL: ${BOSS_CODE_AGENT_STRONG_MODEL:-}
       BOSS_BOOTSTRAP_SEED_API_ENABLED: "false"
       # Community: no Account Connect required
       BOSS_ACCOUNT_CONNECT_URL: ""
@@ -192,6 +220,34 @@ services:
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
+      # PIPELINE KNOBS AN OPERATOR CAN ACTUALLY TURN.
+      #
+      # This file passes a NAMED LIST into the container, so anything not listed here sits in
+      # .env having no effect at all. An operator sets BOSS_CODE_AGENT_MAX_CONCURRENCY, sees
+      # the same behaviour, and concludes BOSS ignores its own configuration -- while the
+      # long-lived install, whose .env is applied differently, honours the very same key. That
+      # asymmetry is where "it works there but not here" comes from.
+      #
+      # Only HOST-INDEPENDENT settings belong here. BOSS_CLAUDE_CLI_PATH, for instance, must
+      # NOT be forwarded: its value on a laptop is /Users/<someone>/.local/bin/claude, which
+      # does not exist in the container, so passing it would break the CLI it configures.
+      #
+      # Defaults match config.py, so an unset key behaves exactly as a stock install.
+      BOSS_CODE_AGENT_MAX_CONCURRENCY: ${BOSS_CODE_AGENT_MAX_CONCURRENCY:-1}
+      BOSS_CODE_AGENT_MAX_TURNS: ${BOSS_CODE_AGENT_MAX_TURNS:-90}
+      BOSS_CODE_AGENT_REVIEW_MAX_TURNS: ${BOSS_CODE_AGENT_REVIEW_MAX_TURNS:-48}
+      BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS: ${BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS:-420}
+      BOSS_CODE_REPAIR_MAX_RETRIES: ${BOSS_CODE_REPAIR_MAX_RETRIES:-0}
+      BOSS_SANDBOX_CI_TIMEOUT_SECONDS: ${BOSS_SANDBOX_CI_TIMEOUT_SECONDS:-120}
+      BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS: ${BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS:-5}
+      # Mirror config.py's default, never empty: an unset compose variable still SETS the
+      # variable to "", which would override the real default with nothing.
+      BOSS_CODE_AGENT_ENGINE: ${BOSS_CODE_AGENT_ENGINE:-claude_code}
+      BOSS_LLM_ENGINE: ${BOSS_LLM_ENGINE:-auto}
+      BOSS_CHAT_LLM_ENGINE: ${BOSS_CHAT_LLM_ENGINE:-}
+      BOSS_CLAUDE_CLI_MODEL: ${BOSS_CLAUDE_CLI_MODEL:-}
+      BOSS_CODE_AGENT_LOW_COST_MODEL: ${BOSS_CODE_AGENT_LOW_COST_MODEL:-}
+      BOSS_CODE_AGENT_STRONG_MODEL: ${BOSS_CODE_AGENT_STRONG_MODEL:-}
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating

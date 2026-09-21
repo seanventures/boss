@@ -178,6 +178,18 @@ CATALOGUE: list[dict[str, Any]] = [
             # cheap — the app is already built — and it is what keeps "a person saw this" true.
             _step("preview_final", "preview",
                   {"run_id": _from("build", "code_task_run_id")}),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -199,6 +211,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("notify", "notify", {"message": _in("title")}),
@@ -226,6 +250,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             _step("ux_review", "ux_review", approver_role="design_lead"),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -244,6 +280,18 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "bugfix",
         "steps": _chain([
             _step("build", "build", _build_inputs()),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("notify", "notify", {"message": _in("title")}),
@@ -281,6 +329,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("spec_review", "spec_review", approver_role="tech_lead"),
             _step("build", "build", _build_inputs(after_meeting=True)),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -303,6 +363,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             _step("ux_review", "ux_review", approver_role="design_lead"),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -323,6 +395,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("build", "build", _build_inputs()),
             _step("review", "review", {"seats": ["security"]}),
             _step("security_review", "security_review", approver_role="security_lead"),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -343,6 +427,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("spec_review", "spec_review", approver_role="data_owner"),
             _step("build", "build", _build_inputs(after_meeting=True)),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="data_owner"),
             _step("monitor", "monitor"),
@@ -371,6 +467,18 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("security_review", "security_review", approver_role="security_lead"),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -397,6 +505,18 @@ CATALOGUE: list[dict[str, Any]] = [
                                          "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="tech_lead"),
             _step("build", "build", _build_inputs(after_meeting=True)),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
@@ -419,7 +539,25 @@ CATALOGUE: list[dict[str, Any]] = [
             # The one control step in the catalogue: a real grace period, not a promise of one.
             {"id": "grace", "kind": "timer", "wait_seconds": 604800, "binding": {},
              "next": ["build"]},
-            _step("build", "build", _build_inputs(after_meeting=True), nxt=["deploy"]),
+            _step("build", "build", _build_inputs(after_meeting=True), nxt=["report"]),
+            # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
+            #
+            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # the report can say what PLRR actually changed:
+            #
+            #     "I want to see the summary of what plr did in the workflow pipeline"
+            #
+            # Before the gate rather than after it, because deploy is the one step a person
+            # decides and many runs stop there for good. A run that never ships still has a
+            # report. And a run that stops even earlier is not left without one: the same
+            # report is assembled on demand for any run, at any point, from the same evidence.
+            # HAND-WIRED, because this workflow is. Every other catalogue entry goes through
+            # `_chain`, which derives `next` from list order — so a step inserted into the list
+            # is wired for free. Here the edges are written out, and a step dropped into the
+            # list without them is simply unreachable: present in the plan, never run. The
+            # validator caught it; without it the step would have shipped silently dead, which
+            # is exactly how `plrr` spent its whole life.
+            _step("report", "report", nxt=["deploy"]),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   nxt=["document"], approver_role="release_manager"),
             _step("document", "document", {"title": _in("title")}),

@@ -19,6 +19,7 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
+from reportlab.lib import colors
 from reportlab.platypus import (
     HRFlowable,
     ListFlowable,
@@ -27,6 +28,8 @@ from reportlab.platypus import (
     Preformatted,
     SimpleDocTemplate,
     Spacer,
+    Table,
+    TableStyle,
 )
 
 
@@ -66,8 +69,67 @@ def _styles():
                                  textColor="#444444", borderColor="#cccccc", spaceAfter=6),
         "code": ParagraphStyle("PRDCode", parent=base["Code"], fontSize=8.5, leading=11, backColor="#f4f4f6",
                                borderPadding=6, spaceAfter=8),
+        # Table cells wrap, so they are Paragraphs rather than bare strings: a long agent name
+        # in a fixed-width column otherwise runs off the page edge instead of wrapping.
+        "th": ParagraphStyle("PRDTH", parent=base["BodyText"], fontSize=9, leading=12,
+                             textColor="#333333", spaceAfter=0),
+        "td": ParagraphStyle("PRDTD", parent=base["BodyText"], fontSize=9, leading=12,
+                             spaceAfter=0),
     }
     return styles
+
+
+#: The page margins, named once. The table width is derived from these, and a table sized
+#: against a different margin than the page uses is a table that runs off the edge.
+_MARGIN = 0.9 * inch
+_CONTENT_WIDTH = LETTER[0] - (2 * _MARGIN)
+
+#: A markdown table row: at least one pipe, and pipes at both ends after stripping.
+_TABLE_ROW = re.compile(r"^\|.*\|$")
+#: The separator under the header — `| --- | :--- | ---: |`.
+_TABLE_RULE = re.compile(r"^\|[\s:|-]+\|$")
+
+
+def _split_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _table_flowable(rows: list[list[str]], styles, width: float):
+    """A markdown table as a real table.
+
+    WHY THIS EXISTS. The renderer had no table case, so every row fell through to the
+    paragraph handler and printed as literal `| Research | succeeded | 3m 41s | $0.87 |`,
+    separator row and all. Documents that were readable in the console arrived as pipe soup in
+    the PDF — and the PDF is the copy that gets mailed and filed.
+
+    Columns share the width evenly rather than being measured: an even split is wrong by a
+    little on every table, and measuring is wrong by a lot on the first one whose longest cell
+    is an outlier.
+    """
+    if not rows:
+        return None
+    header, body = rows[0], rows[1:]
+    data = [[Paragraph(_inline(c), styles["th"]) for c in header]]
+    data += [[Paragraph(_inline(c), styles["td"]) for c in row] for row in body]
+
+    columns = max(len(r) for r in data)
+    # Ragged rows are legal markdown and would otherwise raise inside reportlab.
+    for row in data:
+        while len(row) < columns:
+            row.append(Paragraph("", styles["td"]))
+
+    table = Table(data, colWidths=[width / columns] * columns, hAlign="LEFT", repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor("#bbbbbb")),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.25, colors.HexColor("#e4e4e8")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f4f4f6")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    return table
 
 
 def render_markdown_pdf(
@@ -140,6 +202,20 @@ def render_markdown_pdf(
             i += 1
             continue
 
+        # table — header row, separator, then body until the first non-row line
+        if _TABLE_ROW.match(stripped) and i + 1 < n and _TABLE_RULE.match(lines[i + 1].strip()):
+            flush_lists()
+            rows = [_split_row(stripped)]
+            i += 2  # the header and its separator
+            while i < n and _TABLE_ROW.match(lines[i].strip()):
+                rows.append(_split_row(lines[i].strip()))
+                i += 1
+            table = _table_flowable(rows, styles, _CONTENT_WIDTH)
+            if table is not None:
+                flow.append(table)
+                flow.append(Spacer(1, 8))
+            continue
+
         # horizontal rule
         if re.match(r"^(\*{3,}|-{3,}|_{3,})$", stripped):
             flush_lists()
@@ -188,8 +264,8 @@ def render_markdown_pdf(
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=LETTER,
-        leftMargin=0.9 * inch, rightMargin=0.9 * inch,
-        topMargin=0.9 * inch, bottomMargin=0.9 * inch,
+        leftMargin=_MARGIN, rightMargin=_MARGIN,
+        topMargin=_MARGIN, bottomMargin=_MARGIN,
         title=title or "Document",
     )
     doc.build(flow)

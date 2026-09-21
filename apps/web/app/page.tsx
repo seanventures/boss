@@ -1745,7 +1745,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {/* THE FIRST TEN MINUTES. Before any of the areas below mean anything, an install
             needs somewhere to write code and something to think with. */}
         {shows("setup") ? (
-        <section className="panel-stack" data-area="setup" aria-label="Setup">
+        <section className="panel-stack" data-area="setup" aria-label="Repo and model">
           <SetupHome projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}

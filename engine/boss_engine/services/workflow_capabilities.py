@@ -181,6 +181,19 @@ CAPABILITIES: dict[str, Capability] = {
             is_async=True,
         ),
         _cap(
+            key="report",
+            # answers for what the run cost and who spent it
+            captain="program_manager",
+            label="Run report",
+            summary="What every step so far cost, which agent did it, and what went wrong — "
+                    "as a document that can be downloaded.",
+            tool=None,
+            risk_tier=0,
+            required_inputs=(),
+            produces=("artifact_id", "total_usd", "blockers"),
+            typical_minutes=1,
+        ),
+        _cap(
             key="preview",
             # a person has to be able to use it
             captain="qa",

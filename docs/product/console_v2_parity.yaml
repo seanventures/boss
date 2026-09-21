@@ -176,6 +176,36 @@ ai-sre:
   to: infra
   what: autonomous oncall
 
+# --------------------------------------------------------------------------- #
+# RENDERED FROM SIBLING FILES, NOT page.tsx
+#
+# These three declare their own <section data-area> inside app/<name>-ui.tsx. The parity test
+# used to read page.tsx alone, so they were invisible to it and went unrecorded -- `github`
+# surfaced only because a COMMENT in page.tsx happened to quote the attribute. An area that a
+# map cannot see is exactly the area that disappears in a fold.
+# --------------------------------------------------------------------------- #
+github:
+  to: missions
+  what: repository activity and the GitHub operations feed -- branches, PRs, merges per app
+  risk: >
+    the link from an app to its actual pull request. Without it the console can say a task
+    succeeded while nobody can find the code it produced, which is indistinguishable from the
+    task having produced nothing.
+
+knowledge-graph:
+  to: infra
+  what: the infrastructure graph and its summary, seeded from what infra reports
+  risk: >
+    the seed control. A graph that renders empty because it was never seeded looks the same as
+    one that is genuinely empty, and only the control tells them apart.
+
+observability-suite:
+  to: infra
+  what: health-check the observability sources and recommend a stack
+  risk: >
+    the health check. Recommending a stack on top of sources that are not reachable produces
+    confident advice about nothing.
+
 assurance:
   to: panels
   what: quality gates

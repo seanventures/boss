@@ -14,6 +14,7 @@ import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks
 import { previewRecordFromStepOutput } from "../lib/previews";
 import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
+import { RunReportPanel } from "./run-report-ui";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -170,8 +171,15 @@ type Run = {
 /** The project this run is delivering. Five runs of "Standard Product Delivery" are five
  *  identical rows unless the thing being delivered is on the row. */
 function runSubject(run: Run): string | null {
+  // THROUGH THE NAMER, WHATEVER THE SOURCE. `input.title` is usually the directive already
+  // truncated for display — "Build an incident timeline builder.\nWho it is for: an on-call
+  // enginee…", ellipsis and all — so showing it verbatim put a broken sentence at the top of
+  // the run while the report below it, which does run the namer, called the same thing
+  // "Incident Timeline Builder". Two names for one app on one screen.
   const title = (run.input ?? {})["title"];
-  return typeof title === "string" && title.trim() ? title.trim() : null;
+  const raw = typeof title === "string" && title.trim() ? title.trim() : null;
+  if (!raw) return null;
+  return appIdentity(run.input as AppRun).name || raw;
 }
 
 const LIVE = ["running", "waiting", "queued", "validating", "leased"];
@@ -2204,6 +2212,43 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
   const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
 
+  // WHERE THE CALLOUT POINTS.
+  //
+  // The rail wraps, so the picked step can be on either row and its position changes with the
+  // window. Measured from the DOM rather than computed from an index: a computed position is
+  // right until a label wraps to two lines or the rail reflows, and then it points at the
+  // wrong box while looking exactly as confident.
+  const railRef = useRef<HTMLOListElement | null>(null);
+  const detailRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const place = () => {
+      const rail = railRef.current;
+      const detail = detailRef.current;
+      if (!rail || !detail) return;
+      const node = rail.querySelector<HTMLElement>('[data-picked="true"] .dw-node-btn');
+      const panel = detail.querySelector<HTMLElement>(".dw-detail");
+      if (!node || !panel) {
+        detail.style.removeProperty("--dw-arrow-x");
+        return;
+      }
+      // MEASURED IN THE PANEL'S OWN COORDINATES. `offsetLeft` is relative to whichever
+      // ancestor happens to be positioned, which is not the panel — so the notch landed at an
+      // offset that looked plausible and pointed at the wrong step.
+      const box = node.getBoundingClientRect();
+      const frame = panel.getBoundingClientRect();
+      const centre = box.left + box.width / 2 - frame.left;
+      // Never off the end: a notch hanging past the panel's corner reads as a rendering bug
+      // rather than as a pointer. 18px keeps it clear of the rounded corner.
+      const clamped = Math.max(18, Math.min(frame.width - 18, centre));
+      detail.style.setProperty("--dw-arrow-x", `${Math.round(clamped)}px`);
+    };
+    place();
+    // The rail reflows on resize, and a label that wraps moves every box after it.
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [picked, steps.length]);
+
   // ASSIGNMENT IS STEP ONE, in the chain where it can be seen.
   //
   // It was a panel above the rail and the operator could not find it — "where when creating a
@@ -2220,7 +2265,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
 
   return (
     <div className="dw-path" data-testid="dw-path">
-      <ol className="dw-rail" aria-label="Workflow steps">
+      <ol className="dw-rail" aria-label="Workflow steps" ref={railRef}>
         <li className="dw-node dw-node-agents" data-phase="done"
             data-picked={showAgents ? "true" : undefined} data-testid="dw-node-agents">
           <button type="button" className="dw-node-btn"
@@ -2239,17 +2284,19 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
         {steps.map((step, index) => {
           const phase = phaseOf(step);
           const capability = step.capability ? byKey.get(step.capability) : undefined;
-          const previous = index > 0 ? phaseOf(steps[index - 1]) : null;
+          // THE FIRST STEP HAS A PREDECESSOR TOO. It is the Agents node, which is complete
+          // before any step runs — so treating "no earlier step" as "nothing has flowed" left
+          // Agents and Research as the only pair in the rail with no line between them.
+          const previous = index > 0 ? phaseOf(steps[index - 1]) : "done";
           return (
             <li key={step.step_id} className="dw-node" data-phase={phase}
                 data-picked={step.step_id === picked} data-testid="dw-node">
-              {index > 0 ? (
-                // The connector INTO this step: solid once the work has flowed through it,
-                // animated while it is flowing, dim before.
-                <i className="dw-link" aria-hidden
-                   data-flow={["done", "skipped", "findings", "failed_on"].includes(previous ?? "")
-                     ? (phase === "now" ? "moving" : "past") : "future"} />
-              ) : null}
+              {/* The connector INTO this step: solid once the work has flowed through it,
+                  animated while it is flowing, dim before. Drawn for every step including the
+                  first, whose predecessor is the Agents node. */}
+              <i className="dw-link" aria-hidden
+                 data-flow={["done", "skipped", "findings", "failed_on"].includes(previous ?? "")
+                   ? (phase === "now" ? "moving" : "past") : "future"} />
               <button type="button" className="dw-node-btn"
                       aria-current={phase === "now" ? "step" : undefined}
                       onClick={() => setPicked(step.step_id)}>
@@ -2297,6 +2344,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
                       readOnly={terminal} />
       ) : null}
       {current && !showAgents ? (
+        // The custom property is set on this wrapper and INHERITS into .dw-detail, so the
+        // notch can be positioned without threading a ref through StepDetail's props.
+        <div ref={detailRef} className="dw-detail-wrap">
         <StepDetail
           step={current}
           // Its position in the run, so the card can wear the same number as the rail node.
@@ -2315,7 +2365,17 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           previewStarting={previewStarting}
           busy={busy}
         />
+        </div>
       ) : null}
+      {/* THE REPORT, ONCE THERE IS SOMETHING TO REPORT.
+          Not from step zero: a report reading "0 of 10 steps, $0.00, nothing went wrong" is
+          noise that teaches people to scroll past the panel before it ever has an answer. It
+          appears as soon as one step has finished and keeps filling in, which is also what
+          makes it useful DURING a long build rather than only after it. */}
+      {run.steps.some((s) => s.status === "succeeded" || s.status === "skipped") ? (
+        <RunReportPanel runId={run.id} projectId={projectId} />
+      ) : null}
+
       {/* START IT AGAIN, FROM THE TOP. A run that failed early had no way back except
           retyping the directive into the New project form — the workflow, the title and the
           instructions are all right here. */}

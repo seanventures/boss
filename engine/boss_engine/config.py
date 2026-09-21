@@ -852,7 +852,16 @@ class Settings(BaseSettings):
     code_agent_strong_engine: str = Field(default="", alias="BOSS_CODE_AGENT_STRONG_ENGINE")
     # Lane capacity for the review panel: how many read-only checks run concurrently. Extra checks
     # queue for a free slot (the entitlement broker authorises which model lane each one uses).
-    code_agent_max_concurrency: int = Field(default=3, alias="BOSS_CODE_AGENT_MAX_CONCURRENCY")
+    #
+    # 1, NOT 3 — THE DEFAULT MUST SURVIVE THE SMALLEST BOX WE TELL PEOPLE TO USE.
+    #
+    # The only install that has ever run this pipeline for months sets 1 by hand, and nobody
+    # wrote that down; a fresh install shipped 3. Each concurrent check is a coding-agent
+    # process inside the api container, so on the 4 GB VM in the install docs three of them
+    # exhaust the box — and an operator reads the resulting stall as BOSS being broken, which
+    # is exactly the misattribution the host-stall work exists to prevent. Raise it on a
+    # machine with the memory to spare; the console knob is "Agents at once".
+    code_agent_max_concurrency: int = Field(default=1, alias="BOSS_CODE_AGENT_MAX_CONCURRENCY")
     # Rate-limit-aware model-call pacing (#111) — backpressure on the model lane so a burst
     # can't trip a provider's rolling rate limit (e.g. Anthropic's 5-hour cap) or overflow to
     # paid usage credits. Default PACED; flip burst_mode on to run wide-open (customers who
@@ -1449,3 +1458,183 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+# --- configuration drift -----------------------------------------------------------------
+#
+# Installs drift by accumulating variables nobody reads, and the only way to tell a dead knob
+# from a live one is to ask every reader.
+#
+# THE TRAP, HIT WHILE WRITING THIS: BOSS_LEASE_TTL_SECONDS looks dead from here. It is in no
+# engine setting, so a check built on `Settings` alone calls it unread -- and it is nothing of
+# the sort: the WORKER has its own settings class, and that knob decides how long a crashed
+# worker's job is stuck before another worker reclaims it. A drift report that names a live
+# durability knob as dead is worse than no report, because someone will act on it.
+#
+# So: ask both classes, and count a name as read if ANY of pydantic's routes accept it -- the
+# field name, `alias`, or any entry in `validation_alias=AliasChoices(...)`. Reading only
+# `alias` marks ~300 real settings as unread.
+
+#: Names the source scan cannot see because they are never written out literally -- built by
+#: interpolation, or read by a tool outside this tree. Keep this list tiny; the scan is the
+#: real mechanism.
+CONSUMED_OUTSIDE_SETTINGS: frozenset[str] = frozenset(
+    {
+        "BOSS_API_KEYS",  # apps/api: derived from BOSS_API_KEY in compose
+        "BOSS_API_KEY_PRINCIPALS",  # same
+    }
+)
+
+#: Directories with no BOSS source in them. Skipped so the scan stays fast enough to run at
+#: boot: without this it walks node_modules and .next and takes seconds instead of ~100ms.
+_SKIP_DIRECTORIES = frozenset(
+    {".git", "node_modules", ".next", "__pycache__", ".venv", "venv", "dist", "build",
+     ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+)
+
+#: Extensions that can plausibly contain a reader: Python, shell, compose/k8s YAML, the web
+#: app, Dockerfiles and Makefiles. `.env` files are excluded by name below -- a variable
+#: appearing in the file that SETS it is not evidence that anything READS it.
+_SOURCE_SUFFIXES = frozenset(
+    {".py", ".sh", ".bash", ".yml", ".yaml", ".ts", ".tsx", ".js", ".jsx", ".tmpl",
+     ".toml", ".cfg", ".mk"}
+)
+
+#: Readers with no extension. Matching on the whole name instead of accepting every
+#: extensionless file, which is what made the first scan walk binaries and take 12 seconds.
+_SOURCE_NAMES = frozenset({"Dockerfile", "Makefile", "makefile"})
+
+#: No reader is a megabyte of one line. This skips lockfiles, bundles and checked-in data.
+_MAX_SOURCE_BYTES = 1_000_000
+
+
+@lru_cache(maxsize=4)
+def names_mentioned_in_source(root: str) -> frozenset[str]:
+    """Every BOSS_* name that appears literally anywhere in the source tree.
+
+    WHY A SCAN AND NOT A LIST. Three separate hand-built versions of this check accused live
+    settings of being dead, because a settings class is not the only reader: BOSS_API_PORT is
+    read by the compose file and by doctor.sh, BOSS_LOCAL_SUPERVISOR by a bare `os.getenv`,
+    BOSS_LEASE_TTL_SECONDS by the worker's own settings class. Every one of those is invisible
+    to a scan of `Settings`, and each wrong accusation invited someone to delete something
+    that works.
+
+    Mention is weak evidence of a reader -- a name in a comment counts here. That asymmetry is
+    deliberate: the cost of a missed dead variable is an untidy .env, and the cost of a false
+    accusation is an operator deleting their own API port.
+    """
+    import re
+
+    found: set[str] = set()
+    pattern = re.compile(rb"BOSS_[A-Z0-9_]+")
+    base = Path(root)
+    if not base.is_dir():
+        return frozenset()
+    # os.walk with in-place pruning, NOT rglob: rglob enumerates every file under
+    # node_modules before the filter can reject it, which is the difference between 0.3s and
+    # 13s and therefore the difference between running this at boot and not.
+    import os as _os
+
+    for directory, subdirectories, filenames in _os.walk(base):
+        subdirectories[:] = [d for d in subdirectories if d not in _SKIP_DIRECTORIES]
+        for filename in filenames:
+            path = Path(directory) / filename
+            # A variable in the file that SETS it is not evidence that anything READS it.
+            if filename == ".env" or filename.startswith(".env."):
+                continue
+            if path.suffix.lower() not in _SOURCE_SUFFIXES and filename not in _SOURCE_NAMES:
+                if not filename.startswith("Dockerfile"):
+                    continue
+            try:
+                if path.stat().st_size > _MAX_SOURCE_BYTES:
+                    continue
+                blob = path.read_bytes()
+            except OSError:
+                continue
+            found.update(match.decode() for match in pattern.findall(blob))
+    return frozenset(found)
+
+
+def _env_names(model) -> set[str]:
+    """Every environment variable name a pydantic-settings class will accept, upper-cased."""
+    names: set[str] = set()
+    for field_name, field in model.model_fields.items():
+        names.add(field_name.upper())
+        alias = getattr(field, "alias", None)
+        if isinstance(alias, str):
+            names.add(alias.upper())
+        validation_alias = getattr(field, "validation_alias", None)
+        if isinstance(validation_alias, str):
+            names.add(validation_alias.upper())
+        elif isinstance(validation_alias, AliasChoices):
+            names.update(
+                str(choice).upper()
+                for choice in validation_alias.choices
+                if isinstance(choice, str)
+            )
+    return names
+
+
+def _worker_settings_model():
+    """The worker ships as a separate app and may not be importable from the engine alone.
+
+    If it is not on the path, say nothing rather than guess -- an absent reader must never be
+    reported as proof that a variable has no reader.
+    """
+    import importlib
+
+    # Two spellings, both real: the containers run `python -m apps.worker.boss_worker.main`
+    # with /app on the path, while a dev shell puts apps/worker on PYTHONPATH directly.
+    for module in ("apps.worker.boss_worker.config", "boss_worker.config"):
+        try:
+            return importlib.import_module(module).WorkerSettings
+        except Exception:  # noqa: BLE001 — a diagnostic must never be the thing that breaks
+            continue
+    return None
+
+
+def setting_env_names() -> frozenset[str]:
+    """Every environment variable name any BOSS settings class will accept."""
+    names = _env_names(Settings)
+    worker = _worker_settings_model()
+    if worker is not None:
+        names |= _env_names(worker)
+    return frozenset(names)
+
+
+def unread_boss_variables(environ, source_root=None) -> tuple[str, ...]:
+    """BOSS_* variables that are set and that nothing appears to read — for reporting only.
+
+    Returns nothing at all when the readers cannot be fully enumerated: when the worker's
+    settings will not import, or when no source tree is available to scan. A partial view of
+    the readers can only produce false accusations, and this check has produced three.
+
+    Reported, never enforced. Refusing to boot over a stray variable would strand an install
+    for a typo, and the goal is to make drift visible rather than fatal.
+    """
+    if _worker_settings_model() is None:
+        return ()
+    root = source_root or _default_source_root()
+    if root is None:
+        return ()
+    mentioned = names_mentioned_in_source(str(root))
+    if not mentioned:
+        return ()
+    known = setting_env_names() | CONSUMED_OUTSIDE_SETTINGS | mentioned
+    return tuple(
+        sorted(
+            key
+            for key in environ
+            if key.upper().startswith("BOSS_") and key.upper() not in known
+        )
+    )
+
+
+def _default_source_root():
+    """The tree this package was installed from — the repo in development, /app in a container.
+
+    boss_engine lives at <root>/engine/boss_engine, so the root is two parents up. Returns
+    None when that shape does not hold, which makes the check silent rather than wrong.
+    """
+    root = Path(__file__).resolve().parents[2]
+    return root if (root / "engine").is_dir() else None

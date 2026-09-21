@@ -3080,6 +3080,46 @@ _WORK_TERMINAL: frozenset[str] = frozenset(
 )
 
 
+#: What each kind of awaited work is called in the words the console already uses for the step
+#: that starts it, so "waiting on ..." names something the operator can see on the same screen.
+_AWAIT_LABELS: dict[str, str] = {
+    "discovery": "the research to finish",
+    "meeting": "the panel to finish",
+    "code_task": "the build to finish",
+    "preview": "the preview to come up",
+}
+
+
+def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
+    """What a waiting step is waiting FOR — or None when that is not recorded.
+
+    THE BUG THIS REPLACES. The console said "waiting on a decision" for every waiting step
+    that had no approver, because "a decision" was the fallback. A research step that had
+    started a discovery run and was waiting for it to finish therefore told the operator to go
+    and decide something that did not exist, on a run that was working perfectly:
+
+        "waiting on a decision" — while drun_864aa33554b14eb0b541 was running normally.
+
+    Sending someone to look for a decision that is not there is worse than saying nothing. It
+    costs them the trip, and then it costs the console its credibility, because the next
+    genuine "waiting on you" reads like noise.
+
+    So the fallback is None: the status pill already says `waiting`, and silence is the honest
+    answer to a question we cannot answer.
+    """
+    approver = (step.get("approval") or {}).get("approver_role")
+    if approver:
+        return str(approver)
+    if step.get("decision_id"):
+        return "a decision"
+    awaited = (step.get("output") or {}).get("await")
+    if isinstance(awaited, dict):
+        label = _AWAIT_LABELS.get(str(awaited.get("kind") or "").strip())
+        if label:
+            return label
+    return None
+
+
 def _cancel_work_this_run_started(
     connection: Connection, project_id: str, run_id: str, actor: str, reason: str,
 ) -> list[dict[str, Any]]:

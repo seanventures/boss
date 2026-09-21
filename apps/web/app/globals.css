@@ -966,15 +966,34 @@ h1, h2, h3, h4, h5, h6 {
    that puts real distance between its content and the card below. An operator scanning a list
    should never have to work out where one run's steps stop. */
 .dw-run[data-open="true"] {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong, var(--border)));
+  /* THE ACCENT AT FULL STRENGTH, not mixed 45% into the border colour. Against --surface-2
+     that mix landed a few percent away from the closed card's own border, so the open card
+     was marked by a shadow and almost nothing else — "we cannot differentiate which workflow
+     is expanded". */
+  border-color: var(--accent, #2F6FE0);
   background: var(--surface-2, #0F1830);
   box-shadow: 0 18px 44px -20px rgba(0, 0, 0, .8),
-              0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+              0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* AND THE NEIGHBOURS STEP BACK.
+   Brightening one card only helps if there is something to compare it against. A list of
+   equally-bright rows with one slightly brighter row is a spot-the-difference puzzle; the same
+   list with the others held back is unambiguous at a glance. Scoped to `:has`, so it applies
+   only while something is actually open and the list returns to normal when it closes. Held
+   back rather than hidden — 0.72 keeps every row readable, because the one you want next is
+   often one of the quiet ones. */
+.dw-runs:has(.dw-run[data-open="true"]) .dw-run:not([data-open="true"]) {
+  opacity: .72;
+}
+.dw-runs:has(.dw-run[data-open="true"]) .dw-run:not([data-open="true"]):hover,
+.dw-runs:has(.dw-run[data-open="true"]) .dw-run:not([data-open="true"]):focus-within {
+  opacity: 1;
 }
 /* And its header is a header: separated from the body it opened. */
 .dw-run[data-open="true"] > .dw-run-head {
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .dw-run-head {
   width: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -7973,8 +7992,13 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-path { margin: 10px 0 0; }
 
 .dw-rail {
-  display: flex; align-items: stretch; gap: 0; list-style: none; margin: 0; padding: 2px 0 10px;
-  overflow-x: auto; scrollbar-width: thin;
+  /* WRAPPING, SAID OUT LOUD. This set `overflow-x: auto` and no `flex-wrap`, while an earlier
+     `.dw-rail` rule set `flex-wrap: wrap` — which the cascade left standing. So the rail did
+     both: it wrapped onto a second row AND carried a scroll container that could never
+     scroll. Wrapping is the better behaviour of the two (a scroll bar hides steps, and the
+     plan is part of what the screen is for), so it is now the one that is chosen. */
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+  list-style: none; margin: 0; padding: 2px 0 10px;
 }
 .dw-node { display: flex; align-items: center; flex: 0 0 auto; min-width: 0; }
 
@@ -7996,11 +8020,25 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-node-btn {
   display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
   gap: 0 8px; align-items: center;
-  padding: 7px 12px 7px 8px; border-radius: 9px; cursor: pointer; text-align: left;
-  background: var(--panel, #0d1117); border: 1px solid var(--border, #30363d);
-  color: inherit; max-width: 190px;
+  padding: 8px 12px 8px 9px; border-radius: 10px; cursor: pointer; text-align: left;
+  /* A BOX YOU CAN ACTUALLY SEE.
+     `--border` is #1C2740 and the open run card it sits on is #0F1830 — about two percent of
+     luminance between them, so the boxes were outlines in name only ("I cant see the box
+     still"). The stronger token plus a fill lighter than the card is what makes each step read
+     as an object sitting ON the card rather than a region drawn INTO it. */
+  background: color-mix(in srgb, var(--surface-2, #0F1830) 55%, var(--panel, #0d1117));
+  border: 1px solid var(--border-strong, #26365C);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+  color: inherit;
+  /* A CARD, NOT A CHIP. Every step is the same width, so the row reads as a sequence of equal
+     things rather than as labels of differing importance — and the widest label stops
+     deciding the layout for all of them. */
+  width: 178px; min-height: 46px;
 }
-.dw-node-btn:hover { border-color: var(--live, #58a6ff); }
+.dw-node-btn:hover {
+  border-color: var(--live, #58a6ff);
+  background: color-mix(in srgb, var(--live, #58a6ff) 8%, var(--panel, #0d1117));
+}
 .dw-node[data-picked="true"] .dw-node-btn {
   border-color: var(--live, #58a6ff); box-shadow: 0 0 0 1px var(--live, #58a6ff) inset;
 }
@@ -8010,8 +8048,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: var(--border, #30363d); color: var(--muted, #8b949e);
 }
 .dw-node-name {
-  font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; min-width: 0;
+  /* TWO LINES BEFORE AN ELLIPSIS. At one line "Production launch readiness" — the step whose
+     whole job is the thing nobody thinks about before launch — rendered as "Production launch
+     re…", which names nothing. */
+  font-size: 12px; font-weight: 600; line-height: 1.25; min-width: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .dw-node-meta {
   font-size: 11px; color: var(--muted, #8b949e); white-space: nowrap; overflow: hidden;
@@ -8049,11 +8091,49 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 .dw-detail {
-  border: 1px solid var(--border, #30363d); border-radius: 10px; padding: 12px 14px;
-  background: color-mix(in srgb, var(--panel, #0d1117) 88%, transparent);
+  border: 1px solid var(--border-strong, #26365C); border-radius: 10px; padding: 14px 16px;
+  /* ONE REGION, CLEARLY THIS STEP'S.
+     The panel, the run report and the management row all sat on the same ground at the same
+     weight, so after clicking a step there was nothing to say where its detail stopped:
+     "I dont know what was expanded for that step". A distinct fill plus the accent edge gives
+     the opened step a body of its own. Kept a TINT rather than a new colour — the text keeps
+     the foreground it already had, so nothing has to be re-read against a new background. */
+  background: color-mix(in srgb, var(--accent, #2F6FE0) 7%, var(--surface-1, #0d1117));
+  border-left: 3px solid var(--accent, #2F6FE0);
+  /* A CALLOUT, POINTED AT THE BOX THAT OPENED IT.
+     Ten boxes above and one panel below: which box the panel is about was carried only by a
+     border colour on a step that might be on either row. The notch is drawn under the picked
+     step — `--dw-arrow-x` is measured from the button and set on this element — so the answer
+     is a line rather than a recollection. Centred as a fallback when nothing has measured
+     yet, which is also what a printed page gets. */
+  position: relative; margin-top: 10px;
 }
-.dw-detail[data-phase="failed"] { border-color: var(--bad, #f85149); }
-.dw-detail[data-phase="now"] { border-color: var(--live, #58a6ff); }
+.dw-detail::before, .dw-detail::after {
+  content: ""; position: absolute; bottom: 100%;
+  left: var(--dw-arrow-x, 50%); transform: translateX(-50%);
+  border: 8px solid transparent; width: 0; height: 0;
+}
+/* Two triangles: the outer one is the border, the inner one sits a pixel inside it and paints
+   the fill, which is how a notch keeps the panel's outline unbroken. */
+.dw-detail::before { border-bottom-color: var(--border, #30363d); }
+.dw-detail::after {
+  border-bottom-color: color-mix(in srgb, var(--accent, #2F6FE0) 7%, var(--surface-1, #0d1117));
+  margin-bottom: -1px;
+}
+.dw-detail[data-phase="now"]::before { border-bottom-color: var(--live, #58a6ff); }
+.dw-detail[data-phase="findings"]::before { border-bottom-color: var(--warn, #d29922); }
+.dw-detail[data-phase="failed"]::before { border-bottom-color: var(--bad, #f85149); }
+/* The notch slides to the next step rather than jumping, which is what makes it read as the
+   same callout moving. Only for people who have not asked for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .dw-detail::before, .dw-detail::after { transition: left .18s ease; }
+}
+.dw-detail[data-phase="failed"] { border-left-color: var(--bad, #f85149); }
+.dw-detail[data-phase="now"] { border-left-color: var(--live, #58a6ff); }
+.dw-detail[data-phase="findings"] { border-left-color: var(--warn, #d29922); }
+/* Breathing room between this step's region and whatever follows it, so the report below is
+   plainly a different thing rather than more of the same panel. */
+.dw-detail-wrap { margin-bottom: 14px; }
 .dw-detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dw-detail-head h4 { margin: 0; font-size: 14px; }
 .dw-detail-what { margin: 6px 0 0; font-size: 12px; color: var(--muted, #8b949e); }
@@ -9780,11 +9860,21 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
    Shown only when the host is the reason a run is slow — never on a healthy machine, because
    an indicator that is always on is one nobody reads. Amber warns; red says restart. */
 .host-advice {
-  display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline;
+  /* Icon in its own column, text wrapping beside it. The text keeps the wrapping row it
+     always had — see .host-advice-body — so only the icon column is new. */
+  display: flex; gap: 10px; align-items: flex-start;
   margin: 0 0 10px; padding: 9px 12px; border-radius: 8px;
   border: 1px solid var(--amber, #d29922); background: rgba(210, 153, 34, 0.10);
   font-size: 0.8rem; line-height: 1.45;
 }
+.host-advice-body {
+  display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline;
+  min-width: 0;  /* or a long detail pushes the icon off the left edge instead of wrapping */
+}
+/* Optically aligned to the headline's cap height rather than its line box: on the 1.45
+   line-height above, a top-aligned 16px icon sits visibly high. */
+.host-advice-icon { flex: none; margin-top: 2px; color: var(--amber, #d29922); }
+.host-advice[data-severity="critical"] .host-advice-icon { color: var(--red, #f85149); }
 .host-advice[data-severity="critical"] {
   border-color: var(--red, #f85149); background: rgba(248, 81, 73, 0.10);
 }
@@ -9867,3 +9957,109 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 }
 .dw-wiz-input input:focus { outline: 2px solid var(--accent, #5b8cff); border-color: transparent; }
 .dw-req { font-style: normal; font-size: .72rem; color: var(--amber, #d29922); margin-left: 6px; }
+
+/* ─── RUN REPORT ─────────────────────────────────────────────────────────────
+   What the whole run cost, who did it, and what went wrong. Summary always visible,
+   detail behind disclosures — a report that opens as four screens of tables is one
+   nobody reads twice. */
+.rr { margin: 14px 0 0; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid var(--border, #30363d); background: rgba(255, 255, 255, 0.02); }
+/* Collapsed by default. The summary line has to earn the click on its own, so it carries the
+   name, the numbers and whether anything is urgent — everything needed to decide not to open
+   it. */
+.rr-root > summary { cursor: pointer; list-style: revert; }
+.rr-root-summary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.rr-root-name { font-size: 0.86rem; font-weight: 700; }
+.rr-root-flag { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem;
+                font-weight: 700; color: var(--amber, #d29922); }
+.rr-root[open] > summary { margin-bottom: 4px; }
+
+/* Turn the findings into the next run rather than into a note somebody retypes. */
+.rr-build {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+  padding: 6px 12px; border-radius: 7px; font-size: 0.76rem; font-weight: 600;
+  border: 1px solid var(--accent, #58a6ff); background: rgba(88, 166, 255, 0.10);
+  color: var(--accent-text, #58a6ff); cursor: pointer;
+}
+.rr-build:hover { background: rgba(88, 166, 255, 0.18); }
+.rr-build:disabled { opacity: 0.6; cursor: default; }
+.rr-built { margin: 10px 0 0; font-size: 0.78rem; }
+.rr-built code { font-size: 0.72rem; padding: 1px 5px; border-radius: 4px;
+                 background: rgba(255, 255, 255, 0.06); }
+.rr-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* The eyebrow type, as Setup uses for "Already on this install". Only the colour is left to
+   the .eyebrow rule; the margin reset belongs to the heading. */
+.rr-title { margin: 0; }
+.rr-name { margin: 12px 0 0; font-size: 1.05rem; font-weight: 700; }
+.rr-lede { margin: 4px 0 0; font-size: 0.82rem; line-height: 1.5; opacity: 0.85; }
+.rr-try { margin: 8px 0 0; font-size: 0.78rem; }
+.rr-try a { font-weight: 600; }
+/* P1s are the reason to open the panel, so they sit above every disclosure. */
+.rr-urgent { margin: 10px 0 0; padding: 8px 10px; border-radius: 7px;
+             border: 1px solid var(--amber, #d29922); background: rgba(210, 153, 34, 0.08); }
+.rr-urgent p { margin: 0 0 4px; font-size: 0.78rem; line-height: 1.45; }
+.rr-urgent p:last-child { margin-bottom: 0; }
+.rr-facts { margin: 8px 0 0; font-size: 0.78rem; opacity: 0.85; }
+.rr-note { margin: 8px 0 0; font-size: 0.78rem; line-height: 1.5; opacity: 0.85; }
+.rr-note code { font-size: 0.72rem; padding: 1px 4px; border-radius: 4px;
+                background: rgba(255, 255, 255, 0.06); }
+.rr-caveat { opacity: 0.7; font-style: italic; }
+.rr-screens, .rr-acs, .rr-next { margin: 8px 0 0; padding-left: 18px; font-size: 0.78rem; }
+.rr-screens li, .rr-acs li { margin-bottom: 6px; line-height: 1.45; }
+.rr-next li { margin-bottom: 8px; line-height: 1.45; list-style: none; margin-left: -18px; }
+.rr-next li b { display: inline-block; min-width: 26px; }
+.rr-next li span { display: block; opacity: 0.7; }
+.rr-next li[data-priority="P1"] b { color: var(--red, #f85149); }
+.rr-next li[data-priority="P2"] b { color: var(--amber, #d29922); }
+/* A verdict is a word an operator has to weigh, so the ones that need weighing are marked. */
+.rr-table td[data-verdict="refuted"], .rr-table td[data-verdict="drift"] {
+  color: var(--amber, #d29922); }
+.rr-table td[data-verdict="clean"] { color: var(--green, #3fb950); }
+.rr-pdf {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 7px; font-size: 0.75rem; font-weight: 600;
+  border: 1px solid var(--border, #30363d); background: transparent;
+  color: inherit; cursor: pointer; text-decoration: none;
+}
+.rr-pdf:hover { border-color: var(--accent, #58a6ff); }
+.rr-pdf:disabled { opacity: 0.6; cursor: default; }
+
+/* The four numbers that answer "how did it go", on one row at any width. */
+.rr-figures { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 12px 0 4px; }
+.rr-figures div { display: flex; flex-direction: column; gap: 1px; }
+.rr-figures dt { font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase;
+                 opacity: 0.6; }
+.rr-figures dd { margin: 0; font-size: 0.95rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Time the machine took is only worth colouring when there IS some. Amber at zero would
+   make every clean run look like it had a problem. */
+.rr-figures dd[data-lost="yes"] { color: var(--amber, #d29922); }
+
+.rr-section { margin-top: 10px; border-top: 1px solid var(--border, #30363d); padding-top: 8px; }
+.rr-section > summary {
+  cursor: pointer; font-size: 0.78rem; font-weight: 600;
+  display: flex; align-items: center; gap: 8px; list-style: revert;
+}
+.rr-count { display: inline-flex; align-items: center; gap: 4px; font-weight: 600;
+            font-size: 0.72rem; opacity: 0.75; }
+.rr-clean { font-size: 0.72rem; font-weight: 400; opacity: 0.55; }
+
+.rr-area h4 { margin: 10px 0 4px; font-size: 0.72rem; letter-spacing: 0.04em;
+              text-transform: uppercase; opacity: 0.65; }
+.rr-area ul { margin: 0; padding-left: 16px; }
+.rr-area li { margin-bottom: 7px; font-size: 0.78rem; }
+.rr-area li b { display: block; font-weight: 600; }
+/* The action is advice, not a finding — quieter, so the finding reads first. */
+.rr-area li span { display: block; opacity: 0.72; }
+.rr-area li[data-severity="blocker"] b { color: var(--red, #f85149); }
+.rr-area li[data-severity="warn"] b { color: var(--amber, #d29922); }
+
+.rr-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 0.76rem; }
+.rr-table th { text-align: left; font-weight: 600; opacity: 0.6; padding: 4px 8px 4px 0;
+               font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.rr-table td { padding: 4px 8px 4px 0; border-top: 1px solid rgba(255, 255, 255, 0.05);
+               font-variant-numeric: tabular-nums; }
+.rr-table tr[data-status="pending"] td { opacity: 0.45; }
+.rr-auto { margin-left: 6px; padding: 1px 5px; border-radius: 4px; font-size: 0.64rem;
+           border: 1px solid var(--border, #30363d); opacity: 0.75; }
+.rr-empty, .rr-problem { margin: 8px 0 0; font-size: 0.78rem; opacity: 0.7; }
+.rr-problem { color: var(--amber, #d29922); }

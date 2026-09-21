@@ -128,11 +128,11 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
 
   const steps = status?.steps ?? [];
   return (
-    <section className="panel-stack" aria-label="Setup">
+    <section className="panel-stack" aria-label="Repo and model">
       <article className="stack-card">
         <div className="section-head">
           <div>
-            <span className="eyebrow">Setup</span>
+            <span className="eyebrow">Repo and model</span>
             <h2>Two things make a working install.</h2>
             <p className="detail">
               Somewhere to write code, and something to think with. Each step proves itself
