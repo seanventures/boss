@@ -2857,6 +2857,12 @@ CREATE TABLE IF NOT EXISTS agent_threads (
   status TEXT NOT NULL DEFAULT 'active',
   pending_plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
   pending_plan_summary JSONB,
+  -- WHOSE CONVERSATION THIS IS. Asking the Program Manager and asking QA are two different
+  -- conversations, and the thread key had no room to say so: a thread resolved on
+  -- (project, surface, external_ref) alone, so switching role inside one handed the second
+  -- agent the first one's history as though it were its own. '' means the general agent,
+  -- which is what every thread predating this column was.
+  agent_role TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (surface IN ('chat', 'github')),
@@ -2864,14 +2870,20 @@ CREATE TABLE IF NOT EXISTS agent_threads (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_threads_project_actor
   ON agent_threads(project_id, actor, updated_at DESC);
+-- A SHARED TASK THREAD IS SHARED PER AGENT. Two agents discussing one task each keep their
+-- own thread on it; without agent_role here the second to speak would adopt the first's.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_threads_surface_external
-  ON agent_threads(project_id, surface, external_ref)
+  ON agent_threads(project_id, surface, external_ref, agent_role)
   WHERE external_ref IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_messages (
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+  -- "user" or "assistant" — the SPEAKER, not the agent. Which agent answered was recorded
+  -- nowhere at all, so an existing thread could not even be sorted out after the fact.
   role TEXT NOT NULL,
+  -- WHICH AGENT PRODUCED THIS. Attribution that survives the thread it was said in.
+  agent_role TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL,
   tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
   actions JSONB NOT NULL DEFAULT '[]'::jsonb,

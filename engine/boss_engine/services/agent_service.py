@@ -34,13 +34,20 @@ class AgentService:
         thread_id: Optional[str] = None,
         surface: str = "chat",
         external_ref: Optional[str] = None,
+        agent_role: str = "",
     ) -> dict[str, Any]:
+        # WHOSE CONVERSATION. The key was (project, surface, external_ref) and nothing else, so
+        # asking the Program Manager and then asking QA on the same task resolved to ONE thread
+        # and the second agent read the first's turns as its own. Normalised the same way the
+        # role is matched everywhere else, or "QA" and "qa" would be two conversations.
+        agent_role = (agent_role or "").strip().lower()
         if thread_id:
             row = connection.execute(
                 text(
                     """
                     SELECT id, project_id, actor, surface, external_ref, status,
-                           pending_plan_id, pending_plan_summary, created_at, updated_at
+                           agent_role, pending_plan_id, pending_plan_summary,
+                           created_at, updated_at
                     FROM agent_threads WHERE id = :id
                     """
                 ),
@@ -56,6 +63,15 @@ class AgentService:
                 )
             if row["status"] != "active":
                 raise AgentThreadOwnershipError("Agent thread is closed.")
+            # A THREAD BELONGS TO THE AGENT THAT HAS BEEN SPEAKING IN IT. Handing a PM thread
+            # to QA because the caller kept the same id is the overlap this exists to prevent
+            # — and it would be invisible, because the reply would simply be well-informed
+            # about a conversation QA never had.
+            if (row["agent_role"] or "") != agent_role:
+                raise AgentThreadOwnershipError(
+                    f"this thread belongs to '{row['agent_role'] or 'the general agent'}', "
+                    f"not '{agent_role or 'the general agent'}' — start a new one to ask a "
+                    f"different agent.")
             return dict(row)
 
         if external_ref:
@@ -63,16 +79,18 @@ class AgentService:
                 text(
                     """
                     SELECT id, project_id, actor, surface, external_ref, status,
-                           pending_plan_id, pending_plan_summary, created_at, updated_at
+                           agent_role, pending_plan_id, pending_plan_summary,
+                           created_at, updated_at
                     FROM agent_threads
                     WHERE project_id = :project_id AND surface = :surface
-                      AND external_ref = :external_ref
+                      AND external_ref = :external_ref AND agent_role = :agent_role
                     """
                 ),
                 {
                     "project_id": project_id,
                     "surface": surface,
                     "external_ref": external_ref,
+                    "agent_role": agent_role,
                 },
             ).mappings().first()
             if row:
@@ -86,11 +104,12 @@ class AgentService:
             text(
                 """
                 INSERT INTO agent_threads (
-                    id, project_id, actor, surface, external_ref
+                    id, project_id, actor, surface, external_ref, agent_role
                 )
-                VALUES (:id, :project_id, :actor, :surface, :external_ref)
+                VALUES (:id, :project_id, :actor, :surface, :external_ref, :agent_role)
                 RETURNING id, project_id, actor, surface, external_ref, status,
-                          pending_plan_id, pending_plan_summary, created_at, updated_at
+                          agent_role, pending_plan_id, pending_plan_summary,
+                          created_at, updated_at
                 """
             ),
             {
@@ -99,6 +118,7 @@ class AgentService:
                 "actor": actor,
                 "surface": surface,
                 "external_ref": external_ref,
+                "agent_role": agent_role,
             },
         ).mappings().one()
         emit_event(
@@ -124,19 +144,24 @@ class AgentService:
         #: The buttons this reply put above itself. Not writes that ran — offers, which is
         #: why they are not in `actions`. Stored so reopening the thread restores them.
         proposed_actions: Optional[list[dict[str, Any]]] = None,
+        #: WHICH AGENT SAID IT. Recorded nowhere before, so an existing thread could not be
+        #: sorted out after the fact — "assistant" says a machine spoke, not which one.
+        agent_role: str = "",
     ) -> dict[str, Any]:
         row = connection.execute(
             text(
                 """
                 INSERT INTO agent_messages (
-                    id, thread_id, role, content, tool_calls, actions, proposed_actions
+                    id, thread_id, role, content, tool_calls, actions, proposed_actions,
+                    agent_role
                 )
                 VALUES (
                     :id, :thread_id, :role, :content,
                     CAST(:tool_calls AS JSONB), CAST(:actions AS JSONB),
-                    CAST(:proposed AS JSONB)
+                    CAST(:proposed AS JSONB), :agent_role
                 )
-                RETURNING id, role, content, tool_calls, actions, proposed_actions, created_at
+                RETURNING id, role, content, tool_calls, actions, proposed_actions,
+                          agent_role, created_at
                 """
             ),
             {
@@ -147,6 +172,7 @@ class AgentService:
                 "tool_calls": json.dumps(tool_calls or []),
                 "actions": json.dumps(actions or []),
                 "proposed": json.dumps(proposed_actions or []),
+                "agent_role": (agent_role or "").strip().lower(),
             },
         ).mappings().one()
         connection.execute(
@@ -266,7 +292,8 @@ class AgentService:
         rows = connection.execute(
             text(
                 """
-                SELECT id, role, content, tool_calls, actions, proposed_actions, created_at
+                SELECT id, role, content, tool_calls, actions, proposed_actions,
+                       agent_role, created_at
                 FROM agent_messages
                 WHERE thread_id = :thread_id
                 -- A TURN'S ROWS SHARE ONE TIMESTAMP, SO THE TIEBREAK DECIDES THE TRANSCRIPT.
@@ -474,6 +501,10 @@ class AgentService:
         #: long to paste. Each is {name, media_type, kind, data}.
         attachments: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
+        # THE AGENT IS PART OF WHICH CONVERSATION THIS IS. Without it the thread resolved on
+        # (project, surface, external_ref) alone, so asking a second agent about the same task
+        # handed it the first one's history — and nothing on the messages could tell them
+        # apart afterwards either.
         thread = self.start_or_load_thread(
             connection,
             project_id=project_id,
@@ -481,6 +512,7 @@ class AgentService:
             thread_id=thread_id,
             surface=surface,
             external_ref=external_ref,
+            agent_role=role or "",
         )
         user_content = message.strip() or f"Confirm plan {confirm_plan_id}"
         if not user_content and attachments:
@@ -532,6 +564,7 @@ class AgentService:
             tool_calls=turn.tool_calls,
             actions=turn.actions,
             proposed_actions=getattr(turn, "proposed_actions", []) or [],
+            agent_role=role or "",
         )
 
         pending = turn.pending_confirmation
