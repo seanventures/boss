@@ -22,11 +22,26 @@ never needed.
 
 from __future__ import annotations
 
-from boss_engine.services.governed_code_task_service import resolve_gate_failure_action
+from boss_engine.services.governed_code_task_service import (
+    classify_gate_faults,
+    resolve_gate_failure_action,
+)
 
 REVIEW = "code_review_passed"
 CONSISTENT = "consistent"
+SECURITY = "security_clean"           # the name the pipeline actually records
 NO_CODE = "code_written"              # the whole advisory hard floor
+
+# What a panel that hit the turn cap actually stores. The keys are the ones
+# classify_gate_faults reads — not the old `no_security_findings` alias.
+_PANEL_NEVER_RAN = {
+    "review_summary": "(ran out of turns before finishing — partial attempt)",
+    "adversarial_verdict": "not_run",
+    "security_summary": "(ran out of turns before finishing — partial attempt)",
+    "security_verdict": "not_run",
+    "consistency_summary": "(ran out of turns before finishing — partial attempt)",
+    "consistency_verdict": "not_run",
+}
 
 
 def _action(failing, faults, *, advisory=True, rounds=0, open_pr=True):
@@ -76,3 +91,25 @@ def test_no_faults_recorded_behaves_as_before():
     """faults is optional; absent means nothing is known to be a harness fault."""
     assert _action([REVIEW], None) == "ship"
     assert _action([REVIEW], {}) == "ship"
+
+
+def test_a_security_check_that_never_ran_is_a_harness_fault():
+    """THE BUG: classify_gate_faults looked for `no_security_findings`, a name the
+    pipeline has never recorded. `security_clean` with verdict not_run fell through
+    to WORK, so a check that judged nothing was treated as a real finding."""
+    faults = classify_gate_faults(
+        failing=[SECURITY], evidence=_PANEL_NEVER_RAN)
+    assert faults[SECURITY] == "HARNESS"
+
+
+def test_a_panel_that_never_finished_escalates_including_security():
+    """The measured case: review + security + consistency all not_run.
+
+    Advisory still ships a real opinion. It must not ship past a panel that
+    never produced one — and security_clean being misclassified as WORK was
+    enough to defeat the all-HARNESS guard on its own.
+    """
+    failing = [REVIEW, SECURITY, CONSISTENT]
+    faults = classify_gate_faults(failing=failing, evidence=_PANEL_NEVER_RAN)
+    assert all(faults[g] == "HARNESS" for g in failing)
+    assert _action(failing, faults) == "inconclusive"

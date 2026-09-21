@@ -191,7 +191,10 @@ def classify_gate_faults(
                 evidence.get("consistency_summary", ""),
                 evidence.get("consistency_verdict"),
             )
-        elif gate == "no_security_findings":
+        elif gate in {"security_clean", "no_security_findings"}:
+            # The pipeline records `security_clean` (see gates["security_clean"] =
+            # sec_verdict == "clean"). `no_security_findings` is kept so a stored
+            # older name still classifies instead of falling through to WORK.
             inconclusive = check_is_inconclusive(
                 evidence.get("security_summary", ""),
                 evidence.get("security_verdict"),
