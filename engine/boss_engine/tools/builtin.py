@@ -5000,9 +5000,16 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "recall_role_experience",
         "What a role has argued on THIS project's past panels, in its own words — the "
-        "positions it took, on which brief, and when. Use it before answering as a role: an "
-        "SME's value is the specifics it has seen, and a generic answer from a named expert "
-        "is worse than no expert. Also useful for 'what has our QA lead been worried about'.",
+        "positions it took, on which brief, and when. Use it when the question turns on "
+        "JUDGEMENT this role has exercised before — a trade-off, a standard, a decision it "
+        "has taken a side on: an SME's value is the specifics it has seen, and a generic "
+        "answer from a named expert is worse than no expert. Also useful for 'what has our "
+        "QA lead been worried about'. "
+        "DO NOT call it for a lookup. 'Where is the Google Cloud Console', 'what does this "
+        "flag do', 'what is the API endpoint' need the answer, not a position — calling this "
+        "first produced a reply that opened with governance advice and reported having no "
+        "recorded position, for a question that wanted a URL. And if it returns nothing, say "
+        "nothing about it: the absence of a recorded position is not news to the reader.",
         _obj({"role": {"type": "string",
                        "description": "role title or key, e.g. 'QA / Test' or 'qa'"},
               "limit": _LIMIT,
