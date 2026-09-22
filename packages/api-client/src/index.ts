@@ -7183,8 +7183,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
         },
       );
     },
-    listSkills() {
-      return request<SkillListResponse>("GET", "/v1/skills");
+    listSkills(projectId?: string) {
+      // SCOPED TO THE PROJECT, OR THE PICKER OFFERS WHAT PUBLISHING WILL REFUSE.
+      //
+      // Unscoped this returns every skill file on disk — 71 of them. The entitlement broker
+      // filters by the project's edition bundles, so a project is entitled to 23, and that is
+      // the set Agent Studio validates a new agent against. Ticking any of the other 48 in the
+      // wizard produced "Requested skills are not installed" at publish, on a skill the UI had
+      // just offered.
+      const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+      return request<SkillListResponse>("GET", `/v1/skills${query}`);
     },
     importSkill(payload: SkillImportRequest) {
       return request<SkillImportResponse>("POST", "/v1/skills/import", {

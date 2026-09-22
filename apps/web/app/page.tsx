@@ -814,7 +814,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         selected_only: routingOutcomeFilter === "selected" ? true : undefined,
         denied_only: routingOutcomeFilter === "denied" ? true : undefined,
       }, needs("infra")),
-      fetchSkillFeed(),
+      fetchSkillFeed(activeProjectId),
       Promise.resolve(infraArea.providerOps),
       fetchInfraFabricFeed(activeProjectId, needs("infra")),
       // Twelve and thirty sub-requests respectively, both read only by data-area="github".
@@ -7112,7 +7112,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Every agent, what it has produced, and how well.</h3>
             </div>
           </div>
-          <WorkforceArea workforce={workforceData} />
+          <WorkforceArea workforce={workforceData} skills={skills.items} />
         </section>
         ) : null}
 

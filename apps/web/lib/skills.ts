@@ -32,9 +32,11 @@ export function emptySkillFeed(reason?: string): SkillFeed {
   };
 }
 
-export async function fetchSkillFeed(): Promise<SkillFeed> {
+export async function fetchSkillFeed(projectId?: string): Promise<SkillFeed> {
   try {
-    const payload = await client.listSkills();
+    // The project decides which skills exist for it. Without this the feed is every skill on
+    // disk, and Agent Studio offers capability the project cannot be granted.
+    const payload = await client.listSkills(projectId);
     return {
       apiReachable: true,
       items: payload.items.map(mapSkill),

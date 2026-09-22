@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { RoleFeedItem } from "../lib/roles";
+import type { SkillFeedItem } from "../lib/skills";
 import { AgentCreationWizard } from "./agent-creation-wizard";
 import { AgentDetail } from "./agent-detail-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
@@ -114,7 +115,9 @@ function openAgent(roleKey: string): void {
   } catch { /* non-browser */ }
 }
 
-export function WorkforceArea({ workforce }: { workforce: Workforce }) {
+export function WorkforceArea(
+  { workforce, skills = [] }: { workforce: Workforce; skills?: SkillFeedItem[] },
+) {
   const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
   const [openRole, setOpenRole] = useState("");
@@ -232,7 +235,10 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
       </div>
 
       {creating ? (
-        <AgentCreationWizard projectId={workforce.project_id} roles={roleOptions} skills={[]}
+        // SAME WIZARD, SO IT NEEDS THE SAME SKILLS. This passed `[]`, so the commission
+        // dialog opened from the Agents page always said "No installed skills are available
+        // to request" — the identical dialog opened from Agent Studio offered them.
+        <AgentCreationWizard projectId={workforce.project_id} roles={roleOptions} skills={skills}
                              onClose={() => setCreating(false)} />
       ) : null}
 
