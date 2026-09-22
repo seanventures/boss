@@ -176,8 +176,14 @@ CATALOGUE: list[dict[str, Any]] = [
             # PLRR writes code. Deploying straight after it would ship something nobody looked
             # at, which voids the gate the earlier preview exists to be. The second preview is
             # cheap — the app is already built — and it is what keeps "a person saw this" true.
+            # THE REPAIR'S RUN, NOT THE BUILD'S.
+            #
+            # PLRR extends the build into a new code task on the same branch. Previewing and
+            # deploying the original run id adopts the preview that was already serving the
+            # pre-repair app, then ships while — or instead of — the repair. Both steps follow
+            # the run plrr waited for.
             _step("preview_final", "preview",
-                  {"run_id": _from("build", "code_task_run_id")}),
+                  {"run_id": _from("plrr", "code_task_run_id")}),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
             # Last, before the deploy gate — deliberately after readiness and its preview, so
@@ -190,7 +196,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
-            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+            _step("deploy", "deploy", {"run_id": _from("plrr", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
             _step("notify", "notify", {"message": _in("title")}),

@@ -1343,7 +1343,14 @@ def execute_step(
         # them, so the one step that exists to ask whether anyone can operate the thing at 3am
         # was the step that never ran.
         if key == "plrr":
-            return _plrr_step(ctx, connection, project_id, actor, context)
+            # NOT a bare return. This branch exits before the shared "started is not finished"
+            # path below, and plrr's tool result is `status: extending` with the new run id
+            # nested under `result`. Completing the step there lets preview and deploy run
+            # while the repair is still writing the same branch.
+            started = _plrr_step(ctx, connection, project_id, actor, context)
+            if started.get("status") == "not_applicable":
+                return started
+            return _settle_started_work(capability, key, started)
         if key == "document":
             return _write_the_record(connection, project_id, context, inputs)
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
@@ -1506,58 +1513,8 @@ def execute_step(
     output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
 
-    # STARTED IS NOT FINISHED.
-    #
-    # An async capability's tool returns as soon as the work is ACCEPTED: create_code_task hands
-    # back a run id in milliseconds for a build that takes twenty minutes. Returning here made
-    # the runner complete the step immediately, so a workflow raced past `build` into `review`
-    # and `test` while the build was still cloning — every run finishing in seconds, in a shape
-    # that looked like success.
-    #
-    # Marked as awaiting instead. The caller parks the step against this id, and `resume_awaited`
-    # completes it when the work reaches a terminal state.
-    awaited = _awaited_handle(key, result)
-    if awaited:
-        result["status"] = "awaiting"
-        result["await"] = awaited
-        # create_code_task returns `run_id`; the catalogue reads `code_task_run_id`. Writing the
-        # canonical name here is what makes "deploy the thing you just built" resolve.
-        field = _CANONICAL_FIELD.get(awaited["kind"])
-        if field:
-            result.setdefault(field, awaited["id"])
-        return result
-
-    # AN ASYNC STEP THAT CANNOT BE CORRELATED HAS NOT SUCCEEDED.
-    #
-    # This used to fall through and complete, on the reasoning that parking a step with no id
-    # would hang the run. That reasoning was wrong in the direction that costs the most: the
-    # meeting capability returned its id one level down, no handle was found, and the step
-    # reported success nought seconds after convening a panel that was still arguing. The run
-    # walked on to the spec gate with no PRD behind it.
-    #
-    # A run that stops with a reason can be fixed. A run that claims work happened cannot even
-    # be noticed. Adoption returns earlier, so reaching here means a tool really was invoked.
-    # ONLY FOR WORK THIS RUNTIME KNOWS HOW TO WAIT ON.
-    #
-    # `key in _AWAIT_KINDS` is not decoration, it is the bug this line already caused once.
-    # `deploy` is declared is_async — it does take a while — but there is no await table for a
-    # deployment, so it has no entry here. The first version indexed _AWAIT_KINDS[key] while
-    # building the error message and raised KeyError('deploy') on every deploy step. That
-    # escaped the handler that releases leases, so five deploy steps sat `leased` for fifteen
-    # hours showing a running timer, and the log read `(non-fatal): 'deploy'`.
-    #
-    # A capability with no await spec cannot be parked against anything, so demanding a handle
-    # from it is asking for something that does not exist.
-    if (capability.is_async and key in _AWAIT_KINDS
-            and str(result.get("status") or "") not in _DONE_STATUSES):
-        result["status"] = "failed"
-        result["error"] = (
-            f"{capability.tool} started work but returned no id to wait on, so this step "
-            f"cannot tell when it finished. Looked for "
-            f"{', '.join(_AWAIT_KINDS[key][1])} in the result"
-            f"{f' and in its {key!r} envelope' if key in _AWAIT_KINDS else ''}."
-        )
-    return result
+    # STARTED IS NOT FINISHED. See `_settle_started_work`.
+    return _settle_started_work(capability, key, result)
 
 
 #: An async tool reporting that the work is already over. Rare but real — a capability can find
@@ -1610,6 +1567,75 @@ _CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_K
 #: A step that reports it did not do the thing must not be recorded as having done it. What
 #: happens next is a policy question; claiming success is not an answer to it.
 _DID_NOT_SHIP = frozenset({"failed", "blocked", "refused", "error"})
+
+
+def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> dict[str, Any]:
+    """A tool that has accepted work has not finished it.
+
+    An async capability's tool returns as soon as the work is ACCEPTED: create_code_task hands
+    back a run id in milliseconds for a build that takes twenty minutes. Completing the step
+    there made the runner race past `build` while the build was still cloning.
+
+    Marked as awaiting instead. The caller parks the step against this id, and `resume_awaited`
+    completes it when the work reaches a terminal state.
+
+    `plrr` has to come through here too. It returns from the `tool is None` branch, and
+    `extend_code_task` reports `status: extending` with the new run id nested under `result`.
+    Left as-is, the runner records the step succeeded and the workflow previews and opens the
+    deploy gate while that repair is still editing the branch.
+    """
+    if key == "plrr" and not str(
+        result.get("run_id") or result.get("code_task_run_id") or ""
+    ).strip():
+        inner = result.get("result")
+        if isinstance(inner, dict):
+            nested = str(inner.get("code_task_run_id") or inner.get("run_id") or "").strip()
+            if nested:
+                result["run_id"] = nested
+
+    awaited = _awaited_handle(key, result)
+    if awaited:
+        result["status"] = "awaiting"
+        result["await"] = awaited
+        # create_code_task returns `run_id`; the catalogue reads `code_task_run_id`. Writing the
+        # canonical name here is what makes "deploy the thing you just built" resolve.
+        field = _CANONICAL_FIELD.get(awaited["kind"])
+        if field:
+            result.setdefault(field, awaited["id"])
+        return result
+
+    # AN ASYNC STEP THAT CANNOT BE CORRELATED HAS NOT SUCCEEDED.
+    #
+    # This used to fall through and complete, on the reasoning that parking a step with no id
+    # would hang the run. That reasoning was wrong in the direction that costs the most: the
+    # meeting capability returned its id one level down, no handle was found, and the step
+    # reported success nought seconds after convening a panel that was still arguing. The run
+    # walked on to the spec gate with no PRD behind it.
+    #
+    # A run that stops with a reason can be fixed. A run that claims work happened cannot even
+    # be noticed. Adoption returns earlier, so reaching here means a tool really was invoked.
+    # ONLY FOR WORK THIS RUNTIME KNOWS HOW TO WAIT ON.
+    #
+    # `key in _AWAIT_KINDS` is not decoration, it is the bug this line already caused once.
+    # `deploy` is declared is_async — it does take a while — but there is no await table for a
+    # deployment, so it has no entry here. The first version indexed _AWAIT_KINDS[key] while
+    # building the error message and raised KeyError('deploy') on every deploy step. That
+    # escaped the handler that releases leases, so five deploy steps sat `leased` for fifteen
+    # hours showing a running timer, and the log read `(non-fatal): 'deploy'`.
+    #
+    # A capability with no await spec cannot be parked against anything, so demanding a handle
+    # from it is asking for something that does not exist.
+    if (capability.is_async and key in _AWAIT_KINDS
+            and str(result.get("status") or "") not in _DONE_STATUSES):
+        tool_name = result.get("tool") or capability.tool or key
+        result["status"] = "failed"
+        result["error"] = (
+            f"{tool_name} started work but returned no id to wait on, so this step "
+            f"cannot tell when it finished. Looked for "
+            f"{', '.join(_AWAIT_KINDS[key][1])} in the result"
+            f"{f' and in its {key!r} envelope' if key in _AWAIT_KINDS else ''}."
+        )
+    return result
 
 
 def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]]:
