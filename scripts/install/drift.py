@@ -53,7 +53,7 @@ def stock_settings() -> Settings:
     """Settings as a brand-new install sees them: no .env, and no inherited environment.
 
     `Settings(_env_file=None)` is NOT enough, and getting this wrong makes the tool lie in the
-    one place it matters. doctor.sh sources .env before calling this, and a container has the
+    one place it matters. checkup.sh sources .env before calling this, and a container has the
     variables exported outright -- in both cases `_env_file=None` still reads os.environ, so
     "stock" comes back identical to "here" and the report cheerfully announces no drift.
     """

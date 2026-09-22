@@ -13,18 +13,23 @@
 set -uo pipefail
 
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)}"
-COMPOSE="$INSTALL_DIR/scripts/install/community-compose.yml"
-ENV_FILE="$INSTALL_DIR/.env"
 ASSUME_YES=0
 KEEP_ENV=0
 KEEP_IMAGES=0
 
-for arg in "$@"; do
-  case "$arg" in
+# A WHILE LOOP, BECAUSE `--dir PATH` TAKES A VALUE.
+#
+# This was `for arg in "$@"` with a `shift` inside it. A for-loop has already captured the list,
+# so shifting moves $1 without moving the loop — `--dir /opt/boss` set INSTALL_DIR to the
+# literal string "--dir" and silently ignored the path. It went unnoticed because the paths
+# that matter were computed from the script's own location before any of this ran, so the flag
+# had no effect either way: wrong twice, cancelling out, until someone passed --dir and meant it.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --yes|-y)      ASSUME_YES=1 ;;
     --keep-env)    KEEP_ENV=1 ;;
     --keep-images) KEEP_IMAGES=1 ;;
-    --dir)         shift; INSTALL_DIR="${1:-$INSTALL_DIR}" ;;
+    --dir)         INSTALL_DIR="${2:?--dir needs a path}"; shift ;;
     -h|--help)
       cat <<'USAGE'
 usage: uninstall.sh [--yes] [--keep-env] [--keep-images] [--dir PATH]
@@ -39,8 +44,14 @@ Removes: containers, volumes (INCLUDING THE DATABASE), images, .env, and the gen
 env shim. Does not remove the source checkout.
 USAGE
       exit 0 ;;
+    *) printf "unknown option: %s (try --help)\n" "$1" >&2; exit 2 ;;
   esac
+  shift
 done
+
+# AFTER parsing, so --dir actually points them somewhere.
+COMPOSE="$INSTALL_DIR/scripts/install/community-compose.yml"
+ENV_FILE="$INSTALL_DIR/.env"
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'
 say() { printf "  %s\n" "$1"; }

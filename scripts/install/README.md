@@ -111,12 +111,14 @@ all accepted.
 ### Did it work?
 
 ```bash
-./scripts/install/doctor.sh            # free checks only
-./scripts/install/doctor.sh --probe    # also ask a model a question
+./scripts/install/checkup.sh            # free checks only
+./scripts/install/checkup.sh --probe    # also ask a model a question
 ```
 
-Named to match `consensus doctor` / `consensus doctor --probe`, so an operator who has used
-that already knows what this is and what `--probe` costs them.
+`--probe` behaves as `consensus doctor --probe` does — free checks by default, and a real model
+call only when you ask for one, because that call costs money. The name is `checkup` rather than
+`doctor` because several other tools now ship a `doctor` that means something slightly
+different in each; a command whose meaning changes per product is one nobody trusts.
 
 Seven checks, each one a failure that has actually happened here: containers running, the API
 answering, the address compiled into the console, a model connected, **a model that actually

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BOSS doctor — is this install actually able to do its job?
+# BOSS checkup — is this install actually able to do its job?
 #
 # WHY THIS EXISTS. Everything it checks was already knowable, and answering "is my install
 # healthy" still meant reading container logs, querying Postgres by hand, and knowing which of
@@ -16,8 +16,10 @@
 #
 # Exit 0 when BOSS can work, 1 when it cannot. Advisory checks never fail the run.
 #
-# NAMING follows `consensus doctor` / `consensus doctor --probe` — Sean's own convention in the
-# sibling product, so an operator who has used one already knows what this is and what --probe
+# NAMED `checkup`, NOT `doctor`. The behaviour is the `consensus doctor` convention and the
+# --probe flag is kept for exactly that reason, but "doctor" is now the name several other tools
+# use for their own version of this, and a command that means something slightly different in
+# every product is a command nobody trusts. This one word is ours. What --probe
 # costs them. Without it, only free checks run; with it, a model is actually asked a question,
 # which is the difference between "configured" and "working" and takes a few seconds and a few
 # tokens to establish.
@@ -28,7 +30,7 @@ for arg in "$@"; do
   case "$arg" in
     --probe) PROBE=1 ;;
     -h|--help)
-      echo "usage: doctor.sh [--probe]"
+      echo "usage: checkup.sh [--probe]"
       echo "  --probe   also ask a model a question (costs a few tokens; proves it works)"
       exit 0 ;;
   esac
@@ -50,12 +52,12 @@ ok()   { printf "  ${G}ok${N}    %s\n" "$1"; }
 warn() { printf "  ${Y}warn${N}  %s\n" "$1"; }
 bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; }
 
-printf "\n${B}BOSS doctor${N}  (%s)\n\n" "$API"
+printf "\n${B}BOSS checkup${N}  (%s)\n\n" "$API"
 
 # 1. containers. FOUR are required; web and the bundled secret store are profiles, and a
 # healthy install that runs neither is still a healthy install. The first version of this
 # check hardcoded "expected 6" and failed a correct install — exactly the kind of wrong
-# confident answer a doctor must not give.
+# confident answer a checkup must not give.
 missing=""
 for svc in db api worker; do
   docker ps --filter "name=boss-community-${svc}-" --format '{{.Names}}' 2>/dev/null \
