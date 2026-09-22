@@ -63,20 +63,39 @@ You can still *drive* a server install from Windows, macOS or Linux alike — th
 
 ## Quick start
 
-### 1. Install
+Two ways to run BOSS. **Both start with a clone on your own machine** — the installer and the
+remote tooling both live in this repository.
+
+| | [On this machine](#install-on-this-machine) | [On a server](#install-on-a-server) |
+|---|---|---|
+| **Good for** | trying it, developing against it | real work, a shared install, anything long-running |
+| **BOSS runs on** | your own machine | the server |
+| **You drive it from** | your own machine | your own machine, over SSH |
+| **Console at** | `http://127.0.0.1:3000` | an SSH tunnel to the server |
+| **Credentials land on** | your own machine | **the server** |
+
+---
+
+## Install on this machine
+
+### 1. Clone it
 
 ```bash
 git clone https://github.com/seanheiney/boss.git ~/boss
 cd ~/boss
+```
+
+### 2. Install
+
+```bash
 ./install.sh
 ```
 
 Installing somewhere else? Pass the same path: `./install.sh --dir /opt/boss`. The installer
 defaults to `~/boss` regardless of where you ran it from.
 
-The installer checks the machine, picks ports that are free, starts Postgres, the API, the
-worker and the console, seeds the project, and verifies it came up. It prints where everything
-landed:
+It checks the machine, picks ports that are free, starts Postgres, the API, the worker and the
+console, seeds the project, and verifies it came up. It prints where everything landed:
 
 ```
   Console       http://127.0.0.1:3000/?org=org_boss
@@ -90,7 +109,7 @@ only thing that can read what the secret store holds.
 > Re-running `./install.sh` is safe. It reuses the database password and API key an existing
 > install already has.
 
-### 2. Connect a model
+### 3. Connect a model
 
 BOSS ships with no model of its own. Until you connect one, it can start but it cannot think.
 
@@ -117,7 +136,7 @@ login on your own machine is invisible to it — see
 [Connecting a model](docs/operations/SETUP.md#part-2--connect-a-model) for the three paths and
 which one is yours.
 
-### 3. Check it actually works
+### 4. Check it actually works
 
 ```bash
 ./scripts/install/checkup.sh            # containers, API, console URL, models, host
@@ -129,44 +148,13 @@ job" — containers, API, the address compiled into the console, models connecte
 capacity, a model that actually answers, a pushable repository, and whether the host can
 schedule BOSS at all. Every one of them is a failure that has actually happened here.
 
-### 4. Give it something to do
+### 5. Give it something to do
 
 Open the console and describe an outcome in your own words — *"a calendar that shows change
 freezes and warns on overlaps"*. BOSS researches it, convenes a panel, writes a PRD for you to
 approve, then builds and tests it and opens a pull request.
 
----
-
-## Install on a server
-
-Run it from your laptop. Do not copy the repository up and SSH in.
-
-```bash
-./scripts/install/remote.sh \
-  --host root@YOUR.SERVER.IP \
-  --key ~/.ssh/your_key \
-  install --yes
-```
-
-This streams an exact commit over SSH and runs the same installer there, so the server needs
-**no git, no deploy key and no access to this repository** — only Docker. It records which
-commit it shipped, and points the console at an address a browser can actually reach.
-
-```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP smoke     # prove it works
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP tunnel    # reach it from your laptop
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP uninstall --yes
-```
-
-`tunnel` forwards the server's API and console over SSH, which is how you configure a model on
-a server without exposing its API to the internet.
-
-Full detail, including subscriptions on a server and what to do when it goes wrong:
-[**SETUP.md**](docs/operations/SETUP.md).
-
----
-
-## Removing it
+### Taking it off again
 
 ```bash
 ./scripts/install/uninstall.sh
@@ -175,6 +163,92 @@ Full detail, including subscriptions on a server and what to do when it goes wro
 Removes containers, volumes, images and `.env`, then verifies that "clean" is true rather than
 trusting its own exit code. **This destroys the database and the secret-store key**, so it asks
 before doing it. `--keep-env` keeps your credentials for a reinstall.
+
+---
+
+## Install on a server
+
+You still clone on **your own machine**. `remote.sh` lives in this repository and drives the
+server over SSH — nothing is copied up by hand, and the server never needs git or access to
+this repository.
+
+**On the server you need:** SSH access, and Docker with Compose. That is all.
+
+### 1. Clone it, on your own machine
+
+```bash
+git clone https://github.com/seanheiney/boss.git ~/boss
+cd ~/boss
+```
+
+You are not installing here. This is the tooling that installs onto the server.
+
+### 2. Install onto the server
+
+```bash
+./scripts/install/remote.sh \
+  --host root@YOUR.SERVER.IP \
+  --key ~/.ssh/your_key \
+  install --yes
+```
+
+This streams a `git archive` of your current commit over the SSH connection and runs the same
+`install.sh` on the far side. What lands there is a **named commit**, recorded in
+`.boss-shipped-commit`, so "which version is running" has an answer. It also points the
+console at an address a browser can actually reach, rather than the `127.0.0.1` that means
+*your* machine.
+
+Ship a specific version with `--ref v1.2.0`, or pass anything through to the installer after
+`--`.
+
+### 3. Check it actually works
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key smoke
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key check
+```
+
+`smoke` proves four things the installer's own "done" message does not: containers up,
+`/health` answering, the API able to reach its database, and the console built for a reachable
+address.
+
+### 4. Reach it from your own machine
+
+Do not expose the server's API to the internet. Forward it over SSH instead:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key tunnel
+```
+
+Leave that running. The server's console is now at `http://127.0.0.1:3000` and its API at
+`http://127.0.0.1:8000`, on your own machine.
+
+### 5. Connect a model
+
+Same as a local install, with one difference that catches people: **the API key is the
+server's, not yours.** A credential lands in the secret store of whichever install you are
+talking to.
+
+```bash
+export BOSS_API=http://127.0.0.1:8000       # through the tunnel from step 4
+export BOSS_API_KEY=$(ssh root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2")
+```
+
+Then open `http://127.0.0.1:3000` → **Repo and model**, or use the same `curl` as the local
+path above.
+
+### Taking it off again
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key uninstall --yes
+```
+
+`--yes` is required: there is no prompt over a non-interactive SSH session to catch a mistake,
+and this destroys the server's database and secret-store key. It then verifies the host is
+clean rather than trusting its own exit code.
+
+Full detail — subscriptions on a server, manual install, troubleshooting:
+[**SETUP.md**](docs/operations/SETUP.md).
 
 ---
 

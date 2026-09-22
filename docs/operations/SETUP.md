@@ -85,6 +85,18 @@ Now go to [Part 2](#part-2--connect-a-model).
 Install it from here. Do not copy the repository up and SSH in — that is three steps, each easy
 to get subtly wrong, and it leaves a tree on the server that nobody can identify afterwards.
 
+**You still clone on your own machine.** `remote.sh` lives in this repository and drives the
+server over SSH; you are not installing locally, you are running the tooling that installs
+remotely.
+
+```bash
+git clone https://github.com/seanheiney/boss.git ~/boss
+cd ~/boss
+```
+
+**On the server you need** SSH access and Docker with Compose. Nothing else — not git, not a
+deploy key, not access to this repository.
+
 ```bash
 ./scripts/install/remote.sh \
   --host root@YOUR.SERVER.IP \
