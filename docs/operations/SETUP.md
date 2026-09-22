@@ -101,6 +101,11 @@ deploy key, not access to this repository.
 `ssh -i` takes. The `.pub` half is what sits in the server's `~/.ssh/authorized_keys`. Omit
 `--key` entirely if plain `ssh root@YOUR.SERVER.IP` already works.
 
+No keypair yet, or building the VM now? The README has the full sequence — generate, install
+the public half, prove it — under
+[**No SSH key yet?**](../../README.md#install-on-a-server). It is kept in one place so the two
+cannot drift apart.
+
 ```bash
 ./scripts/install/remote.sh \
   --host root@YOUR.SERVER.IP \

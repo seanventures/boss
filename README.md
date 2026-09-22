@@ -178,6 +178,74 @@ this repository.
 `.pub` half is what belongs in the server's `~/.ssh/authorized_keys`. If plain
 `ssh root@YOUR.SERVER.IP` already works, you can leave `--key` off entirely.
 
+<details>
+<summary><strong>No SSH key yet? Set one up — click to expand</strong></summary>
+
+<br>
+
+**1. Make a keypair on your own machine.** Ed25519, because it is short and every current
+server accepts it. The passphrase is optional but worth having:
+
+```bash
+ssh-keygen -t ed25519 -C "boss-deploy" -f ~/.ssh/boss_deploy
+```
+
+That writes two files and they are not interchangeable:
+
+| File | This is | Treat it as |
+|---|---|---|
+| `~/.ssh/boss_deploy` | the **private** key — what `--key` wants | a password. Never send it anywhere |
+| `~/.ssh/boss_deploy.pub` | the **public** key | safe to paste into a form, an email, a ticket |
+
+**2. Put the public half on the server.** Which method depends on whether you can already get
+in:
+
+*Creating the VM now?* Every provider asks for a public key at creation — Hetzner, DigitalOcean,
+AWS, Vultr all have a field for it. Paste the contents of the `.pub` file:
+
+```bash
+cat ~/.ssh/boss_deploy.pub
+```
+
+*Server already exists and you can log in with a password?*
+
+```bash
+ssh-copy-id -i ~/.ssh/boss_deploy.pub root@YOUR.SERVER.IP
+```
+
+*Server exists but `ssh-copy-id` is unavailable?* The same thing by hand:
+
+```bash
+cat ~/.ssh/boss_deploy.pub | ssh root@YOUR.SERVER.IP \
+  'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
+```
+
+Those permissions matter — `sshd` silently ignores an `authorized_keys` that other users can
+write to, which looks exactly like the key not working.
+
+**3. Prove it before installing anything:**
+
+```bash
+ssh -i ~/.ssh/boss_deploy root@YOUR.SERVER.IP 'echo connected; docker --version'
+```
+
+You want `connected` and a Docker version. If Docker is missing, install it on the server
+first — `remote.sh` checks for it and stops rather than installing it for you.
+
+**4. Then install**, pointing `--key` at the **private** file:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/boss_deploy install --yes
+```
+
+<br>
+
+**If it says `Permission denied (publickey)`:** you named the `.pub` file instead of the
+private one, the public half never reached the server, or `~/.ssh` on the server is
+world-writable. `ssh -v` prints which key it offered.
+
+</details>
+
 ### 1. Clone it, on your own machine
 
 ```bash
