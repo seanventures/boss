@@ -274,9 +274,25 @@ cmd_smoke() {
   health="$(rshq "curl -s -o /dev/null -w '%{http_code}' -m 20 http://127.0.0.1:$API_PORT/health")"
   [[ "$health" == "200" ]] && ok "API /health 200" || { warn "API /health returned $health"; fails=1; }
 
-  local proj
-  proj="$(rshq "curl -s -m 20 http://127.0.0.1:$API_PORT/v1/projects | head -c 400")"
-  [[ "$proj" == *'"'* ]] && ok "API returns project data" || { warn "no project data: $proj"; fails=1; }
+  # THE API MUST REACH ITS DATABASE, and that is not what /health proves.
+  #
+  # This read the BODY of an unauthenticated /v1/projects and passed if it contained a quote
+  # character. A 401 is JSON and contains quotes. So did the 500 that was actually happening:
+  # the API could not authenticate to Postgres, and this check called it "API returns project
+  # data" three cycles running. Status code, with the key, against a route that touches the DB.
+  local key code
+  key="$(rshq "grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-")"
+  if [[ -z "$key" ]]; then
+    warn "no BOSS_API_KEY in $DIR/.env — cannot test an authenticated route"; fails=1
+  else
+    code="$(rshq "curl -s -o /dev/null -w '%{http_code}' -m 25 -H 'Authorization: Bearer $key' http://127.0.0.1:$API_PORT/v1/projects")"
+    if [[ "$code" == "200" ]]; then ok "API reaches its database (authenticated /v1/projects 200)"
+    else
+      warn "authenticated /v1/projects returned $code"
+      rshq "curl -s -m 25 -H 'Authorization: Bearer $key' http://127.0.0.1:$API_PORT/v1/projects | head -c 300" | sed 's/^/      /'
+      fails=1
+    fi
+  fi
 
   local tables
   tables="$(rshq "docker exec \$(docker ps -q --filter name=boss-community-db) psql -U boss -d boss -tAc \"select count(*) from information_schema.tables where table_schema='public'\" 2>/dev/null")"

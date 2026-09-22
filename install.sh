@@ -312,6 +312,35 @@ ui_step "Writing Community configuration"
 
 ENV_FILE="$INSTALL_DIR/.env"
 
+# RE-RUNNING THE INSTALLER MUST NOT BRICK THE INSTALL.
+#
+# Everything below writes .env with `cat >`, wholesale, and the credentials above it are
+# generated fresh every run. That is correct for a first install and destructive for a second:
+# the Postgres ROLE PASSWORD lives in the data volume, which outlives .env. Regenerating it
+# left the database expecting the old password and the API presenting a new one, so every
+# request that touched the database answered
+#
+#     FATAL: password authentication failed for user "boss"
+#
+# while /health still answered 200 — an install that looks up and cannot read a row. Found by
+# running the installer twice over the same volume on 2.29.2.202.
+#
+# The API key is preserved for a smaller reason: anything an operator saved, scripted or put in
+# a tunnel command keeps working across a re-run instead of silently 401-ing.
+if [ -f "$ENV_FILE" ]; then
+  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
+  _keep_db="$(_existing BOSS_DB_PASSWORD)"
+  _keep_api="$(_existing BOSS_API_KEY)"
+  if [ -n "$_keep_db" ]; then
+    BOSS_DB_PASSWORD="$_keep_db"
+    ui_info "Reusing the existing database password — the data volume already expects it"
+  fi
+  if [ -n "$_keep_api" ]; then
+    BOSS_API_KEY="$_keep_api"
+    ui_info "Reusing the existing API key — saved keys keep working"
+  fi
+fi
+
 # A bare host or host:port is accepted and completed, because "boss.example.internal" is what
 # someone types and "http://boss.example.internal:8000" is what the browser needs.
 if [ -n "$PUBLIC_URL" ]; then
