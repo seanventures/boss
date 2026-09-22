@@ -36,15 +36,28 @@ code — and is accountable for it.
 
 ## Requirements
 
-- **Docker** with Compose
-- **8 GB RAM minimum**, 16 GB comfortable — **100 GB disk**
-- A **model key or subscription** (OpenAI, Anthropic, OpenRouter, or a Claude/Codex plan)
+| | |
+|---|---|
+| **OS** | macOS or Linux. **Windows through WSL2 only** — see [below](#windows) |
+| **Docker** | Desktop (macOS/Windows) or Engine + Compose v2 (Linux) |
+| **RAM** | **8 GB minimum**, 16 GB comfortable |
+| **Disk** | **100 GB** |
+| **A model** | an API key or a Claude/Codex subscription |
 
 Those are measured, not guessed. The six containers idle at ~1.6 GB and the coding agent runs
 *inside* the API container, so a build adds a Node process on top; under 8 GB the machine
 swaps, and a host that swaps stops scheduling BOSS for minutes at a time. Images are ~11.5 GB
 and building them has reached 58 GB of layer cache before pruning — see
 [the installer notes](scripts/install/README.md) for the full breakdown.
+
+### Windows
+
+The installer is a bash script, so it needs **WSL2** — install Docker Desktop with the WSL2
+backend, then run everything *inside* your WSL2 distribution and clone into the WSL2 filesystem
+rather than `/mnt/c`. Native PowerShell, CMD and Git Bash are not supported.
+
+You can still *drive* a server install from Windows, macOS or Linux alike — that only needs
+`ssh`, `git` and `tar`. See [Install on a server](#install-on-a-server).
 
 ---
 
