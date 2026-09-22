@@ -97,10 +97,14 @@ cd ~/boss
 **On the server you need** SSH access and Docker with Compose. Nothing else — not git, not a
 deploy key, not access to this repository.
 
+`--key` is the **private** key on your own machine — the file *without* `.pub`, exactly what
+`ssh -i` takes. The `.pub` half is what sits in the server's `~/.ssh/authorized_keys`. Omit
+`--key` entirely if plain `ssh root@YOUR.SERVER.IP` already works.
+
 ```bash
 ./scripts/install/remote.sh \
   --host root@YOUR.SERVER.IP \
-  --key ~/.ssh/your_key \
+  --key ~/.ssh/id_ed25519 \
   install --yes
 ```
 

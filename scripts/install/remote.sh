@@ -56,7 +56,9 @@ commands:
 
 options:
   --host USER@HOST     required; the machine to install on
-  --key PATH           SSH identity (default: ssh's own resolution)
+  --key PATH           SSH PRIVATE key — the file WITHOUT .pub, e.g. ~/.ssh/id_ed25519
+                       (passed to ssh -i; the .pub half belongs in the server's
+                       authorized_keys). Omit to use ssh's own resolution.
   --dir PATH           install directory on the host (default /opt/boss)
   --ref REF            commit/tag/branch to ship (default HEAD)
   --api-port N         host port for the API (default 8000)

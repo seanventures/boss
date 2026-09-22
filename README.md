@@ -174,6 +174,10 @@ this repository.
 
 **On the server you need:** SSH access, and Docker with Compose. That is all.
 
+`--key` is your **private** key — the file *without* `.pub`, the same one `ssh -i` takes. Its
+`.pub` half is what belongs in the server's `~/.ssh/authorized_keys`. If plain
+`ssh root@YOUR.SERVER.IP` already works, you can leave `--key` off entirely.
+
 ### 1. Clone it, on your own machine
 
 ```bash
@@ -188,7 +192,7 @@ You are not installing here. This is the tooling that installs onto the server.
 ```bash
 ./scripts/install/remote.sh \
   --host root@YOUR.SERVER.IP \
-  --key ~/.ssh/your_key \
+  --key ~/.ssh/id_ed25519 \
   install --yes
 ```
 
@@ -204,8 +208,8 @@ Ship a specific version with `--ref v1.2.0`, or pass anything through to the ins
 ### 3. Check it actually works
 
 ```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key smoke
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key check
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 smoke
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 check
 ```
 
 `smoke` proves four things the installer's own "done" message does not: containers up,
@@ -217,7 +221,7 @@ address.
 Do not expose the server's API to the internet. Forward it over SSH instead:
 
 ```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key tunnel
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 tunnel
 ```
 
 Leave that running. The server's console is now at `http://127.0.0.1:3000` and its API at
@@ -240,7 +244,7 @@ path above.
 ### Taking it off again
 
 ```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/your_key uninstall --yes
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 uninstall --yes
 ```
 
 `--yes` is required: there is no prompt over a non-interactive SSH session to catch a mistake,
