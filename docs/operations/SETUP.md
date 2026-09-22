@@ -372,6 +372,89 @@ boss-engine call provider_audit --args '{"expect":"openai","dimension":"vendor"}
 
 ## Moving this to a server
 
+Install it from here. Do not copy the repository up and SSH in — that is three steps, each easy
+to get subtly wrong, and it leaves a tree on the server that nobody can identify afterwards.
+
+```bash
+./scripts/install/remote.sh \
+  --host root@YOUR.SERVER.IP \
+  --key ~/.ssh/your_key \
+  install --yes
+```
+
+That is the whole remote install. It streams a `git archive` of your current commit over the
+SSH connection and runs the same `install.sh` on the far side, so:
+
+* the server needs **no git, no deploy key and no access to this repository** — only Docker;
+* what lands there is a **named commit**, written to `.boss-shipped-commit`, so "which version
+  is running" has an answer;
+* `--public-url` is derived from `--host` for you (see the warning further down about why
+  `127.0.0.1` is the failure that looks like success).
+
+Ship a specific version with `--ref`, and pass anything else straight through to the installer
+after `--`:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --ref v1.2.0 install --yes
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP install --yes -- --anthropic-key "$ANTHROPIC_API_KEY"
+```
+
+### Did the remote install work?
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP smoke    # API, database, console
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP check    # the full checkup
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP status   # containers, ports, capacity
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP logs --service api
+```
+
+`smoke` is the one to run first. It proves four things the installer's own "done" message does
+not: the containers are up, `/health` answers, the schema actually applied (it counts tables),
+and the console was built for an address a browser can reach.
+
+### Taking it off again
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP uninstall --yes
+```
+
+`--yes` is required — there is no prompt over a non-interactive SSH session to catch a mistake,
+and this destroys the server's database and its secret-store key. It then verifies what "clean"
+means rather than trusting its own exit code: no containers, no volumes, no BOSS images, no
+`.env`. Upstream base images like `postgres:16-alpine` are deliberately left, so the next
+install does not re-download them.
+
+The source tree at `--dir` is left in place. Remove it yourself if you want the machine bare.
+
+## Connecting a model to a server, from your laptop
+
+The commands in [Part 2](#part-2--connect-a-model) all talk to `$BOSS_API`. On a server you do
+**not** want that to mean "expose the API to the internet" — so forward it instead:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP tunnel
+```
+
+Leave that running. The server's API is now at `http://127.0.0.1:8000` on your laptop and its
+console at `http://127.0.0.1:3000`, over SSH, with nothing opened to the world.
+
+In a second terminal, point Part 2 at the tunnel. **The API key is the server's, not yours** —
+it was generated into the server's `.env` at install time:
+
+```bash
+export BOSS_API=http://127.0.0.1:8000
+export BOSS_API_KEY=$(ssh root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2")
+export PROJECT=boss-dogfood
+```
+
+Now every command in Part 2 works unchanged, against the server. Connect a key, choose models
+per role, and verify with the same `curl`s.
+
+One thing that does not travel: a **subscription** signed in on your laptop is a login on your
+filesystem, and the server cannot see it. That is what the table below is about.
+
+### The three differences that bite
+
 Everything above works the same on a remote install, with three differences that are worth
 knowing before you are looking at a failure.
 
