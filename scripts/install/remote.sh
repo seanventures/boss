@@ -148,13 +148,32 @@ ship_source() {
     warn "working tree is dirty — shipping committed $REF ($sha), not your edits"
   fi
   say "shipping $REF ($sha) → $HOST:$DIR"
-  # Extracted OVER the existing directory on purpose: .env lives there and is not in the
-  # archive, so an update keeps the secret-store key instead of stranding every stored secret.
+  # STAGED AND SWAPPED, NOT EXTRACTED OVER THE TOP.
+  #
+  # `tar -x` into the existing directory overwrites what the archive contains and leaves
+  # everything it does not. Renaming doctor.sh to checkup.sh therefore shipped checkup.sh and
+  # left doctor.sh sitting beside it, so the host held a tree that matched no commit — exactly
+  # the "which version is running" problem this script exists to end. Deleted files have to
+  # actually delete.
+  #
+  # .env is carried across by hand because it is NOT in the archive and must survive an update:
+  # it holds the secret-store encryption key, and losing it strands every stored secret.
+  local stage="$DIR.staging"
+  rsh "rm -rf '$stage' && mkdir -p '$stage'" || die "could not prepare staging dir on $HOST"
   git -C "$REPO_ROOT" archive --format=tar "$REF" \
-    | rsh "mkdir -p '$DIR' && tar -x -C '$DIR'" \
+    | rsh "tar -x -C '$stage'" \
     || die "could not copy the source to $HOST"
+  rsh "for f in .env boss-community.env.sh; do
+         [ -f '$DIR'/\$f ] && cp -p '$DIR'/\$f '$stage'/\$f || true
+       done" || true
+  # The swap itself: old tree aside, new tree in, old tree gone. Ordered so a failure at any
+  # step leaves a complete tree at \$DIR rather than a half-written one.
+  rsh "rm -rf '$DIR.prev' \
+       && { [ -d '$DIR' ] && mv '$DIR' '$DIR.prev' || true; } \
+       && mv '$stage' '$DIR' \
+       && rm -rf '$DIR.prev'" || die "could not swap the new tree into place on $HOST"
   rsh "printf '%s\n' '$sha' > '$DIR/.boss-shipped-commit'"
-  ok "source on host at $sha"
+  ok "source on host at $sha (tree replaced, not merged)"
 }
 
 # ---------------------------------------------------------------------------- commands
