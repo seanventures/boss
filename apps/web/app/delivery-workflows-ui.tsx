@@ -764,7 +764,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   className="dw-tab" data-active={tab === t}
                   onClick={() => setTab(t)} data-testid={`dw-tab-${t}`}>
             {t === "running" ? `Running (${runs.length})`
-              : t === "catalogue" ? `Catalogue (${catalogue.length})`
+              : t === "catalogue" ? `Catalogue (${catalogue.length + ownWorkflows(installed).length})`
               : t === "design" ? "Design a workflow"
               : `Your steps (${customSteps.length})`}
           </button>
@@ -3840,6 +3840,23 @@ function WorkflowPlanPanel({ plan, onCustomize }: {
 
 /* ── Catalogue ───────────────────────────────────────────────────────────────── */
 
+/** The workflows this operator made, as opposed to the ones BOSS ships.
+ *
+ *  ONE DEFINITION, because the tab count and the grid disagreed. The Catalogue tab read
+ *  `catalogue.length` — shipped entries only — while the screen underneath it also renders
+ *  these. So an operator who authored a workflow saw it appear on the tab and the number stay
+ *  at 12, which reads as "it was not saved".
+ *
+ *  `is_catalogue` is a thin reed to lean on: in the database it is also false for the 33
+ *  bootstrap workflows that run BOSS itself, and they are kept out of here only because the
+ *  endpoint filters to the `product` namespace upstream. It holds, but it holds by accident of
+ *  someone else's WHERE clause. Worth keying on namespace once we decide whether an operator
+ *  can promote their own workflow into the shipped catalogue.
+ */
+function ownWorkflows(installed: Installed[]): Installed[] {
+  return installed.filter((i) => !i.is_catalogue);
+}
+
 
 function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork,
                         onEditMine }: {
@@ -3871,8 +3888,7 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
   // does not exist in Catalogue and how is it coming to Edit mode, it is completely wrong".
   //
   // It is not the Edit list that was wrong. It was this one, for leaving them out.
-  const ours = useMemo(
-    () => installed.filter((i) => !i.is_catalogue), [installed]);
+  const ours = useMemo(() => ownWorkflows(installed), [installed]);
   return (
     <div className="dw-catalogue">
       {ours.length > 0 ? (
@@ -4338,7 +4354,14 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   //: Which step "Customize this step" sent them to, so the row can say so. Cleared on the
   //: next selection — a highlight that never goes away stops meaning anything.
   const [focusStep, setFocusStep] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  //: MAKING ONE COMES FIRST, and the default has to agree with the tabs.
+  //:
+  //: The tab ORDER already says this — "somebody who opens 'Build your own' is usually here to
+  //: build one; editing is what you do on a return visit" — but the state behind it opened on
+  //: Edit, so the first tab was the one the eye lands on and the second was the one selected.
+  //: Every reset `beginCreating` performs is already the initial value of the state it clears,
+  //: so starting here needs nothing stashed: there is no canvas yet to put back.
+  const [creating, setCreating] = useState(true);
   const [newName, setNewName] = useState("");
   const [importFrom, setImportFrom] = useState("");
   /** The canvas as it was before "New workflow" was pressed, so Cancel puts it back rather

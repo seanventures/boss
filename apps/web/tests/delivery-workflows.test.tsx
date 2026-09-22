@@ -797,7 +797,27 @@ describe("the workflow area is organised around intent", () => {
   it("every tab label says what is behind it", () => {
     // A count is the difference between a tab you might open and one you know to skip.
     expect(UI).toContain("`Running (${runs.length})`");
-    expect(UI).toContain("`Catalogue (${catalogue.length})`");
     expect(UI).toContain("`Your steps (${customSteps.length})`");
+  });
+
+  it("the Catalogue count includes the workflows the operator made", () => {
+    // It read `catalogue.length` — shipped entries only — while the screen underneath also
+    // renders the operator's own. So authoring a workflow made it appear on the tab and left
+    // the number at 12, which reads as "it was not saved".
+    expect(UI).toContain(
+      "`Catalogue (${catalogue.length + ownWorkflows(installed).length})`");
+  });
+
+  it("decides 'mine' in one place, so the count and the grid cannot disagree", () => {
+    // The predicate was inline in the grid and absent from the tab, which is how they drifted.
+    expect(UI).toContain("function ownWorkflows(");
+    expect(UI).toContain("useMemo(() => ownWorkflows(installed), [installed])");
+  });
+
+  it("opens on making one, which is what the tab order already promises", () => {
+    // The tabs read "Create a new workflow" then "Edit an existing workflow", but the state
+    // behind them opened on Edit — the first tab was where the eye landed and the second was
+    // the one selected.
+    expect(UI).toContain("const [creating, setCreating] = useState(true)");
   });
 });
