@@ -290,6 +290,7 @@ cmd_smoke() {
     else
       warn "authenticated /v1/projects returned $code"
       rshq "curl -s -m 25 -H 'Authorization: Bearer $key' http://127.0.0.1:$API_PORT/v1/projects | head -c 300" | sed 's/^/      /'
+      printf "\n"
       fails=1
     fi
   fi
