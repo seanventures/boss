@@ -27,6 +27,7 @@ from ..config import Settings
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event
+from .github_connections import github_token_for
 
 
 def _app_name(repo: str, name: Optional[str]) -> str:
@@ -493,7 +494,7 @@ def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
     return owner, repo, branch
 
 
-def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
+def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token: str = "",
                 changed: Optional[list[str]] = None,
                 ref: Optional[str] = None) -> tuple[Path, str, str, Optional[str]]:
     """Prepare the deployable payload for a run's branch.
@@ -507,7 +508,9 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
     One payload name for both modes keeps staging, rollback and cleanup single-implementation;
     only the container command varies.
     """
-    token = settings.github_token
+    # THE TOKEN IS PASSED IN, resolved by the caller where a database connection exists.
+    # Reading settings.github_token here made this an anonymous clone on every install whose
+    # repository was connected through the wizard — see github_connections.github_token_for.
     from .repo_host import clone_url_for  # BOSS-267: host-aware clone
     url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                         owner, repo, token or "")
@@ -776,8 +779,10 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             # under it matches the static-directory rule. "." means the repository root.
             hint = [e, f"{e}/index.html" if e != "." else "index.html"]
             changed = hint + [c for c in (changed or []) if c not in hint]
+        with begin(engine) as _c:
+            _tok = github_token_for(_c, settings, project_id)
         work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
-                                             changed=changed, ref=ref)
+                                             token=_tok, changed=changed, ref=ref)
         # The SHA that was actually checked out, captured inside _build_dist while the clone
         # still existed. Reporting the request rather than the result is how commit_ref came to
         # name a build that was never running.

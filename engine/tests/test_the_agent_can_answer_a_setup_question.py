@@ -161,6 +161,33 @@ def test_the_preview_clone_uses_it_too():
         "all three clone paths must resolve the project's own credential"
 
 
+def test_no_clone_path_anywhere_reads_the_install_wide_setting():
+    """THE SAME BUG LIVED IN THREE SERVICES, and fixing one did not find the others.
+
+    preview_service was reported. deploy_service and agent_loop had it too — the same
+    `clone_url_for(..., settings.github_token)` shape, which is an anonymous clone of a private
+    repository on any install whose repo was connected through the wizard. This walks every
+    service and fails if a clone URL is built from the install-wide field again.
+    """
+    import pathlib, re
+
+    services = pathlib.Path(__file__).resolve().parents[1] / "boss_engine" / "services"
+    offenders = []
+    for path in sorted(services.glob("*.py")):
+        if path.name == "github_connections.py":
+            continue  # where the resolver lives, and reads the field on purpose
+        text_ = path.read_text()
+        if "clone_url_for(" not in text_:
+            continue
+        for line in text_.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if re.search(r"settings\.github_token", stripped):
+                offenders.append(f"{path.name}: {stripped[:70]}")
+    assert not offenders, "clone paths reading the install-wide token:\n  " + "\n  ".join(offenders)
+
+
 def test_and_the_environment_still_wins_where_it_is_set():
     """An install configured the old way must be unaffected — and must not pay for a database
     round trip to discover that."""

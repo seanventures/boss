@@ -377,9 +377,18 @@ def _open_workspace(connection: Connection, settings: Settings, run_id: str, for
         return None, f"no repo recorded for run {run_id}"
     from .repo_host import clone_url_for
 
+    # NOT settings.github_token — see github_connections.github_token_for. It is empty wherever
+    # the repository was connected through the wizard, which makes this an anonymous clone of a
+    # private repo and fails with git asking for a username on a terminal nobody is at.
+    from .github_connections import github_token_for
+
+    project_id = connection.execute(
+        text("SELECT project_id FROM code_task_runs WHERE id = :i"), {"i": run_id},
+    ).scalar() or ""
     clone_url = clone_url_for(
         getattr(settings, "target_repo_host", "github") or "github",
-        target["owner"], target["repo"], settings.github_token or "",
+        target["owner"], target["repo"],
+        github_token_for(connection, settings, project_id) or "",
     )
     return ensure_workspace(
         run_id,
