@@ -131,10 +131,8 @@ curl -sS -X POST "$BOSS_API/v1/setup/model" \
 }'
 ```
 
-Using a **Claude or Codex subscription** rather than a key? BOSS runs in containers, so the
-login on your own machine is invisible to it — see
-[Connecting a model](docs/operations/SETUP.md#part-2--connect-a-model) for the three paths and
-which one is yours.
+**Using a Claude or Codex subscription instead of a key?** That takes a different route —
+see [Which model path is yours?](#which-model-path-is-yours) below.
 
 ### 4. Check it actually works
 
@@ -309,6 +307,10 @@ export BOSS_API_KEY=$(ssh root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.
 Then open `http://127.0.0.1:3000` → **Repo and model**, or use the same `curl` as the local
 path above.
 
+**Using a subscription instead of a key?** See
+[Which model path is yours?](#which-model-path-is-yours) below — a server always takes the
+send-the-credential route.
+
 ### Taking it off again
 
 ```bash
@@ -321,6 +323,33 @@ clean rather than trusting its own exit code.
 
 Full detail — subscriptions on a server, manual install, troubleshooting:
 [**SETUP.md**](docs/operations/SETUP.md).
+
+---
+
+## Which model path is yours?
+
+BOSS spends models in **three** places and they are configured separately: **builds** (writing
+and reviewing code), **the panel** (the meeting that writes your PRD), and **the chat** (asking
+BOSS questions). One subscription or one API key covers all three — but an install that sets
+only the first has a panel and a chat that cannot answer.
+
+Find your row, then follow that section of [SETUP.md](docs/operations/SETUP.md):
+
+| You have | Where BOSS runs | Follow |
+|---|---|---|
+| **An API key** — OpenAI, Anthropic, OpenRouter, or anything OpenAI-compatible | anywhere — your machine or a server | [2A — API key](docs/operations/SETUP.md#2a--api-key) |
+| **A Claude or Codex subscription** | in containers — *the normal install* — or on a server | [2C — send the credential](docs/operations/SETUP.md#2c--subscription-boss-on-a-server) |
+| **A Claude or Codex subscription** | directly on your host, sharing the CLI's own login | [2B — same filesystem](docs/operations/SETUP.md#2b--subscription-boss-on-this-machine) |
+
+**If you installed with either quick start above, a subscription puts you in 2C — even on your
+own laptop.** BOSS runs in containers, and a container does not share your home directory, so
+the `codex login` or `claude auth login` you did on this machine is invisible to it. "Same
+machine" is not the question; *same filesystem as the CLI's login* is. 2B is for BOSS running
+directly on your host with `pnpm dev`, or a container you `exec` into and sign in inside.
+
+Once something is connected, [choose which model fills which
+role](docs/operations/SETUP.md#choose-a-model-per-role) — implementer, reviewer, hard problems,
+and the one that answers the chat and the panel.
 
 ---
 
