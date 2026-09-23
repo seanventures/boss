@@ -111,28 +111,14 @@ only thing that can read what the secret store holds.
 
 ### 3. Connect a model
 
-BOSS ships with no model of its own. Until you connect one, it can start but it cannot think.
+BOSS ships with no model of its own. Until you connect one it starts, but it cannot think.
 
-Open the console, go to **Repo and model**, and connect either an API key or a subscription.
-The same place sets which model answers each role — builds, the panel, and the chat are
-configured separately, and an install that sets only the first has a chat that cannot answer.
+**The easy way:** open the console at `http://127.0.0.1:3000` → **Repo and model** → connect
+what you have. It walks you through it and verifies the credential before saving.
 
-From the command line instead:
-
-```bash
-export BOSS_API=http://127.0.0.1:8000
-export BOSS_API_KEY=$(grep '^BOSS_API_KEY=' .env | cut -d= -f2)
-
-curl -sS -X POST "$BOSS_API/v1/setup/model" \
-  -H "x-boss-api-key: $BOSS_API_KEY" -H 'Content-Type: application/json' -d '{
-  "project_id": "boss-dogfood", "actor": "ceo",
-  "provider": "openrouter", "api_key": "sk-or-your-key-here",
-  "model": "anthropic/claude-sonnet-4.5"
-}'
-```
-
-**Using a Claude or Codex subscription instead of a key?** That takes a different route —
-see [Which model path is yours?](#which-model-path-is-yours) below.
+**From the command line:** what you run depends on whether you have an API key or a
+subscription, so pick your row in [Which model path is yours?](#which-model-path-is-yours)
+below.
 
 ### 4. Check it actually works
 
@@ -172,14 +158,14 @@ this repository.
 
 **On the server you need:** SSH access, and Docker with Compose. That is all.
 
+<details>
+<summary><strong>No SSH key yet, or not sure what <code>--key</code> wants? — click to expand</strong></summary>
+
+<br>
+
 `--key` is your **private** key — the file *without* `.pub`, the same one `ssh -i` takes. Its
 `.pub` half is what belongs in the server's `~/.ssh/authorized_keys`. If plain
 `ssh root@YOUR.SERVER.IP` already works, you can leave `--key` off entirely.
-
-<details>
-<summary><strong>No SSH key yet? Set one up — click to expand</strong></summary>
-
-<br>
 
 **1. Make a keypair on your own machine.** Ed25519, because it is short and every current
 server accepts it. The passphrase is optional but worth having:
@@ -262,6 +248,9 @@ You are not installing here. This is the tooling that installs onto the server.
   install --yes
 ```
 
+`--key` is your **private** key — the file without `.pub`. Omit it if plain `ssh root@…`
+already works.
+
 This streams a `git archive` of your current commit over the SSH connection and runs the same
 `install.sh` on the far side. What lands there is a **named commit**, recorded in
 `.boss-shipped-commit`, so "which version is running" has an answer. It also points the
@@ -271,59 +260,47 @@ console at an address a browser can actually reach, rather than the `127.0.0.1` 
 Ship a specific version with `--ref v1.2.0`, or pass anything through to the installer after
 `--`.
 
-### 3. Check it actually works
+When it finishes:
+
+```
+  Console   http://YOUR.SERVER.IP:3000
+  API       http://YOUR.SERVER.IP:8000
+```
+
+`:8000` is the API — opening `/` there returns `{"detail":"Not Found"}`, which is correct and
+not a broken install. The console is `:3000`.
+
+### 3. Connect a model
+
+BOSS ships with no model of its own. Until you connect one it starts, but it cannot think.
+
+**The easy way:** open `http://YOUR.SERVER.IP:3000` → **Repo and model** → connect what you
+have.
+
+**From the command line:** what you run depends on whether you have an API key or a
+subscription — pick your row in [Which model path is yours?](#which-model-path-is-yours) below.
+If it is an API key, connecting it to a server is a single command; the table says so.
+
+### 4. Check it actually works
 
 ```bash
 ./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 smoke
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 check
 ```
 
 `smoke` proves four things the installer's own "done" message does not: containers up,
-`/health` answering, the API able to reach its database, and the console built for a reachable
-address.
+`/health` answering, the API able to reach its database, and the console built for an address
+a browser can reach. It finishes by printing where to go.
 
-### 4. Reach it from your own machine
+> **Would rather not have `:3000` and `:8000` open to the internet?** Run
+> `remote.sh --host … --key … tunnel` and leave it running; the console is then at
+> `http://127.0.0.1:3000` on your own machine instead. Entirely optional — every step here
+> works without it.
 
-The console is at **`http://YOUR.SERVER.IP:3000`** and the API at
-`http://YOUR.SERVER.IP:8000`. (`:8000/` itself has no page — that is the API, and `/` there is
-a 404. Use `:3000` for the console.)
+### 5. Give it something to do
 
-**Optional, and only if you would rather not have those ports open to the world:** forward them
-over SSH instead.
-
-```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 tunnel
-```
-
-Leave that running and the console is at `http://127.0.0.1:3000` on your own machine. Nothing
-below needs the tunnel.
-
-### 5. Connect a model
-
-One command. No tunnel, no exports, no hunting for the server's API key — the server already
-has its own and does the work:
-
-```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
-  model --provider openrouter --api-key "$OPENROUTER_API_KEY" --model anthropic/claude-sonnet-4.5
-```
-
-The key is verified against the provider before it is stored, so the reply is the answer — a
-bad key comes back as `that key was rejected` and nothing is saved.
-
-Prefer the console? `http://YOUR.SERVER.IP:3000` → **Repo and model**. Or if you want the shell
-variables for other commands:
-
-```bash
-eval "$(./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 env)"
-```
-
-That sets `BOSS_API`, `BOSS_API_KEY` and `PROJECT` — **the server's key, not yours**. A
-credential lands in the secret store of whichever install you are talking to.
-
-**Using a subscription instead of a key?** See
-[Which model path is yours?](#which-model-path-is-yours) below — a server always takes the
-send-the-credential route.
+Open the console and describe an outcome in your own words — *"a calendar that shows change
+freezes and warns on overlaps"*. BOSS researches it, convenes a panel, writes a PRD for you to
+approve, then builds and tests it and opens a pull request.
 
 ### Taking it off again
 
@@ -345,21 +322,35 @@ Full detail — subscriptions on a server, manual install, troubleshooting:
 BOSS spends models in **three** places and they are configured separately: **builds** (writing
 and reviewing code), **the panel** (the meeting that writes your PRD), and **the chat** (asking
 BOSS questions). One subscription or one API key covers all three — but an install that sets
-only the first has a panel and a chat that cannot answer.
+only builds has a panel and a chat that cannot answer.
 
-Find your row, then follow that section of [SETUP.md](docs/operations/SETUP.md):
+Find your row. Each links to the section of [SETUP.md](docs/operations/SETUP.md) with the
+exact commands:
 
 | You have | Where BOSS runs | Follow |
 |---|---|---|
-| **An API key** — OpenAI, Anthropic, OpenRouter, or anything OpenAI-compatible | anywhere — your machine or a server | [2A — API key](docs/operations/SETUP.md#2a--api-key) |
+| **An API key** — OpenAI, Anthropic, OpenRouter, or anything OpenAI-compatible | anywhere | [2A — API key](docs/operations/SETUP.md#2a--api-key) |
 | **A Claude or Codex subscription** | in containers — *the normal install* — or on a server | [2C — send the credential](docs/operations/SETUP.md#2c--subscription-boss-on-a-server) |
 | **A Claude or Codex subscription** | directly on your host, sharing the CLI's own login | [2B — same filesystem](docs/operations/SETUP.md#2b--subscription-boss-on-this-machine) |
+| **Neither yet** | — | [openrouter.ai/keys](https://openrouter.ai/keys) is the shortest route to one key that reaches most models |
 
 **If you installed with either quick start above, a subscription puts you in 2C — even on your
 own laptop.** BOSS runs in containers, and a container does not share your home directory, so
 the `codex login` or `claude auth login` you did on this machine is invisible to it. "Same
 machine" is not the question; *same filesystem as the CLI's login* is. 2B is for BOSS running
 directly on your host with `pnpm dev`, or a container you `exec` into and sign in inside.
+
+**API key onto a server?** That one is a single command — no tunnel, no exports, and it uses
+the server's own credentials rather than making you find them:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
+  model --provider PROVIDER --api-key YOUR_KEY --model MODEL_NAME
+```
+
+`PROVIDER` is `openrouter`, `openai`, `anthropic` or `custom`; `MODEL_NAME` is optional.
+The key is verified against the provider before it is stored, so a bad one comes back as
+`that key was rejected` and nothing is saved.
 
 Once something is connected, [choose which model fills which
 role](docs/operations/SETUP.md#choose-a-model-per-role) — implementer, reviewer, hard problems,
