@@ -130,22 +130,64 @@ def test_a_clone_uses_the_credential_the_project_connected():
     for a username on a terminal nobody is at:
 
         fatal: could not read Username for 'https://github.com': No such device or address
+
+    The resolver lives in the SERVICE layer now. It used to live in tools/builtin.py, which is
+    why preview_service could not reach it and went on reading the setting directly.
     """
-    from boss_engine.tools.builtin import _github_token_for, _repo_root
+    from boss_engine.services.github_connections import github_token_for
+    from boss_engine.tools.builtin import _repo_root
 
     assert "token" in inspect.signature(_repo_root).parameters
-    source = inspect.getsource(_github_token_for)
-    assert "github_connections" in source
+    source = inspect.getsource(github_token_for)
+    assert "github_connections" in source or "GitHubConnectionService" in source
     assert "_resolve_secret(secret, connection)" in source
 
 
-def test_and_the_environment_still_wins_where_it_is_set():
-    """An install configured the old way must be unaffected."""
-    from boss_engine.tools.builtin import _github_token_for
+def test_the_preview_clone_uses_it_too():
+    """THE BUG THIS ALL EXISTS FOR, and the one the resolver did not fix on its own.
 
-    source = inspect.getsource(_github_token_for)
-    at = source.index('getattr(ctx.settings, "github_token"')
-    assert "if configured:" in source[at:at + 160]
+    preview_service built its clone URL from `settings.github_token` in three places. On an
+    install whose repository was connected through the wizard that is the empty string, so git
+    got an anonymous URL for a private repository and every preview on the run failed the same
+    way — measured at fifty-plus attempts on one run, while the connection itself reported
+    `active` with `last_test_status: passed`.
+    """
+    from boss_engine.services import preview_service
+
+    source = inspect.getsource(preview_service)
+    assert "token = settings.github_token" not in source, \
+        "a preview clone is reading the install-wide setting again"
+    assert source.count("github_token_for(_c, settings, project_id)") == 3, \
+        "all three clone paths must resolve the project's own credential"
+
+
+def test_and_the_environment_still_wins_where_it_is_set():
+    """An install configured the old way must be unaffected — and must not pay for a database
+    round trip to discover that."""
+    from boss_engine.services.github_connections import github_token_for
+
+    class RefusesToBeUsed:
+        def execute(self, *args, **kwargs):
+            raise AssertionError("the configured token must be returned without a lookup")
+
+    class Configured:
+        github_token = "ghp_from_the_environment"
+
+    assert github_token_for(RefusesToBeUsed(), Configured(), "proj_x") == "ghp_from_the_environment"
+
+
+def test_a_missing_credential_is_an_empty_string_not_a_traceback():
+    """No connection, or an unreadable store, must leave the clone to report the real problem."""
+    from boss_engine.services.github_connections import github_token_for
+
+    class Exploding:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("store unavailable")
+
+    class Unset:
+        github_token = ""
+
+    assert github_token_for(Exploding(), Unset(), "proj_x") == ""
 
 
 def test_every_caller_passes_it():

@@ -3553,36 +3553,17 @@ def _role_name_candidates(wanted: str) -> list[str]:
 def _github_token_for(ctx: Any, project_id: str) -> str:
     """The credential this project's repository is connected with.
 
-    Cloning used `settings.github_token`, which is the OLD way of configuring a target repo
-    and is empty on any install that connected one through the wizard — the credential lives
-    in the project's GitHub connection and its value in a secret store. So reading a private
-    repository's history failed with git asking for a username on a terminal nobody is at:
-
-        fatal: could not read Username for 'https://github.com': No such device or address
-
-    The environment still wins where it is set, so an install configured the old way is
-    unaffected.
+    ONE IMPLEMENTATION, in the service layer. This used to hold the resolution itself, and
+    preview_service went on reading `settings.github_token` directly — so the fix lived here
+    and the bug lived there, and every preview clone of a private repository failed with git
+    asking for a username on a terminal nobody is at. Both call
+    `github_connections.github_token_for` now, which is where the behaviour is documented.
     """
-    configured = str(getattr(ctx.settings, "github_token", "") or "").strip()
-    if configured:
-        return configured
-    try:
-        from ..services.github_connections import GitHubConnectionService
+    from ..services.github_connections import github_token_for
 
-        service = GitHubConnectionService(ctx.settings)
+    try:
         with ctx.begin() as connection:
-            row = connection.execute(
-                _text("SELECT id FROM github_connections "
-                      " WHERE project_id = :p AND status IN ('configured', 'active') "
-                      " ORDER BY updated_at DESC LIMIT 1"),
-                {"p": project_id},
-            ).first()
-            if row is None:
-                return ""
-            ref = service._credential_ref(connection, project_id, row[0])
-            secret = service.secret_refs.require_usable(
-                connection, project_id=project_id, credential_ref=ref)
-            return service._resolve_secret(secret, connection) or ""
+            return github_token_for(connection, ctx.settings, project_id)
     except Exception:  # noqa: BLE001 — no token is an answer; the clone reports it
         return ""
 

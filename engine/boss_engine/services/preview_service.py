@@ -31,6 +31,7 @@ from ..config import Settings
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
+from .github_connections import github_token_for
 from .execution_substrate import ExecutionSubstrate, normalize_build_substrate
 from .sandbox_provider import MicroVMProvider
 
@@ -1224,7 +1225,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         except OSError as exc:
             return _fail(f"copy local workspace failed: {exc}")
     else:
-        token = settings.github_token
+        # NOT settings.github_token. That field is the old install-wide way of naming a
+        # target repo and is empty wherever the repository was connected through the
+        # wizard, so this handed git an anonymous URL for a private repo and every clone
+        # died on "could not read Username for 'https://github.com'". See
+        # github_connections.github_token_for.
+        with begin(engine) as _c:
+            token = github_token_for(_c, settings, project_id)
         from .repo_host import clone_url_for  # BOSS-267: host-aware clone
         clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                                   owner, repo, token or "")
@@ -1442,7 +1449,11 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         return {"id": preview_id, "status": "failed", "error": msg, "mode": "docker",
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
-    token = settings.github_token
+    # NOT settings.github_token — see github_connections.github_token_for. Empty wherever the
+    # repository was connected through the wizard, which made every clone of a private repo
+    # fail on "could not read Username for 'https://github.com'".
+    with begin(engine) as _c:
+        token = github_token_for(_c, settings, project_id)
     from .repo_host import clone_url_for  # BOSS-267: host-aware clone
     clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                               owner, repo, token or "")
@@ -1598,10 +1609,11 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
     try:
         with begin(engine) as c:
             row = c.execute(text(
-                "SELECT run_id,repo,branch,build_substrate,expires_at FROM app_previews WHERE id=:id"
+                "SELECT run_id,project_id,repo,branch,build_substrate,expires_at FROM app_previews WHERE id=:id"
             ), {"id": preview_id}).mappings().first()
         if row is None:
             return
+        project_id = row["project_id"]
         repo_full = row["repo"] or ""
         owner, _, repo = repo_full.partition("/")
         branch = row["branch"]
@@ -1610,7 +1622,13 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
         workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
         log_path = str(workdir / "_preview.log")
-        token = settings.github_token
+        # NOT settings.github_token. That field is the old install-wide way of naming a
+        # target repo and is empty wherever the repository was connected through the
+        # wizard, so this handed git an anonymous URL for a private repo and every clone
+        # died on "could not read Username for 'https://github.com'". See
+        # github_connections.github_token_for.
+        with begin(engine) as _c:
+            token = github_token_for(_c, settings, project_id)
         from .repo_host import clone_url_for  # BOSS-267: host-aware clone
         clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                                   owner, repo, token or "")
