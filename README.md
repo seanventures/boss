@@ -103,8 +103,13 @@ console, seeds the project, and verifies it came up. It prints where everything 
   Project       boss-dogfood
 ```
 
-Credentials are written to `.env`. **Back that file up** — `INFISICAL_ENCRYPTION_KEY` is the
-only thing that can read what the secret store holds.
+Credentials are written to `.env`. **Back that file up** — it holds this install's keys.
+
+> **`install.sh` starts four containers and no secret store.** Credentials are then held by the
+> API, and storing a *subscription* token needs `--accept-database-fallback` to say so
+> deliberately. For the bundled Infisical secret store, install with
+> `node packages/create-boss/index.js` instead — it starts six containers, picks free ports,
+> and bootstraps the store. Both are the same BOSS; they differ in where secrets live.
 
 > Re-running `./install.sh` is safe. It reuses the database password and API key an existing
 > install already has.

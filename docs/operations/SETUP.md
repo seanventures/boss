@@ -67,6 +67,11 @@ node packages/create-boss/index.js
 That is the whole setup. It picks ports that are free on your machine, starts the containers,
 seeds the database, provisions a secret store, and prints where everything is:
 
+> **Two installers, and they differ.** `node packages/create-boss/index.js` starts six
+> containers including the Infisical secret store. `./install.sh` — what the README and
+> `remote.sh` use — starts four and no secret store, so a subscription credential falls back to
+> the database and asks first. Same BOSS otherwise.
+
 ```
   Console       http://127.0.0.1:3000/?org=org_boss
   API           http://127.0.0.1:8000
