@@ -475,19 +475,33 @@ session you sign in with, so BOSS holding it does not disturb your own login.
 secret store, keeps a reference rather than the value, and proves it with one real turn. No
 restart and nothing to put in a file.
 
-**Or from the shell**, if you prefer:
+**BOSS on a server — one command.** This is the whole thing; it stores the token on the server
+and proves it with a real turn:
+
+```bash
+claude setup-token | ./scripts/install/remote.sh \
+  --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
+  subscription --provider claude_code
+```
+
+The token is read from the pipe, so it never reaches your shell history or the server's process
+list. If that install has no secret store, BOSS stops rather than putting a live credential in
+its database — add `--accept-database-fallback` to say yes deliberately.
+
+**BOSS on this machine — from the shell:**
 
 ```bash
 claude setup-token | python3 scripts/store_subscription_token.py claude_code --stdin
-```
 
-Then connect it:
-
-```bash
 curl -sS -X POST "$BOSS_API/v1/setup/coding-agents/connect" \
-  -H "Authorization: Bearer $BOSS_API_KEY" -H 'Content-Type: application/json' \
+  -H "x-boss-api-key: $BOSS_API_KEY" -H 'Content-Type: application/json' \
   -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"claude_code"}'
 ```
+
+`$BOSS_API` and `$BOSS_API_KEY` come from
+[Point at the install you are configuring](#point-at-the-install-you-are-configuring) — and for
+a server they are **not** `127.0.0.1` unless you opened a tunnel. `remote.sh … env` prints the
+right pair.
 
 ---
 

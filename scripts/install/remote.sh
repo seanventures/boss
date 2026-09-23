@@ -33,6 +33,8 @@ PROVIDER=""
 MODEL_API_KEY=""
 MODEL_NAME=""
 PROJECT_ID="boss-dogfood"
+SUB_TOKEN=""
+ACCEPT_DB_FALLBACK=0
 EXTRA_INSTALL_ARGS=()
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
@@ -55,7 +57,8 @@ commands:
   check        run BOSS's own health check on the host
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
-  model        connect a model to the remote install — one command, no tunnel
+  model        connect an API KEY to the remote install — one command, no tunnel
+  subscription connect a Claude/Codex SUBSCRIPTION token — reads stdin, or --token
   env          print export lines for BOSS_API / BOSS_API_KEY / PROJECT
   tunnel       forward the host's API and console to this laptop over SSH
   logs         tail a service's logs (--service api|worker|web|db)
@@ -76,6 +79,11 @@ options:
   --api-key KEY        model: the provider key to store
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
   --project ID         model/env: project id (default boss-dogfood)
+  --token VALUE        subscription: the token. Omit it and the token is read from stdin,
+                       which keeps it out of your shell history and argv
+  --accept-database-fallback
+                       subscription: store the credential in Postgres when the install has
+                       no secret store. Say yes deliberately; it is a live credential
   --                   everything after this is passed through to install.sh
 
 examples:
@@ -84,6 +92,8 @@ examples:
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key tunnel
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key \
       model --provider openrouter --api-key sk-or-... --model anthropic/claude-sonnet-4.5
+  claude setup-token | scripts/install/remote.sh --host root@2.29.2.202 \
+      --key ~/.config/boss/deploy_key subscription --provider claude_code
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key uninstall --yes
 USAGE
 }
@@ -91,7 +101,9 @@ USAGE
 CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|uninstall|check|smoke|status|tunnel|logs|model|env) CMD="$1"; shift ;;
+    install|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
+    --token) SUB_TOKEN="${2:-}"; shift 2 ;;
+    --accept-database-fallback) ACCEPT_DB_FALLBACK=1; shift ;;
     --provider) PROVIDER="${2:-}"; shift 2 ;;
     --api-key) MODEL_API_KEY="${2:-}"; shift 2 ;;
     --model) MODEL_NAME="${2:-}"; shift 2 ;;
@@ -225,6 +237,26 @@ cmd_install() {
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
     || die "the installer failed on $HOST (see output above)"
   ok "installer finished"
+
+  # THE INSTALLER'S OWN BANNER IS WRITTEN FROM THE SERVER'S POINT OF VIEW.
+  #
+  # It signs off with "API http://127.0.0.1:8000 · Mission Control http://127.0.0.1:3000 ·
+  # API key (in /opt/boss/.env — not printed)". Every one of those is true on the box and
+  # useless to the person reading it over SSH: 127.0.0.1 is their own laptop, and the key they
+  # are told exists is one they have not been shown how to read. So the last thing they see is
+  # addresses that do not work and a credential they cannot get.
+  #
+  # This is the last thing printed, so it is the one that sticks.
+  local addr; addr="${HOST##*@}"
+  printf "\n${B}Where it is${N}\n\n"
+  say "Console   http://${addr}:${WEB_PORT}"
+  say "API       http://${addr}:${API_PORT}    ${D}( / is a 404 — that is the API, not the console )${N}"
+  printf "\n${B}What next${N}\n\n"
+  say "Check it:        ${D}remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
+  say "An API key:      ${D}remote.sh --host $HOST${KEY:+ --key $KEY} model --provider openrouter --api-key KEY${N}"
+  say "A subscription:  ${D}claude setup-token | remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider claude_code${N}"
+  say "Shell variables: ${D}eval \"\$(remote.sh --host $HOST${KEY:+ --key $KEY} env)\"${N}"
+  printf "\n"
 }
 
 cmd_uninstall() {
@@ -390,6 +422,78 @@ print(json.dumps(p))')" || die "could not build the request"
   fi
 }
 
+# THE SUBSCRIPTION EQUIVALENT OF `model`.
+#
+# The documented route was: run store_subscription_token.py on your laptop, then curl
+# /v1/setup/coding-agents/connect with $BOSS_API and $BOSS_API_KEY — two variables nobody had
+# been told how to set for a remote install, and a script that stores the token in the WRONG
+# install because it writes to whichever BOSS is local. Both calls belong on the server.
+cmd_subscription() {
+  [[ -n "$PROVIDER" ]] || die "--provider is required (claude_code | codex)"
+  local token="$SUB_TOKEN"
+  if [[ -z "$token" ]]; then
+    [[ ! -t 0 ]] || die "no token: pass --token, or pipe one in (claude setup-token | … subscription --provider claude_code)"
+    token="$(cat)"
+  fi
+  token="${token//$'\n'/}"
+  [[ -n "$token" ]] || die "the token was empty"
+  head_ "Connecting a $PROVIDER subscription on $HOST"
+  preflight
+
+  local payload
+  payload="$(PROJ="$PROJECT_ID" PROV="$PROVIDER" TOK="$token" ACC="$ACCEPT_DB_FALLBACK" \
+    python3 -c 'import json,os
+print(json.dumps({"project_id":os.environ["PROJ"],"actor":"ceo",
+  "provider":os.environ["PROV"],"credential":os.environ["TOK"],
+  "accept_database_fallback":os.environ["ACC"]=="1"}))')" || die "could not build the request"
+
+  say "provider: $PROVIDER   project: $PROJECT_ID   token: ${#token} chars (not shown)"
+
+  # THE SCRIPT GOES OVER ARGV, THE CREDENTIAL OVER STDIN.
+  #
+  # Written as one quoted ssh string first, and three levels of shell quoting later `$K` was
+  # expanding on the wrong machine. The script is base64'd instead — it holds no secret, so
+  # argv is fine for it — while the payload, which does, stays on stdin.
+  local remote_script encoded out
+  IFS= read -r -d '' remote_script <<'EOS' || true
+set -eu
+DIR="$1"; PORT="$2"; PROJ="$3"; PROV="$4"
+K=$(grep '^BOSS_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
+[ -n "${K:-}" ] || { echo NOKEY; exit 1; }
+B="http://127.0.0.1:$PORT"
+STORE=$(curl -sS -X POST "$B/v1/setup/coding-agents/credential" \
+  -H "x-boss-api-key: $K" -H 'Content-Type: application/json' --data-binary @- || true)
+echo "STORE:$STORE"
+case "$STORE" in *secret_store_fallback_not_accepted*) exit 0 ;; esac
+CONNECT=$(curl -sS -X POST "$B/v1/setup/coding-agents/connect" \
+  -H "x-boss-api-key: $K" -H 'Content-Type: application/json' \
+  -d "{\"project_id\":\"$PROJ\",\"actor\":\"ceo\",\"provider\":\"$PROV\"}" || true)
+echo "CONNECT:$CONNECT"
+EOS
+  encoded=$(printf '%s' "$remote_script" | base64 | tr -d '\n')
+  out="$(printf '%s' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" \
+      "printf %s '$encoded' | base64 -d > /tmp/boss-sub.\$\$ && \
+       bash /tmp/boss-sub.\$\$ '$DIR' '$API_PORT' '$PROJECT_ID' '$PROVIDER'; \
+       rc=\$?; rm -f /tmp/boss-sub.\$\$; exit \$rc" 2>&1)" || true
+
+  [[ "$out" == *NOKEY* ]] && die "no BOSS_API_KEY in $DIR/.env on $HOST — is BOSS installed there?"
+  if printf '%s' "$out" | grep -q 'secret_store_fallback_not_accepted'; then
+    warn "this install has no secret store, so BOSS stopped rather than putting a live"
+    say  "  credential in its database. Re-run with --accept-database-fallback to allow it."
+    return 1
+  fi
+  # `connect` proves the credential with a real turn before saying yes, so its reply is the
+  # answer — not the store call, which only says the bytes were written somewhere.
+  if printf '%s' "$out" | sed -n 's/^CONNECT://p' | grep -q '"ok": *true'; then
+    ok "stored and proved with a real turn"
+    printf '%s\n' "$out" | sed -n 's/^CONNECT://p' | head -c 400 | sed 's/^/      /'; printf "\n"
+  else
+    warn "it did not connect:"
+    printf '%s\n' "$out" | head -c 700 | sed 's/^/      /'; printf "\n"
+    return 1
+  fi
+}
+
 # For when you do want the shell variables — with the right key, which is the server's.
 cmd_env() {
   preflight
@@ -430,6 +534,7 @@ case "$CMD" in
   smoke)     cmd_smoke ;;
   status)    cmd_status ;;
   model)     cmd_model ;;
+  subscription) cmd_subscription ;;
   env)       cmd_env ;;
   tunnel)    cmd_tunnel ;;
   logs)      cmd_logs ;;
