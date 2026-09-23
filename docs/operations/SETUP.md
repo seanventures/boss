@@ -267,8 +267,22 @@ export BOSS_API_KEY=$(grep '^BOSS_API_KEY=' .env | cut -d= -f2)
 export PROJECT=boss-dogfood
 ```
 
-**BOSS on a server** — do not expose its API. Forward it over SSH and use the *server's* key,
-which is not the one on your laptop:
+**BOSS on a server** — easiest is one command that needs none of this, because the server
+already holds its own key:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
+  model --provider openrouter --api-key "$OPENROUTER_API_KEY" --model anthropic/claude-sonnet-4.5
+```
+
+Or get the variables in one go — note this prints the server's API key to your terminal:
+
+```bash
+eval "$(./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 env)"
+```
+
+Doing it by hand, with a tunnel so the API is not exposed — `-i` matters, or ssh offers the
+wrong key and fails with `Permission denied (publickey)`:
 
 ```bash
 # terminal 1 — leave running
@@ -276,7 +290,7 @@ which is not the one on your laptop:
 
 # terminal 2
 export BOSS_API=http://127.0.0.1:8000
-export BOSS_API_KEY=$(ssh root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2")
+export BOSS_API_KEY=$(ssh -i ~/.ssh/id_ed25519 root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2")
 export PROJECT=boss-dogfood
 ```
 

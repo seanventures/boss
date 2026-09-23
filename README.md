@@ -284,28 +284,42 @@ address.
 
 ### 4. Reach it from your own machine
 
-Do not expose the server's API to the internet. Forward it over SSH instead:
+The console is at **`http://YOUR.SERVER.IP:3000`** and the API at
+`http://YOUR.SERVER.IP:8000`. (`:8000/` itself has no page — that is the API, and `/` there is
+a 404. Use `:3000` for the console.)
+
+**Optional, and only if you would rather not have those ports open to the world:** forward them
+over SSH instead.
 
 ```bash
 ./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 tunnel
 ```
 
-Leave that running. The server's console is now at `http://127.0.0.1:3000` and its API at
-`http://127.0.0.1:8000`, on your own machine.
+Leave that running and the console is at `http://127.0.0.1:3000` on your own machine. Nothing
+below needs the tunnel.
 
 ### 5. Connect a model
 
-Same as a local install, with one difference that catches people: **the API key is the
-server's, not yours.** A credential lands in the secret store of whichever install you are
-talking to.
+One command. No tunnel, no exports, no hunting for the server's API key — the server already
+has its own and does the work:
 
 ```bash
-export BOSS_API=http://127.0.0.1:8000       # through the tunnel from step 4
-export BOSS_API_KEY=$(ssh root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2")
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
+  model --provider openrouter --api-key "$OPENROUTER_API_KEY" --model anthropic/claude-sonnet-4.5
 ```
 
-Then open `http://127.0.0.1:3000` → **Repo and model**, or use the same `curl` as the local
-path above.
+The key is verified against the provider before it is stored, so the reply is the answer — a
+bad key comes back as `that key was rejected` and nothing is saved.
+
+Prefer the console? `http://YOUR.SERVER.IP:3000` → **Repo and model**. Or if you want the shell
+variables for other commands:
+
+```bash
+eval "$(./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 env)"
+```
+
+That sets `BOSS_API`, `BOSS_API_KEY` and `PROJECT` — **the server's key, not yours**. A
+credential lands in the secret store of whichever install you are talking to.
 
 **Using a subscription instead of a key?** See
 [Which model path is yours?](#which-model-path-is-yours) below — a server always takes the

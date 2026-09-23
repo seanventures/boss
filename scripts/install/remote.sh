@@ -29,6 +29,10 @@ API_PORT="8000"
 WEB_PORT="3000"
 PG_PORT="5432"
 ASSUME_YES=0
+PROVIDER=""
+MODEL_API_KEY=""
+MODEL_NAME=""
+PROJECT_ID="boss-dogfood"
 EXTRA_INSTALL_ARGS=()
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
@@ -51,6 +55,8 @@ commands:
   check        run BOSS's own health check on the host
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
+  model        connect a model to the remote install — one command, no tunnel
+  env          print export lines for BOSS_API / BOSS_API_KEY / PROJECT
   tunnel       forward the host's API and console to this laptop over SSH
   logs         tail a service's logs (--service api|worker|web|db)
 
@@ -66,12 +72,18 @@ options:
   --postgres-port N    host port for Postgres (default 5432)
   --yes                required by uninstall; also makes install non-interactive
   --service NAME       which service `logs` should tail
+  --provider NAME      model: openrouter | openai | anthropic | custom
+  --api-key KEY        model: the provider key to store
+  --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
+  --project ID         model/env: project id (default boss-dogfood)
   --                   everything after this is passed through to install.sh
 
 examples:
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key install --yes
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key smoke
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key tunnel
+  scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key \
+      model --provider openrouter --api-key sk-or-... --model anthropic/claude-sonnet-4.5
   scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key uninstall --yes
 USAGE
 }
@@ -79,7 +91,11 @@ USAGE
 CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|uninstall|check|smoke|status|tunnel|logs) CMD="$1"; shift ;;
+    install|uninstall|check|smoke|status|tunnel|logs|model|env) CMD="$1"; shift ;;
+    --provider) PROVIDER="${2:-}"; shift 2 ;;
+    --api-key) MODEL_API_KEY="${2:-}"; shift 2 ;;
+    --model) MODEL_NAME="${2:-}"; shift 2 ;;
+    --project) PROJECT_ID="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
     --key) KEY="${2:-}"; shift 2 ;;
     --dir) DIR="${2:-}"; shift 2 ;;
@@ -326,6 +342,67 @@ cmd_smoke() {
   else printf "  ${R}${B}Smoke test FAILED.${N}\n\n"; return 1; fi
 }
 
+# ONE COMMAND, NO TUNNEL, NO EXPORTS.
+#
+# Connecting a model to a server used to be: open a tunnel in one terminal, export BOSS_API in
+# another, ssh in to read the server's API key out of its .env, then hand-write a curl. Four
+# steps across two terminals, and the documented ssh call omitted -i, so it failed with
+# "Permission denied (publickey)" for anyone whose key is not ssh's default.
+#
+# The server can already reach its own API and already holds its own key. So it does the work.
+cmd_model() {
+  [[ -n "$PROVIDER" ]] || die "--provider is required (openrouter | openai | anthropic | custom)"
+  [[ -n "$MODEL_API_KEY" ]] || die "--api-key is required"
+  head_ "Connecting a model on $HOST"
+  preflight
+
+  local payload
+  payload="$(PROJ="$PROJECT_ID" PROV="$PROVIDER" AKEY="$MODEL_API_KEY" MNAME="$MODEL_NAME" \
+    python3 -c 'import json,os
+p={"project_id":os.environ["PROJ"],"actor":"ceo","provider":os.environ["PROV"],
+   "api_key":os.environ["AKEY"]}
+m=os.environ.get("MNAME")
+if m: p["model"]=m
+print(json.dumps(p))')" || die "could not build the request"
+
+  say "provider: $PROVIDER${MODEL_NAME:+   model: $MODEL_NAME}   project: $PROJECT_ID"
+  local out
+  # THE KEY GOES OVER STDIN, not in argv — an argument is visible in the host's process list.
+  out="$(printf '%s' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" "
+      set -e
+      K=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+      [ -n \"\$K\" ] || { echo 'NOKEY'; exit 1; }
+      curl -sS -X POST 'http://127.0.0.1:$API_PORT/v1/setup/model' \
+        -H \"x-boss-api-key: \$K\" -H 'Content-Type: application/json' --data-binary @-
+  " 2>&1)" || true
+
+  if [[ "$out" == *NOKEY* ]]; then die "no BOSS_API_KEY in $DIR/.env on $HOST — is BOSS installed there?"; fi
+  # The API verifies the key against the provider before storing it, so its reply is the answer.
+  if printf '%s' "$out" | grep -q '"ok": *true\|"status": *"connected"\|"provider"'; then
+    ok "stored and verified"
+    printf '%s\n' "$out" | head -c 400 | sed 's/^/      /'
+    printf "\n"
+  else
+    warn "the API refused it:"
+    printf '%s\n' "$out" | head -c 600 | sed 's/^/      /'
+    printf "\n"
+    return 1
+  fi
+}
+
+# For when you do want the shell variables — with the right key, which is the server's.
+cmd_env() {
+  preflight
+  local key host
+  key="$(rshq "grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-")"
+  [[ -n "$key" ]] || die "no BOSS_API_KEY in $DIR/.env on $HOST"
+  host="${HOST##*@}"
+  # Printed for `eval`, so it goes to stdout bare. It contains a secret; do not paste it about.
+  echo "export BOSS_API=http://${host}:${API_PORT}"
+  echo "export BOSS_API_KEY=${key}"
+  echo "export PROJECT=${PROJECT_ID}"
+}
+
 cmd_tunnel() {
   head_ "Forwarding $HOST to this laptop"
   say "API      http://127.0.0.1:$API_PORT"
@@ -352,6 +429,8 @@ case "$CMD" in
   check)     cmd_check ;;
   smoke)     cmd_smoke ;;
   status)    cmd_status ;;
+  model)     cmd_model ;;
+  env)       cmd_env ;;
   tunnel)    cmd_tunnel ;;
   logs)      cmd_logs ;;
 esac
