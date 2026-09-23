@@ -75,14 +75,34 @@ if curl -fsS --max-time 10 "$API/health" >/dev/null 2>&1; then ok "api: /health 
 else bad "api: no answer on $API/health"; fi
 
 # 3. the address compiled into the console — the one a browser must reach
+#
+# LABELLED AS WHAT IT IS, WHICH IS NOT THE CONSOLE'S OWN ADDRESS.
+#
+# This reads NEXT_PUBLIC_BOSS_API_URL: the API address baked into the web bundle. It was
+# printed as `console: http://host:8000`, which reads as "the console is there" — so an
+# operator opened :8000, got {"detail":"Not Found"} from the API, and reasonably concluded the
+# install was broken. It was fine. That is the API port; the console is on WEB_PORT.
 compiled=$(docker exec boss-community-web-1 printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null || echo "")
-if [ -z "$compiled" ]; then warn "console: could not read its API address (web container not running?)"
+if [ -z "$compiled" ]; then warn "console → API: could not read the address it was built with (web container not running?)"
 elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
   if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${BOSS_PUBLIC_URL:-}" ]; then
-    bad "console: built with $compiled — a browser on another machine cannot reach that.
+    bad "console → API: built with $compiled — a browser on another machine cannot reach that.
         Rebuild web with --public-url (see scripts/install/README.md)"
-  else ok "console: $compiled (local install)"; fi
-else ok "console: $compiled"; fi
+  else ok "console → API: $compiled (local install)"; fi
+else ok "console → API: $compiled"; fi
+
+# WHERE THE CONSOLE ACTUALLY IS, in the words of whoever is reading this.
+#
+# Every line below used to say http://127.0.0.1:3000. That is true on the box and false for the
+# person reading it over SSH from a laptop, which is how this script is usually run. The host
+# is taken from the address the console was built for, because that is already known to be one
+# a browser can reach.
+console_host=$(printf '%s' "$compiled" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+if [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
+  CONSOLE_URL="http://${console_host}:${WEB_PORT}"
+else
+  CONSOLE_URL="http://127.0.0.1:${WEB_PORT}"
+fi
 
 # 4. models: connected AND with capacity
 models=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/settings?project_id=$PROJECT" 2>/dev/null)
@@ -91,7 +111,7 @@ if [ -n "$engines" ]; then ok "models connected: $engines"
 else
   # NOT A FAILURE ON A FRESH INSTALL — it is the next step, and saying "FAIL" to someone who
   # has just installed correctly teaches them to distrust this output.
-  warn "models: none connected yet — open Mission Control (http://127.0.0.1:${WEB_PORT}) and connect one"
+  warn "models: none connected yet — open Mission Control ($CONSOLE_URL) and connect one"
 fi
 
 advice=$(curl -fsS --max-time 10 "${AUTH[@]}" "$API/v1/projects/$PROJECT/host-advice" 2>/dev/null)
@@ -134,6 +154,6 @@ else
 fi
 
 printf "\n"
-if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: http://127.0.0.1:%s\n\n" "$WEB_PORT"
+if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
 else printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"; fi
 exit "$fail"

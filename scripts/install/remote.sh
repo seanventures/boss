@@ -310,9 +310,16 @@ cmd_smoke() {
 
   # A CONSOLE BUILT FOR THE WRONG URL IS THE FAILURE THAT LOOKS LIKE SUCCESS: it serves 200 and
   # every link inside points at a port on the operator's laptop.
-  local baked
+  local baked host
   baked="$(rshq "docker exec \$(docker ps -q --filter name=boss-community-web) printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null")"
-  [[ -n "$baked" ]] && say "  ${D}console points at: $baked${N}"
+  if [[ -n "$baked" ]]; then
+    # SAY WHERE TO GO, not just what was compiled in. Reported as "console: <api url>" this
+    # sent an operator to the API port, where `/` is a 404 and the install looks broken.
+    host="${HOST##*@}"
+    say ""
+    say "  ${B}Open the console:${N} http://${host}:${WEB_PORT}"
+    say "  ${D}it calls the API at: $baked${N}"
+  fi
 
   printf "\n"
   if [[ $fails -eq 0 ]]; then printf "  ${G}${B}Smoke test passed.${N}\n\n"; return 0
