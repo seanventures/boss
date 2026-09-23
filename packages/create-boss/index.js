@@ -507,7 +507,7 @@ Credentials are in ${envFile}. Back it up: INFISICAL_ENCRYPTION_KEY is the only 
 what the secret store holds.
 
 BOSS ships with no model — connect one from the console (Setup → Model), or see Part 2 of
-docs/operations/SETUP.md. This install runs in containers, so a subscription you are signed
+SETUP.md. This install runs in containers, so a subscription you are signed
 into on this machine still has to be sent across: that is Path C, not Path B.
 `);
 }

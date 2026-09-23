@@ -138,7 +138,7 @@ deploy key, not access to this repository.
 
 No keypair yet, or building the VM now? The README has the full sequence — generate, install
 the public half, prove it — under
-[**No SSH key yet?**](../../README.md#install-on-a-server). It is kept in one place so the two
+[**No SSH key yet?**](README.md#install-on-a-server). It is kept in one place so the two
 cannot drift apart.
 
 ```bash

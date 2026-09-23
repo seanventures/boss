@@ -362,7 +362,7 @@ and this destroys the server's database and secret-store key. It then verifies t
 clean rather than trusting its own exit code.
 
 Full detail — subscriptions on a server, manual install, troubleshooting:
-[**SETUP.md**](docs/operations/SETUP.md).
+[**SETUP.md**](SETUP.md).
 
 ---
 
@@ -373,14 +373,14 @@ and reviewing code), **the panel** (the meeting that writes your PRD), and **the
 BOSS questions). One subscription or one API key covers all three — but an install that sets
 only builds has a panel and a chat that cannot answer.
 
-Find your row. Each links to the section of [SETUP.md](docs/operations/SETUP.md) with the
+Find your row. Each links to the section of [SETUP.md](SETUP.md) with the
 exact commands:
 
 | You have | Where BOSS runs | Follow |
 |---|---|---|
-| **An API key** — OpenAI, Anthropic, OpenRouter, or anything OpenAI-compatible | anywhere | [2A — API key](docs/operations/SETUP.md#2a--api-key) |
-| **A Claude or Codex subscription** | in containers — *the normal install* — or on a server | [2C — send the credential](docs/operations/SETUP.md#2c--subscription-boss-in-containers-or-on-a-server) |
-| **A Claude or Codex subscription** | directly on your host, sharing the CLI's own login | [2B — same filesystem](docs/operations/SETUP.md#2b--subscription-boss-on-this-machine) |
+| **An API key** — OpenAI, Anthropic, OpenRouter, or anything OpenAI-compatible | anywhere | [2A — API key](SETUP.md#2a--api-key) |
+| **A Claude or Codex subscription** | in containers — *the normal install* — or on a server | [2C — send the credential](SETUP.md#2c--subscription-boss-in-containers-or-on-a-server) |
+| **A Claude or Codex subscription** | directly on your host, sharing the CLI's own login | [2B — same filesystem](SETUP.md#2b--subscription-boss-on-this-machine) |
 | **Neither yet** | — | [openrouter.ai/keys](https://openrouter.ai/keys) is the shortest route to one key that reaches most models |
 
 **If you installed with either quick start above, a subscription puts you in 2C — even on your
@@ -402,7 +402,7 @@ The key is verified against the provider before it is stored, so a bad one comes
 `that key was rejected` and nothing is saved.
 
 Once something is connected, [choose which model fills which
-role](docs/operations/SETUP.md#choose-a-model-per-role) — implementer, reviewer, hard problems,
+role](SETUP.md#choose-a-model-per-role) — implementer, reviewer, hard problems,
 and the one that answers the chat and the panel.
 
 ---
@@ -411,7 +411,7 @@ and the one that answers the chat and the panel.
 
 | | |
 |---|---|
-| [**Setup**](docs/operations/SETUP.md) | Install, connect a model, move it to a server, manual setup, troubleshooting |
+| [**Setup**](SETUP.md) | Install, connect a model, move it to a server, manual setup, troubleshooting |
 | [Features](docs/community/FEATURES.md) | What Community includes |
 | [Capabilities](docs/product/CAPABILITIES.md) | Governed runtime in detail — budgets, audit, comms, entitlements |
 | [Architecture](docs/ARCHITECTURE.md) | The invariants BOSS holds itself to, and the API that enforces them |
@@ -434,7 +434,7 @@ scheduling BOSS for minutes at a time; `checkup` reports this, and so does every
 **A model is connected but the chat cannot answer.** Builds, the panel and the chat are three
 separate settings. Set all three under **Repo and model**.
 
-More in [SETUP.md](docs/operations/SETUP.md#when-the-install-goes-wrong).
+More in [SETUP.md](SETUP.md#when-the-install-goes-wrong).
 
 ---
 

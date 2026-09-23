@@ -2,7 +2,7 @@
 # Postgres + API + worker + Mission Control. No Cloud / Account Connect required.
 #
 # Used by: packages/create-boss  (node packages/create-boss/index.js), or by hand —
-# see docs/operations/SETUP.md. `install.sh` was referenced here and never existed.
+# see SETUP.md. `install.sh` was referenced here and never existed.
 
 name: boss-community
 
