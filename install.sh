@@ -68,6 +68,9 @@ PUBLIC_URL="${BOSS_PUBLIC_URL:-}"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
 PG_PORT="${BOSS_POSTGRES_PORT:-5432}"
 COMPOSE_PROFILES=""
+# WHERE THIS INSTALL KEEPS ITS SECRETS. Both options stay inside your own infrastructure; the
+# difference is two containers and about 400MB, not who holds the data. See --help.
+SECRET_STORE="${BOSS_SECRET_STORE:-database}"
 
 usage() {
   cat <<EOF
@@ -89,6 +92,13 @@ Options:
   --postgres-port N       Host port for Postgres (default 5432)
   --ref REF               Git ref to clone (default main)
   --skip-model-key        Allow empty model key (API starts; model calls fail closed)
+  --secret-store WHICH    database (default) or infisical. Both stay on your own machine:
+                            database   4 containers. Credentials are held by BOSS's own
+                                       Postgres. Lean; storing a SUBSCRIPTION token asks you
+                                       to confirm the database is an acceptable home for it.
+                            infisical  6 containers, ~400MB more. Bundled Infisical secret
+                                       store, bootstrapped and wired up for you. Credentials
+                                       are referenced rather than held, and rotate cleanly.
   -h, --help              Show this help
 
 Environment overrides:
@@ -116,6 +126,9 @@ while [[ $# -gt 0 ]]; do
     --postgres-port) PG_PORT="$2"; shift 2 ;;
     --ref) BOSS_REPO_REF="$2"; shift 2 ;;
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
+    --secret-store)
+      SECRET_STORE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"; shift 2
+      case "$SECRET_STORE" in database|infisical) ;; *) die "--secret-store must be database or infisical" ;; esac ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
@@ -266,11 +279,36 @@ if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
     *) WITH_WEB=1 ;;
   esac
 fi
+# THE CHOICE IS THE OPERATOR'S, because the right answer depends on their machine.
+#
+# install.sh used to generate INFISICAL_ENCRYPTION_KEY and then never start Infisical, so every
+# install had those keys written and unused and no secret store at all — which only surfaced
+# later, when storing a subscription token returned "no secret store". Now it is asked and
+# answered, and whichever way it goes the install matches what was chosen.
+if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
+  echo ""
+  ui_info "Where should this install keep credentials? Both stay on this machine."
+  ui_info "  1) database   — 4 containers, leaner. BOSS's own Postgres holds them."
+  ui_info "  2) infisical  — 6 containers (~400MB more). A real secret store, bootstrapped."
+  prompt "Secret store: 1 (database) or 2 (infisical)?" "1"
+  case "$(printf '%s' "$REPLY" | tr -d ' ')" in
+    2|infisical) SECRET_STORE="infisical" ;;
+    *) SECRET_STORE="database" ;;
+  esac
+fi
+
 if [[ "$WITH_WEB" -eq 1 ]]; then
   COMPOSE_PROFILES="--profile web"
   ui_ok "Mission Control: yes (port $WEB_PORT)"
 else
   ui_ok "Mission Control: skipped"
+fi
+
+if [[ "$SECRET_STORE" == "infisical" ]]; then
+  COMPOSE_PROFILES="$COMPOSE_PROFILES --profile secrets"
+  ui_ok "Secret store: bundled Infisical"
+else
+  ui_ok "Secret store: BOSS's database (no extra containers)"
 fi
 
 # Generate control-plane API key
@@ -431,6 +469,26 @@ ${COMPOSE[@]} \
   up -d --build
 
 ui_ok "Containers started"
+
+# The store has to be PROVISIONED, not merely running. `infisical bootstrap` returns the
+# machine-identity token exactly once, so bootstrap_infisical.sh writes it to .env before doing
+# anything else — re-running against an already-bootstrapped instance returns nothing.
+if [[ "$SECRET_STORE" == "infisical" ]]; then
+  ui_step "Provisioning the secret store"
+  if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
+    if COMPOSE_FILE=scripts/install/community-compose.yml \
+       sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" >/dev/null 2>&1; then
+      ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
+    else
+      # NOT FATAL, and not silent. BOSS falls back through its store chain to the database, so
+      # the install works; the operator just has the leaner arrangement they did not pick.
+      ui_warn "The secret store did not provision. BOSS will use its database instead."
+      ui_warn "  Retry: sh scripts/install/bootstrap_infisical.sh $ENV_FILE"
+    fi
+  else
+    ui_warn "bootstrap_infisical.sh is missing — falling back to the database store"
+  fi
+fi
 
 # ---- wait health -----------------------------------------------------------
 ui_step "Waiting for API health"

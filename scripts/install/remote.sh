@@ -34,6 +34,7 @@ MODEL_API_KEY=""
 MODEL_NAME=""
 PROJECT_ID="boss-dogfood"
 SUB_TOKEN=""
+SECRET_STORE=""
 ACCEPT_DB_FALLBACK=0
 EXTRA_INSTALL_ARGS=()
 
@@ -79,6 +80,8 @@ options:
   --api-key KEY        model: the provider key to store
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
   --project ID         model/env: project id (default boss-dogfood)
+  --secret-store WHICH install: database (default, 4 containers) or infisical (6 containers,
+                       ~400MB more, a real secret store). Both stay on the server
   --token VALUE        subscription: the token. Omit it and the token is read from stdin,
                        which keeps it out of your shell history and argv
   --accept-database-fallback
@@ -103,6 +106,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     install|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
     --token) SUB_TOKEN="${2:-}"; shift 2 ;;
+    --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
     --accept-database-fallback) ACCEPT_DB_FALLBACK=1; shift ;;
     --provider) PROVIDER="${2:-}"; shift 2 ;;
     --api-key) MODEL_API_KEY="${2:-}"; shift 2 ;;
@@ -229,6 +233,7 @@ cmd_install() {
     args+=(--public-url "http://$addr:$API_PORT")
     say "console will be built for http://$addr:$API_PORT"
   fi
+  [[ -n "$SECRET_STORE" ]] && args+=(--secret-store "$SECRET_STORE")
   [[ "$ASSUME_YES" -eq 1 ]] && args+=(-y --skip-model-key)
   [[ ${#EXTRA_INSTALL_ARGS[@]} -gt 0 ]] && args+=("${EXTRA_INSTALL_ARGS[@]}")
   say "running the installer on the host — this builds images and takes a while"
