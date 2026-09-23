@@ -22,6 +22,7 @@ root.
 | Fix an install that went wrong | [When the install goes wrong](#when-the-install-goes-wrong) |
 | Remove it completely | [Taking it off again](#taking-it-off-again) |
 | Know what to set `$BOSS_API` / `$BOSS_API_KEY` to | [Setting the variables](#setting-boss_api-and-boss_api_key) |
+| Choose where credentials are stored | [Where credentials live](#where-credentials-live) |
 | Know where my credentials are stored | [Where secrets live](#reference--where-secrets-live) |
 
 ## Will it run on my machine?
@@ -67,10 +68,9 @@ node packages/create-boss/index.js
 That is the whole setup. It picks ports that are free on your machine, starts the containers,
 seeds the database, provisions a secret store, and prints where everything is:
 
-> **Two installers, and they differ.** `node packages/create-boss/index.js` starts six
-> containers including the Infisical secret store. `./install.sh` — what the README and
-> `remote.sh` use — starts four and no secret store, so a subscription credential falls back to
-> the database and asks first. Same BOSS otherwise.
+> **`./install.sh` is the other way in**, and the one `remote.sh` drives for servers. It takes
+> `--secret-store database|infisical`; `create-boss` always provisions Infisical. See
+> [Where credentials live](#where-credentials-live) below.
 
 ```
   Console       http://127.0.0.1:3000/?org=org_boss
@@ -85,6 +85,35 @@ way to read what the secret store holds. Re-running is safe; it never replaces a
 already exists.
 
 Now go to [Part 2](#part-2--connect-a-model).
+
+## Where credentials live
+
+Asked during `./install.sh`, or set with `--secret-store`. Both keep everything on your own
+infrastructure; the difference is two containers, not who holds the data.
+
+| | `database` *(default)* | `infisical` |
+|---|---|---|
+| Containers | 4 | 6, about 400MB more |
+| Credentials held by | BOSS's own Postgres | the bundled Infisical store |
+| Stored as | the value | a reference — `raw_secret_stored: false` |
+| A subscription token | asks you to confirm the database is an acceptable home for it | stores without asking |
+| Rotation | replace the row | rotate in the store, BOSS keeps the reference |
+| Choose it when | the box is small, or you are evaluating | it is an install you intend to keep |
+
+```bash
+./install.sh --secret-store infisical
+./scripts/install/remote.sh --host root@HOST --key ~/.ssh/id_ed25519 \
+  install --yes --secret-store infisical
+```
+
+Choosing `infisical` also **provisions** it: the installer runs
+`scripts/install/bootstrap_infisical.sh`, which creates the admin, organisation, project and
+machine identity, then recreates `api` and `worker` so they read what it wrote. That last step
+is not optional — compose reads `.env` when it creates a container, and the store's URL, project
+and token only exist after it has been bootstrapped.
+
+If the bootstrap fails the install continues and says so: BOSS walks its store chain down to
+the database, so you get a working install with the leaner arrangement rather than no install.
 
 ## 1B — On a server, from your laptop
 

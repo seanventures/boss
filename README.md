@@ -105,11 +105,25 @@ console, seeds the project, and verifies it came up. It prints where everything 
 
 Credentials are written to `.env`. **Back that file up** — it holds this install's keys.
 
-> **`install.sh` starts four containers and no secret store.** Credentials are then held by the
-> API, and storing a *subscription* token needs `--accept-database-fallback` to say so
-> deliberately. For the bundled Infisical secret store, install with
-> `node packages/create-boss/index.js` instead — it starts six containers, picks free ports,
-> and bootstraps the store. Both are the same BOSS; they differ in where secrets live.
+#### Where should credentials live?
+
+The installer asks. Both answers keep everything on your own machine — the difference is two
+containers, not who holds your data.
+
+| | `--secret-store database` *(default)* | `--secret-store infisical` |
+|---|---|---|
+| **Containers** | 4 | 6 (~400 MB more) |
+| **Credentials held by** | BOSS's own Postgres | the bundled Infisical store |
+| **Stored as** | the value | a *reference* — the value never sits in BOSS's database |
+| **Storing a subscription token** | asks you to confirm the database is an acceptable home | just works |
+| **Pick it when** | the box is small, or you are trying BOSS out | it is a real install you will keep |
+
+```bash
+./install.sh --secret-store infisical      # or database, which is the default
+```
+
+Either way it is **your** infrastructure. `database` is not "less secure", it is fewer moving
+parts with the credential in Postgres instead of beside it.
 
 > Re-running `./install.sh` is safe. It reuses the database password and API key an existing
 > install already has.
