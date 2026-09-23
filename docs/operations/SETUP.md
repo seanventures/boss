@@ -21,6 +21,7 @@ root.
 | Change something after installing | [Making changes](#making-changes) |
 | Fix an install that went wrong | [When the install goes wrong](#when-the-install-goes-wrong) |
 | Remove it completely | [Taking it off again](#taking-it-off-again) |
+| Know what to set `$BOSS_API` / `$BOSS_API_KEY` to | [Setting the variables](#setting-boss_api-and-boss_api_key) |
 | Know where my credentials are stored | [Where secrets live](#reference--where-secrets-live) |
 
 ## Will it run on my machine?
@@ -252,14 +253,16 @@ A subscription covers all three. One CLI, one login, no key. An API key covers a
 What does NOT work is assuming the build model answers the chat — they are different settings
 and an install that sets only the first has a chat and a panel that cannot answer.
 
-## Point at the install you are configuring
+## Setting `$BOSS_API` and `$BOSS_API_KEY`
 
-**A credential lands in the secret store of whichever install you are talking to.** That is the
-one thing to get right before anything below: configure the wrong endpoint and the key is
-stored on the wrong machine, where it looks connected and does nothing for the install you
-meant.
+Every `curl` in Part 2 and [Part 3](#part-3--prove-it-works) uses these two. Set them once here
+and the rest of the page works unchanged.
 
-**BOSS on this machine** — talk to it directly:
+**You may not need them at all.** The console does everything below, and a server takes
+`remote.sh model` / `remote.sh subscription`, which use the server's own credentials and need
+no variables. This is for driving it from a shell.
+
+**BOSS on this machine:**
 
 ```bash
 export BOSS_API=http://127.0.0.1:8000     # the API port Part 1 printed
@@ -267,34 +270,22 @@ export BOSS_API_KEY=$(grep '^BOSS_API_KEY=' .env | cut -d= -f2)
 export PROJECT=boss-dogfood
 ```
 
-**BOSS on a server** — easiest is one command that needs none of this, because the server
-already holds its own key:
-
-```bash
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
-  model --provider openrouter --api-key "$OPENROUTER_API_KEY" --model anthropic/claude-sonnet-4.5
-```
-
-Or get the variables in one go — note this prints the server's API key to your terminal:
+**BOSS on a server** — one command, and it uses the server's real address and the server's key:
 
 ```bash
 eval "$(./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 env)"
 ```
 
-Doing it by hand, with a tunnel so the API is not exposed — `-i` matters, or ssh offers the
-wrong key and fails with `Permission denied (publickey)`:
+That prints the server's API key to your terminal, which is the point but worth knowing.
 
-```bash
-# terminal 1 — leave running
-./scripts/install/remote.sh --host root@YOUR.SERVER.IP tunnel
+> **The key is the server's, not yours,** and the address is its IP — not `127.0.0.1`, which
+> on your laptop means your laptop. The only time `127.0.0.1` is right for a server is when you
+> are forwarding its ports with `remote.sh … tunnel`, which is optional and only worth it if
+> you would rather `:8000` were not reachable from the internet.
 
-# terminal 2
-export BOSS_API=http://127.0.0.1:8000
-export BOSS_API_KEY=$(ssh -i ~/.ssh/id_ed25519 root@YOUR.SERVER.IP "grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2")
-export PROJECT=boss-dogfood
-```
-
-Everything below then works unchanged, against whichever install you pointed at.
+**Why it matters which one you point at:** a credential lands in the secret store of whichever
+install you are talking to. Aim at the wrong endpoint and the key is stored on the wrong
+machine, where it reports connected and does nothing for the install you meant.
 
 ## Which path is yours?
 
@@ -499,7 +490,7 @@ curl -sS -X POST "$BOSS_API/v1/setup/coding-agents/connect" \
 ```
 
 `$BOSS_API` and `$BOSS_API_KEY` come from
-[Point at the install you are configuring](#point-at-the-install-you-are-configuring) — and for
+[Setting `$BOSS_API` and `$BOSS_API_KEY`](#setting-boss_api-and-boss_api_key) — and for
 a server they are **not** `127.0.0.1` unless you opened a tunnel. `remote.sh … env` prints the
 right pair.
 
