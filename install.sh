@@ -478,6 +478,17 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
        sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" >/dev/null 2>&1; then
+      # THE VALUES ARRIVE AFTER THE CONTAINERS DID.
+      #
+      # bootstrap writes BOSS_INFISICAL_URL / _PROJECT_ID / _TOKEN into .env, and compose reads
+      # .env when it CREATES a container. api and worker were created before any of that
+      # existed, so they hold the variables with empty values and BOSS reports "no secret
+      # store" on an install where Infisical is running perfectly. Recreate them so they read
+      # what was just written.
+      # shellcheck disable=SC2086
+      ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+        $COMPOSE_PROFILES up -d --no-deps --force-recreate api worker >/dev/null 2>&1 \
+        || ui_warn "could not restart api/worker — they may not see the secret store yet"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
     else
       # NOT FATAL, and not silent. BOSS falls back through its store chain to the database, so
