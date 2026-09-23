@@ -450,9 +450,20 @@ Press **Connect** in the console afterwards.
 
 ### Codex — send the credential instead
 
-For a machine where you cannot run an interactive login. Run this where you are signed in; it
-reads the credential file and hands it to BOSS, which stores it wherever this installation
-keeps secrets. Nothing is printed but the size.
+For a machine where you cannot run an interactive login. What travels is the CLI's whole
+`~/.codex/auth.json`, not a token — Codex has no headless token to mint.
+
+**BOSS on a server:**
+
+```bash
+cat ~/.codex/auth.json | ./scripts/install/remote.sh \
+  --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
+  subscription --provider codex
+```
+
+**Any install, from the shell.** This posts to whatever `$BOSS_API` points at — set it first,
+see [Setting `$BOSS_API` and `$BOSS_API_KEY`](#setting-boss_api-and-boss_api_key). It reads the
+credential file itself, so nothing is printed but its size:
 
 ```bash
 python3 scripts/store_subscription_token.py codex --dry-run
@@ -504,13 +515,17 @@ claude setup-token
 That prints a long-lived token made for headless use. It is a separate credential from the
 session you sign in with, so BOSS holding it does not disturb your own login.
 
-**In the console:** Setup → Step two → Provider **Claude Code subscription** → paste it into
-*Token from `claude setup-token`* → **Store and connect**. BOSS writes it to this install's
-secret store, keeps a reference rather than the value, and proves it with one real turn. No
-restart and nothing to put in a file.
+The token now has to reach BOSS. **Pick one of these three — they all do the same job**, and
+which is easiest depends on what you have open, not on where BOSS is running.
 
-**BOSS on a server — one command.** This is the whole thing; it stores the token on the server
-and proves it with a real turn:
+**1. The console** — works for any install, nothing to set up.
+
+Setup → Step two → Provider **Claude Code subscription** → paste it into *Token from
+`claude setup-token`* → **Store and connect**. BOSS writes it to this install's secret store,
+keeps a reference rather than the value, and proves it with one real turn. No restart and
+nothing to put in a file.
+
+**2. One command — when BOSS is on a server you reach over SSH.**
 
 ```bash
 claude setup-token | ./scripts/install/remote.sh \
@@ -518,24 +533,33 @@ claude setup-token | ./scripts/install/remote.sh \
   subscription --provider claude_code
 ```
 
-The token is read from the pipe, so it never reaches your shell history or the server's process
-list. If that install has no secret store, BOSS stops rather than putting a live credential in
-its database — add `--accept-database-fallback` to say yes deliberately.
+Nothing to set first: it reads the server's own API key. The token goes in on the pipe, so it
+reaches neither your shell history nor the server's process list. If that install has no secret
+store, BOSS stops rather than putting a live credential in its database — add
+`--accept-database-fallback` to say yes deliberately.
 
-**BOSS on this machine — from the shell:**
+**3. From the shell — any install, local or remote.**
+
+`store_subscription_token.py` does not care where BOSS is; it posts the credential to whatever
+`$BOSS_API` points at. Set that pair first — see
+[Setting `$BOSS_API` and `$BOSS_API_KEY`](#setting-boss_api-and-boss_api_key) — and for a server
+they are the server's address and the server's key, **not** `127.0.0.1` unless you opened a
+tunnel.
 
 ```bash
 claude setup-token | python3 scripts/store_subscription_token.py claude_code --stdin
+```
 
+That stores it. It does not connect it, so do that too:
+
+```bash
 curl -sS -X POST "$BOSS_API/v1/setup/coding-agents/connect" \
   -H "x-boss-api-key: $BOSS_API_KEY" -H 'Content-Type: application/json' \
   -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"claude_code"}'
 ```
 
-`$BOSS_API` and `$BOSS_API_KEY` come from
-[Setting `$BOSS_API` and `$BOSS_API_KEY`](#setting-boss_api-and-boss_api_key) — and for
-a server they are **not** `127.0.0.1` unless you opened a tunnel. `remote.sh … env` prints the
-right pair.
+`connect` runs a real turn before it reports success — so "connected" means a model actually
+answered, not that a credential was written somewhere.
 
 ---
 
