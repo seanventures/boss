@@ -65,12 +65,22 @@ API_PORT="${BOSS_API_PORT:-8000}"
 # the API on the machine it is running on, which is the operator's, and every preview link
 # points at nothing while the previews themselves are fine. Empty means "this is a laptop".
 PUBLIC_URL="${BOSS_PUBLIC_URL:-}"
+# Set when this run was told an address. Unset means "keep the URL a previous .env already
+# has" — writing 127.0.0.1 over it rebuilds the console against the operator's laptop.
+PUBLIC_URL_EXPLICIT=0
+if [ -n "${BOSS_PUBLIC_URL:-}" ]; then
+  PUBLIC_URL_EXPLICIT=1
+fi
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
 PG_PORT="${BOSS_POSTGRES_PORT:-5432}"
 COMPOSE_PROFILES=""
 # WHERE THIS INSTALL KEEPS ITS SECRETS. Both options stay inside your own infrastructure; the
 # difference is two containers and about 400MB, not who holds the data. See --help.
 SECRET_STORE="${BOSS_SECRET_STORE:-database}"
+SECRET_STORE_EXPLICIT=0
+if [ -n "${BOSS_SECRET_STORE:-}" ]; then
+  SECRET_STORE_EXPLICIT=1
+fi
 
 usage() {
   cat <<EOF
@@ -120,7 +130,7 @@ while [[ $# -gt 0 ]]; do
     --anthropic-key) ANTHROPIC_KEY_PRESET="$2"; shift 2 ;;
     --github-token) GITHUB_TOKEN_PRESET="$2"; shift 2 ;;
     --no-web) WITH_WEB=0; shift ;;
-    --public-url) PUBLIC_URL="$2"; shift 2 ;;
+    --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --web-port) WEB_PORT="$2"; shift 2 ;;
     --postgres-port) PG_PORT="$2"; shift 2 ;;
@@ -128,6 +138,7 @@ while [[ $# -gt 0 ]]; do
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
     --secret-store)
       SECRET_STORE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"; shift 2
+      SECRET_STORE_EXPLICIT=1
       case "$SECRET_STORE" in database|infisical) ;; *) die "--secret-store must be database or infisical" ;; esac ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -285,15 +296,28 @@ fi
 # install had those keys written and unused and no secret store at all — which only surfaced
 # later, when storing a subscription token returned "no secret store". Now it is asked and
 # answered, and whichever way it goes the install matches what was chosen.
+#
+# A SECOND RUN MUST NOT FORGET THE ANSWER. `remote.sh install --yes` does not repeat
+# --secret-store, and the interactive prompt used to default to "1" even when this run passed
+# --secret-store infisical and even when .env already held a machine-identity token. Enter, or
+# -y, then started the stack without the secrets profile. The token detection is outside the
+# interactive block so a non-interactive update keeps the store it already provisioned. An
+# explicit --secret-store still wins, including an explicit database.
+if [[ "$SECRET_STORE_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]] && grep -qs '^BOSS_INFISICAL_TOKEN=.' "$INSTALL_DIR/.env"; then
+  SECRET_STORE="infisical"
+fi
 if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
   echo ""
   ui_info "Where should this install keep credentials? Both stay on this machine."
   ui_info "  1) database   — 4 containers, leaner. BOSS's own Postgres holds them."
   ui_info "  2) infisical  — 6 containers (~400MB more). A real secret store, bootstrapped."
-  prompt "Secret store: 1 (database) or 2 (infisical)?" "1"
-  case "$(printf '%s' "$REPLY" | tr -d ' ')" in
+  _store_default=1
+  [[ "$SECRET_STORE" == "infisical" ]] && _store_default=2
+  prompt "Secret store: 1 (database) or 2 (infisical)?" "$_store_default"
+  case "$(printf '%s' "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')" in
     2|infisical) SECRET_STORE="infisical" ;;
-    *) SECRET_STORE="database" ;;
+    1|database) SECRET_STORE="database" ;;
+    *) die "Secret store must be 1 (database) or 2 (infisical)" ;;
   esac
 fi
 
@@ -365,6 +389,17 @@ ENV_FILE="$INSTALL_DIR/.env"
 #
 # The API key is preserved for a smaller reason: anything an operator saved, scripted or put in
 # a tunnel command keeps working across a re-run instead of silently 401-ing.
+#
+# THE REWRITE STILL DELETES EVERYTHING ELSE. The database password was the first thing a
+# second run destroyed, because Postgres keeps it in the volume. The secret store is the same
+# shape and was not covered: INFISICAL_ENCRYPTION_KEY and BOSS_INFISICAL_TOKEN live only in
+# this file. Deleting them and generating a new encryption key (the block below this write
+# does that whenever the line is absent) makes the Infisical database in that same volume
+# unreadable, and the token cannot be issued again. Model keys go the same way: a remote
+# update runs `-y --skip-model-key`, so the heredoc writes OPENAI_API_KEY= blank.
+# restore_preserved_env.sh puts those lines back. It runs on a temp file, and the live .env
+# is replaced only after that succeeds, so a failure leaves the previous credentials in place.
+_ENV_SNAPSHOT=""
 if [ -f "$ENV_FILE" ]; then
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
@@ -377,6 +412,9 @@ if [ -f "$ENV_FILE" ]; then
     BOSS_API_KEY="$_keep_api"
     ui_info "Reusing the existing API key — saved keys keep working"
   fi
+  _ENV_SNAPSHOT="$INSTALL_DIR/.env.previous.$$"
+  cp -p "$ENV_FILE" "$_ENV_SNAPSHOT"
+  chmod 600 "$_ENV_SNAPSHOT"
 fi
 
 # A bare host or host:port is accepted and completed, because "boss.example.internal" is what
@@ -391,7 +429,8 @@ else
   PUBLIC_API_URL="http://127.0.0.1:${API_PORT}"
 fi
 
-cat > "$ENV_FILE" <<EOF
+_new_env="$INSTALL_DIR/.env.writing.$$"
+cat > "$_new_env" <<EOF
 # BOSS Community — generated by install.sh $(date -u +%Y-%m-%dT%H:%MZ)
 # Keep this file private. Do not commit.
 
@@ -420,6 +459,22 @@ BOSS_GITHUB_TOKEN=${GITHUB_TOKEN}
 # Leave unset for pure Community independence
 BOSS_ACCOUNT_CONNECT_URL=
 EOF
+chmod 600 "$_new_env"
+if [ -n "${_ENV_SNAPSHOT:-}" ]; then
+  if [ ! -f "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" ]; then
+    rm -f "$_new_env"
+    die "scripts/install/restore_preserved_env.sh is missing — left the existing $ENV_FILE unchanged"
+  fi
+  if ! BOSS_PUBLIC_URL_EXPLICIT="$PUBLIC_URL_EXPLICIT" \
+      sh "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" "$_ENV_SNAPSHOT" "$_new_env"; then
+    rm -f "$_new_env"
+    die "could not carry credentials forward — left the existing $ENV_FILE unchanged (copy at $_ENV_SNAPSHOT)"
+  fi
+  rm -f "$_ENV_SNAPSHOT"
+  _ENV_SNAPSHOT=""
+  ui_info "Carried existing credentials forward — a re-run must not strand them"
+fi
+mv "$_new_env" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ui_ok "Wrote $ENV_FILE (mode 600)"
 
