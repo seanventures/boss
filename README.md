@@ -264,11 +264,24 @@ You are not installing here. This is the tooling that installs onto the server.
 ./scripts/install/remote.sh \
   --host root@YOUR.SERVER.IP \
   --key ~/.ssh/id_ed25519 \
-  install --yes
+  install --yes --secret-store database
 ```
 
 `--key` is your **private** key — the file without `.pub`. Omit it if plain `ssh root@…`
 already works.
+
+**`--secret-store` is how you choose on a server.** `--yes` makes the install
+non-interactive, so it never stops to ask — leave the flag off and you get `database` without
+being offered `infisical`. Same two options as a local install:
+
+| `--secret-store database` *(default)* | `--secret-store infisical` |
+|---|---|
+| 4 containers. Credentials in BOSS's own Postgres. | 6 containers, ~400 MB more. Bundled store, bootstrapped for you; BOSS keeps a reference rather than the value. |
+| Small box, or evaluating. | An install you intend to keep. |
+
+Both stay on your server — see [Where should credentials
+live?](#where-should-credentials-live) for the full comparison. Drop `--yes` and the installer
+asks you instead.
 
 This streams a `git archive` of your current commit over the SSH connection and runs the same
 `install.sh` on the far side. What lands there is a **named commit**, recorded in
@@ -285,6 +298,13 @@ When it finishes:
   Console   http://YOUR.SERVER.IP:3000
   API       http://YOUR.SERVER.IP:8000
 ```
+
+Credentials are written to **`/opt/boss/.env` on the server**, not on your machine. **Back that
+file up** — with `--secret-store infisical` it holds `INFISICAL_ENCRYPTION_KEY`, the only thing
+that can read what the store contains.
+
+> Re-running this is safe. It reuses the database password and API key the install already has,
+> replaces the source tree with the commit you are shipping, and leaves the database alone.
 
 `:8000` is the API — opening `/` there returns `{"detail":"Not Found"}`, which is correct and
 not a broken install. The console is `:3000`.
@@ -309,6 +329,16 @@ If it is an API key, connecting it to a server is a single command; the table sa
 `smoke` proves four things the installer's own "done" message does not: containers up,
 `/health` answering, the API able to reach its database, and the console built for an address
 a browser can reach. It finishes by printing where to go.
+
+For the fuller picture — including whether a model is connected and whether it actually
+answers:
+
+```bash
+./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 check
+```
+
+That runs BOSS's own `checkup` on the server. Add `-- --probe` to make it ask a model a real
+question, which costs money and is the only way to tell *connected* from *working*.
 
 > **Would rather not have `:3000` and `:8000` open to the internet?** Run
 > `remote.sh --host … --key … tunnel` and leave it running; the console is then at

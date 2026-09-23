@@ -145,8 +145,12 @@ cannot drift apart.
 ./scripts/install/remote.sh \
   --host root@YOUR.SERVER.IP \
   --key ~/.ssh/id_ed25519 \
-  install --yes
+  install --yes --secret-store database
 ```
+
+`--yes` makes the install non-interactive, so it never stops to ask where credentials should
+live — pass `--secret-store database` or `--secret-store infisical` to choose, or drop `--yes`
+and be asked. See [Where credentials live](#where-credentials-live).
 
 That is the whole remote install. It streams a `git archive` of your current commit over the
 SSH connection and runs the same `install.sh` on the far side, so:
