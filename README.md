@@ -379,7 +379,7 @@ exact commands:
 | You have | Where BOSS runs | Follow |
 |---|---|---|
 | **An API key** — OpenAI, Anthropic, OpenRouter, or anything OpenAI-compatible | anywhere | [2A — API key](docs/operations/SETUP.md#2a--api-key) |
-| **A Claude or Codex subscription** | in containers — *the normal install* — or on a server | [2C — send the credential](docs/operations/SETUP.md#2c--subscription-boss-on-a-server) |
+| **A Claude or Codex subscription** | in containers — *the normal install* — or on a server | [2C — send the credential](docs/operations/SETUP.md#2c--subscription-boss-in-containers-or-on-a-server) |
 | **A Claude or Codex subscription** | directly on your host, sharing the CLI's own login | [2B — same filesystem](docs/operations/SETUP.md#2b--subscription-boss-on-this-machine) |
 | **Neither yet** | — | [openrouter.ai/keys](https://openrouter.ai/keys) is the shortest route to one key that reaches most models |
 

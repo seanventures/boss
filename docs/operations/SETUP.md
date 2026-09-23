@@ -331,7 +331,7 @@ machine, where it reports connected and does nothing for the install you meant.
 |---|---|---|
 | An API key | anywhere — this machine or a server | [2A — API key](#2a--api-key) |
 | A Claude or Codex subscription | **directly on your host**, sharing the CLI's login | [2B — same filesystem](#2b--subscription-boss-on-this-machine) |
-| A Claude or Codex subscription | in containers, or on a server | [2C — send the credential](#2c--subscription-boss-on-a-server) |
+| A Claude or Codex subscription | in containers, or on a server | [2C — send the credential](#2c--subscription-boss-in-containers-or-on-a-server) |
 
 **If you installed with Part 1, you want 2C — even on your own laptop.** BOSS runs in
 containers, and a container does not share your home directory, so the login you did on this
@@ -412,9 +412,14 @@ console to record it, or check it from the shell:
 boss-engine call detect_coding_agents --args '{}'
 ```
 
-## 2C — Subscription, BOSS on a server
+## 2C — Subscription, BOSS in containers or on a server
 
 BOSS cannot see your CLI's login, so the credential has to travel.
+
+**This is the normal case, including on your own laptop.** If you installed with Part 1, BOSS
+runs in containers and a container does not share your home directory — so this section applies
+whether BOSS is on a server or sitting on the machine you are typing on. 2B is only for BOSS
+running directly on your host.
 
 | Subscription | What travels | Key |
 |---|---|---|
