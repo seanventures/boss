@@ -894,6 +894,34 @@ def publish_version(
     if existing:
         result = _serialize_version(existing)
         result["duplicate"] = True
+        # IDENTICAL TO AN OLDER VERSION IS NOT THE SAME AS IDENTICAL TO THE CURRENT ONE.
+        #
+        # Returning the match and stopping is right when it IS the active version: nothing to
+        # do. When it is an older one, the operator has just submitted a spec that differs from
+        # what is live and been told nothing changed — so reverting by re-saving a previous
+        # configuration silently did nothing and left the version they were correcting in place.
+        # Found by restoring a workflow after a bad save and watching the bad one stay active.
+        #
+        # Publishing the same content twice must not create two versions, so the match is
+        # ACTIVATED rather than copied: the history stays honest and the intent is carried out.
+        if str(definition.get("active_version_id") or "") != str(existing["id"]):
+            connection.execute(
+                text(
+                    """
+                    UPDATE workflow_definitions
+                    SET active_version_id=:version_id, status='active', updated_at=now()
+                    WHERE id=:definition_id AND project_id=:project_id
+                    """
+                ),
+                {"version_id": existing["id"], "definition_id": definition_id,
+                 "project_id": project_id},
+            )
+            result["reactivated"] = True
+            emit_event(
+                connection, project_id, "workflow.version_reactivated", actor,
+                "workflow_version", str(existing["id"]),
+                {"definition_id": definition_id, "version": existing["version"]},
+            )
         return result
     next_version = int(
         connection.execute(
