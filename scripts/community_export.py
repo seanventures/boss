@@ -22,7 +22,6 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path(__file__).with_name("community_export_manifest.json")
 LOCAL_MODULE_ROOTS = {"apps", "api", "boss_engine", "db", "packages"}
@@ -132,8 +131,7 @@ def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if result.returncode:
@@ -269,7 +267,7 @@ def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
         if not raw:
             continue
         metadata, filename = raw.split(b"\t", 1)
-        mode, kind, oid = metadata.decode().split(" ")
+        mode, _kind, oid = metadata.decode().split(" ")
         path = filename.decode("utf-8")
         if not safe_path(path):
             raise ValueError("source commit contains an unsafe path")
@@ -433,7 +431,7 @@ def markdown_link_edges(selected: dict[str, bytes]) -> list[dict]:
             target = posixpath.normpath(
                 posixpath.join(posixpath.dirname(source), unquote(target_url.path))
             )
-            if target.startswith("../") or target.startswith("/") or target == "..":
+            if target.startswith(("../", "/")) or target == "..":
                 edges.append({"kind": "markdown-link-outside-export", "from": source, "to": raw})
             elif target not in paths and not any(path.startswith(target.rstrip("/") + "/") for path in paths):
                 line = content.count("\n", 0, match.start()) + 1
@@ -764,8 +762,7 @@ def scan_candidate(output: Path) -> tuple[dict, list[dict]]:
                 "--report-path",
                 str(report_path),
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         if result.returncode not in {0, 5}:

@@ -5,7 +5,6 @@ import json
 import subprocess
 from pathlib import Path
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "community_export.py"
 spec = importlib.util.spec_from_file_location("community_export", MODULE_PATH)
 assert spec and spec.loader
