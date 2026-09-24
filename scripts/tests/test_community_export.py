@@ -166,6 +166,18 @@ def test_community_router_is_selected_after_source_audit() -> None:
     assert export.matching_rule("apps/api/app/routers/community.py", manifest["include"])
 
 
+def test_public_client_manifest_rewrites_the_package_root() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    assert manifest["package_export_rewrite"] == {
+        "path": "packages/api-client/package.json",
+        "community_source": "packages/api-client/src/community.ts",
+        "from": "./src/index.ts",
+        "to": "./src/community.ts",
+    }
+    assert "packages/api-client/src/index.ts" in manifest["exclude"]
+
+
 def test_exported_markdown_links_must_resolve_inside_candidate() -> None:
     selected = {
         "README.md": b"[Guide](docs/community/guide.md) [Web](https://example.org)\n",

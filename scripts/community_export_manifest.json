@@ -129,6 +129,12 @@
     "to": "dockerfile: Dockerfile.community",
     "expected_count": 3
   },
+  "package_export_rewrite": {
+    "path": "packages/api-client/package.json",
+    "community_source": "packages/api-client/src/community.ts",
+    "from": "./src/index.ts",
+    "to": "./src/community.ts"
+  },
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",
     "destination": "apps/web/app/page.tsx",
