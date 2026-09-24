@@ -88,6 +88,7 @@
     "apps/web/tests/self-improvement.test.ts",
     "apps/web/tests/ui-v1-cut.test.ts",
     "apps/web/tests/api-client.test.ts",
+    "apps/web/tests/providerops.test.ts",
     "apps/worker/tests/test_external_rollout_readiness.py",
     "engine/tests/test_community_specpack_boundary.py",
     "engine/tests/test_receipt_discipline.py",
