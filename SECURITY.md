@@ -4,4 +4,4 @@ Please report suspected vulnerabilities privately to **boss@sean.net**. Do not o
 
 Include the affected version or commit, impact, safe reproduction steps, and any mitigation already tried. Mention if the issue involves tenant boundaries, approvals, receipts, budgets, secrets, or provider actions. The maintainers will acknowledge the report, assess severity, and coordinate a fix and advisory.
 
-Supported release versions and response targets will be published with the first public release. Until then, this repository remains in private release preparation under the [public-flip checklist](docs/operations/PUBLIC_FLIP_CHECKLIST.md).
+Include the affected release or commit in your report. Maintainers will confirm support status and coordinate disclosure with you. No response-time guarantee is currently published.
