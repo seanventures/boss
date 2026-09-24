@@ -1,7 +1,8 @@
 # Terminal and API access
 
 The Metatron terminal connects to the BOSS HTTP control plane. Set
-`BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID`, then run `make metatron`
+`BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID`, then run
+`python3 scripts/metatron_tui.py`
 from a BOSS checkout. `BOSS_ACTOR` is optional. The API key is sent in the
 `X-Boss-Api-Key` header and is never printed by the terminal.
 
@@ -29,9 +30,8 @@ connection failure, and `2` for invalid local input or missing configuration.
 HTTP failures return a JSON object with `__http_error__`, `status`, and `body`.
 The API remains the authority for permissions, policies, budget gates,
 receipts, and audit records. The terminal does not create a separate execution
-path. See [`api/openapi.yaml`](../../api/openapi.yaml) for route contracts.
-That catalog is currently incomplete for some implemented routes; route
-parity is tracked separately as BOSS-416.
+path. Fetch `/openapi.json` from the running API for its current route schema.
+Terminal, API, and MCP route parity is tracked as BOSS-416.
 
 For direct engine tooling, `boss-engine tools`, `boss-engine call`, and
 `boss-engine code -o json|stream-json` remain available. `boss-engine
