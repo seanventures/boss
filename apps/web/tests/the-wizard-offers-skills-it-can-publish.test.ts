@@ -17,7 +17,7 @@ import { codeOnly } from "./_helpers/source";
  * and after: `/v1/skills` returns 71, `/v1/skills?project_id=boss-dogfood` returns 23, and a
  * publish with an entitled skill succeeds.
  */
-const CLIENT = codeOnly("../../packages/api-client/src/index.ts");
+const CLIENT = codeOnly("../../packages/api-client/src/community.ts");
 const FEED = codeOnly("lib/skills.ts");
 const PAGE = codeOnly("app/page.tsx");
 const WORKFORCE = codeOnly("app/workforce-ui.tsx");

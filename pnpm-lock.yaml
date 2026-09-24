@@ -46,7 +46,13 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/api-client: {}
+  packages/api-client:
+    devDependencies:
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/create-boss: {}
 
 packages:
 
