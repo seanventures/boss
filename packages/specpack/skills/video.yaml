@@ -106,6 +106,144 @@ skills:
       requires_connection: google
       requires_connection_health: healthy
 
+  - id: video.cut
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Remove one or more ranges from the middle and join what is left. Not video.trim with
+      different arguments: trim keeps a single range, and "take out the bit at 3:10" cannot be
+      expressed as one range once the removal is in the middle.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      # A list of {start, end}. Overlapping ranges remove their union rather than failing —
+      # writing 3-6 and 5-8 by hand is ordinary, and naively it produces a zero-length segment
+      # ffmpeg refuses to encode.
+      remove: array
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: video.reframe
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Recrop to a different aspect ratio — a landscape recording to a vertical short. Crops,
+      never pads: padding gives a technically-vertical file with the original letterboxed
+      inside it, which is the thing vertical video exists to avoid.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      aspect: string
+      strategy: string?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      # The only editing step whose output dimensions differ from its input's, so a reviewer can
+      # see from the artifact alone whether the reframe happened.
+      width: integer
+      height: integer
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      allowed_values:
+        aspect: ["9:16", "16:9", "1:1", "4:5"]
+        # Only centre exists today. The value is listed rather than omitted so that asking for
+        # anything else is refused by policy and not silently centre-cropped — cropping to the
+        # middle when asked to follow the speaker crops out the speaker.
+        strategy: [center]
+
+  - id: video.overlay_image
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Show an image over part of the video for a set window while the audio keeps playing. Not
+      video.watermark with a time range: a watermark is small, cornered and present throughout.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      image_artifact_id: string
+      start: string
+      end: string
+      position: string?
+      scale: number?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      allowed_values:
+        position: [center, top_right, top_left, bottom_right, bottom_left]
+
+  - id: video.caption
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Burn a line of text over a window of the video. The text is the only free-form operator
+      string in this capability: it is written to a file and ffmpeg is handed the path, so no
+      character in it can be read as a filter option.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      text: string
+      start: string
+      end: string
+      style: string?
+      size: integer?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      allowed_values:
+        style: [lower_third, bottom, top]
+
   - id: drive.import_video
     kind: media_edit
     # THE ENTRY POINT. Records where a video is; downloads nothing. Every editing step takes a

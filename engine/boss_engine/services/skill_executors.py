@@ -777,6 +777,103 @@ def execute_video_bookend(
     )
 
 
+@register_executor("video.cut")
+def execute_video_cut(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Remove ranges from the middle and join what is left.
+
+    `remove` arrives as a list of {start, end} because "take out the bit where I fumble" is
+    usually more than one bit, and asking for one call per removal would re-encode the whole
+    video once per cut.
+    """
+    from .video_edit import cut
+
+    ranges = inputs.get("remove")
+    if isinstance(ranges, dict):        # a single range, written the obvious way
+        ranges = [ranges]
+    if not isinstance(ranges, list) or not ranges:
+        raise ValueError("remove is required — a list of {start, end} ranges to take out")
+    return _edit_in_drive(
+        context, inputs, operation="cut",
+        apply_edit=lambda src, work, _extra: cut(src, remove=ranges, work_dir=work),
+    )
+
+
+@register_executor("video.reframe")
+def execute_video_reframe(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Landscape to portrait, by cropping.
+
+    The frame changes here, so this is the one editing step whose output dimensions differ from
+    its input's — which is why the recorded artifact carries width and height.
+    """
+    from .video_edit import reframe
+
+    aspect = str(inputs.get("aspect") or "").strip()
+    if not aspect:
+        raise ValueError("aspect is required — 9:16, 16:9, 1:1 or 4:5")
+    return _edit_in_drive(
+        context, inputs, operation="reframe",
+        apply_edit=lambda src, work, _extra: reframe(
+            src, aspect=aspect, work_dir=work,
+            strategy=str(inputs.get("strategy") or "center")),
+    )
+
+
+@register_executor("video.overlay_image")
+def execute_video_overlay_image(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Show an image over part of the video while the audio keeps playing.
+
+    NOT video.watermark WITH A TIME WINDOW. A watermark is small, cornered and present
+    throughout; this is a visual that replaces most of the frame for a few seconds, and the
+    audio continuing underneath is the point of it.
+    """
+    from .video_edit import overlay_image
+
+    if not str(inputs.get("image_artifact_id") or "").strip():
+        raise ValueError("image_artifact_id is required — the image to pop up")
+    return _edit_in_drive(
+        context, inputs, operation="overlay_image",
+        extra_downloads=("image_artifact_id",),
+        apply_edit=lambda src, work, extra: overlay_image(
+            src, image=extra["image_artifact_id"], work_dir=work,
+            start=str(inputs.get("start") or "0"),
+            end=str(inputs.get("end") or ""),
+            position=str(inputs.get("position") or "center"),
+            scale=float(inputs.get("scale") or 0.6)),
+    )
+
+
+@register_executor("video.caption")
+def execute_video_caption(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Burn a line of text over a window of the video.
+
+    The text is the only free-form operator string in the whole capability. video_edit.caption
+    writes it to a file and hands ffmpeg the path, so nothing in it can be read as a filter
+    option — see that function for why that is not optional.
+    """
+    from .video_edit import caption
+
+    text = str(inputs.get("text") or "").strip()
+    if not text:
+        raise ValueError("text is required — the line to put on screen")
+    return _edit_in_drive(
+        context, inputs, operation="caption",
+        apply_edit=lambda src, work, _extra: caption(
+            src, text=text, work_dir=work,
+            start=str(inputs.get("start") or "0"),
+            end=str(inputs.get("end") or ""),
+            style=str(inputs.get("style") or "lower_third"),
+            size=int(inputs.get("size") or 48)),
+    )
+
+
 @register_executor("publish_youtube")
 def execute_publish_youtube(
     context: "SkillExecutorContext", inputs: dict[str, Any]

@@ -19,7 +19,12 @@ boundaries:
     - Delete or overwrite a file in the operator's Drive.
     - Report a render as finished without having verified it plays.
 permissions:
-  allowed_skills: [video.trim, video.watermark, video.bookend, drive.list_videos,
+  # The four vibe-editing operations sit beside the three original ones deliberately: an
+  # instruction like "cut 3:10 to 3:40, make it vertical, caption the opening" is one edit plan
+  # this role executes end to end, and splitting the operations across roles would put a handoff
+  # in the middle of a single person's instruction.
+  allowed_skills: [video.trim, video.cut, video.reframe, video.overlay_image, video.caption,
+                   video.watermark, video.bookend, drive.list_videos, drive.import_video,
                    artifact.create]
   forbidden_skills: [publish_youtube, secret.read]
 output_contracts: [EditPlan, RenderedVideo, RenderDefectReport]
