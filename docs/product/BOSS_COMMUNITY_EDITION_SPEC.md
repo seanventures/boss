@@ -154,7 +154,7 @@ Status legend: **shipped** · **partial** · **planned** · **Cloud/Enterprise**
 |---|---|---|
 | Self-host Docker / Compose / k8s paths | shipped | Deploy docs |
 | Edition router (Community vs paid mounts) | shipped | Paid paths absent → 404 |
-| Optional Easy Connect to BOSS Cloud | shipped | Community-mounted `/v1/cloud/*` |
+| Optional Easy Connect to BOSS Cloud | shipped | Community mounts Cloud catalog/status, local worker and retention status, and Easy Connect start/poll/complete/unlink. Hosted sync, worker enrollment, team invites, marketplace, and retention changes mount only in paid editions. |
 | Self-hosted SSO / SCIM | Community (shipped) | OIDC + SAML SP + SCIM 2.0; opt-in flags |
 | HA fleets | Enterprise / planned | Not required for Community |
 

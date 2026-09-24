@@ -26,7 +26,6 @@ from .bootstrap_ports import build_ports
 from .config import get_settings
 from .db import begin, database_is_reachable, ensure_schema, get_engine
 from .routers import mount_edition_routers
-from .routers.cloud import build_cloud_router
 from .routers.route_ownership import ENTERPRISE_EDITIONS
 from .routers.governance import build_governance_router
 from .routers.platform import mount_platform_routers
@@ -651,8 +650,9 @@ from .services.comms import (
     InvalidCreatedByJobError,
     OutboxMessageNotFoundError,
 )
-from .services.commercial import CommercialService
-from boss_engine.services.cloud_product import CloudProductService
+from boss_engine.services.community_edition import CommunityEditionService
+from boss_engine.services.community_cloud import CommunityCloudService
+from .routers.cloud import register_community_cloud_routes
 from .services.core import stable_dedupe_key, emit_event, make_id
 from .services.deadletters import DeadletterRemediationService
 from .services.docs_agent import DocsUpdateService
@@ -889,13 +889,20 @@ github_reconciler = GitHubReconciliationService(
 )
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
-commercial = CommercialService(settings)
+if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .services.commercial import CommercialService
+    from boss_engine.services.cloud_product import CloudProductService
+
+    commercial = CommercialService(settings)
+    cloud_product = CloudProductService(settings, commercial)
+else:
+    commercial = CommunityEditionService(settings)
+    cloud_product = CommunityCloudService(settings, commercial)
 specpack = SpecPackService(settings, edition_service=commercial)
 agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
 model_gateway = ModelGatewayService(settings)
 capability_bundles = CapabilityBundleService(settings)
-cloud_product = CloudProductService(settings, commercial)
 enterprise = SelfHostedIdentityService(settings)
 audit = AuditTrailService(settings)
 if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
@@ -11688,7 +11695,7 @@ def put_org_assignment(agent_id: str, payload: dict) -> dict:
 
 
 @app.delete("/v1/console/v2/org/{agent_id}")
-def delete_org_assignment(agent_id: str, project_id: str, actor: str = "operator") -> dict:
+def delete_org_assignment(agent_id: str, project_id: str) -> dict:
     """Hand this agent back to the observed chart."""
     from boss_engine.services import org_assignments as oa
 
@@ -11696,8 +11703,8 @@ def delete_org_assignment(agent_id: str, project_id: str, actor: str = "operator
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
         if agent_id == "*":
-            return {"cleared": oa.clear_all(connection, project_id, actor)}
-        oa.clear_one(connection, project_id, agent_id, actor)
+            return {"cleared": oa.clear_all(connection, project_id)}
+        oa.clear_one(connection, project_id, agent_id)
     return {"agent_id": agent_id, "cleared": 1}
 
 
@@ -20124,7 +20131,6 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
-        REGISTERED_ROLES,
         blocks,
         palette,
     )
@@ -20145,13 +20151,6 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # Control blocks the runtime has always supported and the builder never offered, so a
         # customer could only ever author a straight line.
         "blocks": blocks(),
-        # THE AGENTS A STEP CAN BE GIVEN TO.
-        #
-        # A capability step's `captain` has always become the actor that runs it, which is why
-        # BOSS's own pipelines read as agents doing the work. Custom steps ignored it and the
-        # builder offered no way to set one — so a customer's workflow had no agent in it
-        # anywhere, and nothing on screen suggested there could be.
-        "roles": sorted(REGISTERED_ROLES),
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "
@@ -24112,10 +24111,11 @@ app.include_router(
         require_actor=require_project_actor,
     )
 )
-app.include_router(build_cloud_router(engine, cloud_product, require_project_actor))
 mount_platform_routers(app)
+register_community_cloud_routes(app, engine, cloud_product, require_project_actor)
 paid_router = None
 if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .enterprise_extensions.cloud_routes import register_paid_cloud_routes
     from .enterprise_extensions.hosted_routes import register_hosted_routes
     from .enterprise_extensions.operations_routes import (
         register_enterprise_operations_routes,
@@ -24123,6 +24123,7 @@ if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
     from boss_engine.services.enterprise import EnterpriseService
     from .routers.enterprise import enterprise_router, register_soc2_route
 
+    register_paid_cloud_routes(app, engine, cloud_product, require_project_actor)
     register_hosted_routes(
         app,
         engine,
