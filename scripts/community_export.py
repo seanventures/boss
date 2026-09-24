@@ -377,6 +377,31 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("private traceability destination must be withheld for split")
         if traceability_rewrite["destination"] not in manifest["required_runtime"]:
             raise ValueError("runtime traceability destination must be required")
+    specpack_rewrites = manifest.get("specpack_export_rewrites", [])
+    if not isinstance(specpack_rewrites, list) or len(specpack_rewrites) != len(
+        {item.get("destination") for item in specpack_rewrites if isinstance(item, dict)}
+    ):
+        raise ValueError("specpack export rewrites need unique destinations")
+    for item in specpack_rewrites:
+        if not isinstance(item, dict) or any(
+            not isinstance(item.get(key), str) or not safe_path(item[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("specpack export rewrite needs safe source and destination")
+        source, destination = item["source"], item["destination"]
+        if (
+            not source.startswith("packages/specpack/")
+            or not destination.startswith("packages/specpack/")
+            or source != destination.removesuffix(".yaml") + ".community.yaml"
+            or not destination.endswith(".yaml")
+        ):
+            raise ValueError("specpack export rewrite must replace matching YAML")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256", ""))):
+            raise ValueError("specpack export rewrite needs reviewed source sha256")
+        if not matching_rule(source, manifest["include"]):
+            raise ValueError("specpack export source must be included")
+        if destination not in manifest["requires_split"]:
+            raise ValueError("specpack export destination must be withheld for split")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -849,6 +874,24 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
             ]
             traceability_rewrite_applied = True
+    specpack_rewrites_applied: list[str] = []
+    for item in manifest.get("specpack_export_rewrites", []):
+        source, destination = item["source"], item["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "specpack-export-destination-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "specpack-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "specpack-export-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != item["sha256"]:
+            blockers.append({"kind": "specpack-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
+            ]
+            specpack_rewrites_applied.append(destination)
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -882,6 +925,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "schema_export_rewrite_applied": schema_rewrite_applied,
         "openapi_export_rewrite_applied": openapi_rewrite_applied,
         "traceability_export_rewrite_applied": traceability_rewrite_applied,
+        "specpack_export_rewrites_applied": specpack_rewrites_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,

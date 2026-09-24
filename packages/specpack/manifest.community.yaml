@@ -1,0 +1,119 @@
+# Reviewed Community catalog. Export replaces manifest.yaml only at this pinned checksum.
+kind: BossSpecPack
+id: boss-community-specpack-v2
+name: BOSS Community SpecPack v2.0
+version: 2.0.0
+source_prd: docs/product/BOSS_COMMUNITY_EDITION_SPEC.md
+source_technical_spec: docs/product/BOSS_COMMUNITY_EDITION_SPEC.md
+positioning:
+  product_thesis: BOSS coordinates auditable autonomous work.
+  architecture:
+    openclaw_foundation: false
+    resource_plane_core: true
+    provider_adapters_are_plugins: true
+critical_invariants:
+- canonical_truth_is_durable_state_not_chat
+- no_external_effect_without_receipt
+- no_spendy_action_without_budget_reservation
+- no_provider_write_without_changeset
+- no_provider_write_without_budget_reservation
+- no_provider_action_without_resource_receipt
+- no_silent_drops
+- budget_governor_wins_over_autoscaler
+- agents_never_receive_raw_provider_secrets
+- optimize_across_authorized_capacity_do_not_bypass_limits
+- authoritative_claims_require_typed_reproducible_evidence
+- settled_conclusions_interrupt_regressed_priors_before_publication
+- production_surfaces_have_one_current_deploying_owner
+- assurance_policy_composition_is_deterministic_and_fail_closed
+- agent_group_consensus_never_bypasses_governance
+- effective_capability_is_the_intersection_of_all_authority
+- externally_tracked_work_is_the_only_normal_agent_execution_path
+- tracker_provider_is_intake_authority_and_boss_jobs_are_execution_authority
+objects:
+  core:
+  - rolespec
+  - packspec
+  - agent_module_install_record
+  - task
+  - decision
+  - meeting
+  - receipt
+  - deadletter
+  - ops_digest
+  - entitlement_gate_report
+  resource_plane:
+  - provider_account
+  - provider_adapter
+  - external_resource
+  - changeset
+  - resource_receipt
+  - deployment_target
+  - billing_account
+  - cost_event
+  - commitment
+  model_capacity:
+  - model_route_decision
+  - capacity_receipt
+  identity:
+  - enterprise_identity_provider
+  - enterprise_scim_group
+  - enterprise_scim_user
+  ground_truth:
+  - ground_truth_metric_definition
+  - ground_truth_observation
+  - regression_signal
+  - settled_conclusion
+  - closed_question_match
+  - claim
+  - evidence
+  - claim_verification
+  - surface_ownership
+  - ownership_transition
+  - verification_policy
+  - verification_run
+  - assurance_case
+  - assurance_policy_snapshot
+  agent_groups:
+  - agent_group_spec
+  - agent_group_run
+  integrations:
+  - integration_definition
+  - integration_connection
+  - executor_binding
+  - capability_resolution
+workflows:
+  ground_truth:
+  - ground_truth_metric_evaluation
+  - ground_truth_baseline_change
+  - regression_signal_lifecycle
+  - closed_question_publication_guard
+  - settled_conclusion_reopen
+  - claim_authority_gate
+  - red_to_green_verification
+  - causal_isolation_verification
+  - surface_ownership_acquire
+  - surface_ownership_transfer
+  - ownership_effect_preflight
+  - verification_schedule
+  - adversarial_verification_execute
+  - assurance_case_evaluate
+  agent_groups:
+  - agent_group_panel
+  - agent_group_producer_reviewer
+  - agent_group_bounded_debate
+  - agent_group_fan_out_join
+  integrations:
+  - integration_connection_lifecycle
+  - capability_resolution_gate
+policies:
+- default_safety
+- resource_plane_policy
+- budget_governor_policy
+- model_entitlement_policy
+- work_orchestration_policy
+packs:
+- core_v2
+- community_edition
+- providerops_pack
+- software_factory_pack

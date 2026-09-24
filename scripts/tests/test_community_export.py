@@ -849,3 +849,93 @@ def test_reviewed_community_services_allow_only_pinned_easy_connect_fields(tmp_p
     report, candidate = export.analyze(repo, export.git(repo, "rev-parse", "HEAD").decode().strip(), changed)
     assert "reviewed-community-service-has-paid-marker" in {b["kind"] for b in report["blockers"]}
     assert "engine/boss_engine/services/community_cloud.py" not in candidate
+
+def test_community_specpack_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    target = repo / "packages/specpack"
+    target.mkdir(parents=True)
+    (target / "manifest.yaml").write_text("packs: [enterprise_edition]\n")
+    public = b"packs: [community_edition]\n"
+    (target / "manifest.community.yaml").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["packages/specpack/"],
+        "exclude": ["unused.yaml"],
+        "requires_split": ["packages/specpack/manifest.yaml"],
+        "required_runtime": ["packages/specpack/manifest.yaml"],
+        "required_release": ["packages/specpack/manifest.yaml"],
+        "specpack_export_rewrites": [
+            {
+                "source": "packages/specpack/manifest.community.yaml",
+                "destination": "packages/specpack/manifest.yaml",
+                "sha256": hashlib.sha256(public).hexdigest(),
+            }
+        ],
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["specpack_export_rewrites_applied"] == [
+        "packages/specpack/manifest.yaml"
+    ]
+    assert candidate == {"packages/specpack/manifest.yaml": public}
+
+    changed = json.loads(json.dumps(manifest))
+    changed["specpack_export_rewrites"][0]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["specpack_export_rewrites_applied"] == []
+    assert "specpack-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "packages/specpack/manifest.yaml" not in candidate
+
+
+def test_public_specpack_manifest_references_existing_reviewed_specs() -> None:
+    import yaml
+
+    repo = MODULE_PATH.parents[1]
+    manifest = json.loads((MODULE_PATH.parent / "community_export_manifest.json").read_text())
+    export.validate_manifest(manifest)
+    catalog = yaml.safe_load(
+        (repo / "packages/specpack/manifest.community.yaml").read_text()
+    )
+    for group in catalog["objects"].values():
+        for name in group:
+            path = f"packages/specpack/objects/{name}.yaml"
+            assert (repo / path).is_file()
+            assert export.matching_rule(path, manifest["exclude"]) is None
+    for group in catalog["workflows"].values():
+        for name in group:
+            path = f"packages/specpack/workflows/{name}.yaml"
+            assert (repo / path).is_file()
+            assert export.matching_rule(path, manifest["exclude"]) is None
+    for kind in ("policies", "packs"):
+        for name in catalog[kind]:
+            path = f"packages/specpack/{kind}/{name}.yaml"
+            assert (repo / path).is_file()
+            assert export.matching_rule(path, manifest["exclude"]) is None
+    for rewrite in manifest["specpack_export_rewrites"]:
+        source = repo / rewrite["source"]
+        assert source.is_file()
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == rewrite["sha256"]
+        assert not any(marker in source.read_bytes() for marker in export.PRIVATE_MARKERS)
+    safety = yaml.safe_load(
+        (repo / "packages/specpack/policies/default_safety.community.yaml").read_text()
+    )
+    assert safety["rules"]["sandbox_real_mode"]["github_real_pr_allowed"] is False
+    assert safety["rules"]["sandbox_real_mode"]["allowed_github_targets"] == []
+    for skill_file in ("github", "software_factory"):
+        skill_spec = yaml.safe_load(
+            (repo / f"packages/specpack/skills/{skill_file}.community.yaml").read_text()
+        )
+        assert all(
+            skill["policy"]["allowed_targets"] == []
+            for skill in skill_spec["skills"]
+            if "allowed_targets" in skill.get("policy", {})
+        )
