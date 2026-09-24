@@ -23,6 +23,7 @@ tools/call.
 # module globals, silently treat the parameter as a query param, and 422 every
 # JSON-RPC POST. Evaluating annotations at def-time keeps the lazy import valid.
 import json
+import hmac
 import sys
 from typing import Any, Optional
 
@@ -69,11 +70,13 @@ class MCPServer:
         actor: str = "mcp",
         registry: Optional[ToolRegistry] = None,
         read_only: bool = False,
+        http_token: Optional[str] = None,
     ):
         self.ctx = ctx
         self.project_id = project_id
         self.actor = actor
         self.registry = registry or build_default_registry()
+        self.http_token = http_token
         # Catalog-only contexts have no durable workspace in which to record a
         # receipt, approval, lease, or task. Enforce read-only at the transport
         # boundary as well as at invocation time so every MCP host advertises an
@@ -83,7 +86,21 @@ class MCPServer:
     # ---- schema ----------------------------------------------------------
     def _tools(self) -> list[dict]:
         kind = "read" if self.read_only else None
-        return self.registry.mcp_schema(kind=kind)
+        tools = self.registry.mcp_schema(kind=kind)
+        # These fields are transport/session authority, never model arguments.
+        for tool in tools:
+            schema = tool.get("inputSchema") or {}
+            properties = dict(schema.get("properties") or {})
+            for reserved in ("project_id", "_operator_confirmed", "_writes_allowed"):
+                properties.pop(reserved, None)
+            tool["inputSchema"] = {
+                **schema,
+                "properties": properties,
+                "required": [
+                    field for field in schema.get("required", []) if field in properties
+                ],
+            }
+        return tools
 
     def _tool_allowed(self, name: str) -> bool:
         if not self.read_only:
@@ -97,6 +114,8 @@ class MCPServer:
     def handle(self, request: dict) -> Optional[dict]:
         """Handle one JSON-RPC request. Returns a response dict, or None for
         notifications (which take no reply)."""
+        if not isinstance(request, dict):
+            return _err(None, -32600, "invalid JSON-RPC request")
         method = request.get("method")
         rid = request.get("id")
 
@@ -114,17 +133,24 @@ class MCPServer:
         if method == "tools/list":
             return _ok(rid, {"tools": self._tools()})
         if method == "tools/call":
-            return self._tools_call(rid, request.get("params") or {})
+            params = request.get("params") or {}
+            if not isinstance(params, dict):
+                return _err(rid, -32602, "tools/call params must be an object")
+            return self._tools_call(rid, params)
         return _err(rid, -32601, f"method not found: {method}")
 
     def _tools_call(self, rid: Any, params: dict) -> dict:
         name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return _err(rid, -32602, "tools/call requires a tool name")
+        supplied_args = params.get("arguments") or {}
+        if not isinstance(supplied_args, dict):
+            return _err(rid, -32602, "tool arguments must be an object")
         # Session project_id is authoritative — never let tool arguments override
         # into another tenant (write tools historically honored args.project_id).
-        args = dict(params.get("arguments") or {})
-        args.pop("project_id", None)
-        if not name:
-            return _err(rid, -32602, "tools/call requires a tool name")
+        args = dict(supplied_args)
+        for reserved in ("project_id", "_operator_confirmed", "_writes_allowed"):
+            args.pop(reserved, None)
         if not self._tool_allowed(name):
             return _ok(rid, _tool_result(
                 {"ok": False, "error": f"tool '{name}' is not available (read-only mode)"},
@@ -164,21 +190,44 @@ class MCPServer:
         community Mission Control page (GET /). Lazily imports FastAPI so the
         pure engine never depends on it."""
         from fastapi import FastAPI, Request  # noqa: PLC0415 (intentionally lazy)
+        from fastapi import HTTPException  # noqa: PLC0415
         from fastapi.responses import HTMLResponse  # noqa: PLC0415
 
         from .ui import mission_control_html  # noqa: PLC0415
 
+        if not self.read_only and not self.http_token:
+            raise ValueError("write-capable HTTP MCP requires BOSS_MCP_HTTP_TOKEN")
+
         app = FastAPI(title="boss-engine-mcp")
         server = self
 
+        def require_token(request: Request) -> None:
+            if not server.http_token:
+                return
+            authorization = request.headers.get("authorization", "")
+            scheme, _, candidate = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(
+                candidate, server.http_token
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail="MCP bearer token required",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
         @app.post("/mcp")
         async def mcp(request: Request):  # type: ignore[no-redef]
-            body = await request.json()
+            require_token(request)
+            try:
+                body = await request.json()
+            except json.JSONDecodeError:
+                return _err(None, -32700, "parse error")
             resp = server.handle(body)
             return resp if resp is not None else {"jsonrpc": "2.0", "result": {}}
 
         @app.get("/health")
-        async def health():  # type: ignore[no-redef]
+        async def health(request: Request):  # type: ignore[no-redef]
+            require_token(request)
             return {"status": "ok", "server": SERVER_INFO["name"],
                     "tools": [t["name"] for t in server._tools()]}
 
