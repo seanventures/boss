@@ -240,3 +240,59 @@ def test_mechanically_complete_tree_has_no_blocked_marker(tmp_path: Path) -> Non
     status = json.loads((output / "EXPORT_CANDIDATE_STATUS.json").read_text())
     assert status["mechanically_complete"] is True
     assert status["ready_for_publication"] is False
+
+
+def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    source = repo / "packages/api-client/src/community.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text("export const community = true;\n")
+    package = repo / "packages/api-client/package.json"
+    package.write_text('{"name":"@boss/api-client","exports":{".":"./src/index.ts"}}\n')
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["packages/api-client/"],
+        "exclude": ["packages/api-client/src/paid.ts"],
+        "requires_split": ["packages/api-client/src/private.ts"],
+        "required_runtime": ["packages/api-client/src/community.ts"],
+        "required_release": ["packages/api-client/package.json"],
+        "package_export_rewrite": {
+            "path": "packages/api-client/package.json",
+            "community_source": "packages/api-client/src/community.ts",
+            "from": "./src/index.ts",
+            "to": "./src/community.ts",
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["package_export_rewrite_applied"] is True
+    assert json.loads(candidate["packages/api-client/package.json"])["exports"]["."] == (
+        "./src/community.ts"
+    )
+    changed = json.loads(json.dumps(manifest))
+    changed["package_export_rewrite"]["from"] = "./src/changed.ts"
+    report, _ = export.analyze(repo, sha, changed)
+    assert {b["kind"] for b in report["blockers"]} == {"package-export-shape-changed"}
+    missing = json.loads(json.dumps(manifest))
+    missing["package_export_rewrite"]["community_source"] = "packages/api-client/src/missing.ts"
+    missing["package_export_rewrite"]["to"] = "./src/missing.ts"
+    report, _ = export.analyze(repo, sha, missing)
+    assert "package-export-community-source-missing" in {b["kind"] for b in report["blockers"]}

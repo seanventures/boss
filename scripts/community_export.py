@@ -107,6 +107,24 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("compose_rewrite needs a positive expected_count")
         if not matching_rule(rewrite["path"], manifest["include"]):
             raise ValueError("compose_rewrite path must be included")
+    package_rewrite = manifest.get("package_export_rewrite")
+    if package_rewrite is not None:
+        if not isinstance(package_rewrite, dict) or any(
+            not isinstance(package_rewrite.get(key), str) or not safe_path(package_rewrite[key])
+            for key in ("path", "community_source")
+        ):
+            raise ValueError("package_export_rewrite needs safe package and source paths")
+        if not all(
+            isinstance(package_rewrite.get(key), str) and package_rewrite[key].startswith("./src/")
+            for key in ("from", "to")
+        ):
+            raise ValueError("package_export_rewrite needs src entrypoint paths")
+        package_dir = str(PurePosixPath(package_rewrite["path"]).parent)
+        target = str(PurePosixPath(package_dir) / package_rewrite["to"].removeprefix("./"))
+        if target != package_rewrite["community_source"]:
+            raise ValueError("package export target must match Community source")
+        if not matching_rule(package_rewrite["path"], manifest["include"]):
+            raise ValueError("package_export_rewrite path must be included")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -337,6 +355,33 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             else:
                 selected[path] = selected[path].replace(old, rewrite["to"].encode())
                 rewrite_applied = True
+    package_rewrite = manifest.get("package_export_rewrite")
+    package_rewrite_applied = False
+    if package_rewrite:
+        package_path = package_rewrite["path"]
+        source_path = package_rewrite["community_source"]
+        if source_path not in source_paths:
+            blockers.append(
+                {"kind": "package-export-community-source-missing", "path": source_path}
+            )
+        elif source_path not in selected:
+            blockers.append(
+                {"kind": "package-export-community-source-withheld", "path": source_path}
+            )
+        elif package_path not in selected:
+            blockers.append({"kind": "package-export-manifest-withheld", "path": package_path})
+        else:
+            try:
+                package = json.loads(selected[package_path])
+            except (ValueError, UnicodeDecodeError):
+                package = None
+            exports = package.get("exports") if isinstance(package, dict) else None
+            if not isinstance(exports, dict) or exports.get(".") != package_rewrite["from"]:
+                blockers.append({"kind": "package-export-shape-changed", "path": package_path})
+            else:
+                exports["."] = package_rewrite["to"]
+                selected[package_path] = (json.dumps(package, indent=2) + "\n").encode()
+                package_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -361,6 +406,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "source_file_count": len(source_paths),
         "candidate_file_count": len(selected),
         "compose_rewrite_applied": rewrite_applied,
+        "package_export_rewrite_applied": package_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
