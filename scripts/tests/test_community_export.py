@@ -606,3 +606,57 @@ def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     assert report["makefile_export_rewrite_applied"] is False
     assert "makefile-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "Makefile" not in candidate
+
+
+def test_community_openapi_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    (repo / "api").mkdir(parents=True)
+    (repo / "api/openapi.yaml").write_text("private: true\n")
+    public = b"openapi: 3.1.0\ninfo:\n  title: BOSS Community API\n"
+    (repo / "api/openapi.community.yaml").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["api/openapi.yaml", "api/openapi.community.yaml"],
+        "exclude": ["unused.md"],
+        "requires_split": ["api/openapi.yaml"],
+        "required_runtime": ["api/openapi.yaml"],
+        "required_release": ["api/openapi.yaml"],
+        "openapi_export_rewrite": {
+            "source": "api/openapi.community.yaml",
+            "destination": "api/openapi.yaml",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["openapi_export_rewrite_applied"] is True
+    assert candidate == {"api/openapi.yaml": public}
+    assert not any(b.get("path") == "api/openapi.yaml" for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["openapi_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["openapi_export_rewrite_applied"] is False
+    assert "openapi-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "api/openapi.yaml" not in candidate
+
+    (repo / "api/openapi.community.yaml").write_bytes(public + b"x-extra: true\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "drift"],
+        check=True,
+    )
+    drift_sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    report, candidate = export.analyze(repo, drift_sha, manifest)
+    assert report["openapi_export_rewrite_applied"] is False
+    assert "openapi-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "api/openapi.yaml" not in candidate

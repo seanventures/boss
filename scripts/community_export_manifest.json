@@ -25,6 +25,7 @@
     "apps/worker/",
     "apps/web/",
     "api/openapi.yaml",
+    "api/openapi.community.yaml",
     "db/",
     "engine/boss_engine/",
     "engine/tests/",
@@ -88,6 +89,7 @@
   "requires_split": [
     "LICENSE",
     "Makefile",
+    "api/openapi.yaml",
     "apps/api/app/main.py",
     "apps/web/app/page.tsx"
   ],
@@ -100,6 +102,7 @@
     "Dockerfile.community",
     "Makefile",
     "install.sh",
+    "api/openapi.yaml",
     "scripts/install/community-compose.yml",
     "apps/api/app/main.py",
     "apps/worker/boss_worker/main.py",
@@ -145,5 +148,10 @@
     "source": "Makefile.community",
     "destination": "Makefile",
     "sha256": "a4a0aa8dc1fa56364f05fe7f5eab7d90b65510848900087146e5711e96c9e5d1"
+  },
+  "openapi_export_rewrite": {
+    "source": "api/openapi.community.yaml",
+    "destination": "api/openapi.yaml",
+    "sha256": "c15453ea9e9de2471ba80176b7cc0d4e294dd891d985ff7e06af7818de8b4825"
   }
 }
