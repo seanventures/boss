@@ -26,11 +26,11 @@ describe("Community API client boundary", () => {
     const client = createCommunityClient(config);
     expect(client).toHaveProperty("listProjects");
     expect(client).toHaveProperty("getEdition");
+    expect(client).toHaveProperty("getCloudCatalog");
     expect(client).toHaveProperty("listEnterpriseIdentityProviders");
     expect(client).toHaveProperty("getAgentStudioCatalog");
     for (const method of [
       "linkAccountConnect",
-      "getCloudCatalog",
       "listEnterpriseClusters",
       "listEnterpriseSupportCases",
       "listHostedMarketplaceListings",
