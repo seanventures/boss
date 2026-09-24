@@ -28,6 +28,7 @@
     "engine/requirements.txt",
     "packages/api-client/",
     "packages/create-boss/",
+    "packages/goldeneye/",
     "packages/specpack/",
     "scripts/install/",
     "scripts/metatron_tui.py",
@@ -38,6 +39,7 @@
     "tools/",
     "docs/community/",
     "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md",
+    "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md"
   ],
@@ -55,8 +57,6 @@
     "engine/boss_engine/services/cloud_product.py",
     "engine/boss_engine/services/commercial.py",
     "engine/boss_engine/services/enterprise.py",
-    "engine/boss_engine/services/goldeneye_paas.py",
-    "packages/goldeneye/",
     "packages/specpack/packs/cloud_edition.yaml",
     "packages/specpack/packs/enterprise_edition.yaml",
     "packages/specpack/modules/private_enterprise_agent_v1.yaml",
@@ -80,6 +80,9 @@
     "apps/api/app/main.py",
     "apps/worker/boss_worker/main.py",
     "apps/web/app/page.tsx",
+    "engine/boss_engine/services/goldeneye_paas.py",
+    "packages/goldeneye/install.sh",
+    "packages/goldeneye/core/bin/ge",
     "packages/specpack/packs/community_edition.yaml"
   ],
   "required_release": [

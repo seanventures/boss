@@ -64,6 +64,23 @@ def test_internal_ui_audit_media_is_excluded() -> None:
     )
 
 
+def test_goldeneye_community_boundary_is_preserved() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    for path in (
+        "engine/boss_engine/services/goldeneye_paas.py",
+        "packages/goldeneye/install.sh",
+        "packages/goldeneye/core/bin/ge",
+    ):
+        assert export.matching_rule(path, manifest["include"])
+        assert not export.matching_rule(path, manifest["exclude"])
+        assert path in manifest["required_runtime"]
+    assert b"GoldeneyePaas" not in export.PAID_SOURCE_MARKERS
+    assert b"goldeneye_paas" not in export.PAID_SOURCE_MARKERS
+    dockerfile = (export.ROOT / "Dockerfile.community").read_bytes()
+    assert b"COPY packages/goldeneye ./packages/goldeneye" in dockerfile
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()
