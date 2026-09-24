@@ -20,12 +20,11 @@ curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
 
 **Public launch pending:** `seanventures/boss` is not published yet, so the raw URL
 above is a preview of the command, not a working public download. Invited contributors
-can install from the private checkout:
+can install from their authorized checkout:
 
 ```bash
-git clone https://github.com/seanheiney/boss.git ~/boss
-cd ~/boss
-BOSS_REPO_URL=https://github.com/seanheiney/boss.git ./install.sh --dir "$PWD"
+cd /path/to/authorized/boss
+./install.sh --dir "$PWD"
 ```
 
 Supported fresh VMs: Ubuntu 22.04/24.04 and Debian 12/13 with `sudo` or root.
