@@ -27,6 +27,7 @@ OPENAI_API_KEY
 OPENAI_BASE_URL
 ANTHROPIC_API_KEY
 BOSS_GITHUB_TOKEN
+BOSS_ACCOUNT_CONNECT_URL
 CODEX_AUTH_JSON
 CLAUDE_CODE_OAUTH_TOKEN
 "
@@ -113,15 +114,31 @@ if [ "${BOSS_PUBLIC_URL_EXPLICIT:-0}" != "1" ]; then
   fi
 fi
 
-for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_POSTGRES_PORT BOSS_BIND_ADDRESS; do
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_POSTGRES_PORT; do
   case "$key" in
     BOSS_API_PORT) explicit="${BOSS_API_PORT_EXPLICIT:-0}" ;;
     BOSS_WEB_PORT) explicit="${BOSS_WEB_PORT_EXPLICIT:-0}" ;;
     BOSS_POSTGRES_PORT) explicit="${BOSS_POSTGRES_PORT_EXPLICIT:-0}" ;;
-    BOSS_BIND_ADDRESS) explicit="${BOSS_BIND_ADDRESS_EXPLICIT:-0}" ;;
   esac
   if [ "$explicit" != "1" ]; then
     old="$(old_val "$key")"
     [ -z "$old" ] || set_val "$key" "$old"
   fi
 done
+
+# Keep operator-added settings that the installer template does not know about:
+# model routing, worker tuning, provider options, etc. Only literal KEY=VALUE
+# lines are copied. Never source/eval .env or expand a value; a credential may
+# legitimately contain shell metacharacters and must stay data.
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    *=*) key="${line%%=*}" ;;
+    *) continue ;;
+  esac
+  case "$key" in
+    ""|[0-9]*|*[!A-Za-z0-9_]*) continue ;;
+  esac
+  if ! grep -q "^${key}=" "$NEW"; then
+    printf '%s\n' "$line" >> "$NEW"
+  fi
+done < "$OLD"

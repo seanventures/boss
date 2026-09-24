@@ -75,3 +75,12 @@ def test_dirty_boss_checkout_is_not_updated(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "tracked local changes" in result.stdout
     assert tracked.read_text() == "operator edit\n"
+
+
+def test_public_bind_option_is_rejected_before_any_install_action() -> None:
+    result = subprocess.run(
+        ["bash", str(INSTALL), "--bind-address", "0.0.0.0"],
+        text=True, capture_output=True, timeout=5,
+    )
+    assert result.returncode != 0
+    assert "Community binds API/web to loopback" in result.stderr

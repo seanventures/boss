@@ -79,9 +79,7 @@ WEB_PORT_EXPLICIT=0
 PG_PORT="${BOSS_POSTGRES_PORT:-5432}"
 PG_PORT_EXPLICIT=0
 [[ -n "${BOSS_POSTGRES_PORT:-}" ]] && PG_PORT_EXPLICIT=1
-BIND_ADDRESS="${BOSS_BIND_ADDRESS:-127.0.0.1}"
-BIND_ADDRESS_EXPLICIT=0
-[[ -n "${BOSS_BIND_ADDRESS:-}" ]] && BIND_ADDRESS_EXPLICIT=1
+BIND_ADDRESS="127.0.0.1"
 COMPOSE_PROFILES=""
 # WHERE THIS INSTALL KEEPS ITS SECRETS. Both options stay inside your own infrastructure; the
 # difference is two containers and about 400MB, not who holds the data. See --help.
@@ -114,7 +112,6 @@ Options:
   --github-token TOKEN    GitHub token for Software Factory (optional)
   --no-web                Skip Mission Control web console
   --public-url URL        Browser-reachable API URL when using a reverse proxy
-  --bind-address IP       API/web bind address (default 127.0.0.1; 0.0.0.0 exposes HTTP)
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
   --postgres-port N       Host port for Postgres (default 5432)
@@ -135,10 +132,12 @@ Options:
                                        are referenced rather than held, and rotate cleanly.
   -h, --help              Show this help
 
+API and web bind to loopback only; use an SSH tunnel or HTTPS reverse proxy remotely.
+
 Environment overrides:
   BOSS_INSTALL_DIR, OPENAI_API_KEY, ANTHROPIC_API_KEY, BOSS_GITHUB_TOKEN,
   BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT, BOSS_WEB_PORT, BOSS_POSTGRES_PORT,
-  BOSS_PUBLIC_URL, BOSS_BIND_ADDRESS, BOSS_SECRET_STORE
+  BOSS_PUBLIC_URL, BOSS_SECRET_STORE
 
 Examples:
   curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash
@@ -162,7 +161,7 @@ while [[ $# -gt 0 ]]; do
     --github-token) GITHUB_TOKEN_PRESET="$2"; shift 2 ;;
     --no-web) WITH_WEB=0; shift ;;
     --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
-    --bind-address) BIND_ADDRESS="$2"; BIND_ADDRESS_EXPLICIT=1; shift 2 ;;
+    --bind-address) die "--bind-address is no longer supported; Community binds API/web to loopback. Use an SSH tunnel or HTTPS reverse proxy." ;;
     --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
     --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
     --postgres-port) PG_PORT="$2"; PG_PORT_EXPLICIT=1; shift 2 ;;
@@ -179,10 +178,9 @@ done
 
 # Expand ~
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-case "$BIND_ADDRESS" in
-  127.0.0.1|0.0.0.0) ;;
-  *) die "--bind-address must be 127.0.0.1 or 0.0.0.0" ;;
-esac
+if [[ -n "${BOSS_BIND_ADDRESS:-}" && "$BOSS_BIND_ADDRESS" != 127.0.0.1 ]]; then
+  die "BOSS_BIND_ADDRESS is no longer supported; Community binds API/web to loopback. Use an SSH tunnel or HTTPS reverse proxy."
+fi
 
 # A pipe occupies stdin. Read questions from the terminal so the one-liner is interactive.
 # In unattended shells, choose safe defaults rather than reading the rest of install.sh.
@@ -524,6 +522,9 @@ ENV_FILE="$INSTALL_DIR/.env"
 # is replaced only after that succeeds, so a failure leaves the previous credentials in place.
 _ENV_SNAPSHOT=""
 if [ -f "$ENV_FILE" ]; then
+  if grep -qs '^BOSS_BIND_ADDRESS=0.0.0.0$' "$ENV_FILE"; then
+    ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
+  fi
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
   _keep_api="$(_existing BOSS_API_KEY)"
@@ -595,7 +596,6 @@ if [ -n "${_ENV_SNAPSHOT:-}" ]; then
       BOSS_API_PORT_EXPLICIT="$API_PORT_EXPLICIT" \
       BOSS_WEB_PORT_EXPLICIT="$WEB_PORT_EXPLICIT" \
       BOSS_POSTGRES_PORT_EXPLICIT="$PG_PORT_EXPLICIT" \
-      BOSS_BIND_ADDRESS_EXPLICIT="$BIND_ADDRESS_EXPLICIT" \
       sh "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" "$_ENV_SNAPSHOT" "$_new_env"; then
     rm -f "$_new_env"
     die "could not carry credentials forward — left the existing $ENV_FILE unchanged (copy at $_ENV_SNAPSHOT)"
@@ -615,10 +615,6 @@ API_PORT="$(env_value BOSS_API_PORT)"
 WEB_PORT="$(env_value BOSS_WEB_PORT)"
 PG_PORT="$(env_value BOSS_POSTGRES_PORT)"
 PUBLIC_API_URL="$(env_value NEXT_PUBLIC_BOSS_API_URL)"
-BIND_ADDRESS="$(env_value BOSS_BIND_ADDRESS)"
-if [[ "$BIND_ADDRESS" == 0.0.0.0 ]]; then
-  ui_warn "API and web will accept plain HTTP from the network. Put TLS and an access policy in front of this VM."
-fi
 
 # Local helper for humans
 cat > "$INSTALL_DIR/boss-community.env.sh" <<EOF

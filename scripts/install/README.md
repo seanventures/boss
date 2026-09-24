@@ -65,7 +65,10 @@ python3 scripts/install/console_password.py reset
 
 `show` requires a terminal so the password is not piped into logs. Keep the
 console on loopback or behind an HTTPS reverse proxy; the web login refuses
-non-HTTPS requests outside loopback.
+non-HTTPS requests outside loopback. If a reverse proxy does not pass the
+external HTTPS host/scheme through to Next, set
+`BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env` for the
+CSRF origin comparison, then recreate web. This setting does not replace TLS.
 
 No BOSS Cloud / Account Connect required.
 
@@ -162,7 +165,6 @@ Everything derives from these; set them once in `.env`:
 | `BOSS_API_PORT` | 8000 | The console's preview links are built from this **at image build time**. Change it and rebuild `web`, or every preview link points at a port with nothing behind it. |
 | `BOSS_WEB_PORT` | 3000 | Mission Control. |
 | `BOSS_POSTGRES_PORT` | 5432 | |
-| `BOSS_BIND_ADDRESS` | 127.0.0.1 | API and web bind to loopback. Use a TLS reverse proxy for remote browser access. |
 | `INFISICAL_PORT` | 8080 | |
 
 `NEXT_PUBLIC_BOSS_API_URL` derives from `BOSS_API_PORT` automatically. Set it explicitly only
@@ -180,9 +182,9 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 
 Then open `http://127.0.0.1:3000` locally. For a permanent public site, put HTTPS and an
 access policy in front of the loopback ports and pass `--public-url https://boss.example.com`
-when installing or updating. This URL is baked into the web build. `--bind-address 0.0.0.0`
-is an explicit option for an operator-managed private network; it exposes plain HTTP and
-should never be mistaken for TLS setup.
+when installing or updating. This URL is baked into the web build. Community
+keeps API and web ports on loopback even if an older `.env` had a public bind;
+remote access goes through an SSH tunnel or a TLS reverse proxy.
 
 ### Did it work?
 

@@ -147,7 +147,7 @@ def test_the_console_url_stays_unless_this_run_set_one(tmp_path):
     assert _val(new.read_text(), "NEXT_PUBLIC_BOSS_API_URL") == "http://198.51.100.8:8000"
 
 
-def test_custom_ports_and_bind_address_survive_a_plain_rerun(tmp_path):
+def test_custom_ports_survive_and_legacy_public_bind_becomes_loopback(tmp_path):
     old = tmp_path / "old.env"
     new = tmp_path / "new.env"
     _write(old, "BOSS_API_PORT=8111\nBOSS_WEB_PORT=3111\n"
@@ -159,14 +159,26 @@ def test_custom_ports_and_bind_address_survive_a_plain_rerun(tmp_path):
     assert _val(text, "BOSS_API_PORT") == "8111"
     assert _val(text, "BOSS_WEB_PORT") == "3111"
     assert _val(text, "BOSS_POSTGRES_PORT") == "5544"
-    assert _val(text, "BOSS_BIND_ADDRESS") == "0.0.0.0"
+    assert _val(text, "BOSS_BIND_ADDRESS") == "127.0.0.1"
 
-    env = os.environ.copy()
-    env["BOSS_BIND_ADDRESS_EXPLICIT"] = "1"
-    # A caller's explicit new bind address wins when the candidate differs.
-    _write(new, "BOSS_BIND_ADDRESS=127.0.0.1\n")
-    subprocess.check_call(["sh", str(RESTORE), str(old), str(new)], env=env)
-    assert _val(new.read_text(), "BOSS_BIND_ADDRESS") == "127.0.0.1"
+
+def test_operator_added_settings_survive_without_evaluating_their_values(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    marker = tmp_path / "must-not-exist"
+    raw = f"literal$(touch {marker})`whoami`"
+    _write(old, "BOSS_CODE_AGENT_ENGINE=codex\nBOSS_CHAT_LLM_ENGINE=claude_code\n"
+           "BOSS_ACCOUNT_CONNECT_URL=https://account.example.invalid\n"
+           f"CUSTOM_FLAG={raw}\nINVALID-KEY=ignored\n")
+    _write(new, "BOSS_EDITION=community\nBOSS_ACCOUNT_CONNECT_URL=\n")
+    _restore(old, new)
+    text = new.read_text()
+    assert _val(text, "BOSS_CODE_AGENT_ENGINE") == "codex"
+    assert _val(text, "BOSS_CHAT_LLM_ENGINE") == "claude_code"
+    assert _val(text, "BOSS_ACCOUNT_CONNECT_URL") == "https://account.example.invalid"
+    assert _val(text, "CUSTOM_FLAG") == raw
+    assert "INVALID-KEY" not in text
+    assert not marker.exists()
 
 
 def test_console_login_secrets_survive_a_rerun(tmp_path):
