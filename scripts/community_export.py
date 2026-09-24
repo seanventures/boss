@@ -86,6 +86,17 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError(f"manifest {key} has duplicate or unsafe paths")
     if set(manifest["requires_split"]) & set(manifest["exclude"]):
         raise ValueError("requires_split and exclude must be disjoint")
+    symlinks = manifest.get("safe_symlinks", {})
+    if not isinstance(symlinks, dict) or any(
+        not isinstance(path, str)
+        or not isinstance(target, str)
+        or not safe_path(path)
+        or not safe_path(target)
+        or not matching_rule(path, manifest["include"])
+        or matching_rule(path, manifest["exclude"])
+        for path, target in symlinks.items()
+    ):
+        raise ValueError("safe_symlinks must be included relative paths and targets")
     rewrite = manifest.get("compose_rewrite")
     if rewrite is not None:
         if not isinstance(rewrite, dict) or not safe_path(rewrite.get("path", "")):
@@ -257,6 +268,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
     source_paths = set(entries)
     included = {p for p in source_paths if matching_rule(p, manifest["include"])}
     selected: dict[str, bytes] = {}
+    symlink_paths: dict[str, str] = {}
     blockers: list[dict] = []
     for rule in manifest["include"]:
         if not any(match_rule(p, rule) for p in source_paths):
@@ -268,7 +280,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "requires-community-split", "path": path})
             continue
         mode, oid = entries[path]
-        if mode != "100644" and mode != "100755":
+        if mode not in {"100644", "100755", "120000"}:
             blockers.append({"kind": "non-regular-file", "path": path})
             continue
         if any(
@@ -279,6 +291,12 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "sensitive-or-generated-path", "path": path})
             continue
         data = git(repo, "cat-file", "blob", oid)
+        if mode == "120000":
+            target = manifest.get("safe_symlinks", {}).get(path)
+            if target is None or data != target.encode():
+                blockers.append({"kind": "non-regular-file", "path": path})
+                continue
+            symlink_paths[path] = target
         if len(data) > 5_000_000:
             blockers.append({"kind": "large-file-needs-review", "path": path})
             continue
@@ -289,6 +307,15 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "mixed-paid-source-needs-split", "path": path})
             continue
         selected[path] = data
+    for path, target in list(symlink_paths.items()):
+        resolved = str(PurePosixPath(path).parent / target)
+        prefix = resolved.rstrip("/") + "/"
+        if (resolved not in selected or resolved in symlink_paths) and not any(
+            p.startswith(prefix) and p not in symlink_paths for p in selected
+        ):
+            blockers.append({"kind": "symlink-target-missing", "path": path, "to": resolved})
+            del selected[path]
+            del symlink_paths[path]
     rewrite = manifest.get("compose_rewrite")
     rewrite_applied = False
     if rewrite:
@@ -335,6 +362,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "candidate_file_count": len(selected),
         "compose_rewrite_applied": rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
+        "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
         "ready_for_publication": False,
         "mechanically_complete": not blockers,
@@ -351,16 +379,26 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
     return report, selected
 
 
-def write_candidate(output: Path, files: dict[str, bytes], executable_paths: list[str]) -> None:
+def write_candidate(
+    output: Path,
+    files: dict[str, bytes],
+    executable_paths: list[str],
+    symlink_paths: dict[str, str] | None = None,
+) -> None:
     if output.exists():
         raise ValueError("output already exists; use a fresh quarantine directory")
     output.mkdir(parents=True)
+    symlink_paths = symlink_paths or {}
     for name, data in files.items():
+        if name in symlink_paths:
+            continue
         target = output / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         if name in executable_paths:
             target.chmod(0o755)
+    for name, link_target in symlink_paths.items():
+        (output / name).symlink_to(link_target)
     (output / "EXPORT_CANDIDATE_BLOCKED.txt").write_text(
         "Quarantined source candidate only. Do not push or publish. Read the JSON report and BOSS-293 gates.\n"
     )
@@ -471,7 +509,7 @@ def main() -> int:
         sha = git(repo, "rev-parse", f"{args.source_ref}^{{commit}}").decode().strip()
         report, files = analyze(repo, sha, manifest)
         if not report["blockers"] or args.preview:
-            write_candidate(output, files, report["executable_paths"])
+            write_candidate(output, files, report["executable_paths"], report["symlink_paths"])
             scan, findings = scan_candidate(output)
             report["secret_scan"] = scan
             report["blockers"].extend(findings)

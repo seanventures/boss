@@ -72,6 +72,11 @@
     "apps/web/app/actions.ts",
     "packages/specpack/packs/community_edition.yaml"
   ],
+  "safe_symlinks": {
+    "packages/goldeneye/bin": "core/bin",
+    "packages/goldeneye/lib": "core/lib",
+    "packages/goldeneye/packages": "modules"
+  },
   "required_runtime": [
     "Dockerfile.community",
     "Makefile",
