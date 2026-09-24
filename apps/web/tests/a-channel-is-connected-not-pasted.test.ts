@@ -27,10 +27,9 @@ describe("connecting a channel", () => {
     // commonest failure in this flow, and Google reports it as redirect_uri_mismatch — which
     // names neither value.
     expect(UI).toContain("function defaultRedirect");
-    expect(UI).toContain("callback_path");
-    // The API host, not the console's: the callback is an API route, and sending Google to the
-    // web origin 404s AFTER a successful consent, which is the most confusing failure available.
-    expect(UI).toContain("boss-api.local.sean.network");
+    expect(UI).toContain("installation_default_redirect_uri");
+    expect(UI).not.toContain("boss-api.local.sean.network");
+    expect(UI).toContain("!form.redirect_uri.trim()");
   });
 
   it("connect is disabled until a client exists", () => {
