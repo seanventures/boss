@@ -1,6 +1,6 @@
 # Project agent templates (BOSS-435)
 
-The existing 13 Agent Studio specialists remain. These 21 additions are available from the Org Chart's **Add from template** picker and the project-scoped `GET /v1/agent-studio/templates` API. Each template binds to an installed RoleSpec, creates an immutable AgentVersion through the existing validation/publish path, and starts in `deterministic_brief` mode. Installation creates no job, model call, device action, or provider effect.
+The existing 13 Agent Studio specialists remain. These 21 additions are available through **Browse agent templates** in the Org Chart and the project-scoped `GET /v1/agent-studio/templates` API. Each template binds to an installed RoleSpec, creates an immutable AgentVersion through the existing validation/publish path, and starts in `deterministic_brief` mode. Installation creates no job, model call, device action, or provider effect.
 
 | Template | RoleSpec | Intended project work |
 | --- | --- | --- |
@@ -26,4 +26,4 @@ The existing 13 Agent Studio specialists remain. These 21 additions are availabl
 | Localization Specialist | docs_writer | Locale context, string review, truncation, and accessibility. |
 | Cost Analyst | finops_sentinel | Reconciled spend drivers, forecasts, and budget pressure. |
 
-These are **templates**, not 21 running employees. Work begins only through a governed AgentRun or Workflow with current capability, policy, budget, lease, receipt, and approval checks. Installing a template does not create a reporting line; the Org Chart continues to distinguish declared seats from observed handoffs. The mobile template specifically cannot operate a device until a mobile SkillSpec and execution-node adapter are installed and verified.
+These are **templates**, not 21 running employees. Work begins only through a governed AgentRun or Workflow with current capability, policy, budget, lease, receipt, and approval checks. Installing a template does not create a reporting line; the Org Chart continues to distinguish declared seats from observed handoffs. The mobile device runner is being developed separately in BOSS-439; installing this template does not dispatch it. Agent Studio to runner dispatch, project build and test integration, and physical-device support remain tracked in BOSS-440.
