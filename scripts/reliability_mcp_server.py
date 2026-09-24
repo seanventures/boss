@@ -5,7 +5,7 @@
 Dependency-free stdio MCP server (JSON-RPC 2.0 over stdin/stdout) backed by the BOSS API.
 
 Config (env):
-    BOSS_API_URL       e.g. https://boss-api.local.sean.network
+    BOSS_API_URL       e.g. https://boss.example.com
     BOSS_API_KEY       console/API key (Authorization: Bearer)
     BOSS_PROJECT_ID    default project (default: boss-dogfood)
 

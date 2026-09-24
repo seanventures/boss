@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -63,6 +64,28 @@ def test_internal_ui_audit_media_is_excluded() -> None:
     )
 
 
+def test_goldeneye_community_boundary_is_preserved() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    for path in (
+        "engine/boss_engine/services/goldeneye_paas.py",
+        "packages/goldeneye/install.sh",
+        "packages/goldeneye/core/bin/ge",
+    ):
+        assert export.matching_rule(path, manifest["include"])
+        assert not export.matching_rule(path, manifest["exclude"])
+        assert path in manifest["required_runtime"]
+    assert b"GoldeneyePaas" not in export.PAID_SOURCE_MARKERS
+    assert b"goldeneye_paas" not in export.PAID_SOURCE_MARKERS
+    assert manifest["safe_symlinks"] == {
+        "packages/goldeneye/bin": "core/bin",
+        "packages/goldeneye/lib": "core/lib",
+        "packages/goldeneye/packages": "modules",
+    }
+    dockerfile = (export.ROOT / "Dockerfile.community").read_bytes()
+    assert b"COPY packages/goldeneye ./packages/goldeneye" in dockerfile
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()
@@ -74,11 +97,14 @@ def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Pa
         "docker-compose.yaml": b"services:\n  account-connect:\n    image: private\n",
         "scripts/install/community-compose.yml": b"services:\n  api:\n    build:\n      dockerfile: Dockerfile\n",
         "scripts/install/launch.sh": b"#!/bin/sh\nexit 0\n",
+        "Dockerfile.community": b"FROM scratch\nCOPY EXPORT_CANDIDATE_STATUS.json /status.json\nCOPY apps/api/app/main.py /main.py\n",
+        "packages/goldeneye/core/bin/ge": b"#!/bin/sh\nexit 0\n",
     }
     for name, data in files.items():
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+    (repo / "packages/goldeneye/bin").symlink_to("core/bin")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     subprocess.run(
@@ -110,11 +136,25 @@ def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Pa
             "docker-compose.yaml",
             "README.md",
             "scripts/install/",
+            "Dockerfile.community",
+            "packages/goldeneye/",
         ],
         "exclude": ["engine/boss_engine/services/paid.py"],
         "requires_split": ["docker-compose.yaml"],
-        "required_runtime": ["apps/api/app/main.py", "install.sh", "docker-compose.yaml"],
+        "required_runtime": [
+            "apps/api/app/main.py",
+            "install.sh",
+            "docker-compose.yaml",
+            "Dockerfile.community",
+        ],
         "required_release": ["README.md"],
+        "safe_symlinks": {"packages/goldeneye/bin": "core/bin"},
+        "compose_rewrite": {
+            "path": "scripts/install/community-compose.yml",
+            "from": "dockerfile: Dockerfile",
+            "to": "dockerfile: Dockerfile.community",
+            "expected_count": 1,
+        },
     }
     export.validate_manifest(manifest)
     sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
@@ -123,15 +163,45 @@ def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Pa
     assert "python-import" in kinds
     assert "private-source-or-host-reference" in kinds
     assert "mixed-paid-source-needs-split" in kinds
-    assert "compose-private-service" in kinds
-    assert "compose-dockerfile-missing" in kinds
+    assert "compose-dockerfile-missing" not in kinds
+    assert report["compose_rewrite_applied"]
     assert "missing-runtime-entrypoint" in kinds
     assert set(candidate) == {
         "apps/api/app/main.py",
         "scripts/install/community-compose.yml",
         "scripts/install/launch.sh",
+        "Dockerfile.community",
+        "packages/goldeneye/core/bin/ge",
+        "packages/goldeneye/bin",
     }
+    assert b"dockerfile: Dockerfile.community" in candidate["scripts/install/community-compose.yml"]
+    manifest["compose_rewrite"]["expected_count"] = 2
+    mismatch_report, mismatch_candidate = export.analyze(repo, sha, manifest)
+    assert any(b["kind"] == "compose-rewrite-count-mismatch" for b in mismatch_report["blockers"])
+    assert (
+        b"dockerfile: Dockerfile\n" in mismatch_candidate["scripts/install/community-compose.yml"]
+    )
     candidate_dir = tmp_path / "candidate"
-    export.write_candidate(candidate_dir, candidate, report["executable_paths"])
+    export.write_candidate(
+        candidate_dir, candidate, report["executable_paths"], report["symlink_paths"]
+    )
+    assert (candidate_dir / "packages/goldeneye/bin").is_symlink()
+    export.finalize_candidate(candidate_dir, report)
     assert (candidate_dir / "scripts/install/launch.sh").stat().st_mode & 0o111
+    assert not json.loads((candidate_dir / "EXPORT_CANDIDATE_STATUS.json").read_text())[
+        "mechanically_complete"
+    ]
     assert report["ready_for_publication"] is False
+
+
+def test_mechanically_complete_tree_has_no_blocked_marker(tmp_path: Path) -> None:
+    output = tmp_path / "candidate"
+    export.write_candidate(output, {}, [])
+    export.finalize_candidate(
+        output,
+        {"source_commit": "a" * 40, "mechanically_complete": True, "blocker_count": 0},
+    )
+    assert not (output / "EXPORT_CANDIDATE_BLOCKED.txt").exists()
+    status = json.loads((output / "EXPORT_CANDIDATE_STATUS.json").read_text())
+    assert status["mechanically_complete"] is True
+    assert status["ready_for_publication"] is False

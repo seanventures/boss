@@ -39,11 +39,9 @@ PAID_SOURCE_MARKERS = (
     b"CloudProduct",
     b"EnterpriseCluster",
     b"HostedMarketplace",
-    b"GoldeneyePaas",
     b"account_connect",
     b"hosted_marketplace",
     b"enterprise_cluster",
-    b"goldeneye_paas",
     b"commercial_packaging_policy",
     b"enterprise_edition",
     b"cloud_edition",
@@ -88,6 +86,27 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError(f"manifest {key} has duplicate or unsafe paths")
     if set(manifest["requires_split"]) & set(manifest["exclude"]):
         raise ValueError("requires_split and exclude must be disjoint")
+    symlinks = manifest.get("safe_symlinks", {})
+    if not isinstance(symlinks, dict) or any(
+        not isinstance(path, str)
+        or not isinstance(target, str)
+        or not safe_path(path)
+        or not safe_path(target)
+        or not matching_rule(path, manifest["include"])
+        or matching_rule(path, manifest["exclude"])
+        for path, target in symlinks.items()
+    ):
+        raise ValueError("safe_symlinks must be included relative paths and targets")
+    rewrite = manifest.get("compose_rewrite")
+    if rewrite is not None:
+        if not isinstance(rewrite, dict) or not safe_path(rewrite.get("path", "")):
+            raise ValueError("compose_rewrite needs a safe path")
+        if not all(isinstance(rewrite.get(key), str) and rewrite[key] for key in ("from", "to")):
+            raise ValueError("compose_rewrite needs nonempty from/to strings")
+        if type(rewrite.get("expected_count")) is not int or rewrite["expected_count"] < 1:
+            raise ValueError("compose_rewrite needs a positive expected_count")
+        if not matching_rule(rewrite["path"], manifest["include"]):
+            raise ValueError("compose_rewrite path must be included")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -187,13 +206,14 @@ def typescript_edges(
     return edges
 
 
-def packaging_edges(
-    repo: Path, entries: dict[str, tuple[str, str]], manifest: dict, selected: set[str]
-) -> list[dict]:
-    """Name packaging references to paths that the export intentionally omits."""
+def packaging_edges(selected: dict[str, bytes]) -> list[dict]:
+    """Name Docker and Compose references absent from the actual candidate."""
     edges: list[dict] = []
-    if "Dockerfile" in entries:
-        content = git(repo, "cat-file", "blob", entries["Dockerfile"][1]).decode("utf-8", "replace")
+    paths = set(selected)
+    for dockerfile in ("Dockerfile.community", "Dockerfile"):
+        if dockerfile not in selected:
+            continue
+        content = selected[dockerfile].decode("utf-8", "replace")
         for line_number, line in enumerate(content.splitlines(), 1):
             if not line.startswith("COPY "):
                 continue
@@ -204,46 +224,39 @@ def packaging_edges(
             if len(arguments) < 2 or "--from=" in line:
                 continue
             for source in arguments[:-1]:
+                if source == "EXPORT_CANDIDATE_STATUS.json":
+                    continue  # generated after the secret scan
                 prefix = source.rstrip("/") + "/"
-                for excluded in manifest["exclude"]:
-                    if excluded == source or excluded.startswith(prefix):
-                        edges.append(
-                            {
-                                "kind": "docker-copy-includes-excluded-path",
-                                "from": "Dockerfile",
-                                "to": excluded,
-                                "line": line_number,
-                            }
-                        )
-    if "docker-compose.yaml" in entries and matching_rule(
-        "docker-compose.yaml", manifest["include"]
-    ):
-        content = git(repo, "cat-file", "blob", entries["docker-compose.yaml"][1]).decode(
-            "utf-8", "replace"
-        )
+                if source not in paths and not any(path.startswith(prefix) for path in paths):
+                    edges.append(
+                        {
+                            "kind": "docker-copy-source-missing",
+                            "from": dockerfile,
+                            "to": source,
+                            "line": line_number,
+                        }
+                    )
+    for compose in ("scripts/install/community-compose.yml", "docker-compose.yaml"):
+        if compose not in selected:
+            continue
+        content = selected[compose].decode("utf-8", "replace")
         for line_number, line in enumerate(content.splitlines(), 1):
-            if re.match(r"^  account-connect:\s*$", line):
+            if compose == "docker-compose.yaml" and re.match(r"^  account-connect:\s*$", line):
                 edges.append(
                     {
                         "kind": "compose-private-service",
-                        "from": "docker-compose.yaml",
+                        "from": compose,
                         "to": "apps/account_connect/",
                         "line": line_number,
                     }
                 )
-    community_compose = "scripts/install/community-compose.yml"
-    if community_compose in selected:
-        content = git(repo, "cat-file", "blob", entries[community_compose][1]).decode(
-            "utf-8", "replace"
-        )
-        for line_number, line in enumerate(content.splitlines(), 1):
             match = re.match(r"^\s+dockerfile:\s*(\S+)\s*$", line)
-            if match and match.group(1) == "Dockerfile" and "Dockerfile" not in selected:
+            if match and match.group(1) not in paths:
                 edges.append(
                     {
                         "kind": "compose-dockerfile-missing",
-                        "from": community_compose,
-                        "to": "Dockerfile",
+                        "from": compose,
+                        "to": match.group(1),
                         "line": line_number,
                     }
                 )
@@ -255,6 +268,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
     source_paths = set(entries)
     included = {p for p in source_paths if matching_rule(p, manifest["include"])}
     selected: dict[str, bytes] = {}
+    symlink_paths: dict[str, str] = {}
     blockers: list[dict] = []
     for rule in manifest["include"]:
         if not any(match_rule(p, rule) for p in source_paths):
@@ -266,7 +280,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "requires-community-split", "path": path})
             continue
         mode, oid = entries[path]
-        if mode != "100644" and mode != "100755":
+        if mode not in {"100644", "100755", "120000"}:
             blockers.append({"kind": "non-regular-file", "path": path})
             continue
         if any(
@@ -277,6 +291,12 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "sensitive-or-generated-path", "path": path})
             continue
         data = git(repo, "cat-file", "blob", oid)
+        if mode == "120000":
+            target = manifest.get("safe_symlinks", {}).get(path)
+            if target is None or data != target.encode():
+                blockers.append({"kind": "non-regular-file", "path": path})
+                continue
+            symlink_paths[path] = target
         if len(data) > 5_000_000:
             blockers.append({"kind": "large-file-needs-review", "path": path})
             continue
@@ -287,6 +307,36 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "mixed-paid-source-needs-split", "path": path})
             continue
         selected[path] = data
+    for path, target in list(symlink_paths.items()):
+        resolved = str(PurePosixPath(path).parent / target)
+        prefix = resolved.rstrip("/") + "/"
+        if (resolved not in selected or resolved in symlink_paths) and not any(
+            p.startswith(prefix) and p not in symlink_paths for p in selected
+        ):
+            blockers.append({"kind": "symlink-target-missing", "path": path, "to": resolved})
+            del selected[path]
+            del symlink_paths[path]
+    rewrite = manifest.get("compose_rewrite")
+    rewrite_applied = False
+    if rewrite:
+        path = rewrite["path"]
+        if path not in selected:
+            blockers.append({"kind": "compose-rewrite-source-missing", "path": path})
+        else:
+            old = rewrite["from"].encode()
+            count = selected[path].count(old)
+            if count != rewrite["expected_count"]:
+                blockers.append(
+                    {
+                        "kind": "compose-rewrite-count-mismatch",
+                        "path": path,
+                        "expected": rewrite["expected_count"],
+                        "actual": count,
+                    }
+                )
+            else:
+                selected[path] = selected[path].replace(old, rewrite["to"].encode())
+                rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -299,7 +349,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.extend(python_edges(path, data, source_paths, selected_paths))
         elif path.endswith((".ts", ".tsx", ".js", ".jsx")):
             blockers.extend(typescript_edges(path, data, source_paths, selected_paths))
-    blockers.extend(packaging_edges(repo, entries, manifest, selected_paths))
+    blockers.extend(packaging_edges(selected))
     unique: dict[tuple, dict] = {}
     for blocker in blockers:
         identity = (blocker["kind"], blocker.get("path"), blocker.get("from"), blocker.get("to"))
@@ -310,7 +360,9 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "source_commit": sha,
         "source_file_count": len(source_paths),
         "candidate_file_count": len(selected),
+        "compose_rewrite_applied": rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
+        "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
         "ready_for_publication": False,
         "mechanically_complete": not blockers,
@@ -327,19 +379,42 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
     return report, selected
 
 
-def write_candidate(output: Path, files: dict[str, bytes], executable_paths: list[str]) -> None:
+def write_candidate(
+    output: Path,
+    files: dict[str, bytes],
+    executable_paths: list[str],
+    symlink_paths: dict[str, str] | None = None,
+) -> None:
     if output.exists():
         raise ValueError("output already exists; use a fresh quarantine directory")
     output.mkdir(parents=True)
+    symlink_paths = symlink_paths or {}
     for name, data in files.items():
+        if name in symlink_paths:
+            continue
         target = output / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         if name in executable_paths:
             target.chmod(0o755)
+    for name, link_target in symlink_paths.items():
+        (output / name).symlink_to(link_target)
     (output / "EXPORT_CANDIDATE_BLOCKED.txt").write_text(
         "Quarantined source candidate only. Do not push or publish. Read the JSON report and BOSS-293 gates.\n"
     )
+
+
+def finalize_candidate(output: Path, report: dict) -> None:
+    status = {
+        "schema_version": 1,
+        "source_commit": report["source_commit"],
+        "mechanically_complete": report["mechanically_complete"],
+        "blocker_count": report["blocker_count"],
+        "ready_for_publication": False,
+    }
+    (output / "EXPORT_CANDIDATE_STATUS.json").write_text(json.dumps(status, indent=2) + "\n")
+    if status["mechanically_complete"]:
+        (output / "EXPORT_CANDIDATE_BLOCKED.txt").unlink()
 
 
 def containing_git_worktree(path: Path) -> Path | None:
@@ -434,12 +509,13 @@ def main() -> int:
         sha = git(repo, "rev-parse", f"{args.source_ref}^{{commit}}").decode().strip()
         report, files = analyze(repo, sha, manifest)
         if not report["blockers"] or args.preview:
-            write_candidate(output, files, report["executable_paths"])
+            write_candidate(output, files, report["executable_paths"], report["symlink_paths"])
             scan, findings = scan_candidate(output)
             report["secret_scan"] = scan
             report["blockers"].extend(findings)
             report["blocker_count"] = len(report["blockers"])
             report["mechanically_complete"] = not report["blockers"]
+            finalize_candidate(output, report)
         else:
             report["secret_scan"] = {"status": "not-run", "finding_count": None}
         report_path.parent.mkdir(parents=True, exist_ok=True)

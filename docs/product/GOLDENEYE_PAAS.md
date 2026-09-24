@@ -95,7 +95,7 @@ unless `--force` is set for operators who know the risk.
 
 ```bash
 # On a fresh Ubuntu 24.04 host (as root), after Tailscale is up:
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/packages/goldeneye/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/your-org/boss/main/packages/goldeneye/install.sh | bash
 
 # Or from a BOSS checkout:
 sudo packages/goldeneye/install.sh --site /etc/goldeneye/site.yaml

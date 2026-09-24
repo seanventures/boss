@@ -11,11 +11,12 @@
     "LICENSE",
     "Makefile",
     "ruff.toml",
-    "Dockerfile",
+    "Dockerfile.community",
     "install.sh",
     "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
+    "apps/__init__.py",
     "apps/api/",
     "apps/worker/",
     "apps/web/",
@@ -27,6 +28,7 @@
     "engine/requirements.txt",
     "packages/api-client/",
     "packages/create-boss/",
+    "packages/goldeneye/",
     "packages/specpack/",
     "scripts/install/",
     "scripts/metatron_tui.py",
@@ -37,12 +39,14 @@
     "tools/",
     "docs/community/",
     "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md",
+    "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md"
   ],
   "exclude": [
     "apps/account_connect/",
     "apps/api/app/adapters_enterprise/",
+    "apps/api/app/enterprise_extensions/",
     "apps/api/app/services/commercial.py",
     "apps/api/app/services/enterprise.py",
     "apps/api/app/routers/enterprise.py",
@@ -53,8 +57,6 @@
     "engine/boss_engine/services/cloud_product.py",
     "engine/boss_engine/services/commercial.py",
     "engine/boss_engine/services/enterprise.py",
-    "engine/boss_engine/services/goldeneye_paas.py",
-    "packages/goldeneye/",
     "packages/specpack/packs/cloud_edition.yaml",
     "packages/specpack/packs/enterprise_edition.yaml",
     "packages/specpack/modules/private_enterprise_agent_v1.yaml",
@@ -64,21 +66,28 @@
   "requires_split": [
     "LICENSE",
     "Makefile",
-    "Dockerfile",
     "apps/api/app/main.py",
     "apps/api/app/routers/community.py",
     "apps/web/app/page.tsx",
     "apps/web/app/actions.ts",
     "packages/specpack/packs/community_edition.yaml"
   ],
+  "safe_symlinks": {
+    "packages/goldeneye/bin": "core/bin",
+    "packages/goldeneye/lib": "core/lib",
+    "packages/goldeneye/packages": "modules"
+  },
   "required_runtime": [
-    "Dockerfile",
+    "Dockerfile.community",
     "Makefile",
     "install.sh",
     "scripts/install/community-compose.yml",
     "apps/api/app/main.py",
     "apps/worker/boss_worker/main.py",
     "apps/web/app/page.tsx",
+    "engine/boss_engine/services/goldeneye_paas.py",
+    "packages/goldeneye/install.sh",
+    "packages/goldeneye/core/bin/ge",
     "packages/specpack/packs/community_edition.yaml"
   ],
   "required_release": [
@@ -87,5 +96,11 @@
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE"
-  ]
+  ],
+  "compose_rewrite": {
+    "path": "scripts/install/community-compose.yml",
+    "from": "dockerfile: Dockerfile",
+    "to": "dockerfile: Dockerfile.community",
+    "expected_count": 3
+  }
 }

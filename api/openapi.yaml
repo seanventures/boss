@@ -6609,7 +6609,7 @@ paths:
                   type: string
                 repository:
                   type: string
-                  example: seanheiney/boss
+                  example: your-org/your-repo
                 role:
                   type: string
                   enum:
