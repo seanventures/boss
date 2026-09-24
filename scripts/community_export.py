@@ -141,6 +141,19 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("page export source must be included")
         if page_rewrite["destination"] not in manifest["requires_split"]:
             raise ValueError("page export destination must be withheld for split")
+    readme_rewrite = manifest.get("readme_export_rewrite")
+    if readme_rewrite is not None:
+        if not isinstance(readme_rewrite, dict) or any(
+            not isinstance(readme_rewrite.get(key), str) or not safe_path(readme_rewrite[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("readme_export_rewrite needs safe source and destination paths")
+        if readme_rewrite["destination"] != "README.md":
+            raise ValueError("readme export destination must be root README.md")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(readme_rewrite.get("sha256", ""))):
+            raise ValueError("readme_export_rewrite needs reviewed source sha256")
+        if not all(matching_rule(readme_rewrite[key], manifest["include"]) for key in ("source", "destination")):
+            raise ValueError("readme export source and destination must be included")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -421,6 +434,33 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 )
             ]
             page_rewrite_applied = True
+    readme_rewrite = manifest.get("readme_export_rewrite")
+    readme_rewrite_applied = False
+    if readme_rewrite:
+        source = readme_rewrite["source"]
+        destination = readme_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "readme-export-private-readme-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "readme-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "readme-export-private-readme-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != readme_rewrite["sha256"]:
+            blockers.append({"kind": "readme-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (
+                    blocker.get("path") == destination
+                    and blocker["kind"] in {
+                        "private-source-or-host-reference",
+                        "mixed-paid-source-needs-split",
+                        "requires-community-split",
+                    }
+                )
+            ]
+            readme_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -447,6 +487,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "compose_rewrite_applied": rewrite_applied,
         "package_export_rewrite_applied": package_rewrite_applied,
         "page_export_rewrite_applied": page_rewrite_applied,
+        "readme_export_rewrite_applied": readme_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,

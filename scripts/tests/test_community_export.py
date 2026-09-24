@@ -362,3 +362,51 @@ def test_community_page_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     missing["page_export_rewrite"]["source"] = "apps/web/app/missing.tsx"
     report, _ = export.analyze(repo, sha, missing)
     assert "page-export-community-source-withheld" in {b["kind"] for b in report["blockers"]}
+
+
+def test_community_readme_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "README.md").write_text("Private source: seanheiney/boss\n")
+    public = b"# BOSS Community\n\n[Guide](docs/community/guide.md)\n"
+    (repo / "README.community.md").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["README.md", "README.community.md"],
+        "exclude": ["unused.md"],
+        "requires_split": ["unused-split.md"],
+        "required_runtime": ["README.md"],
+        "required_release": ["README.md"],
+        "readme_export_rewrite": {
+            "source": "README.community.md",
+            "destination": "README.md",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["readme_export_rewrite_applied"] is True
+    assert candidate == {"README.md": public}
+    assert not any(b.get("path") == "README.md" for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["readme_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["readme_export_rewrite_applied"] is False
+    assert "readme-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "README.md" not in candidate
+
+    missing = json.loads(json.dumps(manifest))
+    missing["readme_export_rewrite"]["source"] = "missing.md"
+    missing["include"].append("missing.md")
+    report, _ = export.analyze(repo, sha, missing)
+    assert "readme-export-community-source-withheld" in {b["kind"] for b in report["blockers"]}
