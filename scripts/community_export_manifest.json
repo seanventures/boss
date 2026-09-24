@@ -217,5 +217,10 @@
       "destination": "packages/specpack/skills/software_factory.yaml",
       "sha256": "a811625edd7a97a915e8074b6282fb55879bcfd06d4c1536bf8df0c3a56a3d09"
     }
-  ]
+  ],
+  "main_export_rewrite": {
+    "path": "apps/api/app/main.py",
+    "source_sha256": "52e3e208904dc1ad33ea05a49ba682127e7f580354b25cd3c7cdf02f4d19a581",
+    "output_sha256": "8a9acbcdce2dc8f0f3423cad6f5971b6ba20c348f63f80c5133e07953e5c39fa"
+  }
 }

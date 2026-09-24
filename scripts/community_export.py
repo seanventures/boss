@@ -77,6 +77,77 @@ def has_paid_source_markers(path: str, data: bytes) -> bool:
         scan_data = data.replace(SHARED_CONFIG_PAID_FIELDS, b"", 1)
     return any(marker in scan_data for marker in PAID_SOURCE_MARKERS)
 
+MAIN_COMMUNITY_REPLACEMENTS = (
+    (
+        b"from .routers.route_ownership import ENTERPRISE_EDITIONS\n",
+        b"",
+    ),
+    (
+        b'''if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .services.commercial import CommercialService
+    from boss_engine.services.cloud_product import CloudProductService
+
+    commercial = CommercialService(settings)
+    cloud_product = CloudProductService(settings, commercial)
+else:
+    commercial = CommunityEditionService(settings)
+    cloud_product = CommunityCloudService(settings, commercial)
+''',
+        b'''commercial = CommunityEditionService(settings)
+cloud_product = CommunityCloudService(settings, commercial)
+''',
+    ),
+    (
+        b'''if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from boss_engine.services.enterprise_audit import EnterpriseAuditTrailService
+
+    audit = EnterpriseAuditTrailService(settings)
+''',
+        b"",
+    ),
+    (
+        b'''if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .enterprise_extensions.cloud_routes import register_paid_cloud_routes
+    from .enterprise_extensions.hosted_routes import register_hosted_routes
+    from .enterprise_extensions.operations_routes import (
+        register_enterprise_operations_routes,
+    )
+    from boss_engine.services.enterprise import EnterpriseService
+    from .routers.enterprise import enterprise_router, register_soc2_route
+
+    register_paid_cloud_routes(app, engine, cloud_product, require_project_actor)
+    register_hosted_routes(
+        app,
+        engine,
+        commercial,
+        require_project_actor,
+        edition_status_from_service,
+    )
+    register_enterprise_operations_routes(
+        app, engine, EnterpriseService(settings), require_project_actor
+    )
+    register_soc2_route(app, engine, settings, require_project_actor)
+    paid_router = enterprise_router
+''',
+        b"",
+    ),
+)
+MAIN_COMMUNITY_ACCOUNT_GATE = b'    {"domain": "Account connect", "gate": "Account connect required", "trigger": "An action that needs a connected external account before it can run.", "reason": "blocked_account_connect_required"},\n'
+
+
+def rewrite_community_main(data: bytes) -> bytes | None:
+    """Remove only the reviewed paid edition composition from the API entrypoint."""
+    result = data
+    for old, new in MAIN_COMMUNITY_REPLACEMENTS:
+        if result.count(old) != 1:
+            return None
+        result = result.replace(old, new, 1)
+    try:
+        compile(result, "apps/api/app/main.py", "exec")
+    except SyntaxError:
+        return None
+    return result
+
 # These are Community status/configuration contracts. Each exception applies to
 # complete, reviewed source lines in one file and is checked before marker scan.
 SHARED_MARKER_LINES = {
@@ -239,6 +310,19 @@ def validate_manifest(manifest: dict) -> None:
             )
         ):
             raise ValueError("reviewed Community services require exact included paths and SHA-256 digests")
+    main_rewrite = manifest.get("main_export_rewrite")
+    if main_rewrite is not None:
+        if not isinstance(main_rewrite, dict) or main_rewrite.get("path") != "apps/api/app/main.py":
+            raise ValueError("main export rewrite requires the API entrypoint")
+        if any(
+            not re.fullmatch(r"[0-9a-f]{64}", str(main_rewrite.get(key, "")))
+            for key in ("source_sha256", "output_sha256")
+        ):
+            raise ValueError("main export rewrite requires reviewed source and output SHA-256")
+        if main_rewrite["path"] not in manifest["requires_split"]:
+            raise ValueError("main export source must be withheld for split")
+        if main_rewrite["path"] not in manifest["required_runtime"]:
+            raise ValueError("main export destination must be a required runtime file")
     symlinks = manifest.get("safe_symlinks", {})
     if not isinstance(symlinks, dict) or any(
         not isinstance(path, str)
@@ -596,13 +680,17 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
     selected: dict[str, bytes] = {}
     symlink_paths: dict[str, str] = {}
     blockers: list[dict] = []
+    main_rewrite = manifest.get("main_export_rewrite")
+    main_rewrite_applied = False
     for rule in manifest["include"]:
         if not any(match_rule(p, rule) for p in source_paths):
             blockers.append({"kind": "missing-inclusion", "path": rule})
     for path in sorted(included):
         if matching_rule(path, manifest["exclude"]):
             continue
-        if matching_rule(path, manifest["requires_split"]):
+        if matching_rule(path, manifest["requires_split"]) and not (
+            main_rewrite and path == main_rewrite["path"]
+        ):
             blockers.append({"kind": "requires-community-split", "path": path})
             continue
         mode, oid = entries[path]
@@ -634,6 +722,26 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 selected[path] = data
                 continue
             blockers.append({"kind": "schema-export-source-changed", "path": path})
+            continue
+        if main_rewrite and path == main_rewrite["path"]:
+            if hashlib.sha256(data).hexdigest() != main_rewrite["source_sha256"]:
+                blockers.append({"kind": "main-export-source-changed", "path": path})
+                continue
+            transformed = rewrite_community_main(data)
+            if transformed is None or hashlib.sha256(transformed).hexdigest() != main_rewrite["output_sha256"]:
+                blockers.append({"kind": "main-export-output-changed", "path": path})
+                continue
+            if any(marker in transformed for marker in PRIVATE_MARKERS):
+                blockers.append({"kind": "private-source-or-host-reference", "path": path})
+                continue
+            if transformed.count(MAIN_COMMUNITY_ACCOUNT_GATE) != 1 or any(
+                marker in transformed.replace(MAIN_COMMUNITY_ACCOUNT_GATE, b"")
+                for marker in PAID_SOURCE_MARKERS
+            ):
+                blockers.append({"kind": "main-export-paid-marker", "path": path})
+                continue
+            selected[path] = transformed
+            main_rewrite_applied = True
             continue
         openapi_rewrite = manifest.get("openapi_export_rewrite")
         if openapi_rewrite and path == openapi_rewrite["source"]:
@@ -929,6 +1037,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "readme_export_rewrite_applied": readme_rewrite_applied,
         "contributing_export_rewrite_applied": contributing_rewrite_applied,
         "makefile_export_rewrite_applied": makefile_rewrite_applied,
+        "main_export_rewrite_applied": main_rewrite_applied,
         "schema_export_rewrite_applied": schema_rewrite_applied,
         "openapi_export_rewrite_applied": openapi_rewrite_applied,
         "traceability_export_rewrite_applied": traceability_rewrite_applied,
