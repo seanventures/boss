@@ -29955,6 +29955,71 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/agent-studio/templates:
+    get:
+      tags:
+      - agent-studio-seed
+      summary: List Agent Templates
+      description: Catalog cards for Org Chart; installation is separate from execution.
+      operationId: get_v1_agent_studio_templates_d3a88979
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Agent Templates V1 Agent Studio Templates Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/agent-studio/templates/{template_id}/install:
+    post:
+      tags:
+      - agent-studio-seed
+      summary: Install Agent Template
+      description: Install one project-scoped definition with the existing Studio gates.
+      operationId: post_v1_agent_studio_templates_template_id_install_37f3e731
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeedCatalogRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Install Agent Template V1 Agent Studio Templates  Template Id  Install
+                  Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     A2AAcknowledgeRequest:

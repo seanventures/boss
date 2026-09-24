@@ -66,3 +66,10 @@ def test_cloud_contract_keeps_local_reads_and_excludes_hosted_operations():
         ("/v1/cloud/unlink", "post"),
     ):
         assert method in community[path]
+
+
+def test_agent_template_routes_are_documented_in_both_editions():
+    for artifact in ("openapi.community.yaml", "openapi.yaml"):
+        paths = yaml.safe_load((ROOT / "api" / artifact).read_text())["paths"]
+        assert "get" in paths["/v1/agent-studio/templates"]
+        assert "post" in paths["/v1/agent-studio/templates/{template_id}/install"]
