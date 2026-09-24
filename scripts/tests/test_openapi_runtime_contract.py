@@ -40,3 +40,29 @@ def test_community_schema_has_unique_stable_operation_ids():
     ]
     operation_ids = [operation["operationId"] for operation in operations]
     assert len(operation_ids) == len(set(operation_ids))
+
+
+def test_cloud_contract_keeps_local_reads_and_excludes_hosted_operations():
+    community = yaml.safe_load((ROOT / "api/openapi.community.yaml").read_text())["paths"]
+    private = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())["paths"]
+    hosted_operations = {
+        ("/v1/cloud/workers/enroll", "post"),
+        ("/v1/cloud/sync", "post"),
+        ("/v1/cloud/entitlements", "get"),
+        ("/v1/cloud/team-invites", "get"),
+        ("/v1/cloud/team-invites", "post"),
+        ("/v1/cloud/marketplace", "get"),
+        ("/v1/cloud/retention", "put"),
+    }
+    for path, method in hosted_operations:
+        assert method in private[path]
+        assert method not in community.get(path, {})
+    for path, method in (
+        ("/v1/cloud/catalog", "get"),
+        ("/v1/cloud/status", "get"),
+        ("/v1/cloud/workers", "get"),
+        ("/v1/cloud/retention", "get"),
+        ("/v1/cloud/easy-connect", "post"),
+        ("/v1/cloud/unlink", "post"),
+    ):
+        assert method in community[path]

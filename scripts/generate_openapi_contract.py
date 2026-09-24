@@ -95,7 +95,7 @@ def render_private(original: str, existing: dict, mounted: dict) -> str:
         match = pattern.search(rendered, rendered.find("\n  schemas:\n"), schema_end)
         if match is None:
             raise ValueError(f"Cannot find schema block: {name}")
-        next_schema = re.search(r"(?m)^    [^ :]+:\n", rendered[match.end():schema_end])
+        next_schema = re.search(r"(?m)^    [^ :]+:\n", rendered[match.end() : schema_end])
         stop = match.end() + next_schema.start() if next_schema else schema_end + 1
         block = "".join(
             "    " + line + "\n"
@@ -103,7 +103,7 @@ def render_private(original: str, existing: dict, mounted: dict) -> str:
                 {name: schema}, sort_keys=False, allow_unicode=True, width=100
             ).splitlines()
         )
-        rendered = rendered[:match.start()] + block + rendered[stop:]
+        rendered = rendered[: match.start()] + block + rendered[stop:]
         schema_end = rendered.find("\ntags:\n")
     added = {name: schema for name, schema in changed.items() if name not in static_schemas}
     if added:
@@ -128,9 +128,7 @@ def build_community(mounted: dict, product_version: str) -> dict:
         "with BOSS_EDITION=community. API-key transport can be enabled by the "
         "self-hosted operator."
     )
-    forbidden = (
-        "/v1/account-connect", "/v1/marketplace", "/v1/self-improvement"
-    )
+    forbidden = ("/v1/account-connect", "/v1/marketplace", "/v1/self-improvement")
     shared_identity = (
         "/v1/enterprise/identity-providers",
         "/v1/enterprise/identity-rollout-policies",
@@ -147,6 +145,17 @@ def build_community(mounted: dict, product_version: str) -> dict:
         raise ValueError(f"paid routes mounted in Community: {leaks[:5]}")
     stable_operation_ids(mounted)
     return mounted
+
+
+def preserve_documented_path_order(mounted: dict, previous: dict) -> None:
+    """Keep unchanged paths in place when routes move between Python modules."""
+
+    paths = mounted["paths"]
+    previous_paths = previous.get("paths", {})
+    mounted["paths"] = {
+        **{path: paths[path] for path in previous_paths if path in paths},
+        **{path: item for path, item in paths.items() if path not in previous_paths},
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -167,6 +176,10 @@ def main() -> int:
     else:
         destination = COMMUNITY_SCHEMA
         document = build_community(mounted, existing["info"]["version"])
+        if destination.exists():
+            preserve_documented_path_order(
+                document, yaml.safe_load(destination.read_text(encoding="utf-8"))
+            )
         rendered = yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100)
     if args.check:
         if not destination.exists() or destination.read_text(encoding="utf-8") != rendered:
