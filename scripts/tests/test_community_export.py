@@ -138,6 +138,8 @@ hosted_account_connect_required: false
     providers_path = "packages/specpack/models/providers.yaml"
     providers = b"""source_records:
       - source_id: managed_cloud_model_gateway
+        source_kind: managed_cloud_model_gateway
+        entitlement_kind: hosted_usage_based_gateway
         auth_method: account_connect
 """
     masked, valid = export.reviewed_marker_bytes(providers_path, providers)
@@ -146,6 +148,9 @@ hosted_account_connect_required: false
     assert not export.has_semantic_paid_source(providers_path, providers)
     assert export.reviewed_marker_bytes(
         providers_path, providers.replace(b"managed_cloud_model_gateway", b"another_source")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
+        providers_path, providers.replace(b"hosted_usage_based_gateway", b"other_entitlement")
     )[1] is False
     assert export.reviewed_marker_bytes(
         providers_path, providers.replace(b"auth_method: account_connect", b"auth_method: account_connect_v2")

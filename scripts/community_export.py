@@ -94,12 +94,15 @@ def reviewed_marker_bytes(path: str, data: bytes) -> tuple[bytes, bool]:
         positions = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == allowed]
         if len(positions) != 1:
             return data, False
-        source = next(
-            (line.strip() for line in reversed(lines[:positions[0]])
-             if line.strip().startswith("- source_id:")),
-            None,
-        )
-        if source != "- source_id: managed_cloud_model_gateway":
+        expected_owner = [
+            "      - source_id: managed_cloud_model_gateway",
+            "        source_kind: managed_cloud_model_gateway",
+            "        entitlement_kind: hosted_usage_based_gateway",
+        ]
+        if positions[0] < len(expected_owner) or [
+            line.rstrip("\r\n")
+            for line in lines[positions[0] - len(expected_owner):positions[0]]
+        ] != expected_owner:
             return data, False
         return b"".join(
             b"\n" if line.rstrip("\r\n") == allowed else line.encode()
