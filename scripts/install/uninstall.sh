@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 077
 
-INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+INSTALL_DIR="${BOSS_INSTALL_DIR:-}"
 ASSUME_YES=0
 DRY_RUN=0
 PURGE_DATA=0
@@ -46,6 +46,12 @@ while [[ $# -gt 0 ]]; do
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+if [[ -z "$INSTALL_DIR" ]]; then
+  [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]] || {
+    echo 'A piped uninstall needs --dir PATH or BOSS_INSTALL_DIR.' >&2; exit 2;
+  }
+  INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 [[ "$SKIP_BACKUP" -eq 0 || "$PURGE_DATA" -eq 1 ]] || { echo '--skip-backup requires --purge-data.' >&2; exit 2; }
 [[ -z "$CONFIRM_PURGE" || "$PURGE_DATA" -eq 1 ]] || { echo '--confirm-purge requires --purge-data.' >&2; exit 2; }
 [[ -z "$CONFIRM_PURGE" || "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Incorrect purge confirmation; nothing was removed.' >&2; exit 2; }

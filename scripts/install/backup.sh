@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 077
 
-INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+INSTALL_DIR="${BOSS_INSTALL_DIR:-}"
 BACKUP_ROOT="${BOSS_BACKUP_DIR:-$HOME/boss-backups}"
 
 usage() {
@@ -23,6 +23,12 @@ while [[ $# -gt 0 ]]; do
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+if [[ -z "$INSTALL_DIR" ]]; then
+  [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]] || {
+    echo 'A piped backup needs --dir PATH or BOSS_INSTALL_DIR.' >&2; exit 2;
+  }
+  INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
 ENV_FILE="$INSTALL_DIR/.env"

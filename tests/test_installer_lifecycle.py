@@ -83,6 +83,20 @@ def test_dry_run_and_safe_uninstall_preserve_existing_env(tmp_path: Path) -> Non
     assert all("--volumes" not in command for command in commands)
 
 
+def test_piped_uninstall_uses_explicit_install_dir(tmp_path: Path) -> None:
+    install, env, log = _fixture(tmp_path)
+    result = subprocess.run(
+        ["bash", "-s", "--", "--dir", str(install), "--yes"],
+        input=UNINSTALL.read_text(), env=env, text=True,
+        capture_output=True, timeout=20, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == ""
+    assert "BOSS Community stopped." in result.stdout
+    assert "down --remove-orphans" in log.read_text()
+    assert (install / ".env").exists()
+
+
 def test_purge_requires_confirmation_even_with_yes(tmp_path: Path) -> None:
     install, env, log = _fixture(tmp_path)
     result = _run(UNINSTALL, install, env, "--yes", "--purge-data", "--confirm-purge", "wrong")
