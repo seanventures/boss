@@ -37,12 +37,12 @@ class FakeBranchAdapter:
     def repo_metadata(self) -> dict:
         return {
             "id": 4242,
-            "full_name": "seanheiney/boss",
+            "full_name": "example-org/boss",
             "default_branch": "main",
             "visibility": "private",
             "archived": False,
-            "html_url": "https://github.com/seanheiney/boss",
-            "owner": {"login": "seanheiney"},
+            "html_url": "https://github.com/example-org/boss",
+            "owner": {"login": "example-org"},
             "permissions": {"pull": True, "push": True},
         }
 
@@ -100,7 +100,7 @@ def _setup_repository(client, monkeypatch) -> tuple[dict, dict]:
         json={
             "project_id": PROJECT_ID,
             "connection_id": github_connection["id"],
-            "repository": "seanheiney/boss",
+            "repository": "example-org/boss",
             "role": "primary",
             "actor": "ceo",
         },

@@ -514,7 +514,7 @@ def test_enable_disable_changes_next_task_resolution(client, engine):
     }
 
 
-def test_local_skill_and_mcp_bundle_routes_are_account_connect_free(client):
+def test_local_skill_and_mcp_bundle_routes_work_without_hosted_login(client):
     settings = get_settings()
     service = CapabilityBundleService(settings)
     skill = _custom_skill("local.api.bundle")

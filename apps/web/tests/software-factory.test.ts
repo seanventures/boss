@@ -37,7 +37,7 @@ describe("Software Factory evidence mapping", () => {
         release_go_no_go_artifact_id: "art_go",
         release_go_no_go_status: "conditional_go",
         validation_status: "passed",
-        pull_request_url: "https://github.com/seanheiney/boss-sandbox/pull/7",
+        pull_request_url: "https://github.com/example-org/boss-sandbox/pull/7",
         local_validation_receipt_id: "rcpt_local",
       }),
       decision({ action: "approve_changeset" }, { id: "dec_changeset" }),

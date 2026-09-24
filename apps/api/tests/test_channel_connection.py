@@ -312,7 +312,7 @@ def _save_client(client, **over):
         "project_id": PROJECT, "actor": "ceo",
         "client_id": "1234567890-abcdefghijklmnop.apps.googleusercontent.com",
         "client_secret": "GOCSPX-super-secret-value",
-        "redirect_uri": "https://boss-api.local.sean.network/v1/channels/youtube/callback",
+        "redirect_uri": "https://boss-api.local.example.test/v1/channels/youtube/callback",
     }
     body.update(over)
     return client.put("/v1/channels/youtube/client", json=body)
@@ -398,7 +398,7 @@ def test_a_project_without_its_own_client_falls_back_to_the_installation(engine)
 
 
 def test_a_plain_http_redirect_is_refused_before_google_refuses_it(client):
-    r = _save_client(client, redirect_uri="http://boss-api.local.sean.network/cb")
+    r = _save_client(client, redirect_uri="http://boss-api.local.example.test/cb")
     assert r.status_code == 422
     assert "https" in r.json()["detail"]
 

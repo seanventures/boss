@@ -76,7 +76,7 @@ class FakeControlPlaneClient:
             "test_report_artifact_id": "art_test_report",
             "receipt_id": "rcpt_pr",
             "decision_id": "dec_pr",
-            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/1",
+            "pull_request_url": "https://github.com/example-org/boss-sandbox/pull/1",
             "branch_name": payload["branch_name"],
         }
 
@@ -166,7 +166,7 @@ class FakeControlPlaneClient:
             "environment": payload["environment"],
             "deployment_id": 12345,
             "deployment_status": "success",
-            "deployment_url": "https://api.github.com/repos/seanheiney/boss-sandbox/deployments/12345",
+            "deployment_url": "https://api.github.com/repos/example-org/boss-sandbox/deployments/12345",
             "merged_sha": payload["merged_sha"],
         }
 
@@ -1214,7 +1214,7 @@ def test_run_worker_cycle_executes_queued_pr_merge_job():
             "decision_id": "dec_merge",
             "dedupe_key": "merge-test",
             "pull_request_number": 42,
-            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "pull_request_url": "https://github.com/example-org/boss-sandbox/pull/42",
             "title": "Merge Demo",
             "branch_name": "boss/demo-pr",
         },
@@ -1251,7 +1251,7 @@ def test_run_worker_cycle_executes_queued_deployment_job():
             "decision_id": "dec_deploy",
             "dedupe_key": "deploy-test",
             "merged_sha": "abc123",
-            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "pull_request_url": "https://github.com/example-org/boss-sandbox/pull/42",
             "title": "Deploy Demo",
             "branch_name": "boss/demo-pr",
             "environment": "staging",

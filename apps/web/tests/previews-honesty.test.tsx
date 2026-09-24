@@ -59,21 +59,21 @@ const fixtureRunning = preview({
   id: "prev_fix",
   status: "running",
   mode: "fixture",
-  open_url: "https://boss-api.local.sean.network/v1/previews/prev_fix/web/",
+  open_url: "https://boss-api.local.example.test/v1/previews/prev_fix/web/",
 });
 
 const realRunning = preview({
   id: "prev_app",
   status: "running",
   mode: "process",
-  open_url: "https://boss-api.local.sean.network/v1/previews/prev_app/web/",
+  open_url: "https://boss-api.local.example.test/v1/previews/prev_app/web/",
 });
 
 const expiredBound = preview({
   id: "prev_exp",
   status: "expired",
   mode: "process",
-  open_url: "https://boss-api.local.sean.network/v1/previews/prev_exp/web/",
+  open_url: "https://boss-api.local.example.test/v1/previews/prev_exp/web/",
 });
 
 function html(node: React.ReactElement) {

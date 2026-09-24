@@ -30,7 +30,7 @@ def test_loopback_detection():
     assert _is_loopback_url("http://0.0.0.0:8080")
     assert _is_loopback_url("http://[::1]/80")
     assert not _is_loopback_url("/v1/previews/prev_x/web/")
-    assert not _is_loopback_url("https://boss-api.local.sean.network/v1/previews/x/web/")
+    assert not _is_loopback_url("https://boss-api.local.example.test/v1/previews/x/web/")
     assert not _is_loopback_url(None)
 
 
@@ -78,7 +78,7 @@ def test_publicize_list_shape_has_no_loopback_primary_urls():
 
 def test_publicize_with_public_base_rewrites_loopback_to_absolute():
     """BOSS_PREVIEW_PUBLIC_BASE → absolute operator URL; internal stays loopback."""
-    base = "https://boss-api.local.sean.network"
+    base = "https://boss-api.local.example.test"
     out = publicize_preview(
         {
             "id": "prev_abs",
@@ -123,7 +123,7 @@ def test_list_payload_never_returns_loopback_open_url_when_public_base_set():
     """GET /v1/previews list shape: operator open_url is the public-base absolute
     gateway URL. Loopback may appear only under internal_url.
     """
-    base = "https://boss-api.local.sean.network"
+    base = "https://boss-api.local.example.test"
     settings = SimpleNamespace(preview_public_base=base)
     rows = [
         {
@@ -198,11 +198,11 @@ def test_list_previews_applies_public_base_and_never_emits_loopback_open_url(mon
             return False
 
     monkeypatch.setattr(ps, "begin", lambda engine: _Begin())
-    settings = SimpleNamespace(preview_public_base="https://boss-api.local.sean.network")
+    settings = SimpleNamespace(preview_public_base="https://boss-api.local.example.test")
     listed = ps.list_previews(object(), "boss-dogfood", 5, settings)
     assert [p["open_url"] for p in listed] == [
-        "https://boss-api.local.sean.network/v1/previews/prev_a/web/",
-        "https://boss-api.local.sean.network/v1/previews/prev_b/web/",
+        "https://boss-api.local.example.test/v1/previews/prev_a/web/",
+        "https://boss-api.local.example.test/v1/previews/prev_b/web/",
     ]
     assert all("127.0.0.1" not in (p.get("open_url") or "") for p in listed)
     assert all("127.0.0.1" not in (p.get("url") or "") for p in listed)
@@ -211,13 +211,13 @@ def test_list_previews_applies_public_base_and_never_emits_loopback_open_url(mon
 
 def test_publicize_falls_back_to_env_when_settings_field_empty(monkeypatch):
     """Live-shaped Settings: field default empty, BOSS_PREVIEW_PUBLIC_BASE set."""
-    monkeypatch.setenv("BOSS_PREVIEW_PUBLIC_BASE", "https://boss-api.local.sean.network")
+    monkeypatch.setenv("BOSS_PREVIEW_PUBLIC_BASE", "https://boss-api.local.example.test")
     settings = SimpleNamespace(preview_public_base="")
     out = publicize_preview(
         {"id": "prev_env", "status": "expired", "url": "http://127.0.0.1:9"},
         settings=settings,
     )
     assert out["open_url"] == (
-        "https://boss-api.local.sean.network/v1/previews/prev_env/web/"
+        "https://boss-api.local.example.test/v1/previews/prev_env/web/"
     )
     assert "127.0.0.1" not in out["open_url"]

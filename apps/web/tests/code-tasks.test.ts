@@ -29,10 +29,10 @@ describe("operatorPreviewOpenHref", () => {
       operatorPreviewOpenHref({
         id: "prv_1",
         status: "verified",
-        open_url: "https://boss-api.local.sean.network/v1/previews/prv_1/web/",
+        open_url: "https://boss-api.local.example.test/v1/previews/prv_1/web/",
         url: "http://127.0.0.1:41635",
       }),
-    ).toBe("https://boss-api.local.sean.network/v1/previews/prv_1/web/");
+    ).toBe("https://boss-api.local.example.test/v1/previews/prv_1/web/");
   });
 
   it("does not invent View for verified-test without a URL", () => {
@@ -62,7 +62,7 @@ describe("operatorPreviewOpenHref", () => {
       operatorPreviewOpenHref({
         id: "prv_exp",
         status: "expired",
-        open_url: "https://boss-api.local.sean.network/v1/previews/prv_exp/web/",
+        open_url: "https://boss-api.local.example.test/v1/previews/prv_exp/web/",
         url: "http://127.0.0.1:41635",
       }),
     ).toBeNull();

@@ -28,7 +28,7 @@ describe("connecting a channel", () => {
     // names neither value.
     expect(UI).toContain("function defaultRedirect");
     expect(UI).toContain("installation_default_redirect_uri");
-    expect(UI).not.toContain("boss-api.local.sean.network");
+    expect(UI).not.toContain("boss-api.local.example.test");
     expect(UI).toContain("!form.redirect_uri.trim()");
   });
 
