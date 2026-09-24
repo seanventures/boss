@@ -130,7 +130,7 @@ class SoftwareFactoryService:
         # This said `GitHubAdapter(settings)`, so every run cloned, branched and opened its PR
         # against BOSS_TARGET_GITHUB_* no matter what the task asked for. The caller had already
         # resolved `spec["owner"]/spec["repo"]` and minted a token for THAT repo, so the two
-        # disagreed silently: a task targeting seanheiney/boss authenticated for seanheiney/boss
+        # disagreed silently: a task targeting a project repo authenticated for that repo
         # and then pushed to the default sandbox, where its edits landed as 17k lines of "new"
         # files because none of the originals were there. The run reported success.
         #
