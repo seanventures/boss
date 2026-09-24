@@ -400,7 +400,6 @@ from .schemas import (
     MeetingRunRequest,
     MeetingSweepRequest,
     MeetingTallyRequest,
-    SOC2EvidenceRequest,
     MeetingSummary,
     OpsDigestRequest,
     OpsDigestResponse,
@@ -870,7 +869,6 @@ from .services import factory_scale
 from .services.factory_scale import FactoryScaleService
 from .services.dashboard import DashboardService
 from .services.finops_reconciler import FinopsReconcilerService
-from .services.soc2 import SOC2EvidenceService
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -958,7 +956,6 @@ slack_comms = SlackCommsService(settings)
 factory_scale_service = FactoryScaleService(settings)
 dashboard_service = DashboardService(settings)
 finops_reconciler = FinopsReconcilerService(settings)
-soc2_evidence = SOC2EvidenceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -11996,15 +11993,6 @@ def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
     """Fail out meeting runs stalled past their phase timeout, opening an incident Decision for each
     (spec §D phase timeouts / stall prevention)."""
     return meeting_consensus.sweep_stalled_meeting_runs(engine, settings, actor=payload.actor)
-
-
-@app.post("/v1/enterprise/soc2-evidence", status_code=201)
-def collect_soc2_evidence(payload: SOC2EvidenceRequest) -> dict:
-    """Generate a SOC2 evidence bundle (Trust Services Common Criteria) from live audit/policy/
-    break-glass/change/proof data (spec §F enterprise SOC2 evidence collection)."""
-    with begin(engine) as connection:
-        require_project_actor(connection, payload.project_id, payload.actor, "audit_export")
-        return soc2_evidence.collect_evidence(connection, payload.project_id, actor=payload.actor)
 
 
 @app.post("/v1/finops/reconcile-commitments", status_code=201)
@@ -25351,7 +25339,8 @@ app.include_router(
 mount_platform_routers(app)
 paid_router = None
 if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
-    from .routers.enterprise import enterprise_router
+    from .routers.enterprise import enterprise_router, register_soc2_route
 
+    register_soc2_route(app, engine, settings, require_project_actor)
     paid_router = enterprise_router
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

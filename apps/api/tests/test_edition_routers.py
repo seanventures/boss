@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from textwrap import dedent
 from pathlib import Path
 
 import pytest
@@ -290,6 +291,7 @@ def test_real_community_app_omits_paid_routes():
                 # Paid: hosted Account Connect, marketplace, cluster packs, self-improvement.
                 "assert '/v1/account-connect/link' not in paths; "
                 "assert '/v1/enterprise/clusters' not in paths; "
+                "assert '/v1/enterprise/soc2-evidence' not in paths; "
                 "assert '/v1/marketplace/listings' not in paths; "
                 "assert '/v1/self-improvement/proposals' not in paths"
             ),
@@ -301,6 +303,80 @@ def test_real_community_app_omits_paid_routes():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_community_api_starts_without_paid_soc2_service():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockPaidSoc2(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname in {
+                            'apps.api.app.enterprise_extensions',
+                            'apps.api.app.enterprise_extensions.soc2',
+                        }:
+                            raise ImportError('SOC2 service deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockPaidSoc2())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/code-tasks' in paths
+                assert '/v1/enterprise/identity-providers' in paths
+                assert '/v1/enterprise/soc2-evidence' not in paths
+                assert 'apps.api.app.enterprise_extensions' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_api_registers_soc2_route():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "enterprise_self_hosted"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from apps.api.app.main import app; "
+                "routes={getattr(route, 'path', ''): route for route in app.routes}; "
+                "assert '/v1/enterprise/soc2-evidence' in routes; "
+                "assert routes['/v1/enterprise/soc2-evidence'].endpoint.__module__ "
+                "== 'apps.api.app.routers.enterprise'"
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_soc2_route_preserves_actor_gate(client):
+    response = client.post(
+        "/v1/enterprise/soc2-evidence",
+        json={"project_id": "boss-dogfood", "actor": "not_a_project_member"},
+    )
+    assert response.status_code == 403
 
 
 def test_enterprise_event_and_decision_sinks_preserve_postgres_behavior(engine):
