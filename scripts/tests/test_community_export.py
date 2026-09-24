@@ -158,6 +158,28 @@ def test_community_test_boundary_preserves_shared_fixtures() -> None:
     assert "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md" not in selected
 
 
+def test_mixed_test_suites_have_exact_exclusions_and_community_coverage() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    mixed_suites = {
+        "apps/api/tests/test_api.py",
+        "apps/api/tests/test_cloud_easy_connect_e2e.py",
+        "apps/api/tests/test_edition_routers.py",
+        "apps/web/tests/api-client.test.ts",
+    }
+    assert mixed_suites.issubset(set(manifest["exclude"]))
+    for path in (
+        "apps/api/tests/test_community_cloud_routes.py",
+        "apps/api/tests/test_edition_routers_community.py",
+        "apps/api/tests/test_provider_easy_connect.py",
+        "apps/web/tests/api-client-community.test.ts",
+        "apps/web/tests/providerops.test.ts",
+    ):
+        assert (export.ROOT / path).is_file()
+        assert export.matching_rule(path, manifest["include"])
+        assert not export.matching_rule(path, manifest["exclude"])
+        assert not any(marker in (export.ROOT / path).read_bytes() for marker in export.PRIVATE_MARKERS)
+
+
 def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:
     schemas = b"""from typing import Optional
 class BaseModel: pass
