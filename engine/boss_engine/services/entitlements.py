@@ -99,16 +99,14 @@ class EntitlementBrokerService:
         # import the hosted billing/connection service. Edition status uses the
         # same configured edition for its source pack; the database link only
         # affects whether that edition is active, not which skills it installs.
-        del connection, project_id
         configured = str(self.settings.boss_edition or "community").strip().lower()
         configured = configured.replace("-", "_")
-        edition = (
-            "enterprise"
-            if configured in {"enterprise", "enterprise_cloud", "enterprise_self_hosted"}
-            else configured
-            if configured in {"community", "cloud"}
-            else "community"
-        )
+        if configured in {"enterprise", "enterprise_cloud", "enterprise_self_hosted"}:
+            edition = "enterprise"
+        elif configured == "cloud":
+            edition = "cloud"
+        else:
+            edition = "community"
         packs = [
             path
             for path in sorted((self.settings.specpack_root / "packs").glob("*_edition.yaml"))
