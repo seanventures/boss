@@ -455,3 +455,27 @@ def test_a_plan_naming_an_artifact_nobody_fetched_says_so(clip, tmp_path):
         v.apply_plan(clip, [{"op": "overlay_image", "start": "1", "end": "3",
                              "image_artifact_id": "art_missing"}],
                      work_dir=str(tmp_path))
+
+
+def test_the_timecode_people_actually_write_is_accepted():
+    """MM:SS. "cut 2:20 to 2:25" is how an instruction arrives, and ffmpeg reads 2:10 as two
+    minutes ten.
+
+    Rejecting it was not a safety property, it was a gap: measured on a real install, the
+    planning model produced a correct plan, had it refused for this alone, and spent a second
+    model call rewriting the same timecodes as seconds. Every first attempt.
+    """
+    assert v._seconds(v._checked_timecode("2:10", "start")) == 130.0
+    assert v._seconds(v._checked_timecode("2:10.5", "start")) == 130.5
+    assert v._seconds(v._checked_timecode("0:05", "start")) == 5.0
+    # Still unambiguous against the other two forms.
+    assert v._seconds(v._checked_timecode("90", "start")) == 90.0
+    assert v._seconds(v._checked_timecode("01:02:03.250", "start")) == 3723.25
+
+
+def test_widening_the_timecode_did_not_widen_it_to_anything_else():
+    """The validator is the only thing standing between an operator string and a filter
+    expression, so a relaxation has to be checked in the other direction too."""
+    for bad in ("2:10:", "90s", "1m30s", "2:1", ":30", "2:", "a:bc", "-1:00", "2:100"):
+        with pytest.raises(v.VideoEditError):
+            v._checked_timecode(bad, "start")

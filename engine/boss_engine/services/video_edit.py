@@ -43,7 +43,14 @@ CORNERS = {
 
 #: A timecode BOSS will accept: seconds, or HH:MM:SS(.ms). Anything else is refused rather than
 #: passed to ffmpeg, which interprets several other forms in ways an operator would not expect.
-_TIMECODE = re.compile(r"^(?:\d+(?:\.\d+)?|\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)$")
+#: Seconds ("90", "90.5"), MM:SS ("2:10") or HH:MM:SS ("01:02:03.250").
+#:
+#: MM:SS WAS MISSING AND IT IS THE ONE PEOPLE WRITE. "cut 2:20 to 2:25" is how the instruction
+#: arrives, ffmpeg itself reads 2:10 as two minutes ten, and rejecting it meant the planning
+#: model produced a correct plan, had it refused, and spent a second call rewriting the same
+#: timecodes as seconds. Measured on a real install: every first attempt was rejected for this.
+_TIMECODE = re.compile(
+    r"^(?:\d+(?:\.\d+)?|\d{1,3}:\d{2}(?:\.\d+)?|\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)$")
 
 #: Long enough for a real render, short enough that a wedged ffmpeg does not hold a worker slot
 #: for the rest of the day.
@@ -153,7 +160,8 @@ def _checked_timecode(value: Any, field: str) -> str:
     text = str(value or "").strip()
     if not _TIMECODE.match(text):
         raise VideoEditError(
-            f"{field} must be seconds (90, 90.5) or HH:MM:SS — got {text!r}.")
+            f"{field} must be seconds (90, 90.5), MM:SS (2:10) or HH:MM:SS "
+            f"(01:02:03.250) — got {text!r}.")
     return text
 
 
@@ -163,7 +171,11 @@ def _seconds(value: str) -> float:
     text = str(value).strip()
     if ":" not in text:
         return float(text)
-    hours, minutes, secs = text.split(":")
+    parts = text.split(":")
+    if len(parts) == 2:                      # MM:SS
+        minutes, secs = parts
+        return int(minutes) * 60 + float(secs)
+    hours, minutes, secs = parts
     return int(hours) * 3600 + int(minutes) * 60 + float(secs)
 
 

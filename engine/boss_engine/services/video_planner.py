@@ -120,7 +120,8 @@ IMAGES YOU MAY REFER TO, by artifact id:
 {asset_lines}
 
 TIMECODES
-  "90", "90.5", "1:30" or "01:02:03.250". Never "90s", never "1m30s".
+  Seconds ("90", "90.5"), MM:SS ("2:10") or HH:MM:SS ("01:02:03.250").
+  Never "90s", never "1m30s", never "2m10".
   Every timecode must be inside the video's duration above.
 
 THE ORDER MATTERS AND IT IS NOT OBVIOUS
