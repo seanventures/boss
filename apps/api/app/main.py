@@ -21367,6 +21367,7 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
+        REGISTERED_ROLES,
         blocks,
         palette,
     )

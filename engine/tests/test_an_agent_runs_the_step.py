@@ -57,3 +57,27 @@ def test_a_misspelt_agent_is_caught_when_the_workflow_is_published():
     assert validate_captain({"id": "publish", "captain": "media_publisher"}) == []
     # No captain is not an error: it is the existing behaviour every workflow relies on.
     assert validate_captain({"id": "publish"}) == []
+
+
+def test_the_builder_palette_endpoint_actually_runs():
+    """CALLED, NOT PARSED.
+
+    The roles list was added to this endpoint's payload and the import that made the name exist
+    was not — an edit script raised between the two and wrote neither, then a second run wrote
+    only the usage. `ast.parse` said "syntax OK" because a missing name is not a syntax error,
+    the engine suite passed because it never imports this module's handlers, and the console
+    tests are string comparisons. So a 500 on the endpoint that draws the entire builder
+    palette shipped, and the first sign of it was an empty list on a live install.
+
+    This test exists because the cheap check answered a different question than the one I asked.
+    """
+    import os
+
+    os.environ.setdefault("BOSS_EDITION", "enterprise_self_hosted")
+    from apps.api.app import main
+
+    payload = main.list_delivery_capabilities(project_id=None)
+    assert payload["capabilities"], "the palette must not be empty"
+    assert payload["roles"], "a step must have agents to offer"
+    assert "media_publisher" in payload["roles"]
+    assert isinstance(payload["manual_approval_risk_floor"], int)
