@@ -163,7 +163,7 @@
   "test_conftest_export_rewrite": {
     "source": "apps/api/tests/conftest-community.py",
     "destination": "apps/api/tests/conftest.py",
-    "sha256": "82d9b901db49b5071e9088c4f3fed44d73023c08b29d5ad2403c83bf7bec18d6"
+    "sha256": "b9def88e799e5327a03584347ee09c2951279b9f8e2c44f4402a8c9242e900e2"
   },
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",

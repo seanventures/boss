@@ -1,6 +1,6 @@
 import os
 
-os.environ.setdefault("BOSS_EDITION", "community")
+os.environ["BOSS_EDITION"] = "community"
 
 # CONFINE THIS RUN BEFORE ANYTHING READS DATABASE_URL.
 #

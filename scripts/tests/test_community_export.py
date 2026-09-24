@@ -112,7 +112,7 @@ def test_community_test_boundary_preserves_shared_fixtures() -> None:
     rewrite = manifest["test_conftest_export_rewrite"]
     source = (export.ROOT / rewrite["source"]).read_bytes()
     assert hashlib.sha256(source).hexdigest() == rewrite["sha256"]
-    assert b'os.environ.setdefault("BOSS_EDITION", "community")' in source
+    assert b'os.environ["BOSS_EDITION"] = "community"' in source
     assert not any(marker in source for marker in export.PAID_SOURCE_MARKERS)
 
     sha = export.git(export.ROOT, "rev-parse", "HEAD^{commit}").decode().strip()
