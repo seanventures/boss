@@ -42,6 +42,12 @@ reverse proxy, pass `--public-url https://boss.example.com` to the installer,
 and set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env`. The proxy
 must overwrite the forwarded host and scheme headers; see the installer guide.
 Details and flags: [installer guide](../../scripts/install/README.md) · [install.sh](../../install.sh).
+After installation, update with `./scripts/install/upgrade.sh --dir "$PWD"` from
+the checkout. It makes a private database, artifact, and configuration backup
+before rerunning the installer. To stop BOSS while keeping its data and keys,
+run `./scripts/install/uninstall.sh --dir "$PWD" --yes`; rerun the installer to
+resume. To remove data, use `--purge-data`, which backs up first and requires
+a separate typed confirmation. See [upgrade and recovery](../../scripts/install/README.md#upgrade--recover).
 Mission Control asks for its own password. On the VM, run
 `python3 scripts/install/console_password.py show` from the install directory
 to display it privately; `reset` rotates it and prints the web restart command.
