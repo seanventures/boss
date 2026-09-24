@@ -1,0 +1,80 @@
+# Repository targets must be configured through project policy.
+skills:
+- id: software_factory.codex_pr_proposal
+  kind: software_factory
+  risk_tier: 2
+  mock_mode: false
+  description: Use a real Codex-backed software-factory run to produce a sandbox branch,
+    review packet, and draft PR against the approved test repository.
+  data_boundary: internal
+  input_schema:
+    task_id: string
+    spec_artifact_id: string
+    repo_ref: string
+    reservation_id: string
+  output_schema:
+    implementation_plan_artifact_id: string
+    branch_ref: string
+    test_report_artifact_id: string
+    security_review_artifact_id: string
+    review_packet_artifact_id: string
+    release_go_no_go_artifact_id: string
+    pr_url: string
+    pr_decision_id: string
+  cost:
+    estimator: runtime_plus_model
+    category: tool
+  retry:
+    max_attempts: 1
+    backoff: none
+  permissions:
+    allowed_callers:
+    - software_factory
+    - worker
+    required_permissions:
+    - software_factory_run
+    - github_pr_create
+  policy:
+    requires_budget_reservation: true
+    requires_receipts_for_effects: true
+    allowed_targets: []
+    requires_security_dependency_review: true
+    requires_release_go_no_go: true
+    requires_approval_for_merge: true
+- id: software_factory.sandbox_validation
+  kind: software_factory
+  risk_tier: 2
+  mock_mode: false
+  description: Run real, bounded validation commands inside the approved local sandbox
+    repository clone and attach the evidence to the PR review gate.
+  data_boundary: internal
+  input_schema:
+    branch_name: string
+    repo_path: string
+    commands: array
+    timeout_seconds: integer
+  output_schema:
+    status: string
+    summary: string
+    head_sha: string
+    command_results: array
+    receipt_id: string
+  cost:
+    estimator: local_runtime
+    category: tool
+  retry:
+    max_attempts: 1
+    backoff: none
+  permissions:
+    allowed_callers:
+    - software_factory
+    - worker
+    required_permissions:
+    - software_factory_run
+  policy:
+    requires_budget_reservation: true
+    requires_receipts_for_effects: true
+    requires_allowlisted_commands: true
+    shell_execution_allowed: false
+    allowed_targets: []
+    requires_approval_for_merge: true

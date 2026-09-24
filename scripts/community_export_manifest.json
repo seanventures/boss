@@ -83,13 +83,32 @@
     "packages/specpack/modules/private_enterprise_agent_v1.yaml",
     "packages/specpack/models/enterprise_gateway.yaml",
     "packages/specpack/policies/commercial_packaging_policy.yaml",
-    "packages/specpack/policies/enterprise_governance_policy.yaml"
+    "packages/specpack/policies/enterprise_governance_policy.yaml",
+    "packages/specpack/objects/account_connect_auth_session.yaml",
+    "packages/specpack/objects/account_connect_billing_portal_session.yaml",
+    "packages/specpack/objects/account_connect_health_check.yaml",
+    "packages/specpack/objects/account_connect_org.yaml",
+    "packages/specpack/objects/account_connect_team_invite.yaml",
+    "packages/specpack/objects/edition.yaml",
+    "packages/specpack/objects/enterprise_cluster.yaml",
+    "packages/specpack/objects/enterprise_cluster_validation_run.yaml",
+    "packages/specpack/objects/enterprise_support_case.yaml",
+    "packages/specpack/objects/entitlement_pool.yaml",
+    "packages/specpack/objects/hosted_marketplace_listing.yaml",
+    "packages/specpack/objects/hosted_marketplace_sync_run.yaml",
+    "packages/specpack/objects/license_entitlement.yaml",
+    "packages/specpack/objects/marketplace_publisher.yaml",
+    "packages/specpack/workflows/open_core_cloud_upgrade.yaml"
   ],
   "requires_split": [
     "LICENSE",
     "Makefile",
     "apps/api/app/main.py",
-    "apps/web/app/page.tsx"
+    "apps/web/app/page.tsx",
+    "packages/specpack/manifest.yaml",
+    "packages/specpack/policies/default_safety.yaml",
+    "packages/specpack/skills/github.yaml",
+    "packages/specpack/skills/software_factory.yaml"
   ],
   "safe_symlinks": {
     "packages/goldeneye/bin": "core/bin",
@@ -145,5 +164,27 @@
     "source": "Makefile.community",
     "destination": "Makefile",
     "sha256": "a4a0aa8dc1fa56364f05fe7f5eab7d90b65510848900087146e5711e96c9e5d1"
-  }
+  },
+  "specpack_export_rewrites": [
+    {
+      "source": "packages/specpack/manifest.community.yaml",
+      "destination": "packages/specpack/manifest.yaml",
+      "sha256": "1cbd4db35ba750545473b2d7d91445d86086e32a999dd28d046aab79ba5d0639"
+    },
+    {
+      "source": "packages/specpack/policies/default_safety.community.yaml",
+      "destination": "packages/specpack/policies/default_safety.yaml",
+      "sha256": "82449eb2fec6b3823d7c9e16164c9111ce851dfca0f58f5073badf61085ce7a6"
+    },
+    {
+      "source": "packages/specpack/skills/github.community.yaml",
+      "destination": "packages/specpack/skills/github.yaml",
+      "sha256": "4a752340541e4efb2d90f09baba1a5c24eb4288f38e64d0b1eaa731a568565d8"
+    },
+    {
+      "source": "packages/specpack/skills/software_factory.community.yaml",
+      "destination": "packages/specpack/skills/software_factory.yaml",
+      "sha256": "a811625edd7a97a915e8074b6282fb55879bcfd06d4c1536bf8df0c3a56a3d09"
+    }
+  ]
 }
