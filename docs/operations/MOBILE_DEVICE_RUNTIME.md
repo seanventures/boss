@@ -29,7 +29,14 @@ development; validation used command-boundary tests.
 
 An operator must enable `BOSS_MOBILE_DEVICE_RUNNER_ENABLED=true` on the
 trusted host that runs the BOSS API process and has local device tools. The
-default is false. Prebuilt APK, .app, and .xctestrun inputs must already exist
+default is false. Standard Community Compose runs the API in a Linux
+container, so setting this flag there does **not** provide a macOS iOS
+Simulator, even when Docker runs on a Mac laptop. iOS actions require a
+native macOS API process with local Xcode/Simulator/idb; routing these actions
+to a separate macOS device host is not implemented. Android under Compose
+likewise requires an explicitly connected emulator and ADB inside the API
+runtime; the standard installer does not provision that path. Prebuilt APK,
+.app, and .xctestrun inputs must already exist
 as project-scoped BOSS artifacts under `BOSS_ARTIFACTS_DIR`. This skill does
 not accept an arbitrary file path. Screenshots, logs, UI trees, and test
 output become private, bounded artifacts with SHA-256 evidence; log and
@@ -71,7 +78,8 @@ from text actions are not persisted in the result.
 Agent Studio's `agent.studio.execute` currently produces a deterministic
 brief. Its published template cannot dispatch this skill autonomously, even
 when the skill appears in its capability catalog. BOSS-440 tracks the
-template-to-leased-skill bridge, policy tests, and live device qualification.
+template-to-leased-skill bridge, macOS device-host routing, policy tests, and
+live device qualification.
 Source builds and artifact handoff also need a separate isolated Android
 builder and macOS Xcode runner. Until those paths and live tests pass, label
 the mobile template as an available plan/role, not a fully autonomous mobile
