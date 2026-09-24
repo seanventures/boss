@@ -1,5 +1,16 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-09-24 Community feedback and public-release preparation
+
+- `ai/codex/community-feedback-public` is scoped to BOSS-431 contributor intake,
+  GitHub triage language, private security reporting, and BOSS-293 checklist evidence.
+- Product owner selected Apache License 2.0 for a full Community repo at
+  `seanventures/boss`; BOSS-300 still awaits counsel reference. The new org repo
+  is empty and private. A full-history gitleaks scan found eight matches,
+  including a tracked environment backup; BOSS-293 remains blocked.
+- Parallel focused work: installer BOSS-428, MCP BOSS-429, TUI/API BOSS-430,
+  and UI audit. Do not claim public GA or merge the cleanup PR as a history fix.
+
 ## 2026-08-19 official trio 3/3 honest `/report` (◐, not GA)
 
 - Official BugBox / HookWatch / ApproveIt are all honest `passed=true`.

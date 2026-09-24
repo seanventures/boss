@@ -24,6 +24,8 @@ and the rules a change is expected to follow. If you are trying to *use* BOSS, s
 
 To opt into signed GitHub issue triage and pull-request review, install the repository-scoped GitHub App and configure `/v1/webhooks/github` using the [GitHub App community enablement runbook](docs/operations/WEBHOOKS.md#enable-the-github-app-community-surface). The integration is disabled by default, fails closed when its App credentials or inbound secret are absent, never executes fork code, and never auto-merges.
 
+For bugs, installation problems, and feature requests, follow the [Community feedback loop](docs/community/FEEDBACK_LOOP.md). A bot acknowledgement or draft plan never authorizes work; a maintainer records the decision and links the verified result back to the issue.
+
 ## Commands
 
 - `make onboard`: print the private design-partner week-1 path (no secrets)
