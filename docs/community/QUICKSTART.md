@@ -38,7 +38,9 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
 Open `http://127.0.0.1:3000` locally. For a permanent public hostname, use a TLS
-reverse proxy and pass `--public-url https://boss.example.com` to the installer.
+reverse proxy, pass `--public-url https://boss.example.com` to the installer,
+and set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env`. The proxy
+must overwrite the forwarded host and scheme headers; see the installer guide.
 Details and flags: [installer guide](../../scripts/install/README.md) · [install.sh](../../install.sh).
 Mission Control asks for its own password. On the VM, run
 `python3 scripts/install/console_password.py show` from the install directory

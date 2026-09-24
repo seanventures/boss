@@ -65,10 +65,13 @@ python3 scripts/install/console_password.py reset
 
 `show` requires a terminal so the password is not piped into logs. Keep the
 console on loopback or behind an HTTPS reverse proxy; the web login refuses
-non-HTTPS requests outside loopback. If a reverse proxy does not pass the
-external HTTPS host/scheme through to Next, set
-`BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env` for the
-CSRF origin comparison, then recreate web. This setting does not replace TLS.
+non-HTTPS requests outside loopback. For a public console hostname, set
+`BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env` and recreate
+web. The reverse proxy must **overwrite** `Host`, `X-Forwarded-Host`, and
+`X-Forwarded-Proto` with the external HTTPS host and scheme; passing through
+client-supplied values is unsafe. Keep the Next listener bound to loopback.
+This setting does not replace TLS. The proxy configuration needs a live login
+and CSRF check before public access is enabled.
 
 No BOSS Cloud / Account Connect required.
 
@@ -182,7 +185,8 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 
 Then open `http://127.0.0.1:3000` locally. For a permanent public site, put HTTPS and an
 access policy in front of the loopback ports and pass `--public-url https://boss.example.com`
-when installing or updating. This URL is baked into the web build. Community
+when installing or updating. Set `BOSS_CONSOLE_PUBLIC_ORIGIN` to the console's
+HTTPS origin as described above. The public URL is baked into the web build. Community
 keeps API and web ports on loopback even if an older `.env` had a public bind;
 remote access goes through an SSH tunnel or a TLS reverse proxy.
 
