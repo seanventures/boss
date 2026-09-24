@@ -17,6 +17,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { SettingsKnobs } from "./settings-knobs-ui";
+import { HelpTip } from "./help-tip";
 
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
@@ -133,11 +134,11 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
         <div className="section-head">
           <div>
             <span className="eyebrow">Repo and model</span>
-            <h2>Two things make a working install.</h2>
-            <p className="detail">
-              Somewhere to write code, and something to think with. Each step proves itself
-              against the real service before it says it worked.
-            </p>
+            <div className="help-heading">
+              <h2>Connect a repo and model</h2>
+              <HelpTip label="Repo and model setup"
+                text="BOSS needs somewhere to write code and a model to work with. Each connection is checked against the service before it is marked ready." />
+            </div>
           </div>
           {status ? (
             <span className={`cap-badge ${status.ready ? "tone-green" : "tone-amber"}`}
@@ -957,12 +958,12 @@ function RoleModels({ projectId, actor }: { projectId: string; actor: string }) 
               font choice, and dropping to a <span> to get it would cost the card its heading
               landmark for a screen reader — so the element stays an h2 and only the type
               changes. */}
-          <h2 className="eyebrow">Who does what</h2>
-          <p className="detail">
-            Which model implements, which reviews, and which takes the hard ones. Unset means
-            the implementer does that job too. Saved per project and applied on the next run —
-            no restart.
-          </p>
+          <div className="help-heading">
+            <h2 className="eyebrow">Who does what</h2>
+            <HelpTip label="Model roles"
+              text="Choose the model that implements, reviews, or handles difficult work. An unset review or escalation role uses the implementer." />
+          </div>
+          <p className="detail">Saved per project; applies on the next run.</p>
         </div>
       </div>
       <SettingsKnobs projectId={projectId} actor={actor} only="choice" />

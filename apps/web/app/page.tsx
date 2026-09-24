@@ -260,6 +260,7 @@ import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
 import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
 
 import { AskBossHero } from "./ask-boss-hero";
+import { HelpTip } from "./help-tip";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -982,7 +983,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-head">
             <div>
               <span className="eyebrow">Live Dashboard</span>
-              <h2>Cross-phase control snapshot</h2>
+              <div className="help-heading"><h2>Cross-phase control snapshot</h2>
+                <HelpTip label="Live dashboard"
+                  text="A consolidated view of budget, queue, work, proof, and service health. Counts and states come from the control plane." />
+              </div>
             </div>
           </div>
           <DashboardPanel feed={dashboardSnapshot} />
@@ -1630,12 +1634,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="budget" aria-label="Govern">
           <div className="panel">
             <span className="eyebrow" data-area="budget">Govern</span>
-            <h2>How hard BOSS runs</h2>
-            <p className="detail">
-              These lived in environment variables, so changing one meant an ops action and a
-              restart. Each says where its value comes from; a project value overrides the
-              deployment default.
-            </p>
+            <div className="help-heading"><h2>How hard BOSS runs</h2>
+              <HelpTip label="Project run settings"
+                text="Each value shows whether it comes from this project or the deployment default. A project value overrides that default." />
+            </div>
+            <p className="detail">Changes apply to the next run.</p>
             {/* Numbers only. Which model fills which role is asked in Setup, next to the
                 step that connects one — not here beside concurrency and spend. */}
             <SettingsKnobs projectId={activeProjectId} actor={activeActorId} only="number" />
@@ -1665,11 +1668,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <>
                 <div className="grid compact-grid">
                   <article>
-                    <h2>Actual Spend</h2>
+                    <div className="help-heading"><h2>Actual Spend</h2>
+                      <HelpTip label="Actual spend"
+                        text="Cost receipts recorded for this project." />
+                    </div>
                     <div className="metric">
                       {formatMicros(budgetStatus.actualUsdMicros)}
                     </div>
-                    <p className="detail">Cost receipts recorded for this project.</p>
                   </article>
                   <article>
                     <h2>Reserved</h2>
@@ -1682,14 +1687,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </p>
                   </article>
                   <article>
-                    <h2>Forecast 24h</h2>
+                    <div className="help-heading"><h2>Forecast 24h</h2>
+                      <HelpTip label="24 hour forecast"
+                        text="Observed spend over the recent window plus active reservations." />
+                    </div>
                     <div className="metric">
                       {formatMicros(budgetStatus.forecasted24hUsdMicros)}
                     </div>
-                    <p className="detail">
-                      Observed spend over {budgetStatus.burnWindowHours}h plus
-                      active reservations.
-                    </p>
+                    <p className="detail">Based on {budgetStatus.burnWindowHours}h of spend.</p>
                   </article>
                   <article>
                     <h2>Time To Cap</h2>

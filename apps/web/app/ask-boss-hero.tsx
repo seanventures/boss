@@ -27,6 +27,7 @@ import { facetsOf } from "./template-brief";
 import { CRAFT, DETAILS, buildBrief } from "./template-details";
 import { DefaultAgentPicker } from "./default-agent-picker";
 import { SplitAction } from "./split-action";
+import { HelpTip } from "./help-tip";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
@@ -1475,7 +1476,11 @@ export function AskBossHero({
         <header className="mr-header askboss-head">
           <div className="mr-header-main">
             <span className="eyebrow">Ask BOSS</span>
-            <h3 className="mr-title">What do you want to do?</h3>
+            <div className="help-heading">
+              <h3 className="mr-title">What do you want to do?</h3>
+              <HelpTip label="Ask BOSS"
+                text="Ask about current work or describe something to build. BOSS shows the steps before taking gated actions." />
+            </div>
             {/* The first line on the first page described PLUMBING — "reads live control-plane
                 state and acts with your approval" — which tells a visitor how it is wired, not
                 what it is for.
@@ -1483,10 +1488,7 @@ export function AskBossHero({
                 It then said "without the meetings", which sold the wrong thing: the governed
                 panel IS the product. Agents convene it and it produces the PRD, so naming it as
                 friction to avoid undersold the part that makes the output trustworthy. */}
-            <p className="askboss-sub">
-              Ask about your work or describe something to build. BOSS will show you the steps
-              and ask for approval before taking gated actions.
-            </p>
+            <p className="askboss-sub">Gated actions require your approval.</p>
           </div>
           {busy ? <div className="mr-header-meta" role="status">
             {slow ? `Still working · ${elapsed}s` : "Working"}
