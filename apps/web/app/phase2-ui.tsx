@@ -4,15 +4,17 @@ import { type SelfImprovementFeedItem } from "../lib/self-improvement";
 import { type EvalRun } from "../lib/evals";
 import { type SkillInvocation } from "../lib/skill-invocations";
 import {
-  runSelfImprovementCanaryAction,
-  startSelfImprovementRolloutAction,
-  advanceSelfImprovementRolloutAction,
   runEvalsAction,
   evaluateAutonomyAction,
   pollProviderHealthAction,
   recordRouterRationaleAction,
   invokeSkillAction,
 } from "./actions";
+import {
+  runSelfImprovementCanaryAction,
+  startSelfImprovementRolloutAction,
+  advanceSelfImprovementRolloutAction,
+} from "./actions-paid";
 import { SubmitButton } from "./submit-button";
 
 function tone(s: string): string {

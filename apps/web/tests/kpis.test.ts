@@ -155,10 +155,10 @@ describe("client action feedback (toasts + revalidate)", async () => {
     enableProviderAccountAction,
     revokeProviderAccountAction,
     rotateProviderCredentialsAction,
-    submitSelfImprovementProposalAction,
     updateProviderAccountAction,
     queueOutboxMessageAction,
   } = await import("../app/actions");
+  const { submitSelfImprovementProposalAction } = await import("../app/actions-paid");
 
   beforeEach(() => {
     vi.clearAllMocks();

@@ -86,6 +86,19 @@ def test_goldeneye_community_boundary_is_preserved() -> None:
     assert b"COPY packages/goldeneye ./packages/goldeneye" in dockerfile
 
 
+def test_community_actions_do_not_depend_on_paid_server_actions() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    shared = export.ROOT / "apps/web/app/actions.ts"
+    paid = export.ROOT / "apps/web/app/actions-paid.ts"
+    assert shared.is_file() and paid.is_file()
+    assert not export.matching_rule("apps/web/app/actions.ts", manifest["requires_split"])
+    assert export.matching_rule("apps/web/app/actions-paid.ts", manifest["exclude"])
+    assert not any(marker in shared.read_bytes() for marker in export.PAID_SOURCE_MARKERS)
+    assert b"submitCommandAction" in shared.read_bytes()
+    assert b"upsertEnterpriseIdentityProviderAction" in shared.read_bytes()
+    assert b"linkAccountConnectAction" in paid.read_bytes()
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()

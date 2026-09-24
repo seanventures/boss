@@ -4,22 +4,22 @@ import React, { useEffect, useRef, useState, useTransition, ReactNode } from 're
 import { useRouter } from 'next/navigation';
 
 import { pasteConnectSuccessCopy } from '../lib/paste-connect';
-
-// Server actions are importable from client modules in Next.js (they run on server).
 import {
   createKpiAction,
   submitCommandAction,
   createProviderAccountAction,
   easyConnectProviderAction,
-  submitSelfImprovementProposalAction,
   queueOutboxMessageAction,
   testProviderAccountAction,
   syncProviderResourcesAction,
-  recordSelfImprovementCanaryAction,
-  recordSelfImprovementRolloutAction,
   applyChangeSetAction,
   resolveDecisionAction,
 } from './actions';
+import {
+  submitSelfImprovementProposalAction,
+  recordSelfImprovementCanaryAction,
+  recordSelfImprovementRolloutAction,
+} from './actions-paid';
 
 export type ToastType = 'success' | 'error';
 

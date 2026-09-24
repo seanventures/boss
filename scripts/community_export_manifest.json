@@ -50,6 +50,7 @@
     "apps/api/app/services/commercial.py",
     "apps/api/app/services/enterprise.py",
     "apps/api/app/routers/enterprise.py",
+    "apps/web/app/actions-paid.ts",
     "apps/web/audits/",
     "apps/web/app/cloud/",
     "apps/web/lib/commercial.ts",
@@ -69,7 +70,6 @@
     "apps/api/app/main.py",
     "apps/api/app/routers/community.py",
     "apps/web/app/page.tsx",
-    "apps/web/app/actions.ts",
     "packages/specpack/packs/community_edition.yaml"
   ],
   "safe_symlinks": {

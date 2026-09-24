@@ -12,8 +12,8 @@ import {
   runChaosAction,
   reconcileCommitmentsAction,
   requestInitiativeBudgetAction,
-  collectSoc2EvidenceAction,
 } from "./actions";
+import { collectSoc2EvidenceAction } from "./actions-paid";
 import { SubmitButton } from "./submit-button";
 
 function usd(micros: number): string {
