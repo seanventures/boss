@@ -1,0 +1,34 @@
+name: Install or setup problem
+description: Get help with the one-line installer, model connection, or startup.
+title: "[Installation] "
+body:
+  - type: markdown
+    attributes:
+      value: "Do not paste .env, API keys, model tokens, or private logs. Redact hostnames and customer data."
+  - type: input
+    id: host
+    attributes:
+      label: Host OS and version
+      placeholder: Ubuntu 24.04, Debian 12, macOS 15, or WSL2
+    validations:
+      required: true
+  - type: textarea
+    id: step
+    attributes:
+      label: Where did setup stop?
+      description: Give the command, step name, and redacted error output.
+    validations:
+      required: true
+  - type: textarea
+    id: checkup
+    attributes:
+      label: Checkup result
+      description: If BOSS started, run scripts/install/checkup.sh and share only redacted failing checks.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: BOSS version or commit
+    validations:
+      required: true
