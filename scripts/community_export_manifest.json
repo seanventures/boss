@@ -145,5 +145,9 @@
     "source": "Makefile.community",
     "destination": "Makefile",
     "sha256": "a4a0aa8dc1fa56364f05fe7f5eab7d90b65510848900087146e5711e96c9e5d1"
+  },
+  "reviewed_community_service_sha256": {
+    "engine/boss_engine/services/community_edition.py": "96fff2acfae8f54709deee00e1d6e3388a6a785f0943a9f83780e549c5953faf",
+    "engine/boss_engine/services/community_cloud.py": "dca25b4114e4e251cd0f267e009ca0dce4b3bee5d72c00d6c4330bc4764238ea"
   }
 }

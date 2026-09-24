@@ -606,3 +606,63 @@ def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     assert report["makefile_export_rewrite_applied"] is False
     assert "makefile-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "Makefile" not in candidate
+
+
+def test_reviewed_community_services_allow_only_pinned_easy_connect_fields(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    service_dir = repo / "engine/boss_engine/services"
+    service_dir.mkdir(parents=True)
+    bodies = {
+        "engine/boss_engine/services/community_edition.py": b"account_connect_url = None\n",
+        "engine/boss_engine/services/community_cloud.py": b"account_connect_status = 'unlinked'\n",
+    }
+    for path, data in bodies.items():
+        (repo / path).write_bytes(data)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["engine/boss_engine/services/"],
+        "exclude": ["unused.py"],
+        "requires_split": ["withheld.py"],
+        "required_runtime": ["engine/boss_engine/services/community_edition.py"],
+        "required_release": ["engine/boss_engine/services/community_cloud.py"],
+        "reviewed_community_service_sha256": {
+            path: hashlib.sha256(data).hexdigest() for path, data in bodies.items()
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert candidate == bodies
+    assert report["blocker_count"] == 0
+
+    changed = json.loads(json.dumps(manifest))
+    changed["reviewed_community_service_sha256"]["engine/boss_engine/services/community_cloud.py"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert "reviewed-community-service-changed" in {b["kind"] for b in report["blockers"]}
+    assert "engine/boss_engine/services/community_cloud.py" not in candidate
+
+    tainted = dict(bodies)
+    tainted["engine/boss_engine/services/community_cloud.py"] += b"HostedMarketplace = True\n"
+    (repo / "engine/boss_engine/services/community_cloud.py").write_bytes(
+        tainted["engine/boss_engine/services/community_cloud.py"]
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "tainted"],
+        check=True,
+    )
+    changed = json.loads(json.dumps(manifest))
+    changed["reviewed_community_service_sha256"]["engine/boss_engine/services/community_cloud.py"] = hashlib.sha256(
+        tainted["engine/boss_engine/services/community_cloud.py"]
+    ).hexdigest()
+    report, candidate = export.analyze(repo, export.git(repo, "rev-parse", "HEAD").decode().strip(), changed)
+    assert "reviewed-community-service-has-paid-marker" in {b["kind"] for b in report["blockers"]}
+    assert "engine/boss_engine/services/community_cloud.py" not in candidate
