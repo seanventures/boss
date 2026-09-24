@@ -8047,16 +8047,38 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* The connector INTO a step. `moving` is the segment work is crossing right now. */
 .dw-link {
+  position: relative;
   display: block; width: 26px; height: 2px; flex: 0 0 26px; border-radius: 2px;
   background: var(--border, #30363d);
+  /* The bar is drawn with `background` and the end caps below use `currentColor`, so each
+     state sets BOTH. Keeping them in step is what stops a green segment ending in grey dots. */
+  color: var(--border, #30363d);
 }
-.dw-link[data-flow="past"] { background: var(--ok, #3fb950); }
-.dw-link[data-flow="future"] { background: var(--border, #30363d); opacity: .5; }
+/* A CAP AT EACH END.
+   A bare 26px bar meets the step cards at nothing in particular; the dots give the segment two
+   ends, so the row reads as joined nodes rather than as boxes with lines lying between them.
+   Sized to sit just proud of the 2px bar — enough to register, not enough to become a bead. */
+.dw-link::before,
+.dw-link::after {
+  content: ""; position: absolute; top: 50%;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor;
+  transform: translateY(-50%);
+}
+.dw-link::before { left: -1px; }
+.dw-link::after { right: -1px; }
+.dw-link[data-flow="past"] { background: var(--ok, #3fb950); color: var(--ok, #3fb950); }
+.dw-link[data-flow="future"] {
+  background: var(--border, #30363d); color: var(--border, #30363d); opacity: .5;
+}
 .dw-link[data-flow="moving"] {
   background: linear-gradient(90deg, var(--ok, #3fb950) 0%, var(--live, #58a6ff) 50%,
                               var(--ok, #3fb950) 100%);
   background-size: 200% 100%;
   animation: dw-flow 1.4s linear infinite;
+  /* The animated segment's caps take the live colour rather than sampling the gradient, which
+     a pseudo-element cannot do — and the blue is the point of that state anyway. */
+  color: var(--live, #58a6ff);
 }
 @keyframes dw-flow { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
