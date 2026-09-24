@@ -239,7 +239,7 @@ install_coding_clis() {
       rm -f "$script"
       die "$name installer could not be downloaded from $url"
     fi
-    if ! "$shell" "$script"; then
+    if ! "$shell" "$script" </dev/null; then
       rm -f "$script"
       die "$name installer failed. BOSS core install has not started."
     fi
@@ -470,19 +470,19 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
     die "$INSTALL_DIR has tracked local changes. Commit or move them before updating BOSS."
   fi
   ui_info "Updating existing checkout at $INSTALL_DIR to $BOSS_REPO_REF"
-  git -C "$INSTALL_DIR" fetch origin "$BOSS_REPO_REF" ||
+  git -C "$INSTALL_DIR" fetch origin "$BOSS_REPO_REF" </dev/null ||
     die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
-  git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD ||
+  git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD </dev/null ||
     die "Could not fast-forward; existing checkout left unchanged."
 elif [[ -d "$INSTALL_DIR" ]]; then
   [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
     die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."
   ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" ||
+  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
     die "Clone failed; existing directory was not removed."
 else
   ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" ||
+  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
     die "Clone failed; check repo visibility, URL, and ref."
 fi
 
@@ -582,6 +582,10 @@ OPENAI_BASE_URL=
 OPENAI_MODEL=gpt-4o-mini
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 BOSS_GITHUB_TOKEN=${GITHUB_TOKEN}
+# This installer source is not the operator's webhook repository. Leave the
+# legacy default-project GitHub route unbound until explicitly configured.
+BOSS_GITHUB_OWNER=
+BOSS_GITHUB_REPO=
 
 # Leave unset for pure Community independence
 BOSS_ACCOUNT_CONNECT_URL=
@@ -596,7 +600,7 @@ if [ -n "${_ENV_SNAPSHOT:-}" ]; then
       BOSS_API_PORT_EXPLICIT="$API_PORT_EXPLICIT" \
       BOSS_WEB_PORT_EXPLICIT="$WEB_PORT_EXPLICIT" \
       BOSS_POSTGRES_PORT_EXPLICIT="$PG_PORT_EXPLICIT" \
-      sh "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" "$_ENV_SNAPSHOT" "$_new_env"; then
+      sh "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" "$_ENV_SNAPSHOT" "$_new_env" </dev/null; then
     rm -f "$_new_env"
     die "could not carry credentials forward — left the existing $ENV_FILE unchanged (copy at $_ENV_SNAPSHOT)"
   fi
@@ -641,7 +645,7 @@ chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 # generator refuses when the value is already there.
 if ! grep -qs '^INFISICAL_ENCRYPTION_KEY=' "$ENV_FILE"; then
   if [ -x "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" ]; then
-    sh "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" "$ENV_FILE" >/dev/null 2>&1 \
+    sh "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" "$ENV_FILE" </dev/null >/dev/null 2>&1 \
       && ui_ok "Generated the secret-store keys (back up $ENV_FILE — they are unrecoverable)"
   else
     { echo "INFISICAL_ENCRYPTION_KEY=$(openssl rand -hex 16)"
@@ -659,7 +663,7 @@ ${COMPOSE[@]} \
   -f scripts/install/community-compose.yml \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  up -d --build
+  up -d --build </dev/null
 
 ui_ok "Containers started"
 
@@ -670,7 +674,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
   ui_step "Provisioning the secret store"
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
-       sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" >/dev/null 2>&1; then
+       sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" </dev/null >/dev/null 2>&1; then
       # THE VALUES ARRIVE AFTER THE CONTAINERS DID.
       #
       # bootstrap writes BOSS_INFISICAL_URL / _PROJECT_ID / _TOKEN into .env, and compose reads
@@ -680,7 +684,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
       # what was just written.
       # shellcheck disable=SC2086
       ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
-        $COMPOSE_PROFILES up -d --no-deps --force-recreate api worker >/dev/null 2>&1 \
+        $COMPOSE_PROFILES up -d --no-deps --force-recreate api worker </dev/null >/dev/null 2>&1 \
         || ui_warn "could not restart api/worker — they may not see the secret store yet"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
     else
@@ -723,13 +727,13 @@ ui_step "Seeding Community project (roles, packs, demo project)"
 SEED_ERR="$(mktemp)"
 set +e
 ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
-  python -c "from boss_engine.bootstrap import seed; seed()" 2>"$SEED_ERR"
+  python -c "from boss_engine.bootstrap import seed; seed()" </dev/null 2>"$SEED_ERR"
 SEED_RC=$?
 set -e
 if [[ "$SEED_RC" -ne 0 ]]; then
   ui_warn "Seed returned $SEED_RC — trying alternate entrypoint"
   ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
-    python -m boss_engine.bootstrap 2>>"$SEED_ERR" ||
+    python -m boss_engine.bootstrap </dev/null 2>>"$SEED_ERR" ||
     die "Seed failed. API may be up but the project is not ready; see $SEED_ERR."
 else
   ui_ok "Database seeded (project boss-dogfood)"
@@ -764,7 +768,7 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   [[ "$CONNECT_CODEX" -eq 1 ]] && _subscription_args+=(--connect-codex)
   [[ "$CONNECT_CLAUDE" -eq 1 ]] && _subscription_args+=(--connect-claude)
   [[ "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]] && _subscription_args+=(--accept-database-fallback)
-  BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_subscription_args[@]}" ||
+  BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_subscription_args[@]}" </dev/null ||
     die "Coding subscription discovery/connection failed; BOSS core remains available."
 fi
 

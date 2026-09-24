@@ -34,18 +34,18 @@ done
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
 [[ -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/scripts/install/community-compose.yml" ]] ||
   { echo 'No BOSS Community install with private .env found; nothing changed.' >&2; exit 1; }
-[[ -f "$INSTALL_DIR/scripts/install/backup.sh" ]] ||
-  { echo 'This checkout predates the backup helper; update it manually after making a verified backup.' >&2; exit 1; }
 [[ "$(git -C "$INSTALL_DIR" rev-parse --is-inside-work-tree 2>/dev/null || true)" == true ]] ||
   { echo 'This install is a remote.sh archive without Git; run remote.sh update from the operator machine.' >&2; exit 1; }
 [[ -z "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no)" ]] ||
   { echo 'Tracked local changes need to be committed or moved before upgrade; nothing changed.' >&2; exit 1; }
 
 OLD_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
-git -C "$INSTALL_DIR" fetch origin "$REF"
+git -C "$INSTALL_DIR" fetch origin "$REF" </dev/null
 NEW_COMMIT="$(git -C "$INSTALL_DIR" rev-parse FETCH_HEAD)"
 git -C "$INSTALL_DIR" merge-base --is-ancestor "$OLD_COMMIT" "$NEW_COMMIT" ||
   { echo 'Upstream cannot fast-forward this checkout; nothing changed.' >&2; exit 1; }
+git -C "$INSTALL_DIR" cat-file -e FETCH_HEAD:scripts/install/backup.sh 2>/dev/null ||
+  { echo 'Target ref has no backup helper; source and containers were not changed.' >&2; exit 1; }
 [[ "$OLD_COMMIT" != "$NEW_COMMIT" ]] || echo 'Already at the requested source commit; verifying with a safe installer rerun.'
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -53,21 +53,23 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
+FETCHED_BACKUP="$(mktemp)"
+FETCHED_INSTALLER="$(mktemp)"
+trap 'rm -f "$FETCHED_BACKUP" "$FETCHED_INSTALLER"' EXIT
+git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$FETCHED_BACKUP"
+git -C "$INSTALL_DIR" show FETCH_HEAD:install.sh > "$FETCHED_INSTALLER"
 backup_args=(--dir "$INSTALL_DIR")
 [[ -n "$BACKUP_DIR" ]] && backup_args+=(--backup-dir "$BACKUP_DIR")
-BACKUP="$(bash "$INSTALL_DIR/scripts/install/backup.sh" "${backup_args[@]}")" || {
+BACKUP="$(bash "$FETCHED_BACKUP" "${backup_args[@]}" </dev/null)" || {
   echo 'Backup failed; source and containers were not changed.' >&2; exit 1;
 }
 printf 'Private recovery backup: %s\n' "$BACKUP"
 
 # The fetched installer performs its own fast-forward and credential-preserving
 # rerun. Execute that version so new installer fixes apply during this upgrade.
-FETCHED_INSTALLER="$(mktemp)"
-trap 'rm -f "$FETCHED_INSTALLER"' EXIT
-git -C "$INSTALL_DIR" show FETCH_HEAD:install.sh > "$FETCHED_INSTALLER"
 install_args=(--dir "$INSTALL_DIR" --ref "$REF" --yes --skip-model-key)
 [[ "$NO_WEB" -eq 1 ]] && install_args+=(--no-web)
-if ! bash "$FETCHED_INSTALLER" "${install_args[@]}"; then
+if ! bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
   echo "Upgrade failed. Recovery backup: $BACKUP" >&2
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2
   exit 1

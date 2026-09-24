@@ -128,6 +128,14 @@ This selects Grok for governed coding work; it does not select the console's
 chat model. A host CLI being installed does not by itself mean the BOSS
 containers are connected.
 
+The BOSS source URL used by the installer is not an operator repository
+binding. Fresh Community installs leave `BOSS_GITHUB_OWNER` and
+`BOSS_GITHUB_REPO` blank, so the legacy default-project webhook route does
+not point at the private development repository. Register the repository in
+the project setup flow; if you intentionally use the legacy default webhook
+route, set both variables in the private `.env` and rerun the installer. Reruns
+retain those explicit values.
+
 ## Files
 
 | Path | Role |
@@ -286,13 +294,26 @@ docker compose -f scripts/install/community-compose.yml --env-file .env --profil
 git switch --detach "$(cat "$BACKUP/source-commit")"
 cp "$BACKUP/.env" .env && chmod 600 .env
 docker compose -f scripts/install/community-compose.yml --env-file .env up -d db
+for attempt in {1..60}; do
+  docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_isready -U boss -d boss >/dev/null && break
+  sleep 1
+done
+docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_isready -U boss -d boss
 docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_restore -U boss -d boss --clean --if-exists --no-owner < "$BACKUP/boss.dump"
 if [ -f "$BACKUP/infisical.dump" ]; then
   docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_restore -U boss -d infisical --clean --if-exists --no-owner < "$BACKUP/infisical.dump"
 fi
 docker compose -f scripts/install/community-compose.yml --env-file .env run --rm --no-deps -T --entrypoint tar api -C /var/lib/boss/artifacts -xf - < "$BACKUP/artifacts.tar"
-docker compose -f scripts/install/community-compose.yml --env-file .env --profile web --profile secrets up -d --build
+docker compose -f scripts/install/community-compose.yml --env-file .env --profile web up -d --build
 ```
+
+The final command is for the default database-backed install with Mission
+Control. Omit `--profile web` if the console was disabled. Add
+`--profile secrets` only if the previous install used Infisical; wait for its
+health before restarting the API and worker. Restoring an upgraded database
+into an older source revision may require a migration-aware recovery plan.
+Run these commands during a maintenance window and confirm `/health`, the
+project list, and an artifact before reopening the console.
 
 The artifact restore overlays the archive. Files created after the backup
 remain unless removed separately; review the current volume first. A remote archive
