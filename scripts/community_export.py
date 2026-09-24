@@ -49,6 +49,10 @@ PAID_SOURCE_MARKERS = (
     b"enterprise_edition",
     b"cloud_edition",
 )
+REVIEWED_COMMUNITY_SERVICES = {
+    "engine/boss_engine/services/community_edition.py",
+    "engine/boss_engine/services/community_cloud.py",
+}
 # This exact block is shared configuration consumed by the private paid
 # extensions. It contains no adapter, route, or paid behavior. Keep it in the
 # Community settings module so the private edition retains its configuration
@@ -214,6 +218,20 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError(f"manifest {key} has duplicate or unsafe paths")
     if set(manifest["requires_split"]) & set(manifest["exclude"]):
         raise ValueError("requires_split and exclude must be disjoint")
+    shared_services = manifest.get("reviewed_community_service_sha256")
+    if shared_services is not None:
+        if (
+            not isinstance(shared_services, dict)
+            or set(shared_services) != REVIEWED_COMMUNITY_SERVICES
+            or any(
+                not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not matching_rule(path, manifest["include"])
+                or matching_rule(path, manifest["exclude"])
+                for path, digest in shared_services.items()
+            )
+        ):
+            raise ValueError("reviewed Community services require exact included paths and SHA-256 digests")
     symlinks = manifest.get("safe_symlinks", {})
     if not isinstance(symlinks, dict) or any(
         not isinstance(path, str)
@@ -597,6 +615,16 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             continue
         if has_semantic_paid_source(path, data):
             blockers.append({"kind": "semantic-paid-source-needs-split", "path": path})
+            continue
+        shared_services = manifest.get("reviewed_community_service_sha256", {})
+        if path in shared_services:
+            if hashlib.sha256(data).hexdigest() != shared_services[path]:
+                blockers.append({"kind": "reviewed-community-service-changed", "path": path})
+                continue
+            if any(marker in data.replace(b"account_connect", b"") for marker in PAID_SOURCE_MARKERS):
+                blockers.append({"kind": "reviewed-community-service-has-paid-marker", "path": path})
+                continue
+            selected[path] = data
             continue
         marker_data, contract_ok = reviewed_marker_bytes(path, data)
         if not contract_ok:
