@@ -55,9 +55,8 @@ describe("v1 Workforce", () => {
 
   it("flags an agent running work with no registered role", () => {
     const out = html(wf({ agents: [agent({ registered: false })] }));
-    expect(out).toContain("without");
-    expect(out).toContain("a registered role");
-    expect(out).toContain("nothing governs them");
+    expect(out).toContain("unregistered role");
+    expect(out).toContain("Review authority before another run.");
   });
 
   it("says so rather than rendering an empty roster when the API is unreachable", () => {
@@ -128,16 +127,16 @@ describe("v1 Org Chart", () => {
 
   it("separates planned structure from read-only observed handoffs", () => {
     const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({ derived_from: "handoffs" })} />);
-    expect(out).toContain("Planned structure");
-    expect(out).toContain("Observed handoffs");
-    expect(out).toContain("Set reporting lines for this project.");
+    expect(out).toContain("Planned roles");
+    expect(out).toContain("Actual handoffs");
+    expect(out).toContain("This plan does not change task routing.");
     expect(codeOnly("app/workforce-ui.tsx")).toContain("Read-only work handoffs");
   });
 
   it("says nothing rather than drawing an empty tree", () => {
     const out = renderToStaticMarkup(
       <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
-    expect(out).toContain("No roles placed yet.");
+    expect(out).toContain("No planned roles yet.");
   });
 
   it("invites the operator to place somebody", () => {
@@ -146,7 +145,7 @@ describe("v1 Org Chart", () => {
     const node = { id: "pm", name: "Product Manager", role: "product_manager", depth: 0 } as never;
     const out = renderToStaticMarkup(
       <OrgChartArea chart={chart({ nodes: [node] })} projectId="p" actor="ceo" />);
-    expect(out).toContain("Browse agent templates");
-    expect(out).toContain("Open unassigned roles");
+    expect(out).toContain("Add agent from template");
+    expect(out).toContain("Choose a role to place");
   });
 });

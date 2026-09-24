@@ -64,13 +64,13 @@ export function FocusedAgents({
     <article className="stack-card" data-testid="focused-agents">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Workforce</span>
-          <h2>Focused agents</h2>
+          <span className="eyebrow">Optional</span>
+          <h2>On-duty automations</h2>
         </div>
       </div>
       <p className="detail">
-        Build a specialist, put it on always-on duty, or wake it when something
-        happens. Every action is validated first. Decisions stay human.
+        Schedule a focused agent to watch this project or wake it on demand.
+        Actions still pass policy and approval checks.
       </p>
 
       {error ? (
@@ -177,8 +177,7 @@ export function FocusedAgents({
       ) : null}
       {state.apiReachable && state.agents.length === 0 ? (
         <p className="empty-state" data-testid="focused-agents-empty">
-          No focused agents yet. Create one above — always-on agents tick from
-          the worker; on-demand agents wait for Wake now.
+          No on-duty automations yet. Create one above to schedule checks or wake it on demand.
         </p>
       ) : null}
       {state.agents.map((agent) => (

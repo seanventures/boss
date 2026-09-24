@@ -31,6 +31,18 @@ function volumeOf(a: V2Agent): number {
   return (a.calls ?? 0) + (a.steps ?? 0);
 }
 
+function AgentModelHelp() {
+  return (
+    <span className="org-model-help">
+      <button type="button" aria-label="How roles, agents, and runs fit together">?</button>
+      <span role="tooltip">
+        A role names a responsibility. An agent definition sets its behavior. Runs record actual
+        work. Team structure is a plan; it does not route tasks.
+      </span>
+    </span>
+  );
+}
+
 function openArea(area: "org_chart" | "studio"): void {
   const url = new URL(window.location.href);
   url.searchParams.set("area", area);
@@ -138,6 +150,7 @@ export function WorkforceArea(
   }, [workforce.agents, filter, search]);
 
   const counts = workforce.counts ?? { WORKING: 0, STUCK: 0, IDLE: 0, total: 0 };
+  const unregisteredCount = (workforce.agents ?? []).filter((agent) => !agent.registered).length;
   const shownAgents = filter === "all" && !search.trim() && !showAll
     ? agents.slice(0, 8) : agents;
 
@@ -161,7 +174,7 @@ export function WorkforceArea(
     <div className="roster">
       <div className="roster-filterbar">
         <span className="detail">
-          {counts.total} roles · recent work in the last {workforce.window_hours}h
+          {counts.total} role{counts.total === 1 ? "" : "s"} · last {workforce.window_hours}h
         </span>
         <span className="roster-filters">
           {(["all", "working", "worked"] as const).map((f) => (
@@ -180,13 +193,14 @@ export function WorkforceArea(
               27th — the only wizard in BOSS is in Agent Studio, and it writes
               `agent_definitions`, which this roster does not read. */}
           <button type="button" className="cap-btn roster-new" data-testid="wf-new-agent"
-                  onClick={() => setCreating(true)}>Create agent definition</button>
+                  onClick={() => setCreating(true)}>Create agent</button>
         </span>
       </div>
       <div className="roster-guide">
-        <span>Agents shows observed work by role.</span>
-        <button type="button" onClick={() => openArea("org_chart")}>Plan reporting in Org Chart</button>
-        <button type="button" onClick={() => openArea("studio")}>Manage definitions in Agent Studio</button>
+        <span>Work is grouped by role.</span>
+        <AgentModelHelp />
+        <button type="button" onClick={() => openArea("org_chart")}>Team structure</button>
+        <button type="button" onClick={() => openArea("studio")}>Agent Studio</button>
       </div>
       <input className="roster-search" type="search" aria-label="Find an agent role"
              placeholder="Find an agent role" value={search}
@@ -202,10 +216,10 @@ export function WorkforceArea(
 
       {/* Governance gap, said once and at the top: an agent running work without a registered
           role has no trust score, no autonomy level and no violation tracking. */}
-      {(workforce.agents ?? []).some((a) => !a.registered) ? (
+      {unregisteredCount > 0 ? (
         <p className="detail roster-ungoverned" data-testid="roster-ungoverned">
-          {(workforce.agents ?? []).filter((a) => !a.registered).length} agents are working without
-          a registered role — nothing governs them.
+          Work is attributed to {unregisteredCount} unregistered role{unregisteredCount === 1 ? "" : "s"}.
+          Review authority before another run.
         </p>
       ) : null}
 
@@ -305,7 +319,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
       setTemplates((current) => current.map((item) => item.id === templateId
         ? { ...item, installed: true, active: true } : item));
       setInstalledTemplate(templateId);
-      setNote(`${templateId.replaceAll("_", " ")} is installed as an Agent Studio definition. It has not been placed or started.`);
+      setNote("Added to Agent Studio. The team structure is unchanged; no work has started.");
     } catch (error) {
       setTemplateError(String((error as Error).message ?? error));
     } finally { setInstalling(null); }
@@ -377,23 +391,26 @@ export function OrgChartArea({ chart, projectId, actor }: {
   return (
     <div className="org" data-declared={view === "planned" && placedCount > 0}
          data-view={view}>
-      <div className="org-views" role="tablist" aria-label="Org Chart views">
-        <button type="button" role="tab" aria-selected={view === "planned"}
-                onClick={() => setView("planned")}>Planned structure</button>
-        <button type="button" role="tab" aria-selected={view === "observed"}
-                onClick={() => setView("observed")}>Observed handoffs</button>
+      <div className="org-viewbar">
+        <div className="org-views" role="tablist" aria-label="Team structure views">
+          <button type="button" role="tab" aria-selected={view === "planned"}
+                  onClick={() => setView("planned")}>Planned roles</button>
+          <button type="button" role="tab" aria-selected={view === "observed"}
+                  onClick={() => setView("observed")}>Actual handoffs</button>
+        </div>
+        <AgentModelHelp />
       </div>
       <p className="detail" data-testid="org-provenance">
         {view === "planned"
-          ? "Set reporting lines for this project."
+          ? "Arrange responsibilities for this project. This plan does not change task routing."
           : `Read-only work handoffs from the last ${chartNow.window_hours} hours.`}
       </p>
       <div className="org-toolbar">
         {view === "planned" && placedCount > 0 ? (
-          <span className="detail">{placedCount} placed role{placedCount === 1 ? "" : "s"}</span>
+          <span className="detail">{placedCount} role{placedCount === 1 ? "" : "s"} in structure</span>
         ) : null}
         {view === "observed" && treeNow.length > 0 ? (
-          <span className="detail">{treeNow.length} recent handoff{treeNow.length === 1 ? "" : "s"}</span>
+          <span className="detail">{treeNow.length} role{treeNow.length === 1 ? "" : "s"} in recent handoffs</span>
         ) : null}
         {view === "planned" && placedCount ? (
           <button type="button" className="cap-btn" disabled={busy} data-testid="org-reset-all"
@@ -406,7 +423,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
         {view === "planned" ? <button type="button" className="cap-btn" aria-expanded={templateOpen}
                 aria-controls="org-template-picker" data-testid="org-template-toggle"
                 onClick={() => setTemplateOpen((value) => !value)}>
-          {templateOpen ? "Close templates" : "Browse agent templates"}
+          {templateOpen ? "Close templates" : "Add agent from template"}
         </button> : null}
       </div>
       {view === "planned" && templateOpen ? (
@@ -415,7 +432,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
           <div className="org-template-head">
             <div>
               <strong>Agent templates</strong>
-              <p>Install a scoped Agent Studio definition. This does not start work or grant device access.</p>
+              <p>Templates create agent definitions in Studio. They do not add reporting lines or start work.</p>
             </div>
             <input type="search" aria-label="Search agent templates" placeholder="Find a role"
                    value={templateSearch} onChange={(event) => setTemplateSearch(event.target.value)} />
@@ -429,7 +446,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
                   <span>{item.category} · {humanise(item.role_key)}</span>
                   <p>{item.description}</p>
                   {item.mobile ? (
-                    <small>Android needs an SDK runner. iOS build and Simulator need a macOS runner with full Xcode. Device automation needs an installed adapter.</small>
+                    <small>Device work needs a configured Android or macOS/Xcode runner.</small>
                   ) : null}
                 </div>
                 <button type="button" className="cap-btn" disabled={item.installed || !!installing}
@@ -455,7 +472,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
       {treeNow.length === 0 ? (
         <div className="org-empty" data-testid="org-empty">
           <p className="detail">{view === "planned"
-            ? "No roles placed yet."
+            ? "No planned roles yet."
             : "No recent handoffs."}</p>
           {view === "planned" && unplaced.length > 0 ? (
             <button type="button" className="org-next-action" onClick={() => {
@@ -463,7 +480,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
                 unassignedRef.current.open = true;
                 unassignedRef.current.scrollIntoView({ block: "nearest" });
               }
-            }}>Open unassigned roles</button>
+            }}>Choose a role to place</button>
           ) : null}
         </div>
       ) : (
@@ -495,12 +512,12 @@ export function OrgChartArea({ chart, projectId, actor }: {
                   {view === "observed" && n.task ? <span className="org-node-task">{n.task}</span> : null}
                   {view === "planned" ? <span className="org-node-tools">
                     <button type="button" className="org-node-act" disabled={busy}
-                            title="Make this a top-level seat"
+                            title="Make this a top-level role"
                             data-testid={`org-top-${n.id}`}
-                            onClick={() => void place(n.id, null)}>move to top</button>
+                            onClick={() => void place(n.id, null)}>Top level</button>
                     {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
                       <button type="button" className="org-node-act" disabled={busy}
-                              title="Remove this reporting line"
+                              title="Remove this role from the planned structure"
                               data-testid={`org-reset-${n.id}`}
                               onClick={() => void release(n.id)}>remove</button>
                     ) : null}
@@ -514,7 +531,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
 
       {view === "planned" && unplaced.length > 0 ? (
         <details className="org-unassigned" data-testid="org-unassigned" ref={unassignedRef}>
-          <summary>Unassigned roles <span>{unplaced.length}</span></summary>
+          <summary>Roles not in structure <span>{unplaced.length}</span></summary>
           <label className="org-unassigned-search">
             <span>Find a role</span>
             <input type="search" value={roleSearch}
@@ -529,7 +546,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
                         value={placementTargets[n.id] ?? ""}
                         onChange={(event) => setPlacementTargets((current) =>
                           ({ ...current, [n.id]: event.target.value }))}>
-                  <option value="">Top-level seat</option>
+                  <option value="">Top-level role</option>
                   {(chartNow.tree ?? []).map((parent) => (
                     <option key={parent.id} value={parent.id}>{displayName(parent)}</option>
                   ))}

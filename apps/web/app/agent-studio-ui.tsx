@@ -108,10 +108,10 @@ export function AgentStudio({
   roles: RoleFeedItem[];
   skills: SkillFeedItem[];
 }) {
-  const initial: Selection | undefined = feed.panels[0]
-    ? { kind: "panel", item: feed.panels[0] }
-    : feed.agents[0]
-      ? { kind: "agent", item: feed.agents[0] }
+  const initial: Selection | undefined = feed.agents[0]
+    ? { kind: "agent", item: feed.agents[0] }
+    : feed.panels[0]
+      ? { kind: "panel", item: feed.panels[0] }
       : feed.workflows[0]
         ? { kind: "workflow", item: feed.workflows[0] }
         : undefined;
@@ -126,9 +126,7 @@ export function AgentStudio({
   );
   const [selection, setSelection] = useState<Selection | undefined>(initial);
   const [query, setQuery] = useState("");
-  const [objective, setObjective] = useState(
-    "Review the proposed change, identify evidence gaps, and return the safest high-leverage next move.",
-  );
+  const [objective, setObjective] = useState("");
   const [workflowSpec, setWorkflowSpec] = useState(
     JSON.stringify(initialWorkflowVersion?.spec ?? STARTER_WORKFLOW, null, 2),
   );
@@ -347,27 +345,18 @@ export function AgentStudio({
       <div className="as-shell">
         <header className="as-header">
           <div>
-            <span className="as-kicker"><Sparkle weight="fill" /> Agent Studio / setup</span>
-            <h2>Starter catalog not installed</h2>
+            <span className="as-kicker">Agent Studio</span>
+            <h2>Add your first agents</h2>
             <p>
-              This project has no governed agents, panels, or workflows yet.
-              The reviewed starter catalog is project-scoped and idempotent.
+              Start with the built-in catalog or create one agent for this project.
             </p>
           </div>
-          <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
-            <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
-          </button>
         </header>
         <div className="as-first-run" role="region" aria-label="Agent Studio first-run setup">
           <div>
-            <b>This project has no governed agents yet</b>
             <p>
-              Install the reviewed BOSS starter catalog (34 agents, 3 panels, shipped workflows)
-              to make Agent Studio usable. The setup is project-scoped, idempotent,
-              role-review gated, and never dispatches work or spends budget.
-            </p>
-            <p className="detail">
-              Endpoint: <code>POST /v1/agent-studio/catalog/seed</code>
+              The reviewed starter catalog adds agent definitions, panels, and workflows to this project.
+              It does not start a run or spend budget.
             </p>
           </div>
           <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
@@ -378,7 +367,7 @@ export function AgentStudio({
             disabled={pending}
             onClick={() => setWizardOpen(true)}
           >
-            <Plus /> Commission a scoped agent
+            <Plus /> Create an agent
           </button>
           {result && (
             <div className={`as-action-result ${result.ok ? "ok" : "bad"}`} role="status">
@@ -405,34 +394,23 @@ export function AgentStudio({
     <div className="as-shell">
       <header className="as-header">
         <div>
-          <span className="as-kicker"><Sparkle weight="fill" /> Agent Studio / live system</span>
-          <h2>Compose intelligence. Watch the work.</h2>
+          <span className="as-kicker">Agent Studio</span>
+          <h2>Build and run agents</h2>
           <p>
-            Versioned agents, executable panels, reusable workflows, and every
-            coordination message on one governed surface.
+            Define an agent, test it, then run a task. Panels and workflows combine agents.
           </p>
         </div>
-        <div className="as-header-signal" aria-label="A2A transport health">
-          <span className={`as-beacon ${tone(feed.a2a.health.status)}`} />
-          <div>
-            <b>{feed.a2a.health.status}</b>
-            <small>
-              Redis {feed.a2a.health.transport?.configured ? "linked" : "not configured"} ·
-              Postgres canonical
-            </small>
-          </div>
-        </div>
-        <button className="as-button primary" disabled={pending} onClick={runCatalogSmoke}>
-          <Flask /> {pending ? "Running catalog checks…" : `Smoke test all ${feed.agents.length} agents`}
+        <button className="as-button secondary" disabled={pending} onClick={runCatalogSmoke}>
+          <Flask /> {pending ? "Running catalog checks…" : `Test all ${feed.agents.length} agent${feed.agents.length === 1 ? "" : "s"}`}
         </button>
       </header>
 
       <div className="as-metrics" aria-label="Agent Studio summary">
-        <div><span>Published agents</span><b>{feed.agents.length}</b><small>immutable active versions</small></div>
-        <div><span>Executable panels</span><b>{feed.panels.length}</b><small>attributed consolidation</small></div>
-        <div><span>Workflows</span><b>{feed.workflows.length}</b><small>validated reusable graphs</small></div>
-        <div><span>Active runs</span><b>{activeRuns}</b><small>leased or waiting</small></div>
-        <div><span>Live A2A</span><b>{liveMessages}</b><small>{feed.a2a.channels.length} governed channels</small></div>
+        <div><span>Agents</span><b>{feed.agents.length}</b><small>available definitions</small></div>
+        <div><span>Panels</span><b>{feed.panels.length}</b><small>agent groups</small></div>
+        <div><span>Workflows</span><b>{feed.workflows.length}</b><small>reusable steps</small></div>
+        <div><span>Active runs</span><b>{activeRuns}</b><small>working or waiting</small></div>
+        <div><span>Messages</span><b>{liveMessages}</b><small>{feed.a2a.channels.length} channels</small></div>
       </div>
 
       <div className="as-workbench">
@@ -479,9 +457,8 @@ export function AgentStudio({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter the active library…"
+              placeholder="Find an agent, panel, or workflow"
             />
-            <span>⌘ K</span>
           </label>
           <div className="as-object-list">
             {mode === "agents" ? (
@@ -625,8 +602,8 @@ export function AgentStudio({
                     {selection.kind === "panel"
                       ? "Panel topology"
                       : selection.kind === "workflow"
-                        ? "Workflow graph / draft preview"
-                        : "Agent authority graph"}
+                        ? "Workflow steps"
+                        : "Agent definition"}
                   </span>
                   <h3>{selection.item.name}</h3>
                 </div>
@@ -636,7 +613,6 @@ export function AgentStudio({
               </div>
 
               <div className={`as-topology ${selection.kind}`}>
-                <div className="as-grid-lines" aria-hidden="true" />
                 {selection.kind === "panel" ? (
                   <PanelTopology panel={selection.item} />
                 ) : selection.kind === "workflow" ? (
@@ -685,12 +661,13 @@ export function AgentStudio({
 
               <div className="as-command">
                 <div className="as-command-label">
-                  <span><BracketsCurly /> Run objective</span>
-                  <small>Every execution becomes a leased job with evidence.</small>
+                  <span><BracketsCurly /> Task</span>
+                  <small>Runs are recorded with evidence.</small>
                 </div>
                 <textarea
                   value={objective}
                   onChange={(event) => setObjective(event.target.value)}
+                  placeholder="Describe the task for this agent"
                   rows={3}
                 />
                 <div className="as-command-actions">
@@ -739,14 +716,16 @@ export function AgentStudio({
         <aside className="as-inspector" aria-label="A2A trace inspector">
           <div className="as-pane-head">
             <span>Live coordination</span>
-            <small><Broadcast /> A2A fabric</small>
+            <small><Broadcast /> Messaging</small>
           </div>
           <div className="as-transport">
             <div>
               <span className={`as-beacon ${tone(feed.a2a.health.status)}`} />
               <b>Transport</b>
             </div>
-            <span>{feed.a2a.health.transport?.latency_ms ?? "—"} ms</span>
+            <span>{feed.a2a.health.status === "not_configured"
+              ? "Not configured"
+              : `${feed.a2a.health.transport?.latency_ms ?? "—"} ms`}</span>
           </div>
           <div className="as-channel-rail">
             {feed.a2a.channels.map((channel) => (
@@ -840,21 +819,17 @@ function AgentTopology({ agent }: { agent: StudioAgent }) {
   return (
     <div className="as-agent-graph">
       <div className="as-authority-node role">
-        <small>AUTHORITY</small>
+        <small>ROLE</small>
         <b>{compact(version?.role_key)}</b>
-        <span>RoleSpec</span>
+        <span>Responsibility</span>
       </div>
-      <div className="as-link horizontal" />
       <div className="as-agent-core">
-        <span className="as-core-ring ring-one" />
-        <span className="as-core-ring ring-two" />
-        <span className="as-core-orb">{initials(agent.name)}</span>
+        <span className="as-agent-type">AGENT</span>
         <b>{agent.name}</b>
         <small>{compact(String(version?.model_policy.execution_mode ?? "deterministic_brief"))}</small>
       </div>
-      <div className="as-link horizontal right" />
       <div className="as-authority-node tools">
-        <small>EFFECTIVE TOOLS</small>
+        <small>TOOLS</small>
         <b>{skills.length}</b>
         <span>{skills.slice(0, 2).map(compact).join(" · ") || "No tools requested"}</span>
       </div>

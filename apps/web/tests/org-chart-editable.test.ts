@@ -22,7 +22,7 @@ describe("the chart can be changed", () => {
     // The list of agents BOSS knows about is the thing you build a chart FROM; without it the
     // only agents you could place would be the ones already placed.
     expect(UI).toContain('data-testid="org-bench"');
-    expect(UI).toContain("Unassigned roles");
+    expect(UI).toContain("Roles not in structure");
     expect(UI).toContain('aria-label={`Reports to for ${displayName(n)}`}');
   });
 
