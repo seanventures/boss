@@ -12,6 +12,7 @@ import argparse
 import ast
 import hashlib
 import json
+import posixpath
 import re
 import shlex
 import shutil
@@ -19,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path(__file__).with_name("community_export_manifest.json")
@@ -29,6 +30,7 @@ TS_IMPORT_RE = re.compile(
     r"(?:\b(?:import|export)\s+(?:[^;]*?\s+from\s+)?|\b(?:import|require)\s*\()\s*['\"]([^'\"]+)['\"]",
     re.MULTILINE,
 )
+MARKDOWN_LINK_RE = re.compile(r"\]\(([^)]+)\)")
 PRIVATE_MARKERS = (
     b"seanheiney/boss",
     b".sean.network",
@@ -71,13 +73,115 @@ def has_paid_source_markers(path: str, data: bytes) -> bool:
         scan_data = data.replace(SHARED_CONFIG_PAID_FIELDS, b"", 1)
     return any(marker in scan_data for marker in PAID_SOURCE_MARKERS)
 
+# These are Community status/configuration contracts. Each exception applies to
+# complete, reviewed source lines in one file and is checked before marker scan.
+SHARED_MARKER_LINES = {
+    "engine/boss_engine/schemas.py": {
+        "class AccountConnectOrgSummary(BaseModel):": "AccountConnectOrgSummary",
+        "    account_connect_required: bool": "EditionStatusResponse",
+        "    account_connect_status: str": "EditionStatusResponse",
+        "    account_connect_org: Optional[AccountConnectOrgSummary] = None": "EditionStatusResponse",
+        "    account_connect_org_id: Optional[str] = None": "LicenseEntitlementSummary",
+    },
+    "engine/boss_engine/services/entitlements.py": {
+        "                and self.settings.account_connect_url": "_runtime_flags",
+        "                runtime_supported and self.settings.account_connect_token": "_runtime_flags",
+    },
+}
+SEMANTIC_PAID_MARKERS = {
+    "engine/boss_engine/services/entitlements.py": (b"enterprise_model_gateway",),
+    "packages/specpack/models/providers.yaml": (
+        b"enterprise_model_gateway",
+        b"private_enterprise_gateway_adapter",
+    ),
+}
+
+
+def has_semantic_paid_source(path: str, data: bytes) -> bool:
+    return any(marker in data for marker in SEMANTIC_PAID_MARKERS.get(path, ()))
+
+
+def reviewed_marker_bytes(path: str, data: bytes) -> tuple[bytes, bool]:
+    """Return source for paid-marker scan, with only audited Community lines masked.
+
+    A missing, duplicated, relocated, or changed line fails the contract. The
+    original bytes always enter the candidate when the contract passes.
+    """
+    rules = SHARED_MARKER_LINES.get(path)
+    if path == "packages/specpack/models/providers.yaml":
+        try:
+            lines = data.decode("utf-8").splitlines(keepends=True)
+        except UnicodeDecodeError:
+            return data, False
+        allowed = "        auth_method: account_connect"
+        positions = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == allowed]
+        if len(positions) != 1:
+            return data, False
+        expected_owner = [
+            "      - source_id: managed_cloud_model_gateway",
+            "        source_kind: managed_cloud_model_gateway",
+            "        entitlement_kind: hosted_usage_based_gateway",
+        ]
+        if positions[0] < len(expected_owner) or [
+            line.rstrip("\r\n")
+            for line in lines[positions[0] - len(expected_owner):positions[0]]
+        ] != expected_owner:
+            return data, False
+        return b"".join(
+            b"\n" if line.rstrip("\r\n") == allowed else line.encode()
+            for line in lines
+        ), True
+    if path == "packages/specpack/packs/community_edition.yaml":
+        try:
+            lines = data.decode("utf-8").splitlines(keepends=True)
+        except UnicodeDecodeError:
+            return data, False
+        allowed = "hosted_account_connect_required: false"
+        valid = (
+            sum(line.rstrip("\r\n") == allowed for line in lines) == 1
+            and b"id: community_edition\n" in data
+            and b"license_candidate: Apache-2.0\n" in data
+            and b"legal_review_required: true\n" in data
+            and b"commercial_packaging_policy" not in data
+        )
+        if not valid:
+            return data, False
+        return b"".join(
+            b"\n" if line.rstrip("\r\n") == allowed else line.encode()
+            for line in lines
+        ), True
+    if rules is None:
+        return data, True
+    try:
+        text = data.decode("utf-8")
+        tree = ast.parse(text)
+    except (UnicodeDecodeError, SyntaxError):
+        return data, False
+    lines = text.splitlines(keepends=True)
+    for allowed, owner in rules.items():
+        positions = [i + 1 for i, line in enumerate(lines) if line.rstrip("\r\n") == allowed]
+        if len(positions) != 1:
+            return data, False
+        nodes = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+            and node.name == owner
+            and node.lineno <= positions[0] <= (node.end_lineno or node.lineno)
+        ]
+        if len(nodes) != 1:
+            return data, False
+    allowed_lines = set(rules)
+    return b"".join(
+        b"\n" if line.rstrip("\r\n") in allowed_lines else line.encode()
+        for line in lines
+    ), True
+
 
 def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if result.returncode:
@@ -190,6 +294,21 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("contributing_export_rewrite needs reviewed source sha256")
         if not all(matching_rule(contributing_rewrite[key], manifest["include"]) for key in ("source", "destination")):
             raise ValueError("contributing export source and destination must be included")
+    makefile_rewrite = manifest.get("makefile_export_rewrite")
+    if makefile_rewrite is not None:
+        if not isinstance(makefile_rewrite, dict) or any(
+            not isinstance(makefile_rewrite.get(key), str) or not safe_path(makefile_rewrite[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("makefile_export_rewrite needs safe source and destination paths")
+        if makefile_rewrite["destination"] != "Makefile":
+            raise ValueError("makefile export destination must be root Makefile")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(makefile_rewrite.get("sha256", ""))):
+            raise ValueError("makefile_export_rewrite needs reviewed source sha256")
+        if not matching_rule(makefile_rewrite["source"], manifest["include"]):
+            raise ValueError("makefile export source must be included")
+        if makefile_rewrite["destination"] not in manifest["requires_split"]:
+            raise ValueError("makefile export destination must be withheld for split")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -198,7 +317,7 @@ def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
         if not raw:
             continue
         metadata, filename = raw.split(b"\t", 1)
-        mode, kind, oid = metadata.decode().split(" ")
+        mode, _kind, oid = metadata.decode().split(" ")
         path = filename.decode("utf-8")
         if not safe_path(path):
             raise ValueError("source commit contains an unsafe path")
@@ -346,6 +465,30 @@ def packaging_edges(selected: dict[str, bytes]) -> list[dict]:
     return edges
 
 
+def markdown_link_edges(selected: dict[str, bytes]) -> list[dict]:
+    """Find local document links that would break in the exported root tree."""
+    paths = set(selected)
+    edges: list[dict] = []
+    for source, data in selected.items():
+        if not source.endswith(".md"):
+            continue
+        content = data.decode("utf-8", "replace")
+        for match in MARKDOWN_LINK_RE.finditer(content):
+            raw = match.group(1).strip().strip("<>")
+            target_url = urlsplit(raw)
+            if target_url.scheme or target_url.netloc or not target_url.path:
+                continue
+            target = posixpath.normpath(
+                posixpath.join(posixpath.dirname(source), unquote(target_url.path))
+            )
+            if target.startswith(("../", "/")) or target == "..":
+                edges.append({"kind": "markdown-link-outside-export", "from": source, "to": raw})
+            elif target not in paths and not any(path.startswith(target.rstrip("/") + "/") for path in paths):
+                line = content.count("\n", 0, match.start()) + 1
+                edges.append({"kind": "markdown-link-target-missing", "from": source, "to": target, "line": line})
+    return edges
+
+
 def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes]]:
     entries = tracked_blobs(repo, sha)
     source_paths = set(entries)
@@ -386,7 +529,14 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         if any(marker in data for marker in PRIVATE_MARKERS):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             continue
-        if has_paid_source_markers(path, data):
+        if has_semantic_paid_source(path, data):
+            blockers.append({"kind": "semantic-paid-source-needs-split", "path": path})
+            continue
+        marker_data, contract_ok = reviewed_marker_bytes(path, data)
+        if not contract_ok:
+            blockers.append({"kind": "shared-marker-contract-changed", "path": path})
+            continue
+        if has_paid_source_markers(path, marker_data):
             blockers.append({"kind": "mixed-paid-source-needs-split", "path": path})
             continue
         selected[path] = data
@@ -524,6 +674,26 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 )
             ]
             contributing_rewrite_applied = True
+    makefile_rewrite = manifest.get("makefile_export_rewrite")
+    makefile_rewrite_applied = False
+    if makefile_rewrite:
+        source = makefile_rewrite["source"]
+        destination = makefile_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "makefile-export-private-source-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "makefile-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "makefile-export-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != makefile_rewrite["sha256"]:
+            blockers.append({"kind": "makefile-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
+            ]
+            makefile_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -537,6 +707,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         elif path.endswith((".ts", ".tsx", ".js", ".jsx")):
             blockers.extend(typescript_edges(path, data, source_paths, selected_paths))
     blockers.extend(packaging_edges(selected))
+    blockers.extend(markdown_link_edges(selected))
     unique: dict[tuple, dict] = {}
     for blocker in blockers:
         identity = (blocker["kind"], blocker.get("path"), blocker.get("from"), blocker.get("to"))
@@ -552,6 +723,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "page_export_rewrite_applied": page_rewrite_applied,
         "readme_export_rewrite_applied": readme_rewrite_applied,
         "contributing_export_rewrite_applied": contributing_rewrite_applied,
+        "makefile_export_rewrite_applied": makefile_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
@@ -640,8 +812,7 @@ def scan_candidate(output: Path) -> tuple[dict, list[dict]]:
                 "--report-path",
                 str(report_path),
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         if result.returncode not in {0, 5}:

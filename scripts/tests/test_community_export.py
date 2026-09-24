@@ -5,7 +5,6 @@ import json
 import subprocess
 from pathlib import Path
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "community_export.py"
 spec = importlib.util.spec_from_file_location("community_export", MODULE_PATH)
 assert spec and spec.loader
@@ -75,6 +74,107 @@ def test_public_issue_forms_are_exact_manifest_paths() -> None:
         ".github/ISSUE_TEMPLATE/feature.yml",
         ".github/ISSUE_TEMPLATE/config.yml",
     ])
+
+
+def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:
+    schemas = b"""from typing import Optional
+class BaseModel: pass
+class AccountConnectOrgSummary(BaseModel):
+    id: str
+class EditionStatusResponse(BaseModel):
+    account_connect_required: bool
+    account_connect_status: str
+    account_connect_org: Optional[AccountConnectOrgSummary] = None
+class LicenseEntitlementSummary(BaseModel):
+    account_connect_org_id: Optional[str] = None
+"""
+    path = "engine/boss_engine/schemas.py"
+    masked, valid = export.reviewed_marker_bytes(path, schemas)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    changed = schemas.replace(b"    account_connect_status: str", b"    account_connect_status: object")
+    assert export.reviewed_marker_bytes(path, changed)[1] is False
+    added = schemas + b"class HostedMarketplaceRequest(BaseModel): pass\n"
+    masked, valid = export.reviewed_marker_bytes(path, added)
+    assert valid
+    assert any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+
+    broker = b"""class Broker:
+    def _runtime_flags(self, source_id):
+        if source_id == "managed_cloud_model_gateway":
+            runtime_supported = bool(
+                self.settings.managed_cloud_model_gateway_enabled
+                and self.settings.account_connect_url
+            )
+            return runtime_supported, bool(
+                runtime_supported and self.settings.account_connect_token
+            )
+"""
+    broker_path = "engine/boss_engine/services/entitlements.py"
+    masked, valid = export.reviewed_marker_bytes(broker_path, broker)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    assert not export.has_semantic_paid_source(broker_path, broker)
+    assert export.has_semantic_paid_source(
+        broker_path, broker + b"enterprise_model_gateway\n"
+    )
+
+    pack = b"""id: community_edition
+license_candidate: Apache-2.0
+legal_review_required: true
+hosted_account_connect_required: false
+"""
+    pack_path = "packages/specpack/packs/community_edition.yaml"
+    masked, valid = export.reviewed_marker_bytes(pack_path, pack)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    assert export.reviewed_marker_bytes(
+        pack_path, pack.replace(b"Apache-2.0", b"AGPLv3")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
+        pack_path, pack + b"commercial_packaging_policy\n"
+    )[1] is False
+
+    providers_path = "packages/specpack/models/providers.yaml"
+    providers = b"""source_records:
+      - source_id: managed_cloud_model_gateway
+        source_kind: managed_cloud_model_gateway
+        entitlement_kind: hosted_usage_based_gateway
+        auth_method: account_connect
+"""
+    masked, valid = export.reviewed_marker_bytes(providers_path, providers)
+    assert valid
+    assert b"account_connect" not in masked
+    assert not export.has_semantic_paid_source(providers_path, providers)
+    assert export.reviewed_marker_bytes(
+        providers_path, providers.replace(b"managed_cloud_model_gateway", b"another_source")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
+        providers_path, providers.replace(b"hosted_usage_based_gateway", b"other_entitlement")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
+        providers_path, providers.replace(b"auth_method: account_connect", b"auth_method: account_connect_v2")
+    )[1] is False
+    assert export.has_semantic_paid_source(
+        providers_path, providers + b"enterprise_model_gateway\n"
+    )
+
+
+def test_community_router_is_selected_after_source_audit() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    assert "apps/api/app/routers/community.py" not in manifest["requires_split"]
+    assert export.matching_rule("apps/api/app/routers/community.py", manifest["include"])
+
+
+def test_exported_markdown_links_must_resolve_inside_candidate() -> None:
+    selected = {
+        "README.md": b"[Guide](docs/community/guide.md) [Web](https://example.org)\n",
+        "docs/community/guide.md": b"[Local](../../README.md) [Missing](../product/spec.md) [Here](#section)\n",
+    }
+    edges = export.markdown_link_edges(selected)
+    assert [(edge["kind"], edge["to"]) for edge in edges] == [
+        ("markdown-link-target-missing", "docs/product/spec.md"),
+    ]
 
 
 def test_goldeneye_community_boundary_is_preserved() -> None:
@@ -475,3 +575,45 @@ def test_community_contributing_rewrite_is_checksum_pinned(tmp_path: Path) -> No
     assert report["contributing_export_rewrite_applied"] is False
     assert "contributing-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "CONTRIBUTING.md" not in candidate
+
+
+def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "Makefile").write_text("private:\n\t@echo private\n")
+    public = b"help:\n\t@echo BOSS Community\n"
+    (repo / "Makefile.community").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["Makefile", "Makefile.community"],
+        "exclude": ["unused.md"],
+        "requires_split": ["Makefile"],
+        "required_runtime": ["Makefile"],
+        "required_release": ["Makefile"],
+        "makefile_export_rewrite": {
+            "source": "Makefile.community",
+            "destination": "Makefile",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["makefile_export_rewrite_applied"] is True
+    assert candidate == {"Makefile": public}
+    assert not any(b.get("path") == "Makefile" for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["makefile_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["makefile_export_rewrite_applied"] is False
+    assert "makefile-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "Makefile" not in candidate
