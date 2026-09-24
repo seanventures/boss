@@ -1,6 +1,6 @@
 # BOSS Community — full feature list
 
-Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md). This page is the public-facing checklist.
+This is the Community feature checklist. A status here describes the implementation scope; it is not a public release claim.
 
 **v1 lock:** [V1_FEATURE_LOCK.md](../product/V1_FEATURE_LOCK.md) — Community v1 in / out / Cloud-Enterprise only. ✦ rows stay Cloud/Enterprise (never Community shipped). **Not public GA.**
 
