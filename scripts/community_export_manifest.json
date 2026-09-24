@@ -11,11 +11,12 @@
     "LICENSE",
     "Makefile",
     "ruff.toml",
-    "Dockerfile",
+    "Dockerfile.community",
     "install.sh",
     "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
+    "apps/__init__.py",
     "apps/api/",
     "apps/worker/",
     "apps/web/",
@@ -43,6 +44,7 @@
   "exclude": [
     "apps/account_connect/",
     "apps/api/app/adapters_enterprise/",
+    "apps/api/app/enterprise_extensions/",
     "apps/api/app/services/commercial.py",
     "apps/api/app/services/enterprise.py",
     "apps/api/app/routers/enterprise.py",
@@ -64,7 +66,6 @@
   "requires_split": [
     "LICENSE",
     "Makefile",
-    "Dockerfile",
     "apps/api/app/main.py",
     "apps/api/app/routers/community.py",
     "apps/web/app/page.tsx",
@@ -72,7 +73,7 @@
     "packages/specpack/packs/community_edition.yaml"
   ],
   "required_runtime": [
-    "Dockerfile",
+    "Dockerfile.community",
     "Makefile",
     "install.sh",
     "scripts/install/community-compose.yml",
@@ -87,5 +88,11 @@
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE"
-  ]
+  ],
+  "compose_rewrite": {
+    "path": "scripts/install/community-compose.yml",
+    "from": "dockerfile: Dockerfile",
+    "to": "dockerfile: Dockerfile.community",
+    "expected_count": 3
+  }
 }
