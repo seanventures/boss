@@ -1,0 +1,31 @@
+# Community export candidate tool — BOSS-293
+
+This is the mechanical companion to [the full Community export boundary](COMMUNITY_REPO_EXPORT.md) in PR #224. It selects tracked blobs from one fixed private commit into a **new, history-free local tree**. It does not push, publish, rewrite source history, grant a license, or approve the BOSS-293 public flip. `seanventures/boss` remains private and empty.
+
+## Run
+
+Use a fresh output directory **outside** the source checkout. Never point the command at the public staging repository.
+
+```sh
+python3 scripts/community_export.py \
+  --source-ref origin/main \
+  --output /tmp/boss-community-candidate-1 \
+  --report /tmp/boss-community-candidate-1.json \
+  --preview
+```
+
+The default mode refuses to write a candidate when it finds blockers. `--preview` writes a quarantined candidate for local inspection and gitleaks scanning, but still exits nonzero. The report contains source commit, counts, missing runtime/release files, static Python/TypeScript import edges, Dockerfile/Compose edges, excluded private references, and redacted gitleaks metadata. It contains no secret values. The candidate has no `.git` directory and includes `EXPORT_CANDIDATE_BLOCKED.txt`. Delete it after review.
+
+The inclusion and exclusion rules are in [`scripts/community_export_manifest.json`](../../scripts/community_export_manifest.json). They select API, worker, web, engine, Community specpack, CLI/MCP, installer, and supporting tests/docs. Known hosted Account Connect, Cloud/Enterprise service, private Goldeneye, and commercial pack paths are excluded. Internal UI audit screenshots under `apps/web/audits/` are excluded; new media and metadata need review before inclusion. Files that mix Community and paid code are withheld and listed as split blockers. Any file containing known private source/host or paid symbols is also withheld. These byte markers are a conservative guard, **not** a complete classification or a replacement for manual source review. A new, unfamiliar proprietary name could evade them. The report therefore always says `ready_for_publication: false`.
+
+## 2026-09-24 baseline result
+
+The fixed source commit `9a72bd9a02f14ca5ff71b44b5fe5af72ff19ccce` generated 1,541 candidate files and failed with 479 blockers. The candidate had zero files containing the tool's known private/paid markers. All 842 selected Python files parsed. The included Community Compose YAML passed `docker compose config --no-interpolate --quiet`; a build remains blocked because its referenced Dockerfile is withheld. The main failures are structural:
+
+- API `apps/api/app/main.py` and web `apps/web/app/page.tsx` / `actions.ts` interleave Community and paid paths. Removing paid services leaves hundreds of static import edges into withheld files.
+- The shared `Dockerfile` copies all of `apps/` and `packages/`, including hosted Account Connect and private packages. The Community installer Compose file builds that Dockerfile. These need Community-only packaging.
+- The Community pack still says `license_candidate: AGPLv3` and installs `commercial_packaging_policy`; it needs the recorded BOSS-300 license decision implemented. Root `LICENSE` is withheld until counsel reference and metadata review.
+- The current installer points to the private source repository. Public `README.md`/contributor/security documents require a Community-specific review; root `SECURITY.md` and `CODE_OF_CONDUCT.md` are absent from the baseline main commit (feedback PR #221 supplies them).
+- Gitleaks found one `generic-api-key` match in `engine/tests/test_a_failed_check_says_why.py` line 81 in the quarantined tree. Treat it as unresolved until Security triages the fixture. No value is copied into this document.
+
+The selected Python files parse, but API import and Compose validation cannot pass while their required entrypoints/Dockerfile are withheld. Do not replace those files with stubs or ship a reduced product to make the check green. Split the mixed modules, preserve self-hosted SSO and ProviderOps, then rerun API/worker/web tests and clean-Linux installer acceptance. PRs #218–#223 and the UI/installer work may change the source; rerun from the merged fixed commit, then perform the independent scanner, dependency/license audit, counsel review, and remaining BOSS-293 gates before any private target push or visibility change.
