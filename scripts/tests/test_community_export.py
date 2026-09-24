@@ -121,6 +121,24 @@ def test_local_agent_modules_do_not_fetch_hosted_marketplace() -> None:
     assert export.matching_rule("apps/web/lib/agent-modules-paid.ts", manifest["exclude"])
 
 
+def test_mixed_web_components_keep_community_forms_in_candidate() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    for path in (
+        "apps/web/app/client-forms.tsx",
+        "apps/web/app/phase2-ui.tsx",
+        "apps/web/app/phase4-ui.tsx",
+    ):
+        source = (export.ROOT / path).read_bytes()
+        assert b'"./actions-paid"' not in source
+        assert b"'./actions-paid'" not in source
+    for path in (
+        "apps/web/app/client-forms-paid.tsx",
+        "apps/web/app/phase2-paid-ui.tsx",
+        "apps/web/app/phase4-paid-ui.tsx",
+    ):
+        assert export.matching_rule(path, manifest["exclude"])
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()

@@ -116,7 +116,6 @@ import { PolicyEvalList, AnomalyScanCard, RunTraceViewer } from "./safety-ui";
 import { fetchLatestEval } from "../lib/evals";
 import { fetchSkillInvocations } from "../lib/skill-invocations";
 import {
-  SelfImprovementRuntime,
   EvalHarnessCard,
   AutonomyEvaluateCard,
   RouterHealthCard,
@@ -132,7 +131,9 @@ import {
 } from "./phase3-ui";
 import { fetchChaosRuns } from "../lib/chaos";
 import { fetchCommitmentReconciliations, fetchFinopsSummary } from "../lib/finops";
-import { ChaosCard, FinopsCard, Soc2Card } from "./phase4-ui";
+import { ChaosCard, FinopsCard } from "./phase4-ui";
+import { Soc2Card } from "./phase4-paid-ui";
+import { SelfImprovementRuntime } from "./phase2-paid-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
