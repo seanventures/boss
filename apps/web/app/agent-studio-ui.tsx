@@ -12,14 +12,13 @@ import {
   LockKey,
   Play,
   Plus,
-  Pulse,
   Robot,
   ShieldCheck,
   Sparkle,
   UsersThree,
   Warning,
 } from "@phosphor-icons/react";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import type {
@@ -126,6 +125,7 @@ export function AgentStudio({
   );
   const [selection, setSelection] = useState<Selection | undefined>(initial);
   const [query, setQuery] = useState("");
+  const [requestedRole, setRequestedRole] = useState("");
   const [objective, setObjective] = useState("");
   const [workflowSpec, setWorkflowSpec] = useState(
     JSON.stringify(initialWorkflowVersion?.spec ?? STARTER_WORKFLOW, null, 2),
@@ -137,6 +137,40 @@ export function AgentStudio({
   const [wizardOpen, setWizardOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
+  const linkedRole = useRef("");
+
+  useEffect(() => {
+    const selectLinkedRole = () => {
+      const role = new URL(window.location.href).searchParams.get("studio_role")?.trim();
+      if (!role) {
+        if (linkedRole.current) {
+          linkedRole.current = "";
+          setRequestedRole("");
+          setQuery("");
+          setSelection(initial);
+        }
+        return;
+      }
+      linkedRole.current = role;
+      const match = feed.agents.find((agent) =>
+        agent.active_version?.role_key === role || agent.agent_key === role);
+      setMode("agents");
+      setRequestedRole(match ? "" : role);
+      setQuery(match ? "" : role);
+      setSelection(match ? { kind: "agent", item: match } : undefined);
+    };
+    selectLinkedRole();
+    window.addEventListener("popstate", selectLinkedRole);
+    return () => window.removeEventListener("popstate", selectLinkedRole);
+  }, [feed.agents]);
+
+  const clearLinkedRole = () => {
+    if (!linkedRole.current) return;
+    linkedRole.current = "";
+    const url = new URL(window.location.href);
+    url.searchParams.delete("studio_role");
+    window.history.replaceState(null, "", url.toString());
+  };
 
   const filteredAgents = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -214,7 +248,10 @@ export function AgentStudio({
   };
 
   const switchMode = (next: StudioMode) => {
+    clearLinkedRole();
     setMode(next);
+    setQuery("");
+    setRequestedRole("");
     setResult(undefined);
     if (next === "agents" && feed.agents[0]) {
       setSelection({ kind: "agent", item: feed.agents[0] });
@@ -222,6 +259,8 @@ export function AgentStudio({
       setSelection({ kind: "panel", item: feed.panels[0] });
     } else if (next === "workflows" && feed.workflows[0]) {
       selectWorkflow(feed.workflows[0]);
+    } else {
+      setSelection(undefined);
     }
   };
 
@@ -456,7 +495,9 @@ export function AgentStudio({
             <span className="sr-only">Filter library</span>
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                clearLinkedRole(); setQuery(event.target.value); setRequestedRole("");
+              }}
               placeholder="Find an agent, panel, or workflow"
             />
           </label>
@@ -470,7 +511,9 @@ export function AgentStudio({
                         ? "as-object active"
                         : "as-object"
                     }
-                    onClick={() => setSelection({ kind: "agent", item: agent })}
+                    onClick={() => {
+                      clearLinkedRole(); setSelection({ kind: "agent", item: agent }); setRequestedRole("");
+                    }}
                   >
                     <span className="as-mini-orb">{initials(agent.name)}</span>
                     <span>
@@ -702,8 +745,17 @@ export function AgentStudio({
             </>
           ) : (
             <div className="as-empty">
-              <b>No Studio object is selected.</b>
-              <span>Install the reviewed BOSS starter catalog or commission a scoped agent to begin.</span>
+              <b>{requestedRole
+                ? `No agent definition for ${compact(requestedRole)}.`
+                : "No Studio object is selected."}</b>
+              <span>{requestedRole
+                ? "This role can have recorded work without a Studio definition. Create and validate one here."
+                : "Install the reviewed BOSS starter catalog or commission a scoped agent to begin."}</span>
+              {requestedRole && (
+                <button className="as-button primary" onClick={() => setWizardOpen(true)}>
+                  <Plus /> Create agent
+                </button>
+              )}
               {feed.agents.length === 0 && (
                 <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
                   <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
@@ -815,30 +867,20 @@ function StudioEmptyState({
 
 function AgentTopology({ agent }: { agent: StudioAgent }) {
   const version = agent.active_version;
-  const skills = version?.requested_skills ?? [];
+  if (!version) {
+    return <p className="as-agent-summary-empty">No active version. This agent cannot run yet.</p>;
+  }
+  const skills = version.requested_skills ?? [];
   return (
-    <div className="as-agent-graph">
-      <div className="as-authority-node role">
-        <small>ROLE</small>
-        <b>{compact(version?.role_key)}</b>
-        <span>Responsibility</span>
-      </div>
-      <div className="as-agent-core">
-        <span className="as-agent-type">AGENT</span>
-        <b>{agent.name}</b>
-        <small>{compact(String(version?.model_policy.execution_mode ?? "deterministic_brief"))}</small>
-      </div>
-      <div className="as-authority-node tools">
-        <small>TOOLS</small>
-        <b>{skills.length}</b>
-        <span>{skills.slice(0, 2).map(compact).join(" · ") || "No tools requested"}</span>
-      </div>
-      <div className="as-agent-floor">
-        <span><LockKey /> {compact(version?.scopes.data_boundary)}</span>
-        <span><Pulse /> {agent.active_run_count} active</span>
-        <span><ShieldCheck /> validation {version?.validation.valid ? "passed" : "pending"}</span>
-      </div>
-    </div>
+    <dl className="as-agent-summary">
+      {agent.description ? <div><dt>Purpose</dt><dd>{agent.description}</dd></div> : null}
+      <div><dt>Role</dt><dd>{compact(version.role_key)}</dd></div>
+      <div><dt>Execution</dt><dd>{compact(version.model_policy.execution_mode ?? "deterministic_brief")}</dd></div>
+      <div><dt>Requested skills</dt><dd>{skills.length ? skills.map(compact).join(", ") : "None"}</dd></div>
+      <div><dt>Data boundary</dt><dd>{compact(version.scopes.data_boundary)}</dd></div>
+      <div><dt>Validation</dt><dd>{version.validation.valid ? "Passed" : "Pending"}</dd></div>
+      <div><dt>Active runs</dt><dd>{agent.active_run_count}</dd></div>
+    </dl>
   );
 }
 

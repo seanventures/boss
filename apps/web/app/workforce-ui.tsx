@@ -13,8 +13,7 @@ import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce"
  *
  * The data is the same the v2 screens read — one fetch each, already bounded server-side. What
  * differs is the chrome: v2's classes live under `.v2-shell` and render unstyled here, so these
- * are built from v1's own card, badge and block vocabulary rather than by importing components
- * that would arrive naked.
+ * use v1's own compact list and structure styles rather than importing unstyled components.
  */
 
 /** Acronyms stay acronyms: "Qa" and "Cto" read as typos. */
@@ -46,6 +45,8 @@ function AgentModelHelp() {
 function openArea(area: "org_chart" | "studio"): void {
   const url = new URL(window.location.href);
   url.searchParams.set("area", area);
+  url.searchParams.delete("role");
+  url.searchParams.delete("studio_role");
   window.history.pushState(null, "", url.toString());
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
@@ -77,6 +78,28 @@ function openAgent(roleKey: string): void {
   try {
     const url = new URL(window.location.href);
     url.searchParams.set("role", roleKey);
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
+function openRoleWork(roleKey: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("area", "workforce");
+    url.searchParams.set("role", roleKey);
+    url.searchParams.delete("studio_role");
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
+function openAgentDefinition(roleKey: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("area", "studio");
+    url.searchParams.set("studio_role", roleKey);
+    url.searchParams.delete("role");
     window.history.pushState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
@@ -238,6 +261,8 @@ export function WorkforceArea(
               <div className="roster-actions">
                 <button type="button" className="roster-open" onClick={() => openAgent(a.id)}
                         data-testid={`wf-open-${a.id}`}>Details</button>
+                <button type="button" onClick={() => openAgentDefinition(a.id)}
+                        data-testid={`wf-definition-${a.id}`}>Definition</button>
                 <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
                         data-testid={`wf-ask-${a.id}`}>Ask</button>
               </div>
@@ -262,9 +287,8 @@ export function WorkforceArea(
  * captain" or add a seat that has not been filled yet. A measurement nobody can act on is a
  * report, and this one had no effect anywhere else in the product.
  *
- * Declared placements are laid over the observed ones and both are kept. Where they disagree
- * is the most interesting thing on the page: an agent who is meant to report to the captain
- * and in practice hands everything to the architect is a fact worth seeing.
+ * Planned reporting lines and observed handoffs stay in separate views. A reporting line is a
+ * decision by the operator; an observed handoff is evidence of recent work, not authority.
  */
 export function OrgChartArea({ chart, projectId, actor }: {
   chart: OrgChart; projectId: string; actor: string;
@@ -367,17 +391,32 @@ export function OrgChartArea({ chart, projectId, actor }: {
   }, [projectId, actor, reload]);
 
   const chartNow = live;
-  const declared = (chartNow as { declared?: Record<string, unknown> }).declared ?? {};
+  const declared = chartNow.declared ?? {};
   const placedCount = Object.keys(declared).length;
   const treeNow = view === "observed"
     ? (chartNow.observed_tree ?? (placedCount ? [] : chartNow.tree) ?? [])
     : (placedCount ? chartNow.tree ?? [] : []);
-  const levelsNow = new Map<number, OrgNode[]>();
-  for (const n of treeNow) {
-    const d = n.depth ?? 0;
-    levelsNow.set(d, [...(levelsNow.get(d) ?? []), n]);
+  const parentFor = (node: OrgNode) => view === "planned"
+    ? declared[node.id]?.reports_to ?? null : node.parent ?? null;
+  // Keep each role beside its parent. Grouping all roles by depth makes unrelated
+  // branches look like one reporting line when the chart gets wider than a row.
+  const treeIds = new Set(treeNow.map((node) => node.id));
+  const children = new Map<string, OrgNode[]>();
+  for (const node of treeNow) {
+    const assignedParent = parentFor(node);
+    const parent = assignedParent && treeIds.has(assignedParent) ? assignedParent : "";
+    children.set(parent, [...(children.get(parent) ?? []), node]);
   }
-  const rowsNow = [...levelsNow.entries()].sort((a, b) => a[0] - b[0]);
+  const ordered: OrgNode[] = [];
+  const visited = new Set<string>();
+  const visit = (node: OrgNode) => {
+    if (visited.has(node.id)) return;
+    visited.add(node.id);
+    ordered.push(node);
+    for (const child of children.get(node.id) ?? []) visit(child);
+  };
+  for (const root of children.get("") ?? []) visit(root);
+  for (const node of treeNow) visit(node);
   const isolated = (chartNow.nodes ?? []).filter((n) => !n.connected);
   const unplaced = (chartNow.nodes ?? []).filter(
     (n) => !Object.prototype.hasOwnProperty.call(declared, n.id));
@@ -387,6 +426,13 @@ export function OrgChartArea({ chart, projectId, actor }: {
   for (const n of chartNow.nodes ?? []) nameCounts.set(n.name, (nameCounts.get(n.name) ?? 0) + 1);
   const displayName = (n: OrgNode) => (nameCounts.get(n.name) ?? 0) > 1
     ? `${n.name} (${humanise(n.id) === n.name ? n.id : humanise(n.id)})` : n.name;
+  const namesById = new Map((chartNow.nodes ?? []).map((node) => [node.id, displayName(node)]));
+
+  if (!chartNow.apiReachable) {
+    return <p className="detail" role="alert">
+      Team structure is unavailable{chartNow.blockedReason ? ` — ${chartNow.blockedReason}` : ""}.
+    </p>;
+  }
 
   return (
     <div className="org" data-declared={view === "planned" && placedCount > 0}
@@ -403,7 +449,8 @@ export function OrgChartArea({ chart, projectId, actor }: {
       <p className="detail" data-testid="org-provenance">
         {view === "planned"
           ? "Arrange responsibilities for this project. This plan does not change task routing."
-          : `Read-only work handoffs from the last ${chartNow.window_hours} hours.`}
+          : `Read-only work handoffs from the last ${chartNow.window_hours} hours.${chartNow.root_inferred
+            ? " A display root was selected because the handoffs form a cycle." : ""}`}
       </p>
       <div className="org-toolbar">
         {view === "planned" && placedCount > 0 ? (
@@ -464,8 +511,10 @@ export function OrgChartArea({ chart, projectId, actor }: {
       {note ? <p className="org-note" data-tone={installedTemplate ? "ok" : "error"}
                  data-testid="org-note">{note}</p> : null}
       {installedTemplate ? (
-        <button type="button" className="org-next-action" onClick={() => openArea("studio")}>
-          Open {installedTemplate.replaceAll("_", " ")} in Agent Studio
+        <button type="button" className="org-next-action"
+                onClick={() => openAgentDefinition(
+                  templates.find((item) => item.id === installedTemplate)?.role_key ?? installedTemplate)}>
+          Open definition in Agent Studio
         </button>
       ) : null}
 
@@ -485,13 +534,17 @@ export function OrgChartArea({ chart, projectId, actor }: {
         </div>
       ) : (
         <div className="org-tree" data-testid="org-tree">
-          {rowsNow.map(([depth, nodes]) => (
-            <div className="org-level" key={depth} data-depth={depth}>
-              {nodes.map((n) => (
-                <div className="org-node" key={n.id} data-root={depth === 0}
+          <div className="org-list-head" aria-hidden="true">
+            <span>Role</span><span>{view === "planned" ? "Reports to" : "Shown under"}</span><span>Open</span>
+          </div>
+          {ordered.map((n) => {
+            const parentId = parentFor(n);
+            return (
+              <div className="org-node" key={n.id} data-root={!parentId}
                      data-testid={`org-node-${n.id}`}
                      data-placed={Object.prototype.hasOwnProperty.call(declared, n.id)}
                      data-over={over === n.id || undefined}
+                     style={{ "--org-depth": Math.min(n.depth ?? 0, 6) } as React.CSSProperties}
                      draggable={view === "planned" && !busy}
                      onDragStart={() => setDragging(n.id)}
                      onDragEnd={() => { setDragging(null); setOver(null); }}
@@ -503,29 +556,40 @@ export function OrgChartArea({ chart, projectId, actor }: {
                        if (view === "planned" && dragging && dragging !== n.id) void place(dragging, n.id);
                        setDragging(null);
                      }}>
-                  <span className="org-node-name">{displayName(n)}</span>
-                  {/* Only when it ADDS something. "Product Manager / Product Manager" is the
-                      same duplication flagged elsewhere. */}
-                  {humanise(n.role || n.id) !== n.name ? (
-                    <span className="org-node-role">{humanise(n.role || n.id)}</span>
-                  ) : null}
-                  {view === "observed" && n.task ? <span className="org-node-task">{n.task}</span> : null}
-                  {view === "planned" ? <span className="org-node-tools">
-                    <button type="button" className="org-node-act" disabled={busy}
-                            title="Make this a top-level role"
-                            data-testid={`org-top-${n.id}`}
-                            onClick={() => void place(n.id, null)}>Top level</button>
-                    {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
-                      <button type="button" className="org-node-act" disabled={busy}
-                              title="Remove this role from the planned structure"
-                              data-testid={`org-reset-${n.id}`}
-                              onClick={() => void release(n.id)}>remove</button>
+                  <div className="org-node-identity">
+                    <span className="org-node-name">{displayName(n)}</span>
+                    {/* Only show the role when it adds information beyond the name. */}
+                    {humanise(n.role || n.id) !== n.name ? (
+                      <span className="org-node-role">{humanise(n.role || n.id)}</span>
                     ) : null}
-                  </span> : null}
-                </div>
-              ))}
-            </div>
-          ))}
+                    {view === "observed" && n.task ? <span className="org-node-task">{n.task}</span> : null}
+                  </div>
+                  <span className="org-node-parent">
+                    {parentId ? namesById.get(parentId) ?? humanise(parentId)
+                      : view === "planned" ? "Top level"
+                        : chartNow.root_inferred ? "Display root" : "Handoff start"}
+                  </span>
+                  <span className="org-node-tools">
+                    <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
+                            data-testid={`org-work-${n.id}`}>Work</button>
+                    <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
+                            data-testid={`org-definition-${n.id}`}>Definition</button>
+                    {view === "planned" ? <>
+                      {parentId ? <button type="button" className="org-node-act" disabled={busy}
+                              title="Make this a top-level role"
+                              data-testid={`org-top-${n.id}`}
+                              onClick={() => void place(n.id, null)}>Top level</button> : null}
+                      {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
+                        <button type="button" className="org-node-act" disabled={busy}
+                                title="Remove this role from the planned structure"
+                                data-testid={`org-reset-${n.id}`}
+                                onClick={() => void release(n.id)}>Remove</button>
+                      ) : null}
+                    </> : null}
+                  </span>
+              </div>
+            );
+          })}
         </div>
       )}
 

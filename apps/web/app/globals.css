@@ -5021,53 +5021,17 @@ select.input:focus {
   border-bottom: 1px solid var(--as-line);
 }
 
-.as-agent-graph {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: center;
-  gap: 12px;
-  padding: 24px 28px 54px;
+.as-agent-summary { display: grid; margin: 0; padding: 14px 26px; }
+.as-agent-summary-empty { margin: 0; padding: 26px; color: var(--muted); font-size: 13px; }
+.as-agent-summary > div {
+  display: grid; grid-template-columns: minmax(120px, .4fr) minmax(0, 1fr);
+  gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--as-line);
 }
-.as-agent-core {
-  min-height: 104px; padding: 14px;
-  display: grid;
-  align-content: center;
-  border: 1px solid var(--as-cyan);
-  background: rgba(9, 20, 33, 0.9);
-}
-.as-agent-type { color: var(--as-cyan); font-family: var(--mono); font-size: 0.55rem; letter-spacing: 0.06em; }
-.as-agent-core b { margin: 5px 0; font-size: 0.76rem; }
-.as-agent-core small { color: var(--muted); font-family: var(--mono); font-size: 0.55rem; }
-.as-authority-node {
-  display: grid;
-  align-content: center;
-  min-height: 104px;
-  padding: 14px;
-  border: 1px solid var(--as-line);
-  background: rgba(9, 20, 33, 0.9);
-}
-.as-authority-node small { font-family: var(--mono); color: var(--muted); font-size: 0.52rem; letter-spacing: 0.1em; }
-.as-authority-node b { margin: 5px 0; color: var(--ink); font-size: 0.76rem; text-transform: capitalize; }
-.as-authority-node span { color: var(--muted); font-size: 0.61rem; line-height: 1.45; }
-.as-agent-floor {
-  position: absolute;
-  right: 22px;
-  bottom: 18px;
-  left: 22px;
-  display: flex;
-  justify-content: center;
-  gap: 20px;
-}
-.as-agent-floor span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.55rem;
-  text-transform: uppercase;
+.as-agent-summary > div:last-child { border-bottom: 0; }
+.as-agent-summary dt { color: var(--muted); font-size: 12px; }
+.as-agent-summary dd { margin: 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .as-agent-summary > div { grid-template-columns: 1fr; gap: 3px; }
 }
 
 .as-panel-graph { position: relative; z-index: 1; min-height: 385px; padding: 38px 20px 22px; }
@@ -5869,9 +5833,6 @@ select.input:focus {
   .as-workbench { display: block; }
   .as-library { border-right: 0; border-bottom: 1px solid var(--as-line); }
   .as-object-list { max-height: 300px; }
-  .as-agent-graph { grid-template-columns: 1fr; gap: 14px; padding: 24px 32px 74px; }
-  .as-agent-core { order: -1; }
-  .as-authority-node { min-height: 76px; }
   .as-panel-graph { min-height: 520px; overflow-x: auto; }
   .as-member-row { min-width: 700px; }
   .as-panel-links { min-width: 700px; }
@@ -7505,43 +7466,25 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 /* ── Org chart ────────────────────────────────────────────────────────────── */
-/*
- * Drawn from OBSERVED handoffs — BOSS has no declared reporting line — so the page says so
- * rather than presenting a derived shape as a declared structure.
- *
- * The first pass was a row of flat dark boxes: same fill as the page, one hairline border, no
- * hierarchy. It read as a wireframe. What a chart of this kind needs is depth (the card must
- * sit ON the canvas), a visible spine (so it reads as a tree rather than a row), and one
- * accent that says which node is the root.
- */
+/* Planned reporting lines and observed handoffs share a compact row layout. */
 .org { padding-top: 6px; }
-.org-tree { display: flex; flex-direction: column; align-items: center; gap: 34px; margin-top: 22px; }
-.org-level { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; position: relative; }
-
-/* The spine: a horizontal rail above the level, and a stub up from each card to meet it. */
-.org-level:not(:first-child)::before {
-  content: ""; position: absolute; top: -18px; left: 12%; right: 12%;
-  border-top: 1px solid var(--accent-line, var(--border-strong));
-  opacity: .5;
+.org-tree { display: grid; margin-top: 18px; border-top: 1px solid var(--border); }
+.org-list-head, .org-node {
+  display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(110px, .65fr) minmax(225px, 1fr);
+  align-items: center; gap: 20px;
 }
-.org-node:not([data-root="true"])::before {
-  content: ""; position: absolute; top: -18px; left: 50%; height: 18px;
-  border-left: 1px solid var(--accent-line, var(--border-strong)); opacity: .5;
+.org-list-head {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
 }
-/* And a stub DOWN from the root, so the trunk is continuous rather than floating. */
-.org-level:first-child::after {
-  content: ""; position: absolute; bottom: -18px; left: 50%; height: 18px;
-  border-left: 1px solid var(--accent-line, var(--border-strong)); opacity: .5;
-}
-
 .org-node {
-  position: relative; min-width: 190px; max-width: 250px;
-  padding: 13px 15px; border-radius: 3px;
-  background: var(--panel);
-  border: 1px solid var(--border-strong);
-  display: flex; flex-direction: column; gap: 5px;
+  min-width: 0; padding: 11px 12px; border-bottom: 1px solid var(--border);
+  background: transparent;
 }
-.org-node:hover, .org-node[data-root="true"] { border-color: var(--accent); }
+.org-node:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.org-node-identity { display: grid; gap: 2px; min-width: 0; padding-left: calc(var(--org-depth, 0) * 15px); }
+.org-node:not([data-root="true"]) .org-node-identity { border-left: 1px solid var(--border-strong); }
+.org-node-parent { font-size: 12px; color: var(--muted); }
 
 /* An action, not a badge. `text-transform: uppercase` on a one-word button turned "top" into
    "TOP" on every card, which reads as a status stamp — and a status stamp that says TOP on
@@ -7550,21 +7493,18 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .org-node-name { font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.25; }
 .org-node-role {
-  font-size: 10.5px; color: var(--muted); font-family: var(--mono, monospace);
-  letter-spacing: .02em;
+  font-size: 11px; color: var(--muted);
 }
 .org-node-task {
   font-size: 11.5px; color: var(--faint, var(--muted));
-  padding-top: 5px; margin-top: 2px; border-top: 1px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 
 @media (max-width: 700px) {
-  .org-level { flex-direction: column; align-items: stretch; }
-  .org-level:not(:first-child)::before,
-  .org-level:first-child::after,
-  .org-node:not([data-root="true"])::before { display: none; }
-  .org-node { max-width: none; }
+  .org-list-head { display: none; }
+  .org-node { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .org-node-tools { padding-left: calc(var(--org-depth, 0) * 15px); }
 }
 
 /* ── The detail's action bar ──────────────────────────────────────────────── */
@@ -8386,26 +8326,16 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .org-note[data-tone="ok"] { color: var(--accent-text, #2ec5c5); }
 .org-node { position: relative; cursor: grab; }
 .org-node:active { cursor: grabbing; }
-/* A seat somebody DECIDED, as opposed to one BOSS inferred. */
-.org-node[data-placed="true"] { border-color: var(--live, #58a6ff); }
 .org-node[data-over] {
-  border-color: var(--ok, #3fb950);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok, #3fb950) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.org-node-tools { display: flex; gap: 6px; margin-top: 6px; }
+.org-node-tools { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; }
 .org-node-act {
   font-size: 11px; text-transform: none; letter-spacing: 0; cursor: pointer;
   padding: 2px 0; border-radius: 0; background: transparent; color: var(--muted, #8b949e);
   border: 0; border-bottom: 1px solid transparent;
 }
-.org-node-act:hover { color: inherit; border-bottom-color: var(--live, #58a6ff); }
-.org-bench { display: flex; gap: 8px; flex-wrap: wrap; }
-.org-benchchip {
-  display: inline-flex; align-items: center; gap: 8px; cursor: grab;
-  padding: 5px 10px; border-radius: 999px; font-size: 12px;
-  border: 1px dashed var(--border, #30363d); color: var(--muted, #8b949e);
-}
-.org-benchchip:hover { color: inherit; border-color: var(--live, #58a6ff); }
+.org-node-act:hover { color: var(--ink); border-bottom-color: var(--accent); }
 
 /* Failed, and the work went on. Not "not run" — that hides something worth fixing — and not a
    stopped run either, because the project carried on without it. */
@@ -8507,12 +8437,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .org-unassigned-row > span { flex: 1 1 auto; min-width: 120px; }
 .org-unassigned-row .org-node-act { border-radius: 0; }
-.org-node { border-radius: 4px; background: var(--panel, #0d1117); box-shadow: none; }
-.org-node:hover { transform: none; box-shadow: none; }
-.org-node[data-root="true"] { box-shadow: none; }
-.org-node[data-root="true"]::after { border-radius: 0; }
 .org[data-view="observed"] .org-node { cursor: default; }
-.org[data-view="observed"] .org-node[data-root="true"]::after { content: "HANDOFF START"; }
+@media (max-width: 700px) {
+  .org-node-parent { padding-left: calc(var(--org-depth, 0) * 15px); }
+  .org-node-tools { justify-content: flex-start; }
+}
 .studio-duty-details { border-top: 1px solid var(--border); padding-top: 14px; }
 .studio-duty-details > summary { cursor: pointer; color: var(--ink); font-weight: 600; }
 .studio-duty-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
