@@ -264,6 +264,14 @@ type Draft = {
   capability?: string;
   /** Set instead of `capability` when the step is one the customer defined. */
   customStep?: string;
+  /** HOW THIS STEP'S INPUTS ARE WIRED, exactly as the saved spec has them.
+   *
+   *  Dropped on load and rebuilt on save, every input became `{from_input: <name>}` — so
+   *  opening a workflow whose steps feed each other and pressing Save replaced
+   *  `{from_step: "fetch-link", field: "media_artifact_id"}` with a demand that the operator
+   *  type a media artifact id by hand. The chain was destroyed by viewing and saving, with
+   *  nothing on screen having been changed. */
+  inputs?: Record<string, unknown>;
   approval?: string;
   config?: Record<string, unknown>;
 };
@@ -4502,6 +4510,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         capability: binding.capability ? String(binding.capability) : undefined,
         customStep: binding.custom_step ? String(binding.custom_step) : undefined,
         approval: approval.mode ? String(approval.mode) : "auto",
+        // Carried through untouched. The builder cannot yet AUTHOR a step-to-step reference,
+        // which is a gap; silently discarding one somebody else authored is a bug.
+        inputs: (binding.inputs ?? undefined) as Record<string, unknown> | undefined,
         // Everything that is not id/kind/binding/approval/next is the block's own
         // configuration — wait_seconds, workflow_version_id — and must survive a round trip
         // or editing one step would quietly reset another.
@@ -4705,7 +4716,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           kind: "capability",
           binding: {
             custom_step: step.customStep,
-            inputs: Object.fromEntries(
+            // What the step was saved with wins. The default below — every input read from the
+            // run's input by name — is a starting point for a step just dropped on the canvas,
+            // not a rule to impose on one that already has wiring.
+            inputs: step.inputs ?? Object.fromEntries(
               (defined?.inputs ?? []).map((i) => [i.name, { from_input: i.name }]),
             ),
           },
@@ -4720,8 +4734,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         binding: {
           capability: step.capability,
           // Required inputs are read from the run's input by name. The builder does not invent
-          // values — a workflow that hard-codes the thing being built only works once.
-          inputs: Object.fromEntries(
+          // values — a workflow that hard-codes the thing being built only works once. Same
+          // rule as above: existing wiring is preserved rather than overwritten.
+          inputs: step.inputs ?? Object.fromEntries(
             (capability?.required_inputs ?? []).map((name) => [name, { from_input: name }]),
           ),
         },
