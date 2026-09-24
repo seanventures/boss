@@ -148,9 +148,9 @@ describe("the strip does not pretend a page is the whole list", () => {
     expect(ROUTE).toContain("total: d.total_projects");
   });
 
-  it("says '40 of 59' on the label, and only when it is short", () => {
-    expect(STRIP).toContain("{total > projects.length ? (");
-    expect(STRIP).toContain("of {total}");
+  it("says how much of a truncated project list is loaded", () => {
+    expect(STRIP).toContain("{total > projects.length ?");
+    expect(STRIP).toContain("Showing {projects.length} of {total}");
   });
 });
 

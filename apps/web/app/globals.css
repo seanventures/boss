@@ -7942,6 +7942,131 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 @media (max-width: 900px) { .bx-new-project { display: none; } }
 .ct-workflow-default { opacity: .7; font-weight: 400; }
 
+/* Command Center shell: one clear location, one action, quiet system details. */
+.bx-topbar { gap: 14px; }
+.bx-topbar-title {
+  position: static; width: auto; height: auto; margin: 0; padding: 0;
+  overflow: visible; clip: auto; clip-path: none;
+  color: var(--ink); font: 700 .96rem var(--display);
+  white-space: nowrap;
+  order: 0;
+}
+.bx-topbar-title small { display: none; }
+.bx-new-project { order: 2; border-radius: 6px; background: transparent; }
+.bx-topbar-spacer { order: 1; }
+.bx-org-chip {
+  padding: 5px 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--ink-soft);
+}
+.bx-org-chip:hover, .bx-org-chip:focus-visible { color: var(--ink); background: var(--surface-2); }
+.bx-org-switch { font-size: .9rem; }
+.bx-live-status {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: .78rem; cursor: pointer; padding: 6px;
+}
+.bx-live-status:hover { color: var(--ink); }
+.bx-kbd { border: 0; background: transparent; border-radius: 4px; }
+.bx-kbd kbd { background: transparent; }
+.bx-system-menu { position: relative; font-size: .8rem; color: var(--ink-soft); }
+.bx-system-menu summary {
+  cursor: pointer; list-style: none; padding: 7px 8px; border-radius: 4px;
+}
+.bx-system-menu summary::-webkit-details-marker { display: none; }
+.bx-system-menu summary::after { content: "⌄"; margin-left: 6px; }
+.bx-system-menu[open] summary, .bx-system-menu summary:hover { background: var(--surface-2); color: var(--ink); }
+.bx-system-panel {
+  position: absolute; right: 0; top: calc(100% + 9px); z-index: 50;
+  min-width: 270px; padding: 10px 14px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 16px 32px rgba(0,0,0,.35);
+}
+.bx-system-panel > div {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 18px; padding: 9px 0; border-bottom: 1px solid var(--border);
+}
+.bx-system-panel > div:last-child { border-bottom: 0; }
+.bx-system-panel > div > strong { color: var(--ink); font-weight: 600; }
+.bx-system-budget { text-transform: capitalize; }
+.bx-system-budget.amber { color: var(--amber); }
+.bx-system-budget.red { color: var(--red); }
+
+/* Project picker replaces the always-scrolling row of status pills. */
+.bx-strip { min-height: 40px; gap: 8px; }
+.bx-strip-label { display: inline-flex; align-items: center; gap: 8px; }
+.bx-project-trigger {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 38px; padding: 0 6px; border: 0;
+  background: transparent; color: var(--ink-soft); font: inherit;
+  font-size: .79rem; cursor: pointer;
+}
+.bx-project-trigger:hover { color: var(--ink); }
+.bx-project-trigger strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.bx-project-attention { color: var(--amber); }
+.bx-project-picker {
+  position: absolute; top: 39px; left: 28px; z-index: 50;
+  width: min(520px, calc(100vw - 40px)); max-height: min(70vh, 650px);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 18px 36px rgba(0,0,0,.4);
+}
+.bx-project-search-label { font-weight: 650; color: var(--ink); font-size: .85rem; }
+#boss-project-search {
+  width: 100%; padding: 9px 11px; border: 1px solid var(--border-strong);
+  border-radius: 5px; background: var(--surface-2); color: var(--ink); font: inherit;
+}
+.bx-project-picker .bx-strip-filters { gap: 0; border-bottom: 1px solid var(--border); }
+.bx-project-picker .bx-strip-filter { border-radius: 0; text-transform: capitalize; letter-spacing: 0; }
+.bx-project-picker .bx-strip-filter[data-active="true"] { border-bottom: 2px solid var(--accent); background: transparent; }
+.bx-project-picker .bx-strip-scroll {
+  display: flex; flex-direction: column; align-items: stretch;
+  min-height: 0; overflow-x: hidden; overflow-y: auto; mask-image: none;
+}
+.bx-project-picker .bx-strip-item {
+  width: 100%; min-height: 40px; border: 0; border-bottom: 1px solid var(--border);
+  border-radius: 0; padding: 8px 6px; text-align: left;
+}
+.bx-project-picker .bx-strip-name { flex: 1; max-width: none; }
+.bx-project-picker .bx-strip-stage { color: var(--muted); font-family: inherit; letter-spacing: 0; }
+.bx-project-picker .bx-strip-page { display: none; }
+.bx-project-picker .bx-strip-pager { display: none; }
+.bx-project-limited { margin: 0; font-size: .75rem; color: var(--muted); }
+.bx-strip-syncing { color: var(--muted); font-size: .72rem; }
+
+/* The composer is a tool, not a product pitch. Examples stay available on request. */
+.askboss { border-radius: 8px; border-top-width: 1px; background: var(--surface); }
+.askboss-inner { padding: 17px 20px; }
+.askboss-aura { display: none; }
+.askboss-head { margin-bottom: 10px; }
+.askboss-head .mr-title { font-size: 1.16rem; }
+.askboss-sub { font-size: .84rem; }
+.askboss-box { border-radius: 6px; background: var(--surface-2); }
+.askboss-examples { margin-top: 11px; }
+.askboss-examples summary { color: var(--muted); font-size: .8rem; cursor: pointer; width: fit-content; }
+.askboss-examples summary:hover { color: var(--ink); }
+.askboss-examples[open] { padding-top: 8px; border-top: 1px solid var(--border); }
+.askboss-opener, .askboss-seed { border-radius: 5px; }
+.ov-help-disclosure > summary { width: fit-content; padding: 8px 0; cursor: pointer; color: var(--muted); font-size: .82rem; }
+.ov-help-disclosure > summary:hover { color: var(--ink); }
+.ov-help-disclosure[open] > summary { margin-bottom: 10px; }
+.ct-benchmark-disclosure { margin: 12px 0 18px; border: 1px solid var(--border); border-radius: 7px; }
+.ct-benchmark-disclosure > summary { padding: 12px 16px; cursor: pointer; font-size: .84rem; font-weight: 650; }
+.ct-benchmark-disclosure > summary span { margin-left: 6px; color: var(--muted); font-weight: 400; }
+.ct-benchmark-disclosure[open] { padding: 0 14px 14px; }
+.wf-detail-head { scroll-margin-top: 164px; }
+
+@media (max-width: 900px) {
+  .bx-new-project { display: inline-flex; }
+  .bx-project-picker { left: 14px; }
+}
+@media (max-width: 700px) {
+  .bx-topbar-title { display: none; }
+  .bx-live-status, .bx-kbd { display: none; }
+  .bx-topbar { gap: 6px; }
+  .bx-new-project { font-size: .75rem; padding: 0 8px; }
+  .bx-system-panel { right: -6px; min-width: min(270px, calc(100vw - 24px)); }
+}
+
 /* BACK, AND OBVIOUSLY BACK.
    This control had a row to itself above the split; now it shares the project's title row, so
    it has to earn attention without a line of whitespace around it. It is the only thing in

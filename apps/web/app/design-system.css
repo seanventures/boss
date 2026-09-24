@@ -3540,3 +3540,46 @@ select.input:focus,
   opacity: 0.6;
   font-weight: 400;
 }
+
+/* The navigation and project picker use plain controls instead of a band of pills. */
+.bx-topbar { height: 62px; gap: 12px; }
+.bx-topbar-title { color: var(--ink); font-size: .96rem; font-weight: 700; }
+.bx-topbar-title small { display: none; }
+.bx-org-chip, .bx-kbd { border: 0; background: transparent; color: var(--ink-soft); font: inherit; font-size: .78rem; }
+.bx-org-chip:hover, .bx-kbd:hover { background: var(--raised); color: var(--ink); }
+.bx-kbd kbd { background: transparent; }
+.bx-strip { top: 62px; }
+
+/* Assignments are a live readout with task links, not a decorative orbit. */
+.cc-coord, .cc-feed { background: var(--panel-alt); }
+.cc-coord-list { max-height: 390px; overflow-y: auto; }
+.cc-agent-row { border-bottom: 1px solid var(--hair); }
+.cc-agent-row:last-child { border-bottom: 0; }
+.cc-agent-row summary {
+  display: flex; align-items: center; gap: 14px; cursor: pointer;
+  padding: 12px 16px; color: var(--ink-soft); font-size: .86rem;
+}
+.cc-agent-row summary:hover, .cc-agent-row[open] summary { background: var(--raised); color: var(--ink); }
+.cc-agent-row summary::marker { color: var(--muted); }
+.cc-agent-name { flex: 1; font-weight: 600; }
+.cc-agent-state { text-transform: capitalize; font-size: .76rem; color: var(--muted); }
+.cc-agent-state.running { color: var(--green); }
+.cc-agent-state.blocked { color: var(--red); }
+.cc-agent-state.verified { color: var(--teal); }
+.cc-agent-detail { padding: 0 16px 13px 32px; color: var(--muted); font-size: .82rem; }
+.cc-agent-detail p { margin: 0 0 6px; }
+.cc-agent-meta { color: var(--faint); font-family: var(--mono); font-size: .72rem; }
+.cc-agent-detail a { color: var(--accent-text); }
+.cc-agent-idle-note { margin: 0; padding: 14px 16px 8px; color: var(--muted); font-size: .82rem; }
+.cc-idle-list { border-top: 1px solid var(--hair); }
+.cc-idle-list > summary { padding: 11px 16px; color: var(--accent-text); cursor: pointer; font-size: .8rem; }
+.cc-idle-list > summary:hover { color: var(--ink); background: var(--raised); }
+.cc-coord-freshness {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+  color: var(--muted); font-size: .72rem;
+}
+.cc-coord-freshness button {
+  border: 0; background: transparent; color: var(--accent-text);
+  font: inherit; cursor: pointer; padding: 2px 4px;
+}
+.cc-coord-freshness button:hover { text-decoration: underline; }
