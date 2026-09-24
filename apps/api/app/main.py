@@ -26,6 +26,7 @@ from .bootstrap_ports import build_ports
 from .config import get_settings
 from .db import begin, database_is_reachable, ensure_schema, get_engine
 from .routers import mount_edition_routers
+from .routers.route_ownership import ENTERPRISE_EDITIONS
 from .routers.governance import build_governance_router
 from .routers.platform import mount_platform_routers
 from .schemas import (
@@ -25348,4 +25349,9 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
-mount_edition_routers(app, settings.boss_edition)
+paid_router = None
+if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .routers.enterprise import enterprise_router
+
+    paid_router = enterprise_router
+mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
