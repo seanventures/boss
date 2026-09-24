@@ -13,6 +13,7 @@ from .core import emit_event, json_hash, make_id, normalize_data_boundary
 from .entitlements import EntitlementBrokerService
 from .jobs import enqueue_job
 from .skill_scope import matching_skill_ids
+from .specpack import SpecPackService
 from .work_orchestration import WorkOrchestrationService
 
 
@@ -101,6 +102,51 @@ class AgentStudioService:
     # ------------------------------------------------------------------
     # Seed catalog
     # ------------------------------------------------------------------
+    def list_templates(self) -> list[dict[str, Any]]:
+        """Describe installable SpecPack agents without implying they can run tools."""
+        templates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for path in sorted((self.settings.specpack_root / "agents").glob("*.yaml")):
+            payload = self._load_yaml(path)
+            key = self._key(payload.get("id"), f"{path}: id")
+            if key != path.stem or key in seen:
+                raise ValueError(f"Invalid or duplicate agent template id in {path.name}.")
+            seen.add(key)
+            version = dict(payload.get("version") or {})
+            meta = dict(payload.get("template") or {})
+            templates.append(
+                {
+                    "id": key,
+                    "name": self._required_text(payload.get("name"), f"{path}: name"),
+                    "description": str(payload.get("description") or ""),
+                    "role_key": self._key(version.get("role_key"), f"{path}: role_key"),
+                    "category": str(meta.get("category") or "general"),
+                    "readiness": str(meta.get("readiness") or "definition_only"),
+                    "mobile": meta.get("mobile") if key == "mobile_app_operator" else None,
+                }
+            )
+        return templates
+
+    def seed_template(
+        self,
+        connection: Connection,
+        project_id: str,
+        template_id: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Install one governed definition. Never dispatch or acquire a tool."""
+        template_id = self._key(template_id, "template_id")
+        path = self.settings.specpack_root / "agents" / f"{template_id}.yaml"
+        if not path.is_file():
+            raise ValueError(f"Unknown agent template '{template_id}'.")
+        payload = self._load_yaml(path)
+        if payload.get("id") != template_id:
+            raise ValueError(f"Agent template id mismatch in {path.name}.")
+        ready, missing = self._catalog_tables_ready(connection)
+        if not ready:
+            raise AgentStudioSchemaMissingError(missing)
+        return self._seed_agent(connection, project_id, payload, actor, path)
+
     def seed_catalog(
         self,
         connection: Connection,
@@ -153,6 +199,20 @@ class AgentStudioService:
                 source="specpack",
             )
         version_payload = dict(payload.get("version") or {})
+        role_key = self._key(version_payload.get("role_key"), f"{source}: role_key")
+        role_exists = connection.execute(
+            text("SELECT 1 FROM roles WHERE project_id=:project_id AND role_key=:role_key"),
+            {"project_id": project_id, "role_key": role_key},
+        ).scalar_one_or_none()
+        if not role_exists:
+            # An older project may have installed its core pack before a new
+            # built-in RoleSpec was added. Install only the missing reviewed role;
+            # never overwrite a project's existing RoleSpec customizations.
+            specpack = SpecPackService(self.settings)
+            specpack._upsert_role_spec(
+                connection, project_id, role_key,
+                specpack.load_role_spec(role_key), actor,
+            )
         version_payload["provenance"] = {
             **dict(version_payload.get("provenance") or {}),
             "source": "specpack",
