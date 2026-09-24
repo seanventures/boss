@@ -4,6 +4,10 @@
   "include": [
     ".dockerignore",
     ".env.example",
+    ".github/ISSUE_TEMPLATE/bug.yml",
+    ".github/ISSUE_TEMPLATE/install.yml",
+    ".github/ISSUE_TEMPLATE/feature.yml",
+    ".github/ISSUE_TEMPLATE/config.yml",
     "README.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
@@ -105,12 +109,21 @@
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
-    "LICENSE"
+    "LICENSE",
+    ".github/ISSUE_TEMPLATE/bug.yml",
+    ".github/ISSUE_TEMPLATE/install.yml",
+    ".github/ISSUE_TEMPLATE/feature.yml",
+    ".github/ISSUE_TEMPLATE/config.yml"
   ],
   "compose_rewrite": {
     "path": "scripts/install/community-compose.yml",
     "from": "dockerfile: Dockerfile",
     "to": "dockerfile: Dockerfile.community",
     "expected_count": 3
+  },
+  "page_export_rewrite": {
+    "source": "apps/web/app/page-community.tsx",
+    "destination": "apps/web/app/page.tsx",
+    "sha256": "de9ce43f31e075c8bb7f35ba6f7cafb8cc9f6579f0cb10ab4cd49ee58f63b4ee"
   }
 }

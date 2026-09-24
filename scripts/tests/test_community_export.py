@@ -64,6 +64,19 @@ def test_internal_ui_audit_media_is_excluded() -> None:
     )
 
 
+def test_public_issue_forms_are_exact_manifest_paths() -> None:
+    manifest = json.loads((MODULE_PATH.parent / "community_export_manifest.json").read_text())
+    issue_paths = sorted(
+        rule for rule in manifest["include"] if rule.startswith(".github/")
+    )
+    assert issue_paths == sorted([
+        ".github/ISSUE_TEMPLATE/bug.yml",
+        ".github/ISSUE_TEMPLATE/install.yml",
+        ".github/ISSUE_TEMPLATE/feature.yml",
+        ".github/ISSUE_TEMPLATE/config.yml",
+    ])
+
+
 def test_goldeneye_community_boundary_is_preserved() -> None:
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
     export.validate_manifest(manifest)
@@ -325,3 +338,140 @@ def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
     missing["package_export_rewrite"]["to"] = "./src/missing.ts"
     report, _ = export.analyze(repo, sha, missing)
     assert "package-export-community-source-missing" in {b["kind"] for b in report["blockers"]}
+
+
+def test_community_page_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    app = repo / "apps/web/app"
+    app.mkdir(parents=True)
+    (app / "page.tsx").write_text("export const AccountConnect = true;\n")
+    community = b"export default function Page() { return null; }\n"
+    (app / "page-community.tsx").write_bytes(community)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["apps/web/app/"],
+        "exclude": ["apps/web/app/unused.tsx"],
+        "requires_split": ["apps/web/app/page.tsx"],
+        "required_runtime": ["apps/web/app/page.tsx"],
+        "required_release": ["apps/web/app/page.tsx"],
+        "page_export_rewrite": {
+            "source": "apps/web/app/page-community.tsx",
+            "destination": "apps/web/app/page.tsx",
+            "sha256": hashlib.sha256(community).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["page_export_rewrite_applied"] is True
+    assert candidate == {"apps/web/app/page.tsx": community}
+    assert not any(b["kind"] in {"requires-community-split", "missing-runtime-entrypoint"} for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["page_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["page_export_rewrite_applied"] is False
+    assert "page-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "apps/web/app/page.tsx" not in candidate
+
+    missing = json.loads(json.dumps(manifest))
+    missing["page_export_rewrite"]["source"] = "apps/web/app/missing.tsx"
+    report, _ = export.analyze(repo, sha, missing)
+    assert "page-export-community-source-withheld" in {b["kind"] for b in report["blockers"]}
+
+
+def test_community_readme_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "README.md").write_text("Private source: seanheiney/boss\n")
+    public = b"# BOSS Community\n\n[Guide](docs/community/guide.md)\n"
+    (repo / "README.community.md").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["README.md", "README.community.md"],
+        "exclude": ["unused.md"],
+        "requires_split": ["unused-split.md"],
+        "required_runtime": ["README.md"],
+        "required_release": ["README.md"],
+        "readme_export_rewrite": {
+            "source": "README.community.md",
+            "destination": "README.md",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["readme_export_rewrite_applied"] is True
+    assert candidate == {"README.md": public}
+    assert not any(b.get("path") == "README.md" for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["readme_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["readme_export_rewrite_applied"] is False
+    assert "readme-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "README.md" not in candidate
+
+    missing = json.loads(json.dumps(manifest))
+    missing["readme_export_rewrite"]["source"] = "missing.md"
+    missing["include"].append("missing.md")
+    report, _ = export.analyze(repo, sha, missing)
+    assert "readme-export-community-source-withheld" in {b["kind"] for b in report["blockers"]}
+
+
+def test_community_contributing_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "CONTRIBUTING.md").write_text("Private source: seanheiney/boss\n")
+    public = b"# Contributing to BOSS Community\n"
+    (repo / "CONTRIBUTING.community.md").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["CONTRIBUTING.md", "CONTRIBUTING.community.md"],
+        "exclude": ["unused.md"],
+        "requires_split": ["unused-split.md"],
+        "required_runtime": ["CONTRIBUTING.md"],
+        "required_release": ["CONTRIBUTING.md"],
+        "contributing_export_rewrite": {
+            "source": "CONTRIBUTING.community.md",
+            "destination": "CONTRIBUTING.md",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["contributing_export_rewrite_applied"] is True
+    assert candidate == {"CONTRIBUTING.md": public}
+
+    changed = json.loads(json.dumps(manifest))
+    changed["contributing_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["contributing_export_rewrite_applied"] is False
+    assert "contributing-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "CONTRIBUTING.md" not in candidate
