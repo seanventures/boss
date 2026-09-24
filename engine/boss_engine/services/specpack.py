@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .commercial import CommercialService
+from .community_edition import CommunityEditionService
 from .core import create_artifact, emit_event, json_hash
 from .receipts import ReceiptService
 from .skill_scope import matching_skill_ids
@@ -57,9 +57,14 @@ class SpecPackService:
         "codex_software_engineer_v1",
     ]
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        edition_service: CommunityEditionService | None = None,
+    ):
         self.settings = settings
-        self.commercial = CommercialService(settings)
+        self.edition_service = edition_service or CommunityEditionService(settings)
         self.receipts = ReceiptService()
         self._skill_ids_cache: set[str] | None = None
 
@@ -1490,7 +1495,7 @@ class SpecPackService:
         project_id: str,
     ) -> set[str]:
         capabilities: set[str] = set()
-        edition = self.commercial.edition_status(connection, project_id)
+        edition = self.edition_service.edition_status(connection, project_id)
         active_account_connect_org_id = (
             edition.get("account_connect_org") or {}
         ).get("hosted_org_id")
