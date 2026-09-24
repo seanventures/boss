@@ -605,6 +605,12 @@ class Settings(BaseSettings):
         default="boss-dogfood", alias="BOSS_DEFAULT_PROJECT_ID"
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
+    # Device control is opt-in because the API process must run on a host with
+    # locally attached emulators/simulators. The skill executor never runs a
+    # caller-supplied command or accepts a caller-supplied filesystem path.
+    mobile_device_runner_enabled: bool = Field(
+        default=False, alias="BOSS_MOBILE_DEVICE_RUNNER_ENABLED"
+    )
     core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
     # Standalone/pip installs don't have the monorepo layout, so let them point
     # at a spec pack directly instead of relying on repo_root discovery.
