@@ -28,7 +28,7 @@ Authenticate each provider on the VM under the runtime user after installation. 
 
 ## Use BOSS
 
-Start in **Command Center** to submit a goal. Use **Approvals** for decisions and **Activity log** for receipts and failures. **Agents** shows observed work; **Org Chart** is where you plan reporting lines. Installing an agent template creates a definition, not a running employee or a device action.
+Start in **Command Center** to submit a goal. Use **Approvals** for decisions and **Activity log** for receipts and failures. **Agent work** shows recent activity by role. **Team structure** holds planned roles and actual handoffs; changing the plan does not route tasks. **Agent Studio** holds definitions you can test and run. Installing a template does not start work or control a device.
 
 The console, [terminal and API](docs/community/TERMINAL_API.md), and MCP client use the same server-side permissions and audit trail. You can inspect or automate a task through any of them.
 
@@ -50,6 +50,6 @@ Data removal is a separate, explicitly confirmed option. See [upgrade, backup, a
 
 ## Help improve it
 
-Use the repository's bug, installation, or feature issue form. The [feedback process](docs/community/FEEDBACK_LOOP.md) explains how a report becomes a verified change. Report vulnerabilities privately to [boss@sean.net](mailto:boss@sean.net), following [SECURITY.md](SECURITY.md).
+Use the repository's bug, installation, or feature issue form. The [feedback process](docs/community/FEEDBACK_LOOP.md) explains how a report becomes a verified change. See [Contributing](CONTRIBUTING.md) for code and documentation changes and the [Code of Conduct](CODE_OF_CONDUCT.md) for community expectations. Report vulnerabilities privately to [boss@sean.net](mailto:boss@sean.net), following [SECURITY.md](SECURITY.md).
 
 Community runs without a hosted BOSS account. Connect your own model, repository, and infrastructure credentials only for the work you choose to enable.
