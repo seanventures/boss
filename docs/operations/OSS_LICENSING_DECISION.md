@@ -60,7 +60,7 @@ Related analysis (options only; **not** a decision):
 | **`NOTICE`** | **Absent** | Apache §4(d) NOTICE is not present. Do not add one until legal decides. |
 | `engine/pyproject.toml` | `license = { file = "LICENSE" }` | Points at the interim file. |
 | `packages/goldeneye/pyproject.toml` | `license = { text = "Apache-2.0" }` plus Trove “OSI Approved” classifier | Metadata only. Human legal must confirm or replace after BOSS-300. |
-| `packages/specpack/packs/community_edition.yaml` | `license_candidate: AGPLv3` + `legal_review_required: true` | **Candidate**, not selected. Conflicts with Apache-2.0 *files* until a human picks one story. |
+| `packages/specpack/packs/community_edition.yaml` | `license_candidate: Apache-2.0` + `legal_review_required: true` | Product-owner direction encoded as a candidate; counsel reference and public-flip record remain outstanding. |
 | PRD v2.0 § Commercial Strategy | AGPLv3 / Apache-or-MIT / proprietary / FSL *candidates*; “legal review required” | Product intent, not a recorded decision. |
 | Repo visibility | Private / non-public launch | BOSS-293 public flip is **blocked**. |
 | Community pack / edition | Self-hosted Community product | Useful self-host ≠ “this is public OSI OSS.” |
@@ -71,9 +71,11 @@ test is **not** proof that legal chose Apache-2.0 for a public release.
 
 ---
 
-## 3. Options under consideration (none selected)
+## 3. Earlier options and the pending legal record
 
-Agents may list these for a human. **Do not rank them. Do not implement one.**
+The product owner chose Apache-2.0 for the full Community repository on
+2026-09-24. The table below preserves the earlier alternatives for the counsel
+record; it does not change the `UNDECIDED` release gate above.
 
 | ID | Option | What it would mean (neutral) | OSI “open source” while restricted? |
 |---|---|---|---|
@@ -84,12 +86,10 @@ Agents may list these for a human. **Do not rank them. Do not implement one.**
 | S | **Source-available / fair-source** (examples only: FSL, BSL) | Source visible with a non-compete or delayed-open window. | **No** during the restriction window. Must not be marketed as open source. |
 | X | **Mixed / open-core** | Different terms on engine vs Community control plane vs console vs Cloud/Enterprise modules. Still requires a human pick per surface. | Only the OSI-licensed surfaces |
 
-Boundary questions the human must answer *with* the license (still UNDECIDED):
-
-- How much of BOSS is published (engine-only vs thin Community plane vs full Community product)?
-- Is the console paid/proprietary?
-- Will external contributions be accepted, and under what inbound terms?
-- What may be called “open source” in README, site, GTM, and release notes?
+The product owner settled the intended scope: the full self-hosted Community
+product, including its console, is the Apache-2.0 candidate. The legal record
+still needs to cover inbound contribution terms, any required notices, and the
+public wording for README, site, GTM, and release notes.
 
 Older planning notes discuss “engine-only / whole Community / thin middle”
 as product-boundary options. Those are **not** license selections.
@@ -117,8 +117,10 @@ Private extract (BOSS-291) and design-partner work on a **private** repo
 
 ## 5. Files that would change *after* a human decision
 
-Do not edit these to “pick” a license. After counsel records `DECIDED` here,
-a follow-up ticket should update:
+Do not edit license texts or publication metadata to assert a completed legal
+decision. The Community pack and private packaging policy carry the approved
+Apache-2.0 product candidate now; after counsel records `DECIDED` here, a
+follow-up ticket should confirm the remaining artifacts:
 
 ### License texts and notices (human / counsel)
 
@@ -136,7 +138,7 @@ a follow-up ticket should update:
 - [`packages/goldeneye/pyproject.toml`](../../packages/goldeneye/pyproject.toml) (`license` text + Trove classifier)
 - [`packages/api-client/package.json`](../../packages/api-client/package.json) (no `license` field today)
 - Root / app `package.json` files if a license field is added
-- [`packages/specpack/packs/community_edition.yaml`](../../packages/specpack/packs/community_edition.yaml) (`license_candidate` → chosen term or remove)
+- [`packages/specpack/packs/community_edition.yaml`](../../packages/specpack/packs/community_edition.yaml) (confirm the staged Apache-2.0 candidate and `legal_review_required` state)
 
 ### Tests that pin current file text
 
