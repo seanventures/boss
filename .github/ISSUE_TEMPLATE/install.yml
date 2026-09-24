@@ -9,7 +9,7 @@ body:
     id: host
     attributes:
       label: Host OS and version
-      placeholder: Ubuntu 24.04, Debian 12, macOS 15, or WSL2
+      placeholder: Ubuntu 24.04 or Debian 12, with CPU architecture
     validations:
       required: true
   - type: textarea
