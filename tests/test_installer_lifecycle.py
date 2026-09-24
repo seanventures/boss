@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,6 +13,28 @@ UNINSTALL = REPO / "scripts/install/uninstall.sh"
 UPGRADE = REPO / "scripts/install/upgrade.sh"
 INSTALLER = REPO / "install.sh"
 REMOTE = REPO / "scripts/install/remote.sh"
+
+
+def test_compose_forwards_only_operator_github_route(tmp_path: Path) -> None:
+    if not shutil.which("docker"):
+        return
+    env_file = tmp_path / ".env"
+    base = (
+        "BOSS_API_KEY=fixture\nINFISICAL_ENCRYPTION_KEY=fixture\n"
+        "INFISICAL_AUTH_SECRET=fixture\nBOSS_CONSOLE_PASSWORD=fixture\n"
+        "BOSS_CONSOLE_SESSION_SECRET=fixture\n"
+    )
+    for extra, expected in (("", ""), ("BOSS_GITHUB_OWNER=operator\nBOSS_GITHUB_REPO=app\n", "operator")):
+        env_file.write_text(base + extra)
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(REPO / "scripts/install/community-compose.yml"),
+             "--env-file", str(env_file), "config", "--format", "json"],
+            text=True, capture_output=True, check=True,
+        )
+        services = json.loads(result.stdout)["services"]
+        for name in ("api", "worker"):
+            assert services[name]["environment"]["BOSS_GITHUB_OWNER"] == expected
+            assert services[name]["environment"]["BOSS_GITHUB_REPO"] == ("app" if expected else "")
 
 
 def _fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
@@ -153,6 +177,51 @@ def test_upgrade_backup_failure_leaves_checkout_and_env_unchanged(tmp_path: Path
     assert (install / ".env").read_text() == "BOSS_API_KEY=keep\n"
 
 
+def test_upgrade_bootstraps_backup_helper_from_target_ref(tmp_path: Path) -> None:
+    upstream = tmp_path / "upstream"
+    (upstream / "scripts/install").mkdir(parents=True)
+    (upstream / "scripts/install/community-compose.yml").write_text("name: proof\nservices: {}\n")
+    (upstream / "install.sh").write_text("echo old\n")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(upstream)], check=True)
+    subprocess.run(["git", "-C", str(upstream), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(upstream), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+         "commit", "-qm", "old without backup helper"],
+        check=True,
+    )
+    install = tmp_path / "boss"
+    subprocess.run(["git", "clone", "-q", str(upstream), str(install)], check=True)
+    (install / ".env").write_text("BOSS_API_KEY=keep\n")
+    assert not (install / "scripts/install/backup.sh").exists()
+    (upstream / "scripts/install/backup.sh").write_text(
+        "#!/bin/sh\n"
+        'test -f "$2/.env" || exit 9\n'
+        "echo /tmp/fetched-backup\n"
+    )
+    (upstream / "install.sh").write_text(
+        "#!/bin/bash\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = --dir ]; then install_dir="$2"; shift 2; continue; fi\n'
+        "  shift\n"
+        "done\n"
+        'git -C "$install_dir" merge --ff-only FETCH_HEAD >/dev/null\n'
+        'test -f "$install_dir/.env"\n'
+        'touch "$install_dir/upgrade-ran"\n'
+    )
+    subprocess.run(["git", "-C", str(upstream), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(upstream), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+         "commit", "-qm", "new with backup helper"],
+        check=True,
+    )
+
+    result = _run(UPGRADE, install, os.environ.copy())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Private recovery backup: /tmp/fetched-backup" in result.stdout
+    assert (install / "upgrade-ran").exists()
+    assert (install / ".env").read_text() == "BOSS_API_KEY=keep\n"
+
+
 def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
     upstream = tmp_path / "upstream"
     (upstream / "scripts/install").mkdir(parents=True)
@@ -175,6 +244,7 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
         "BOSS_DB_PASSWORD=existing-db\nBOSS_API_KEY=existing-api\n"
         "BOSS_CONSOLE_PASSWORD=existing-console-password-1234567890\n"
         "BOSS_CONSOLE_SESSION_SECRET=existing-console-session-secret-1234567890\n"
+        "BOSS_GITHUB_OWNER=operator\nBOSS_GITHUB_REPO=operator-project\n"
         "BOSS_CUSTOM_OPERATOR_SETTING=retain\n"
     )
     bin_dir = tmp_path / "bin"
@@ -215,9 +285,21 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
             "BOSS_DB_PASSWORD=existing-db", "BOSS_API_KEY=existing-api",
             "BOSS_CONSOLE_PASSWORD=existing-console-password-1234567890",
             "BOSS_CONSOLE_SESSION_SECRET=existing-console-session-secret-1234567890",
+            "BOSS_GITHUB_OWNER=operator", "BOSS_GITHUB_REPO=operator-project",
             "BOSS_CUSTOM_OPERATOR_SETTING=retain",
         ):
             assert retained in lines
+
+    fresh = tmp_path / "fresh"
+    subprocess.run(["git", "clone", "-q", str(upstream), str(fresh)], check=True)
+    result = _run(
+        INSTALLER, fresh, test_env,
+        "--yes", "--skip-model-key", "--no-web", "--no-install-deps",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    fresh_lines = (fresh / ".env").read_text().splitlines()
+    assert "BOSS_GITHUB_OWNER=" in fresh_lines
+    assert "BOSS_GITHUB_REPO=" in fresh_lines
 
 
 def test_remote_failed_build_retains_previous_source(tmp_path: Path) -> None:

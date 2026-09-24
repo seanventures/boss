@@ -582,6 +582,10 @@ OPENAI_BASE_URL=
 OPENAI_MODEL=gpt-4o-mini
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 BOSS_GITHUB_TOKEN=${GITHUB_TOKEN}
+# This installer source is not the operator's webhook repository. Leave the
+# legacy default-project GitHub route unbound until explicitly configured.
+BOSS_GITHUB_OWNER=
+BOSS_GITHUB_REPO=
 
 # Leave unset for pure Community independence
 BOSS_ACCOUNT_CONNECT_URL=

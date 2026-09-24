@@ -128,6 +128,14 @@ This selects Grok for governed coding work; it does not select the console's
 chat model. A host CLI being installed does not by itself mean the BOSS
 containers are connected.
 
+The BOSS source URL used by the installer is not an operator repository
+binding. Fresh Community installs leave `BOSS_GITHUB_OWNER` and
+`BOSS_GITHUB_REPO` blank, so the legacy default-project webhook route does
+not point at the private development repository. Register the repository in
+the project setup flow; if you intentionally use the legacy default webhook
+route, set both variables in the private `.env` and rerun the installer. Reruns
+retain those explicit values.
+
 ## Files
 
 | Path | Role |
