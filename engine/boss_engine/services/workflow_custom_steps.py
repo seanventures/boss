@@ -490,9 +490,15 @@ def _allowed_callers(connection: Connection, project_id: str, skill_id: str) -> 
     validator that fails closed on its own lookup error blocks correct work.
     """
     try:
+        from ..config import Settings
         from .entitlements import EntitlementBrokerService
 
-        spec = EntitlementBrokerService(None).get_skill(
+        # A REAL Settings, not None. Passing None constructed a BudgetGovernor(None), which
+        # threw in the constructor — and because this fails open, the exception was swallowed
+        # and the check silently never ran. A guard that cannot fail loudly has to be exercised
+        # against the thing it guards, which is how this was found: by saving the very spec it
+        # was written to refuse and watching it succeed.
+        spec = EntitlementBrokerService(Settings()).get_skill(
             skill_id, project_id, connection=connection) or {}
         permissions = spec.get("permissions") or {}
         return {str(c).strip().lower() for c in (permissions.get("allowed_callers") or [])}

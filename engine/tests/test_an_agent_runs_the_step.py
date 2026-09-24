@@ -103,3 +103,33 @@ def test_the_check_does_not_fail_closed_on_its_own_lookup():
     assert "return set()" in source
     assert "if callers and captain not in callers" in inspect.getsource(steps.validate_step), \
         "an empty set must mean 'do not judge', not 'refuse everything'"
+
+
+def test_the_allowed_caller_lookup_actually_returns_callers(tmp_path):
+    """EXERCISED, NOT READ.
+
+    The first version of this guard passed `None` where a Settings was wanted. That threw in
+    EntitlementBrokerService's constructor, the fail-open `except` swallowed it, and the check
+    silently never ran — so assigning video_editor to a publish step saved cleanly, which is
+    the exact thing the guard exists to refuse.
+
+    Two tests asserted the source looked right and both passed. This one asks the function.
+    """
+    import os
+
+    from sqlalchemy import create_engine
+
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        import pytest
+
+        pytest.skip("no database configured")
+
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        callers = steps._allowed_callers(connection, "boss-dogfood", "publish_youtube")
+
+    # An empty set means the guard silently does nothing, which is the failure being tested.
+    assert callers, "the lookup returned nothing, so the guard would never fire"
+    assert "media_publisher" in callers
+    assert "video_editor" not in callers, "the whole separation depends on this"
