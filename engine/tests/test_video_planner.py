@@ -196,3 +196,21 @@ def test_the_house_style_falls_back_rather_than_failing_the_step():
 
     assert vp.house_style_for(Boom(), "p") == vp.DEFAULT_HOUSE_STYLE
     assert "HOW THIS CHANNEL EDITS" in vp.DEFAULT_HOUSE_STYLE
+
+
+def test_the_planning_step_asks_which_engine_this_project_chose():
+    """`chat_llm_engine` is a PROJECT setting and is not on Settings unless a caller puts it
+    there.
+
+    Without that lookup the adapter falls through to "auto", which means OpenAI, and an install
+    running happily on a Claude subscription fails with "OPENAI_API_KEY is not configured".
+    That is the exact sentence chat_engine_for was written to stop — it had stopped it for the
+    chat, and not for anything built afterwards. Caught by running the step on a real install.
+    """
+    import inspect
+
+    from boss_engine.services import skill_executors
+
+    source = inspect.getsource(skill_executors.execute_video_plan_edit)
+    assert "chat_engine_for" in source, "the step must resolve the project's engine"
+    assert "make_agent_chat_adapter(settings)" in source, "and hand the resolved one over"

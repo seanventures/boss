@@ -1014,10 +1014,26 @@ def execute_video_plan_edit(
     assets = inputs.get("assets") if isinstance(inputs.get("assets"), dict) else {}
     assets = {str(k): str(v) for k, v in assets.items() if str(v).strip()}
 
+    # THE ENGINE THIS PROJECT CHOSE, not whatever the bare Settings object defaults to.
+    #
+    # `chat_llm_engine` is a PROJECT setting; it is not on Settings unless a caller puts it
+    # there. Without this the adapter falls through to `llm_engine` = "auto" = OpenAI, and an
+    # install running happily on a Claude subscription fails with "OPENAI_API_KEY is not
+    # configured" — true, and useless, which is the exact sentence chat_engine_for was written
+    # to stop. It had stopped it for the chat and not for anything built afterwards.
     from .claude_cli_adapter import make_agent_chat_adapter
+    from .setup_service import chat_engine_for
+
+    settings = context.settings
+    try:
+        engine = chat_engine_for(context.connection, settings, context.project_id)
+        if engine:
+            settings = settings.model_copy(update={"chat_llm_engine": engine})
+    except Exception:  # noqa: BLE001 — a settings lookup must not fail the step on its own
+        pass
 
     result = plan_from_instructions(
-        make_agent_chat_adapter(context.settings),
+        make_agent_chat_adapter(settings),
         instructions=instructions,
         house_style=str(inputs.get("house_style")
                         or house_style_for(context.connection, context.project_id)),
