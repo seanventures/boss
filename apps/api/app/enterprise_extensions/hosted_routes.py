@@ -24,7 +24,7 @@ from boss_engine.services.commercial import (
 from boss_engine.services.core import emit_event
 
 from ..db import begin
-from ..schemas import (
+from .paid_schemas import (
     AccountConnectAuthSessionCompleteRequest, AccountConnectAuthSessionCreateRequest,
     AccountConnectAuthSessionListResponse, AccountConnectAuthSessionSummary,
     AccountConnectBillingPortalSessionCreateRequest, AccountConnectBillingPortalSessionListResponse,
