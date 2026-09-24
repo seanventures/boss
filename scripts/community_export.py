@@ -67,6 +67,10 @@ SHARED_MARKER_LINES = {
 }
 SEMANTIC_PAID_MARKERS = {
     "engine/boss_engine/services/entitlements.py": (b"enterprise_model_gateway",),
+    "packages/specpack/models/providers.yaml": (
+        b"enterprise_model_gateway",
+        b"private_enterprise_gateway_adapter",
+    ),
 }
 
 
@@ -81,6 +85,26 @@ def reviewed_marker_bytes(path: str, data: bytes) -> tuple[bytes, bool]:
     original bytes always enter the candidate when the contract passes.
     """
     rules = SHARED_MARKER_LINES.get(path)
+    if path == "packages/specpack/models/providers.yaml":
+        try:
+            lines = data.decode("utf-8").splitlines(keepends=True)
+        except UnicodeDecodeError:
+            return data, False
+        allowed = "        auth_method: account_connect"
+        positions = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == allowed]
+        if len(positions) != 1:
+            return data, False
+        source = next(
+            (line.strip() for line in reversed(lines[:positions[0]])
+             if line.strip().startswith("- source_id:")),
+            None,
+        )
+        if source != "- source_id: managed_cloud_model_gateway":
+            return data, False
+        return b"".join(
+            b"\n" if line.rstrip("\r\n") == allowed else line.encode()
+            for line in lines
+        ), True
     if path == "packages/specpack/packs/community_edition.yaml":
         try:
             lines = data.decode("utf-8").splitlines(keepends=True)

@@ -135,6 +135,31 @@ hosted_account_connect_required: false
         pack_path, pack + b"commercial_packaging_policy\n"
     )[1] is False
 
+    providers_path = "packages/specpack/models/providers.yaml"
+    providers = b"""source_records:
+      - source_id: managed_cloud_model_gateway
+        auth_method: account_connect
+"""
+    masked, valid = export.reviewed_marker_bytes(providers_path, providers)
+    assert valid
+    assert b"account_connect" not in masked
+    assert not export.has_semantic_paid_source(providers_path, providers)
+    assert export.reviewed_marker_bytes(
+        providers_path, providers.replace(b"managed_cloud_model_gateway", b"another_source")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
+        providers_path, providers.replace(b"auth_method: account_connect", b"auth_method: account_connect_v2")
+    )[1] is False
+    assert export.has_semantic_paid_source(
+        providers_path, providers + b"enterprise_model_gateway\n"
+    )
+
+
+def test_community_router_is_selected_after_source_audit() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    assert "apps/api/app/routers/community.py" not in manifest["requires_split"]
+    assert export.matching_rule("apps/api/app/routers/community.py", manifest["include"])
+
 
 def test_exported_markdown_links_must_resolve_inside_candidate() -> None:
     selected = {
