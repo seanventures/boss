@@ -1157,7 +1157,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </AreaLink>
           </div>
 
-          <CoordinationPanel projectId={activeProjectId} orgId={activeOrgId}
+          <CoordinationPanel key={`${activeOrgId}:${activeProjectId}`}
+            projectId={activeProjectId} orgId={activeOrgId}
             initial={{ roster: ccRoster, inFlight: reconcileRecentWork(inFlight, tasks.items), observedAt: new Date().toISOString() }} />
           {/* The flow, as one row, in the order the work happens.
               These already carried the two ways in — convene a panel, start a code task. What
