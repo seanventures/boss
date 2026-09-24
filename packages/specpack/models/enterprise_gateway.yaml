@@ -1,0 +1,69 @@
+# Paid edition source and route defaults, loaded only by the private gateway extension.
+provider_description: BOSS-managed enterprise and hosted model gateways with explicit policy, budget, and capacity governance.
+source_record:
+  source_id: enterprise_model_gateway
+  source_kind: enterprise_model_gateway
+  entitlement_kind: enterprise_gateway
+  auth_method: gateway_token
+  connection_status: not_connected
+  connection_ref: BOSS_ENTERPRISE_MODEL_GATEWAY_URL
+  credential_ref: BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN
+  owner_type: project
+  workload_classes_allowed:
+  - owner_sandbox
+  - single_tenant_customer
+  - multi_tenant_customer
+  - internal_batch
+  multi_tenant_allowed: true
+  allowed_data_boundaries:
+  - public
+  - internal
+  - confidential
+  - restricted
+  supported_models:
+  - enterprise-gateway-auto
+  task_strengths:
+  - coding
+  - planning
+  - reasoning
+  - review
+  - privacy_sensitive
+  limit_shape:
+    max_concurrent: 256
+  risk_tier_max: 3
+  connection_metadata:
+    required_env:
+    - BOSS_ENTERPRISE_MODEL_GATEWAY_ENABLED
+    - BOSS_ENTERPRISE_MODEL_GATEWAY_URL
+    - BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN
+    credential_storage: secret_ref_or_env
+    execution_boundary: private_enterprise_gateway_adapter
+  policy_notes:
+  - Enterprise gateways are authorized private capacity, not personal subscription
+    pools.
+  - Gateway use still requires ModelRouteDecision logs and BudgetReservations for
+    spendy work.
+  - Restricted data may route here only when the gateway is explicitly enabled and
+    connected.
+model:
+  id: boss:enterprise-gateway-auto
+  provider: boss
+  tier: mid
+  strengths:
+  - planning
+  - coding
+  - reasoning
+  - review
+  - privacy_sensitive
+  cost_class: gateway_metered
+  enabled: true
+data_boundary_default:
+- public
+- internal
+- confidential
+- restricted
+preferred_source_kind_positions:
+  owner_sandbox: 3
+  single_tenant_customer: 1
+  multi_tenant_customer: 0
+  internal_batch: 1

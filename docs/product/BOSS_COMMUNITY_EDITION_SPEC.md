@@ -101,6 +101,7 @@ Status legend: **shipped** · **partial** · **planned** · **Cloud/Enterprise**
 | Model entitlement broker (local) | shipped | Route under policy; Community uses allow-all port by design |
 | Skill packs & role packs | shipped | Specpack roles/workflows/skills |
 | Managed model gateway | Cloud | Optional after Easy Connect |
+| Private enterprise model gateway | Enterprise | Source and routing policy load only with the paid edition pack |
 
 ### 4.4 Software Factory — **shipped**
 
