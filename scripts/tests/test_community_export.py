@@ -94,6 +94,10 @@ def test_community_test_boundary_preserves_shared_fixtures() -> None:
         assert export.matching_rule(path, manifest["include"])
         assert not export.matching_rule(path, manifest["exclude"])
         assert not any(marker in (export.ROOT / path).read_bytes() for marker in export.PRIVATE_MARKERS)
+    public_spec = "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md"
+    assert export.matching_rule(public_spec, manifest["include"])
+    assert not export.matching_rule(public_spec, manifest["exclude"])
+    assert not any(marker in (export.ROOT / public_spec).read_bytes() for marker in export.PRIVATE_MARKERS)
 
     paid_only = (
         "apps/api/tests/test_account_connect_integration.py",
@@ -117,6 +121,7 @@ def test_community_test_boundary_preserves_shared_fixtures() -> None:
     assert selected[rewrite["destination"]] == source
     assert rewrite["source"] not in selected
     assert all(path in selected for path in shared)
+    assert public_spec in selected
 
 
 def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:

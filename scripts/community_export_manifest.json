@@ -86,7 +86,6 @@
     "apps/worker/tests/test_external_rollout_readiness.py",
     "engine/tests/test_community_specpack_boundary.py",
     "engine/tests/test_receipt_discipline.py",
-    "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md",
     "engine/boss_engine/services/cloud_product.py",
     "engine/boss_engine/services/commercial.py",
     "engine/boss_engine/services/enterprise_audit.py",

@@ -2,7 +2,7 @@
 
 **Status:** Active product baseline (not a trial tier)  
 **Audience:** Open-source operators, founders, platform teams, design partners  
-**Companion:** [BOSS Cloud & Enterprise](./BOSS_CLOUD_ENTERPRISE_SPEC.md) · Marketing [community site](https://boss.sean.network/community/)  
+**Companion:** [Community feature list](../community/FEATURES.md)
 **Pack:** `packages/specpack/packs/community_edition.yaml`  
 **Runtime:** `BOSS_EDITION=community` (default)
 
@@ -275,11 +275,9 @@ Avoid:
 |---|---|
 | This document | Community product + feature contract |
 | `packages/specpack/packs/community_edition.yaml` | Installable pack |
-| `apps/api/app/routers/enterprise.py` | What is paid-only |
-| `docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md` | Upmarket path |
+| `docs/community/FEATURES.md` | Public feature checklist |
 | `api/openapi.yaml` | API surface |
-| `https://boss.sean.network/community/` | Public Community story |
-| `AGENTS.md` | Implementation hard rules |
+| `README.md` | Public install and contribution entry point |
 
 ---
 
