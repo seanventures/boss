@@ -7446,19 +7446,24 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .roster-search { width: min(320px, 100%); padding: 8px 10px;
   border: 1px solid var(--border); border-radius: 3px;
   background: var(--panel, #0d1117); color: var(--ink); }
-.roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 8px; margin-top: 12px; }
-.roster-card { border: 1px solid var(--border); border-radius: 3px; padding: 11px 13px;
-  background: var(--panel, #0d1117); min-width: 0; }
-.roster-card[data-status="WORKING"] { border-left: 3px solid var(--accent); }
-.roster-card[data-status="STUCK"] { border-left: 3px solid var(--amber); }
-.roster-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.roster-grid { display: grid; margin-top: 12px; border-top: 1px solid var(--border); }
+.roster-card {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 2fr) auto;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.roster-card-head { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
 .roster-name { font-size: 13px; font-weight: 650; color: var(--ink); }
 .roster-state { font-size: 11px; color: var(--muted); }
+.roster-card[data-status="WORKING"] .roster-state { color: var(--accent); }
 .roster-card[data-status="STUCK"] .roster-state { color: var(--amber); }
-.roster-task { margin: 7px 0 10px; font-size: 12px; color: var(--muted);
+.roster-task { margin: 0; font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.roster-actions { display: flex; gap: 12px; }
+.roster-actions { display: flex; justify-content: flex-end; gap: 12px; }
 .roster-actions button, .roster-show-all { border: 0; padding: 0; border-radius: 0;
   background: transparent; color: var(--accent-text, #2ec5c5);
   font: inherit; font-size: 12px; cursor: pointer; }
@@ -7467,6 +7472,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .roster-actions button:focus-visible, .roster-guide button:focus-visible,
 .roster-show-all:focus-visible, .roster-search:focus-visible {
   outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px;
+}
+@media (max-width: 740px) {
+  .roster-card { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }
+  .roster-task { grid-row: 2; grid-column: 1 / -1; }
+  .roster-actions { grid-row: 1; grid-column: 2; }
 }
 
 /* ── Org chart ────────────────────────────────────────────────────────────── */
@@ -7605,8 +7615,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-live-dot { box-shadow: 0 0 0 3px rgba(63, 185, 80, .22); }
 }
 
-/* Recent work uses text status and a border, without decorative motion. */
-.roster-card:hover { border-color: var(--border-strong); }
+/* Recent work reads as a list; the actions, not the whole row, are interactive. */
+.roster-card:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 
 /* ── Ask BOSS ─────────────────────────────────────────────────────────────── */
 /*
