@@ -320,7 +320,7 @@ def test_hop_headers_describing_this_connection_are_not_forwarded():
     Host — a stale one breaks redirects and any host-based routing inside the app.
     """
     got = forwarded_preview_headers(
-        {"Host": "boss-api.local.sean.network", "Content-Length": "99999",
+        {"Host": "boss-api.local.example.test", "Content-Length": "99999",
          "Connection": "keep-alive", "Transfer-Encoding": "chunked",
          "X-Request-ID": "req-1"},
     )

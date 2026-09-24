@@ -39,7 +39,7 @@ def _create_endpoint(client, *, boundary: str = "internal") -> dict:
     return response.json()
 
 
-def _github_payload(event: str, repo: str = "seanheiney/boss") -> dict:
+def _github_payload(event: str, repo: str = "example-org/boss") -> dict:
     payload = {
         "action": "opened",
         "repository": {"full_name": repo},
@@ -472,7 +472,7 @@ def test_valid_github_events_normalize_dispatch_and_dedupe(
     monkeypatch.setattr(
         settings,
         "webhook_project_map_json",
-        json.dumps({"seanheiney/boss": PROJECT_ID}),
+        json.dumps({"example-org/boss": PROJECT_ID}),
     )
     with engine.begin() as connection:
         seed_default_event_subscriptions(connection, PROJECT_ID)

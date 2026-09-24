@@ -221,7 +221,7 @@ def test_the_card_reports_the_connected_repository_not_the_environment():
     """Measured, with a connection that was tested and passing:
 
         REPOSITORY  CHECK FAILED
-        seanheiney/boss-sandbox · token …ThOQ — GitHub has no seanheiney/boss-sandbox
+        example-org/boss-sandbox · token …ThOQ — GitHub has no example-org/boss-sandbox
         visible to this token.
 
     The project was bound to paramg/boss, every build would use it, and the card showed a
@@ -269,7 +269,7 @@ def test_a_404_on_a_private_repository_is_explained_here_too():
 
 
 def test_no_install_ships_pointed_at_somebody_elses_repository():
-    """`target_github_owner` shipped as "seanheiney" and `target_github_repo` as
+    """`target_github_owner` shipped as "example-org" and `target_github_repo` as
     "boss-sandbox", so every install claimed to be pointed at one developer's private sandbox
     and the setup screen reported it failing — about a repository the operator has never heard
     of and cannot see."""

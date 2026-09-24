@@ -468,6 +468,24 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("private traceability destination must be withheld for split")
         if traceability_rewrite["destination"] not in manifest["required_runtime"]:
             raise ValueError("runtime traceability destination must be required")
+    conftest_rewrite = manifest.get("test_conftest_export_rewrite")
+    if conftest_rewrite is not None:
+        if not isinstance(conftest_rewrite, dict) or any(
+            not isinstance(conftest_rewrite.get(key), str) or not safe_path(conftest_rewrite[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("test conftest rewrite needs safe source and destination")
+        if (
+            conftest_rewrite["source"] != "apps/api/tests/conftest-community.py"
+            or conftest_rewrite["destination"] != "apps/api/tests/conftest.py"
+        ):
+            raise ValueError("test conftest rewrite must use reviewed Community paths")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(conftest_rewrite.get("sha256", ""))):
+            raise ValueError("test conftest rewrite needs reviewed source sha256")
+        if not matching_rule(conftest_rewrite["source"], manifest["include"]):
+            raise ValueError("test conftest source must be included")
+        if conftest_rewrite["destination"] not in manifest["requires_split"]:
+            raise ValueError("private test conftest must be withheld for split")
     specpack_rewrites = manifest.get("specpack_export_rewrites", [])
     if not isinstance(specpack_rewrites, list) or len(specpack_rewrites) != len(
         {item.get("destination") for item in specpack_rewrites if isinstance(item, dict)}
@@ -989,6 +1007,25 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
             ]
             traceability_rewrite_applied = True
+    conftest_rewrite = manifest.get("test_conftest_export_rewrite")
+    conftest_rewrite_applied = False
+    if conftest_rewrite:
+        source, destination = conftest_rewrite["source"], conftest_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "test-conftest-private-source-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "test-conftest-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "test-conftest-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != conftest_rewrite["sha256"]:
+            blockers.append({"kind": "test-conftest-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
+            ]
+            conftest_rewrite_applied = True
     specpack_rewrites_applied: list[str] = []
     for item in manifest.get("specpack_export_rewrites", []):
         source, destination = item["source"], item["destination"]
@@ -1041,6 +1078,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "schema_export_rewrite_applied": schema_rewrite_applied,
         "openapi_export_rewrite_applied": openapi_rewrite_applied,
         "traceability_export_rewrite_applied": traceability_rewrite_applied,
+        "test_conftest_export_rewrite_applied": conftest_rewrite_applied,
         "specpack_export_rewrites_applied": specpack_rewrites_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,

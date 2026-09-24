@@ -166,12 +166,12 @@ def test_pull_request_signal_ignores_fork_ref_outside_bound_repository():
                 "base": {
                     "ref": "main",
                     "sha": NEW_SHA,
-                    "repo": {"full_name": "seanheiney/boss"},
+                    "repo": {"full_name": "example-org/boss"},
                 },
             }
         },
         default_branch="main",
-        repository_full_name="seanheiney/boss",
+        repository_full_name="example-org/boss",
     )
 
     assert refs == [
@@ -257,7 +257,7 @@ def test_bound_webhook_schedules_without_inline_provider_reads_and_dedupes(
         "ref": "refs/heads/main",
         "after": OLD_SHA,
         "deleted": False,
-        "repository": {"full_name": "seanheiney/boss"},
+        "repository": {"full_name": "example-org/boss"},
         "sender": {"login": "github-user"},
         "head_commit": {"timestamp": "2026-07-26T18:00:00Z"},
     }

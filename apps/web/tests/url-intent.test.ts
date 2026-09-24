@@ -203,9 +203,9 @@ describe("the redirect after starting a project keeps who you are", () => {
     // A server action has no URL of its own; the referer is the page the operator was on, and
     // it carries the org because the console cannot render without one.
     const { orgFromReferer } = await import("../app/actions-href");
-    expect(orgFromReferer("https://boss.local.sean.network/?org=org_boss&area=code_tasks"))
+    expect(orgFromReferer("https://boss.local.example.test/?org=org_boss&area=code_tasks"))
       .toBe("org_boss");
-    expect(orgFromReferer("https://boss.local.sean.network/?org_id=org_boss")).toBe("org_boss");
+    expect(orgFromReferer("https://boss.local.example.test/?org_id=org_boss")).toBe("org_boss");
   });
 
   it("survives a missing or unparseable referer", async () => {

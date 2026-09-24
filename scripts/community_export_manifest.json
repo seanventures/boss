@@ -57,6 +57,10 @@
     "apps/api/app/enterprise_extensions/",
     "apps/api/tests/test_paid_schema_boundary.py",
     "apps/api/tests/test_entitlement_pack_parity.py",
+    "apps/api/tests/test_account_connect_integration.py",
+    "apps/api/tests/test_cloud_post_link.py",
+    "apps/api/tests/test_cloud_product.py",
+    "apps/api/tests/test_e2e_identity_kms_feedback.py",
     "apps/api/app/services/commercial.py",
     "apps/api/app/services/enterprise.py",
     "apps/api/app/routers/enterprise.py",
@@ -75,6 +79,14 @@
     "apps/web/tests/kpis-paid.test.ts",
     "apps/web/tests/packs-import-paid.test.ts",
     "apps/web/tests/skills-import-paid.test.ts",
+    "apps/web/tests/commercial-enterprise.test.ts",
+    "apps/web/tests/edition-gating.test.ts",
+    "apps/web/tests/edition-visibility.test.ts",
+    "apps/web/tests/self-improvement.test.ts",
+    "apps/web/tests/ui-v1-cut.test.ts",
+    "apps/worker/tests/test_external_rollout_readiness.py",
+    "engine/tests/test_community_specpack_boundary.py",
+    "engine/tests/test_receipt_discipline.py",
     "engine/boss_engine/services/cloud_product.py",
     "engine/boss_engine/services/commercial.py",
     "engine/boss_engine/services/enterprise_audit.py",
@@ -109,6 +121,7 @@
   "requires_split": [
     "LICENSE",
     "Makefile",
+    "apps/api/tests/conftest.py",
     "api/openapi.yaml",
     "db/schema.sql",
     "docs/product/TRACEABILITY.md",
@@ -156,6 +169,11 @@
     "from": "dockerfile: Dockerfile",
     "to": "dockerfile: Dockerfile.community",
     "expected_count": 3
+  },
+  "test_conftest_export_rewrite": {
+    "source": "apps/api/tests/conftest-community.py",
+    "destination": "apps/api/tests/conftest.py",
+    "sha256": "b9def88e799e5327a03584347ee09c2951279b9f8e2c44f4402a8c9242e900e2"
   },
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",

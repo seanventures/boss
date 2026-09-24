@@ -1,6 +1,6 @@
 """A run works on the repository its task named, not on a global default.
 
-BOSS was asked to fix a bug in its own source (`seanheiney/boss`). The run resolved
+BOSS was asked to fix a bug in its own source (`example-org/boss`). The run resolved
 `spec["owner"]/spec["repo"]` correctly, minted a token scoped to that repository, and then
 cloned, branched and opened its pull request against `BOSS_TARGET_GITHUB_*` instead --
 because SoftwareFactoryService built `GitHubAdapter(settings)` with no owner or repo.
@@ -29,8 +29,8 @@ def _settings() -> Settings:
 
 
 def test_a_run_that_names_a_repo_uses_that_repo():
-    sf = SoftwareFactoryService(_settings(), owner="seanheiney", repo="boss")
-    assert sf.github.repository_full_name == "seanheiney/boss"
+    sf = SoftwareFactoryService(_settings(), owner="example-org", repo="boss")
+    assert sf.github.repository_full_name == "example-org/boss"
 
 
 def test_a_run_that_names_nothing_still_uses_the_configured_default():
@@ -47,7 +47,7 @@ def test_blank_targets_fall_back_rather_than_producing_a_broken_slug(owner, repo
 
 def test_the_pipeline_adapter_shares_the_same_repository():
     """The PR and the CI/checks calls must agree; two adapters drifting is the original bug."""
-    sf = SoftwareFactoryService(_settings(), owner="seanheiney", repo="boss")
+    sf = SoftwareFactoryService(_settings(), owner="example-org", repo="boss")
     inner = getattr(sf.pipeline, "github", None)
     if inner is not None:
-        assert inner.repository_full_name == "seanheiney/boss"
+        assert inner.repository_full_name == "example-org/boss"

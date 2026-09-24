@@ -115,6 +115,49 @@ def test_community_traceability_is_pinned_and_references_exported_files() -> Non
             assert all(ref in selected for ref in refs), feature.label
 
 
+def test_community_test_boundary_preserves_shared_fixtures() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    for directory in ("apps/api/tests/", "apps/web/tests/", "engine/tests/"):
+        assert directory not in manifest["exclude"]
+
+    shared = (
+        "apps/api/tests/test_github_project_connections.py",
+        "apps/api/tests/test_skill_marketplace.py",
+        "apps/web/tests/github-operations.test.tsx",
+        "apps/worker/tests/test_worker.py",
+        "engine/tests/test_run_targets_its_own_repo.py",
+    )
+    for path in shared:
+        assert export.matching_rule(path, manifest["include"])
+        assert not export.matching_rule(path, manifest["exclude"])
+        assert not any(marker in (export.ROOT / path).read_bytes() for marker in export.PRIVATE_MARKERS)
+
+    paid_only = (
+        "apps/api/tests/test_account_connect_integration.py",
+        "apps/api/tests/test_cloud_product.py",
+        "apps/web/tests/commercial-enterprise.test.ts",
+        "apps/web/tests/edition-visibility.test.ts",
+        "apps/worker/tests/test_external_rollout_readiness.py",
+        "engine/tests/test_community_specpack_boundary.py",
+    )
+    assert all(path in manifest["exclude"] for path in paid_only)
+
+    rewrite = manifest["test_conftest_export_rewrite"]
+    source = (export.ROOT / rewrite["source"]).read_bytes()
+    assert hashlib.sha256(source).hexdigest() == rewrite["sha256"]
+    assert b'os.environ["BOSS_EDITION"] = "community"' in source
+    assert not any(marker in source for marker in export.PAID_SOURCE_MARKERS)
+
+    sha = export.git(export.ROOT, "rev-parse", "HEAD^{commit}").decode().strip()
+    report, selected = export.analyze(export.ROOT, sha, manifest)
+    assert report["test_conftest_export_rewrite_applied"] is True
+    assert selected[rewrite["destination"]] == source
+    assert rewrite["source"] not in selected
+    assert all(path in selected for path in shared)
+    assert "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md" not in selected
+
+
 def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:
     schemas = b"""from typing import Optional
 class BaseModel: pass

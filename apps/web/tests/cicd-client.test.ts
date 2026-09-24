@@ -20,7 +20,7 @@ describe("CI/CD and promotion API client", () => {
 
     await client.proposeCIConfig({
       project_id: "boss-dogfood",
-      repo: "seanheiney/boss-sandbox",
+      repo: "example-org/boss-sandbox",
       language: "typescript",
       framework: "nextjs",
       reservation_id: "res_1",
@@ -58,7 +58,7 @@ describe("CI/CD and promotion API client", () => {
       "POST http://127.0.0.1:8000/v1/deployment-promotions/prom_1/advance",
     ]);
     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
-      repo: "seanheiney/boss-sandbox",
+      repo: "example-org/boss-sandbox",
       language: "typescript",
       reservation_id: "res_1",
     });

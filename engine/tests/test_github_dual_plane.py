@@ -54,9 +54,9 @@ def test_bind_project_github_prefers_primary_binding(monkeypatch):
 
     def fake_resolve(*_a, **_k):
         return {
-            "owner": "seanheiney",
+            "owner": "example-org",
             "repo": "boss",
-            "full_name": "seanheiney/boss",
+            "full_name": "example-org/boss",
             "binding_id": "bind_primary_1",
             "connection_id": "conn_1",
             "default_branch": "main",
@@ -70,13 +70,13 @@ def test_bind_project_github_prefers_primary_binding(monkeypatch):
 
         def adapter_for_binding(self, connection, *, project_id, binding_id):
             adapter = GitHubAdapter(
-                _settings(), owner="seanheiney", repo="boss", token="mc-token"
+                _settings(), owner="example-org", repo="boss", token="mc-token"
             )
             binding = {
                 "id": binding_id,
-                "owner": "seanheiney",
+                "owner": "example-org",
                 "name": "boss",
-                "full_name": "seanheiney/boss",
+                "full_name": "example-org/boss",
             }
             connection_row = {"id": "conn_1", "status": "active"}
             return adapter, connection_row, binding
@@ -95,7 +95,7 @@ def test_bind_project_github_prefers_primary_binding(monkeypatch):
     assert plane["github_binding_id"] == "bind_primary_1"
     assert plane["github_connection_id"] == "conn_1"
     assert sf.github_plane == "mission_control_binding"
-    assert sf.github.repository_full_name == "seanheiney/boss"
+    assert sf.github.repository_full_name == "example-org/boss"
     assert sf.github._token_override == "mc-token"
 
 
@@ -104,9 +104,9 @@ def test_bind_project_github_falls_back_honestly_when_binding_unusable(monkeypat
 
     def fake_resolve(*_a, **_k):
         return {
-            "owner": "seanheiney",
+            "owner": "example-org",
             "repo": "boss",
-            "full_name": "seanheiney/boss",
+            "full_name": "example-org/boss",
             "binding_id": "bind_broken",
             "connection_id": "conn_broken",
             "default_branch": "main",
@@ -143,9 +143,9 @@ def test_describe_github_plane_is_read_only_and_prefers_binding(monkeypatch):
 
     def fake_resolve(*_a, **_k):
         return {
-            "owner": "seanheiney",
+            "owner": "example-org",
             "repo": "boss",
-            "full_name": "seanheiney/boss",
+            "full_name": "example-org/boss",
             "binding_id": "bind_primary_1",
             "connection_id": "conn_1",
             "default_branch": "main",
@@ -161,7 +161,7 @@ def test_describe_github_plane_is_read_only_and_prefers_binding(monkeypatch):
     assert plane["github_plane"] == "mission_control_binding"
     assert plane["github_binding_id"] == "bind_primary_1"
     assert plane["github_connection_id"] == "conn_1"
-    assert plane["full_name"] == "seanheiney/boss"
+    assert plane["full_name"] == "example-org/boss"
     # GET-safe: adapters stay on the legacy settings plane.
     assert sf.github_plane == "legacy_env"
     assert sf.github.repository_full_name == original_repo

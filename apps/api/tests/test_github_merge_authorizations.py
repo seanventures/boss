@@ -119,17 +119,17 @@ def _configure(monkeypatch, *, pull_number: int = 42) -> None:
     }
     FakeMergeAdapter.pull = {
         "number": pull_number,
-        "url": f"https://github.com/seanheiney/boss/pull/{pull_number}",
+        "url": f"https://github.com/example-org/boss/pull/{pull_number}",
         "state": "open",
         "draft": False,
         "mergeable": True,
         "mergeable_state": "clean",
         "head_ref": "ai/codex/work",
         "head_sha": HEAD_SHA,
-        "head_repository": "seanheiney/boss",
+        "head_repository": "example-org/boss",
         "base_ref": "main",
         "base_sha": BASE_SHA,
-        "base_repository": "seanheiney/boss",
+        "base_repository": "example-org/boss",
         "updated_at": "2026-07-26T16:00:00Z",
     }
     FakeMergeAdapter.checks = [
@@ -349,7 +349,7 @@ def test_merge_queue_serializes_each_project_target(client, monkeypatch):
     FakeMergeAdapter.pull = {
         **FakeMergeAdapter.pull,
         "number": 43,
-        "url": "https://github.com/seanheiney/boss/pull/43",
+        "url": "https://github.com/example-org/boss/pull/43",
     }
     second = _request(
         client,
