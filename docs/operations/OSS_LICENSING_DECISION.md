@@ -13,6 +13,15 @@
 > Apache-2.0 *files* in the tree are packaging evidence, not a human legal
 > decision and not authorization to flip the repo public or announce OSS.
 
+**Product direction recorded 2026-09-24:** the product owner selected Apache
+License 2.0 for the **full Community repository** planned at
+`seanventures/boss`, and said a counsel reference will follow. This resolves
+the product preference and intended publication scope only. The counsel
+reference has not been provided or recorded here, so the legal/release status
+above remains **UNDECIDED** and BOSS-300 and BOSS-293 stay open. The Community
+tree must also be separated from paid/private code and pass the public-flip
+checks before visibility changes.
+
 ---
 
 ## 1. Hard rules for agents and contributors
