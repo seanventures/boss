@@ -27,3 +27,8 @@ that package. Their 16 route contracts and denial audit helpers are registered
 only in paid editions. The separate Community `/v1/cloud/*` Easy Connect client
 remains mounted, so a self-hosted operator can choose to link later without
 making hosted Account Connect a startup dependency.
+
+Enterprise cluster validation and support-case routes are also registered from
+the paid package. The shared `EnterpriseService` remains in the main API because
+Community self-hosted identity and SCIM use it; those Community routes must not
+be removed with the paid cluster operations. Goldeneye PaaS remains Community.
