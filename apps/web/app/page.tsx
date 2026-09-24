@@ -80,7 +80,7 @@ import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
-import { fetchAgentModuleFeed } from "../lib/agent-modules";
+import { fetchAgentModuleFeedWithMarketplace as fetchAgentModuleFeed } from "../lib/agent-modules-paid";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
 import { FocusedAgents } from "./focused-agents-ui";

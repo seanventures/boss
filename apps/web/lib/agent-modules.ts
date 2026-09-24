@@ -2,12 +2,9 @@ import {
   BossApiError,
   type AgentModuleInstallRecordSummary,
   type AgentModuleSummary,
-  type HostedMarketplaceListingSummary,
-  type HostedMarketplaceSyncRunSummary,
 } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
-import { editionOptionalList } from "./edition-gating";
 
 export type AgentModuleFeedItem = {
   moduleId: string;
@@ -45,48 +42,12 @@ export type AgentModuleInstallRecordFeedItem = {
   createdAt: string;
 };
 
-export type HostedMarketplaceListingFeedItem = {
-  id: string;
-  hostedOrgId?: string;
-  listingId: string;
-  packId: string;
-  version: string;
-  displayName: string;
-  publisher: string;
-  category: string;
-  description?: string;
-  status: string;
-  priceModel?: string;
-  priceUsdMicros?: number;
-  requiredEntitlements: string[];
-  capabilities: string[];
-  sourceUrl?: string;
-  metadata: Record<string, unknown>;
-  lastSyncRunId?: string;
-  updatedAt: string;
-};
-
-export type HostedMarketplaceSyncRunFeedItem = {
-  id: string;
-  hostedOrgId?: string;
-  status: string;
-  listingCount: number;
-  providerRef?: string;
-  syncPacketArtifactId?: string;
-  error?: Record<string, unknown>;
-  syncedBy: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-};
-
 export type AgentModuleFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   items: AgentModuleFeedItem[];
   installRecords: AgentModuleInstallRecordFeedItem[];
-  hostedListings: HostedMarketplaceListingFeedItem[];
-  marketplaceSyncRuns: HostedMarketplaceSyncRunFeedItem[];
 };
 
 function mapModule(payload: AgentModuleSummary): AgentModuleFeedItem {
@@ -131,48 +92,6 @@ function mapInstallRecord(
   };
 }
 
-function mapHostedListing(
-  payload: HostedMarketplaceListingSummary,
-): HostedMarketplaceListingFeedItem {
-  return {
-    id: payload.id,
-    hostedOrgId: payload.hosted_org_id,
-    listingId: payload.listing_id,
-    packId: payload.pack_id,
-    version: payload.version,
-    displayName: payload.display_name,
-    publisher: payload.publisher,
-    category: payload.category,
-    description: payload.description,
-    status: payload.status,
-    priceModel: payload.price_model,
-    priceUsdMicros: payload.price_usd_micros,
-    requiredEntitlements: payload.required_entitlements,
-    capabilities: payload.capabilities,
-    sourceUrl: payload.source_url,
-    metadata: payload.metadata,
-    lastSyncRunId: payload.last_sync_run_id,
-    updatedAt: payload.updated_at,
-  };
-}
-
-function mapMarketplaceSyncRun(
-  payload: HostedMarketplaceSyncRunSummary,
-): HostedMarketplaceSyncRunFeedItem {
-  return {
-    id: payload.id,
-    hostedOrgId: payload.hosted_org_id,
-    status: payload.status,
-    listingCount: payload.listing_count,
-    providerRef: payload.provider_ref,
-    syncPacketArtifactId: payload.sync_packet_artifact_id,
-    error: payload.error,
-    syncedBy: payload.synced_by,
-    metadata: payload.metadata,
-    createdAt: payload.created_at,
-  };
-}
-
 export function emptyAgentModuleFeed(
   reason?: string,
   projectId = PROJECT_ID,
@@ -183,8 +102,6 @@ export function emptyAgentModuleFeed(
     blockedReason: reason,
     items: [],
     installRecords: [],
-    hostedListings: [],
-    marketplaceSyncRuns: [],
   };
 }
 
@@ -196,22 +113,15 @@ export async function fetchAgentModuleFeed(
   if (!active) return emptyAgentModuleFeed("not requested", resolveProjectId(projectId));
   const resolvedProjectId = resolveProjectId(projectId);
   try {
-    // The marketplace routes are hosted/paid; on Community they 404. A bare Promise.all threw
-    // away `listAgentModules` and `listAgentModuleInstallRecords` — both of which return 200 —
-    // which is why "Available agent modules" reported an API error while its endpoint was fine.
-    const [payload, installRecords, hostedListings, syncRuns] = await Promise.all([
+    const [payload, installRecords] = await Promise.all([
       client.listAgentModules(resolvedProjectId),
       client.listAgentModuleInstallRecords(resolvedProjectId),
-      editionOptionalList(client.listHostedMarketplaceListings(resolvedProjectId)),
-      editionOptionalList(client.listHostedMarketplaceSyncRuns(resolvedProjectId)),
     ]);
     return {
       projectId: payload.project_id,
       apiReachable: true,
       items: payload.items.map(mapModule),
       installRecords: installRecords.items.map(mapInstallRecord),
-      hostedListings: hostedListings.items.map(mapHostedListing),
-      marketplaceSyncRuns: syncRuns.items.map(mapMarketplaceSyncRun),
     };
   } catch (error) {
     if (error instanceof BossApiError) {

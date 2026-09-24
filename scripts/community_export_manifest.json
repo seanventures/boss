@@ -55,6 +55,7 @@
     "apps/web/audits/",
     "apps/web/app/cloud/",
     "apps/web/lib/commercial.ts",
+    "apps/web/lib/agent-modules-paid.ts",
     "apps/web/lib/edition-paid.ts",
     "apps/web/lib/enterprise.ts",
     "engine/boss_engine/services/cloud_product.py",

@@ -100,7 +100,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
   const { client } = await import("../lib/client");
   const { fetchCommercialFeed } = await import("../lib/commercial");
   const { fetchEnterpriseFeed } = await import("../lib/enterprise");
-  const { fetchAgentModuleFeed } = await import("../lib/agent-modules");
+  const { fetchAgentModuleFeedWithMarketplace: fetchAgentModuleFeed } = await import("../lib/agent-modules-paid");
 
   function mockCloudSurfaces(
     overrides: {
@@ -480,7 +480,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
   });
 
   it("handles marketplace blocked via commercial edition context + empty agent module marketplace feeds", async () => {
-    const { fetchAgentModuleFeed } = await import("../lib/agent-modules");
+    const { fetchAgentModuleFeedWithMarketplace: fetchAgentModuleFeed } = await import("../lib/agent-modules-paid");
     // reuse client mock; simulate reachable but no hosted due to no link (blocked)
     vi.mocked(client.listAgentModules).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
     vi.mocked(client.listAgentModuleInstallRecords).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });

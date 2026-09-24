@@ -110,6 +110,17 @@ def test_community_edition_navigation_does_not_import_paid_chrome() -> None:
     assert b"org_chart" in (export.ROOT / "apps/web/lib/edition.ts").read_bytes()
 
 
+def test_local_agent_modules_do_not_fetch_hosted_marketplace() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    local = (export.ROOT / "apps/web/lib/agent-modules.ts").read_bytes()
+    paid = (export.ROOT / "apps/web/lib/agent-modules-paid.ts").read_bytes()
+    assert not any(marker in local for marker in export.PAID_SOURCE_MARKERS)
+    assert b"listAgentModules" in local and b"listAgentModuleInstallRecords" in local
+    assert b"listHostedMarketplaceListings" not in local
+    assert b"listHostedMarketplaceListings" in paid
+    assert export.matching_rule("apps/web/lib/agent-modules-paid.ts", manifest["exclude"])
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()
