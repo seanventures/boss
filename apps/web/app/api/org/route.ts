@@ -52,13 +52,14 @@ export async function DELETE(req: Request) {
   const params = new URL(req.url).searchParams;
   const projectId = params.get("project_id")?.trim();
   const agentId = params.get("agent_id")?.trim();
+  const actor = params.get("actor")?.trim() || "operator";
   if (!projectId || !agentId) {
     return NextResponse.json({ error: "project_id and agent_id are required" }, { status: 400 });
   }
   try {
     const r = await fetch(
       `${API_URL}/v1/console/v2/org/${encodeURIComponent(agentId)}`
-      + `?project_id=${encodeURIComponent(projectId)}`,
+      + `?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actor)}`,
       { method: "DELETE", headers: authHeaders(), cache: "no-store" });
     const parsed = await r.json().catch(() => ({}));
     return NextResponse.json(parsed, { status: r.ok ? 200 : r.status });

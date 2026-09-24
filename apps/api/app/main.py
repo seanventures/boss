@@ -12850,7 +12850,7 @@ def put_org_assignment(agent_id: str, payload: dict) -> dict:
 
 
 @app.delete("/v1/console/v2/org/{agent_id}")
-def delete_org_assignment(agent_id: str, project_id: str) -> dict:
+def delete_org_assignment(agent_id: str, project_id: str, actor: str = "operator") -> dict:
     """Hand this agent back to the observed chart."""
     from boss_engine.services import org_assignments as oa
 
@@ -12858,8 +12858,8 @@ def delete_org_assignment(agent_id: str, project_id: str) -> dict:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
         if agent_id == "*":
-            return {"cleared": oa.clear_all(connection, project_id)}
-        oa.clear_one(connection, project_id, agent_id)
+            return {"cleared": oa.clear_all(connection, project_id, actor)}
+        oa.clear_one(connection, project_id, agent_id, actor)
     return {"agent_id": agent_id, "cleared": 1}
 
 

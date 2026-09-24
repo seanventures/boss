@@ -6990,8 +6990,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="workforce" aria-label="Workforce">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Workforce</span>
-              <h3>Every agent, what it has produced, and how well.</h3>
+              <span className="eyebrow">Agents</span>
+              <h3>Recent work by role.</h3>
             </div>
           </div>
           <WorkforceArea workforce={workforceData} skills={skills.items} />
@@ -7003,7 +7003,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-head">
             <div>
               <span className="eyebrow">Org Chart</span>
-              <h3>Who actually passes work to whom.</h3>
+              <h3>Reporting lines and handoffs</h3>
             </div>
           </div>
           <OrgChartArea projectId={activeProjectId} actor={activeActorId} chart={orgChartData} />

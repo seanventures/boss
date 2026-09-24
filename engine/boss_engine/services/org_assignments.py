@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from .core import emit_event
+
 
 class OrgCycle(ValueError):
     """Somebody would report to themselves, through however many hops."""
@@ -78,26 +80,41 @@ def set_one(
         {"p": project_id, "a": agent_id, "r": parent,
          "d": (display_name or "").strip() or None, "s": int(sort), "by": actor},
     )
+    emit_event(
+        connection, project_id, "org.assignment_set", actor, "role", agent_id,
+        {"reports_to": parent, "display_name": display_name},
+    )
     return {"agent_id": agent_id, "reports_to": parent, "display_name": display_name}
 
 
-def clear_one(connection, project_id: str, agent_id: str) -> None:
+def clear_one(connection, project_id: str, agent_id: str, actor: str = "operator") -> None:
     """Hand this agent back to the observed chart.
 
     Deleting rather than storing "no parent": a NULL parent is a real statement — this agent is
     a root — and it has to stay distinguishable from "nobody has said".
     """
-    connection.execute(
+    deleted = connection.execute(
         text("DELETE FROM org_assignments WHERE project_id = :p AND agent_id = :a"),
         {"p": project_id, "a": agent_id},
-    )
+    ).rowcount
+    if deleted:
+        emit_event(
+            connection, project_id, "org.assignment_cleared", actor, "role", agent_id,
+            {"count": deleted},
+        )
 
 
-def clear_all(connection, project_id: str) -> int:
+def clear_all(connection, project_id: str, actor: str = "operator") -> int:
     """Back to the observed chart entirely. Returns how many statements were dropped."""
-    return connection.execute(
+    deleted = connection.execute(
         text("DELETE FROM org_assignments WHERE project_id = :p"), {"p": project_id},
     ).rowcount
+    if deleted:
+        emit_event(
+            connection, project_id, "org.structure_cleared", actor, "project", project_id,
+            {"count": deleted},
+        )
+    return deleted
 
 
 def apply_to(chart: dict[str, Any], declared: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -108,7 +125,12 @@ def apply_to(chart: dict[str, Any], declared: dict[str, dict[str, Any]]) -> dict
     the only way "these disagree" can be seen at all.
     """
     if not declared:
-        return {**chart, "declared": {}, "has_declared": False}
+        return {
+            **chart,
+            "observed_tree": chart.get("tree") or [],
+            "declared": {},
+            "has_declared": False,
+        }
 
     nodes = [dict(n) for n in (chart.get("nodes") or [])]
     known = {n.get("id") for n in nodes}
@@ -152,6 +174,7 @@ def apply_to(chart: dict[str, Any], declared: dict[str, dict[str, Any]]) -> dict
     tree.sort(key=lambda n: (n["depth"], n.get("name") or ""))
     return {
         **chart,
+        "observed_tree": chart.get("tree") or [],
         "nodes": nodes,
         "tree": tree,
         "declared": {k: dict(v) for k, v in declared.items()},
