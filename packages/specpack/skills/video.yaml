@@ -244,6 +244,56 @@ skills:
       allowed_values:
         style: [lower_third, bottom, top]
 
+  - id: video.plan_edit
+    kind: media_edit
+    # THE ONE STEP THAT NEEDS JUDGEMENT. Fetching, editing and publishing are mechanical;
+    # reading "cut the boring bit and make it vertical" and deciding it means two specific
+    # operations is not. So a model writes a PLAN here and performs no edit — everything it
+    # produces goes through the same validator a hand-written step faces.
+    #
+    # SEPARATE FROM video.apply_plan ON PURPOSE. Together they would be one step that thinks and
+    # edits, and re-running it would re-plan — so a reviewer who rejected a render could not ask
+    # for the same plan again with one operation changed. Apart, the plan is its own artifact.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Turn free-form editing instructions into a validated edit plan, using the project's
+      standing house style as the default and this video's instructions as the override.
+      Renders nothing; the plan is reviewed before anything runs.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      # What to do with THIS video. The standing rules come from the editable
+      # `video_editing_standards` skill unless house_style is passed explicitly.
+      instructions: string
+      house_style: string?
+      # Images the plan may refer to, as {name: artifact_id}. A plan can only name what is
+      # listed here — the model never chooses which file gets read.
+      assets: object?
+    output_schema:
+      plan: array
+      # What it had to guess, and what it was asked for and could not do. These are the two
+      # things most likely to make the answer wrong, so they are outputs rather than logs.
+      assumptions: array
+      refused: array
+      timeline_note: string?
+      # The plan as sentences, for the human review step. Nobody reads JSON carefully while
+      # deciding whether to publish something.
+      summary: string
+      steps: integer
+    cost: { estimator: runtime_plus_model, category: model }
+    # One retry lives inside the executor and carries the rejection reason, which is the retry
+    # worth doing. A second identical attempt would spend money on the same mistake.
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      # No connection and no receipt: it touches no channel and changes nothing. Tier 0 is
+      # honest here in a way it would not be for any other step in this file.
+      requires_receipt: false
+
   - id: video.apply_plan
     kind: media_edit
     # THE STEP A VIBE INSTRUCTION ACTUALLY RUNS. A workflow's step list is fixed when the

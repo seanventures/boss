@@ -23,7 +23,7 @@ permissions:
   # instruction like "cut 3:10 to 3:40, make it vertical, caption the opening" is one edit plan
   # this role executes end to end, and splitting the operations across roles would put a handoff
   # in the middle of a single person's instruction.
-  allowed_skills: [media.fetch_link, video.apply_plan, video.trim, video.cut, video.reframe, video.overlay_image, video.caption,
+  allowed_skills: [media.fetch_link, video.plan_edit, video.apply_plan, video.trim, video.cut, video.reframe, video.overlay_image, video.caption,
                    video.watermark, video.bookend, drive.list_videos, drive.import_video,
                    artifact.create]
   forbidden_skills: [publish_youtube, secret.read]

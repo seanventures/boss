@@ -953,6 +953,89 @@ def execute_media_fetch_link(
     }
 
 
+@register_executor("video.plan_edit")
+def execute_video_plan_edit(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Read the instructions, write the edit plan. The one step that needs judgement.
+
+    It renders nothing and changes nothing. Its whole output is a plan, which the next step
+    executes and a person approves before anything is published — so the model's judgement is
+    bounded twice over: by validate_plan, which refuses anything outside the operation
+    vocabulary, and by a human who sees the result.
+
+    SEPARATE FROM video.apply_plan ON PURPOSE. Together they would be one step that thinks and
+    edits, and a re-run would re-plan — so a reviewer who rejected a render could not ask for the
+    same plan again with one operation changed. Apart, the plan is an artifact of its own: it can
+    be read, corrected and handed to the editing step unchanged.
+    """
+    from .video_edit import probe, VideoEditError
+    from .video_planner import PlanningError, house_style_for, plan_from_instructions, summarise
+    from .drive_media import download, workspace
+
+    source_artifact = str(inputs.get("media_artifact_id") or "").strip()
+    if not source_artifact:
+        raise ValueError("media_artifact_id is required — the video to plan edits for")
+    instructions = str(inputs.get("instructions") or "").strip()
+    if not instructions:
+        raise ValueError(
+            "instructions are required — say what should happen to this video")
+
+    source = _media_artifact(context, source_artifact)
+
+    # THE VIDEO'S OWN FACTS, taken from the recorded artifact where they are already known. A
+    # model asked to "cut the bit near the end" without the duration invents a timecode, and an
+    # invented timecode passes validation and edits the wrong part — the one failure validation
+    # cannot catch. Reading them off the artifact avoids downloading gigabytes to plan.
+    detail = source.get("detail") if isinstance(source.get("detail"), dict) else {}
+    duration = float(detail.get("duration_seconds") or source.get("duration_seconds") or 0)
+    width = int(detail.get("width") or source.get("width") or 0)
+    height = int(detail.get("height") or source.get("height") or 0)
+    if duration <= 0:
+        # Not recorded — an artifact imported before those were captured. Measure it rather than
+        # planning blind, because planning blind is the failure above.
+        connection_key = str(inputs.get("connection_key") or "youtube_default")
+        with workspace("boss-plan-probe-") as work:
+            local = download(
+                context.connection, context.settings, project_id=context.project_id,
+                file_id=source["drive_file_id"], dest_dir=work,
+                connection_key=connection_key)["path"]
+            try:
+                info = probe(local)
+            except VideoEditError as exc:
+                raise PlanningError(
+                    f"could not read that video's duration, so no timecode can be planned "
+                    f"against it ({exc}).") from exc
+        duration = float(info.get("duration_seconds") or 0)
+        width, height = int(info.get("width") or 0), int(info.get("height") or 0)
+
+    # Images the plan may refer to, named by the operator. A plan can only mention what is
+    # listed here — the model never gets to name an artifact BOSS was not told about.
+    assets = inputs.get("assets") if isinstance(inputs.get("assets"), dict) else {}
+    assets = {str(k): str(v) for k, v in assets.items() if str(v).strip()}
+
+    from .claude_cli_adapter import make_agent_chat_adapter
+
+    result = plan_from_instructions(
+        make_agent_chat_adapter(context.settings),
+        instructions=instructions,
+        house_style=str(inputs.get("house_style")
+                        or house_style_for(context.connection, context.project_id)),
+        duration_seconds=duration, width=width, height=height, assets=assets,
+    )
+    return {
+        "plan": result["plan"],
+        "assumptions": result["assumptions"],
+        "refused": result["refused"],
+        "timeline_note": result["timeline_note"],
+        # What the review step puts in front of a person. A JSON plan is not a thing anybody
+        # reads carefully while deciding whether to publish.
+        "summary": summarise(result),
+        "media_artifact_id": source_artifact,
+        "steps": len(result["plan"]),
+    }
+
+
 @register_executor("video.apply_plan")
 def execute_video_apply_plan(
     context: "SkillExecutorContext", inputs: dict[str, Any]
