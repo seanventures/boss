@@ -76,6 +76,16 @@ def test_public_issue_forms_are_exact_manifest_paths() -> None:
     ])
 
 
+def test_public_docs_do_not_export_internal_product_brief() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    internal = "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md"
+    assert not export.matching_rule(internal, manifest["include"])
+    assert export.matching_rule("docs/community/FEATURES.md", manifest["include"])
+    assert export.matching_rule("docs/product/V1_FEATURE_LOCK.md", manifest["include"])
+    public_docs = (export.ROOT / "docs/community/FEATURES.md").read_text()
+    assert internal not in public_docs
+
+
 def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:
     schemas = b"""from typing import Optional
 class BaseModel: pass

@@ -42,7 +42,6 @@
     "scripts/tests/test_metatron_tui.py",
     "tools/",
     "docs/community/",
-    "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md",
     "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md",
