@@ -32,6 +32,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import tomllib
 from typing import Optional
 
 _log = logging.getLogger(__name__)
@@ -39,6 +40,51 @@ _log = logging.getLogger(__name__)
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
 #: endpoint that writes it and the harness that reads it cannot disagree about the key.
 SUBSCRIPTION_SECRET_SCOPE = "subscription"
+
+
+def _grok_subscription_config_problem(home: Path, system_dir: Path = Path("/etc/grok")) -> str:
+    """Refuse config that can route a Grok subscription turn to an API-billed model.
+
+    Grok resolves per-model API credentials before the active OAuth session. Inspect every
+    documented config layer, including version overrides, without exposing config values.
+    A config we cannot read or parse is unsafe to assume subscription-backed.
+    """
+    api_route_keys = {"api_key", "env_key", "base_url", "extra_headers", "api_backend"}
+
+    def has_api_route(value: object) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "model" and isinstance(child, dict):
+                    if api_route_keys.intersection(child) or any(
+                        isinstance(entry, dict) and api_route_keys.intersection(entry)
+                        for entry in child.values()
+                    ):
+                        return True
+                if has_api_route(child):
+                    return True
+        elif isinstance(value, list):
+            return any(has_api_route(item) for item in value)
+        return False
+
+    for directory, name in (
+        (system_dir, "managed_config.toml"),
+        (home, "managed_config.toml"),
+        (home, "config.toml"),
+        (home, "requirements.toml"),
+        (system_dir, "requirements.toml"),
+    ):
+        path = directory / name
+        try:
+            if not path.exists() and not path.is_symlink():
+                continue
+            with path.open("rb") as handle:
+                config = tomllib.load(handle)
+        except (OSError, tomllib.TOMLDecodeError):
+            return "Grok configuration cannot be verified for subscription billing."
+        if has_api_route(config):
+            return ("Grok model configuration can use API billing. Remove its API model "
+                    "routing before connecting a subscription.")
+    return ""
 
 
 @dataclass(frozen=True)
@@ -600,6 +646,13 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
             result["auth_detail"] = "No readable, service-user-owned private CLI session (mode 0600)."
             result["next_step"] = f"sign in with: {spec.signin_hint}"
             return result
+        if spec.name == "grok":
+            config_problem = _grok_subscription_config_problem(Path(home))
+            if config_problem:
+                result["authenticated"] = False
+                result["auth_detail"] = config_problem
+                result["next_step"] = config_problem
+                return result
     code, out = _run_probe(found, spec.auth_check_args, extra_env=probe_env,
                            exclude_env=spec.env_exclude)
     # The line that ANSWERS the question, not merely the first one printed. These CLIs emit

@@ -102,6 +102,63 @@ def test_grok_positive_probe_is_only_a_preliminary_check(
     assert found["verified_harness"] is False
 
 
+@pytest.mark.parametrize("setting", (
+    'api_key = "fake-key"',
+    'env_key = "XAI_API_KEY"',
+    'base_url = "https://api.x.ai/v1"',
+    'extra_headers = { "x-api-key" = "fake-key" }',
+    'api_backend = "responses"',
+))
+def test_grok_refuses_api_model_configuration_before_auth_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str,
+) -> None:
+    home = _session(tmp_path)
+    (home / "config.toml").write_text(f'[model."grok-build"]\n{setting}\n')
+    monkeypatch.setenv("GROK_HOME", str(home))
+    monkeypatch.setattr(cli_harness.shutil, "which", lambda _: "/usr/local/bin/grok")
+    calls = []
+    monkeypatch.setattr(cli_harness, "_run_probe", lambda _binary, args, **_kw: (
+        calls.append(args) or (0, "grok 1.0.41")))
+
+    found = cli_harness.detect(SPEC)
+
+    assert not found["ready"] and not found["authenticated"]
+    assert "API billing" in found["auth_detail"]
+    assert "fake-key" not in str(found)
+    assert calls == [("--version",)]
+
+
+def test_grok_refuses_managed_override_and_unreadable_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    system = tmp_path / "etc"
+    home.mkdir()
+    system.mkdir()
+    (system / "requirements.toml").write_text(
+        '[[version_overrides]]\n[version_overrides.model.grok-build]\n'
+        'env_key = "XAI_API_KEY"\n')
+    assert "API billing" in cli_harness._grok_subscription_config_problem(home, system)
+    (system / "requirements.toml").write_text("[broken\n")
+    assert "cannot be verified" in cli_harness._grok_subscription_config_problem(home, system)
+
+
+def test_grok_refuses_direct_model_api_key(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    system = tmp_path / "etc"
+    home.mkdir()
+    system.mkdir()
+    (home / "config.toml").write_text('[model]\napi_key = "fake-key"\n')
+    assert "API billing" in cli_harness._grok_subscription_config_problem(home, system)
+
+
+def test_grok_allows_non_billing_preferences(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    system = tmp_path / "etc"
+    home.mkdir()
+    system.mkdir()
+    (home / "config.toml").write_text('[models]\ndefault = "grok-build"\n')
+    assert cli_harness._grok_subscription_config_problem(home, system) == ""
+
+
 def test_a_nonzero_auth_probe_is_never_ready_even_with_cached_models(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

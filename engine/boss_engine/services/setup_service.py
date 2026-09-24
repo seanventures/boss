@@ -590,7 +590,7 @@ def connect_coding_agent(
     if found["authenticated"] is False:
         if spec.require_local_session_file:
             raise SetupError(
-                f"the {provider} CLI is installed but not signed in for this service user. "
+                f"the {provider} CLI cannot use this service user's subscription. "
                 f"{found['next_step']}")
         # TRY THE STORED CREDENTIAL BEFORE REFUSING. On a server the CLI is never signed in
         # by hand — nobody can open a browser there — so "not signed in" is the expected

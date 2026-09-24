@@ -27,6 +27,13 @@ volume at `/home/boss/.grok`, owned by `boss`, to keep the CLI session after rec
 The CLI stores its own private `auth.json`; BOSS checks only file ownership, readability,
 mode 0600, and the CLI's auth response. A signed-out `grok models` may exit successfully
 and print cached models, so this check alone does not prove a working subscription.
+Grok gives per-model API keys and API endpoint settings precedence over its active session.
+BOSS inspects the documented user and managed TOML layers before each coding turn and
+refuses a subscription route if model API billing settings are present or a config cannot
+be parsed. Remove those model settings from the service user's Grok config and retry;
+the diagnostic never displays config values. BOSS also strips `XAI_API_KEY` from the child
+process. See [xAI authentication precedence](https://docs.x.ai/build/enterprise#authentication)
+and [configuration scopes](https://docs.x.ai/build/settings#scopes).
 
 Use `GET /v1/setup/coding-agents` to see `grok` detection and the next step. Use the setup
 screen or `POST /v1/setup/coding-agents/connect` with `{"project_id":"...","provider":"grok"}`
