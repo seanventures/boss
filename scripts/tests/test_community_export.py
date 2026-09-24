@@ -982,3 +982,13 @@ def test_public_specpack_manifest_references_existing_reviewed_specs() -> None:
             for skill in skill_spec["skills"]
             if "allowed_targets" in skill.get("policy", {})
         )
+
+def test_public_docs_do_not_export_internal_product_brief() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    internal = "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md"
+    assert not export.matching_rule(internal, manifest["include"])
+    assert export.matching_rule("docs/community/FEATURES.md", manifest["include"])
+    assert export.matching_rule("docs/product/V1_FEATURE_LOCK.md", manifest["include"])
+    public_docs = (export.ROOT / "docs/community/FEATURES.md").read_text()
+    assert internal not in public_docs
+
