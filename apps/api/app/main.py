@@ -14260,8 +14260,37 @@ def _set_project_skill_state(
             ),
             publisher=skill.get("publisher") or {},
             provenance=skill.get("provenance") or {},
+            # THE DECLARED RISK TIER, carried across from the catalogue.
+            #
+            # Without it `config` is empty, and workflow_custom_steps.resolve_risk reads
+            # config.risk_tier — so every skill registered this way bound at UNKNOWN_RISK (2).
+            # That is wrong in both directions at once: a tier-0 read like video.plan_edit
+            # "always requires a person", which makes a workflow unrunnable unattended, and a
+            # tier-3 publish is understated as 2. The tier a skill declares is the only
+            # tier anything downstream can act on, so it has to arrive with the row.
+            config={"risk_tier": int(skill["risk_tier"])}
+            if skill.get("risk_tier") is not None else None,
             actor=payload.actor,
         )
+    # REPAIR A ROW THAT PREDATES THE FIX ABOVE.
+    #
+    # ensure_skill only runs when the row is absent, so every skill registered before the tier
+    # was carried across still has an empty config — and goes on binding at UNKNOWN_RISK
+    # forever. Enabling is the action an operator already takes when a skill misbehaves, so it
+    # is the right place to put the repair: it makes the fix reachable from the console instead
+    # of needing a migration nobody knows to run.
+    declared = skill.get("risk_tier")
+    if declared is not None:
+        current = row.get("config") if isinstance(row.get("config"), dict) else {}
+        if current.get("risk_tier") is None:
+            connection.execute(
+                text("UPDATE project_skills SET config = COALESCE(config, '{}'::jsonb) "
+                        "|| CAST(:c AS JSONB) "
+                        "WHERE project_id = :p AND skill_id = :s"),
+                {"c": json.dumps({"risk_tier": int(declared)}),
+                 "p": payload.project_id, "s": skill_id},
+            )
+
     updated = (
         enable_skill(
             connection,

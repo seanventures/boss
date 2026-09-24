@@ -292,6 +292,11 @@ def seed_system_skills(
                 on_demand=skill.get("load") == "on_demand",
                 publisher={"id": "boss", "kind": "system"},
                 provenance={"source": "builtin", "version": "1", "trusted": True},
+                # Same reason as the enable path: config.risk_tier is what
+                # workflow_custom_steps.resolve_risk reads, and a row without it binds at
+                # UNKNOWN_RISK whatever the skill actually declared.
+                config=({"risk_tier": int(skill["risk_tier"])}
+                        if skill.get("risk_tier") is not None else None),
                 actor=actor,
             )
         )
