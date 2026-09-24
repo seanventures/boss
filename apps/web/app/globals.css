@@ -1555,53 +1555,28 @@ h1, h2, h3, h4, h5, h6 {
   .bx-refresh-line::after { animation: none; width: 100%; opacity: .55; }
 }
 
-/* THE ROUTE-LEVEL SKELETON — what is on screen before the console exists.
-   Six and a half seconds to first byte means every indicator inside the page is unreachable
-   during the wait it exists for. These are the only styles that are on screen for it. */
+/* The route-level fallback keeps the shell visible while the page loads. */
 .bx-skel {
-  display: block; border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    var(--surface-2, #0F1830) 0%,
-    color-mix(in srgb, var(--surface-3, #16203c) 70%, var(--accent, #2F6FE0) 8%) 45%,
-    var(--surface-2, #0F1830) 90%);
-  background-size: 220% 100%;
-  animation: bx-skel-sweep 1.5s ease-in-out infinite;
+  display: block;
+  border-radius: 2px;
+  background: var(--surface-2, #0F1830);
 }
-/* A skeleton that pulses forever is a page that has hung. The sweep is the only motion, and it
-   is the same rhythm as the loading bar above it so the screen reads as ONE thing waiting. */
-@keyframes bx-skel-sweep {
-  0%   { background-position: 140% 0; }
-  100% { background-position: -40% 0; }
-}
-.bx-skel-chip { height: 26px; width: 92px; border-radius: 999px; }
 .bx-skel-line { height: 11px; }
-.bx-skel-navitem { height: 30px; width: 100%; border-radius: 8px; }
-.bx-skel-nav { display: grid; gap: 8px; padding: 4px 12px; }
+.bx-skel-navitem { height: 9px; width: 64%; }
+.bx-skel-navitem:nth-child(2) { width: 78%; }
+.bx-skel-navitem:nth-child(4) { width: 55%; }
+.bx-skel-nav { display: grid; gap: 22px; padding: 18px 24px; }
 .bx-content-loading { padding: 22px 28px; }
-.bx-skel-grid {
-  display: grid; gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-}
-.bx-skel-card {
-  display: grid; gap: 10px; padding: 18px 16px;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--surface, #0d1424);
-}
-/* Motion is a signal here, not decoration. For a reader who has asked the OS to stop animating
-   things it becomes seven seconds of noise they cannot turn off — the bar's text and the
-   elapsed count still say everything this needs to say. */
-@media (prefers-reduced-motion: reduce) {
-  .bx-skel { animation: none; }
-}
+.bx-skel-title { width: min(240px, 55%); height: 24px; margin-bottom: 18px; }
+.bx-skel-rows { display: grid; gap: 1px; max-width: 760px; margin-top: 34px; background: var(--border); }
+.bx-skel-row { height: 48px; border-radius: 0; background: var(--surface, #0d1424); }
 
 /* The elapsed count. Tabular figures so the number does not jitter the sentence sideways as
    it ticks — a bar that twitches every second reads as broken rather than busy. */
 .bx-loading-elapsed {
-  margin-left: 8px; padding: 1px 6px; border-radius: 4px;
+  margin-left: 8px;
   font-variant-numeric: tabular-nums; font-size: 0.92em;
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 @media (max-width: 900px) { .bx-loading { padding-left: 14px; padding-right: 14px; } }
 
