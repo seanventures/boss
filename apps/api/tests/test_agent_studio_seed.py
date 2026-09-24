@@ -38,7 +38,7 @@ def test_catalog_seed_is_idempotent_receipted_and_never_spends(client, engine):
     assert first.status_code == 200, first.text
     body = first.json()
     assert body["status"] == "seeded"
-    assert body["agent_count"] == 13
+    assert body["agent_count"] == 34, body["skipped"]
     assert body["panel_count"] == 3
     assert body["workflow_count"] >= 1
     assert len(body["workflows"]) == body["workflow_count"]
@@ -86,6 +86,92 @@ def test_catalog_seed_is_idempotent_receipted_and_never_spends(client, engine):
     assert studio_jobs == 0
     assert receipt["status"] == "succeeded"
     assert receipt["effect_kind"] == "agent_studio.catalog_seed"
+
+
+def test_mobile_template_is_selectable_but_does_not_claim_device_execution(client, engine):
+    settings = get_settings()
+    response = client.get(
+        "/v1/agent-studio/templates",
+        params={"project_id": settings.default_project_id},
+    )
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert len(items) == 34
+    assert sum(item["id"] == "mobile_app_operator" for item in items) == 1
+    assert sum(
+        item["id"] != "mobile_app_operator"
+        and item.get("category") != "general"
+        for item in items
+    ) == 20
+    mobile = next(item for item in items if item["id"] == "mobile_app_operator")
+    assert mobile["readiness"] == "definition_only"
+    assert mobile["mobile"]["execution_status"] == "adapter_required"
+    assert mobile["mobile"]["capabilities"] == [
+        "build", "test", "launch", "interact", "screenshot", "logs"
+    ]
+    assert set(mobile["mobile"]["device_targets"]) == {
+        "android_emulator", "android_physical", "ios_simulator", "ios_physical"
+    }
+    assert "macos" in mobile["mobile"]["host_requirements"]["ios_simulator"]
+
+    with begin(engine) as connection:
+        jobs_before = connection.execute(text("SELECT count(*) FROM jobs")).scalar_one()
+    installed = client.post(
+        "/v1/agent-studio/templates/mobile_app_operator/install",
+        json={"project_id": settings.default_project_id, "actor": "ceo"},
+    )
+    assert installed.status_code == 200, installed.text
+    body = installed.json()
+    assert body["agent_key"] == "mobile_app_operator"
+    assert body["status"] == "installed"
+    assert body["receipt_id"]
+    assert body["model_calls"] == body["jobs_enqueued"] == body["external_effects"] == 0
+    assert body["launched_live_agent"] is False
+    with begin(engine) as connection:
+        jobs_after = connection.execute(text("SELECT count(*) FROM jobs")).scalar_one()
+        receipt = connection.execute(
+            text("SELECT status FROM receipts WHERE id=:id"), {"id": body["receipt_id"]}
+        ).scalar_one()
+    assert jobs_after == jobs_before
+    assert receipt == "succeeded"
+
+    missing = client.post(
+        "/v1/agent-studio/templates/not_a_template/install",
+        json={"project_id": settings.default_project_id, "actor": "ceo"},
+    )
+    assert missing.status_code == 404
+
+
+def test_template_install_restores_missing_builtin_role_without_replacing_existing_roles(
+    client, engine
+):
+    settings = get_settings()
+    with begin(engine) as connection:
+        pm_before = connection.execute(
+            text("SELECT spec FROM roles WHERE project_id=:p AND role_key='pm'"),
+            {"p": settings.default_project_id},
+        ).scalar_one()
+        deleted = connection.execute(
+            text("DELETE FROM roles WHERE project_id=:p AND role_key='docs_writer'"),
+            {"p": settings.default_project_id},
+        ).rowcount
+    assert deleted == 1
+    response = client.post(
+        "/v1/agent-studio/templates/technical_writer/install",
+        json={"project_id": settings.default_project_id, "actor": "ceo"},
+    )
+    assert response.status_code == 200, response.text
+    with begin(engine) as connection:
+        restored = connection.execute(
+            text("SELECT spec FROM roles WHERE project_id=:p AND role_key='docs_writer'"),
+            {"p": settings.default_project_id},
+        ).scalar_one()
+        pm_after = connection.execute(
+            text("SELECT spec FROM roles WHERE project_id=:p AND role_key='pm'"),
+            {"p": settings.default_project_id},
+        ).scalar_one()
+    assert restored["role_id"] == "docs_writer"
+    assert pm_after == pm_before
 
 
 def test_catalog_tables_ready_fails_closed_when_missing():

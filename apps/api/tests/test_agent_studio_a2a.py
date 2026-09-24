@@ -93,7 +93,7 @@ def test_seeded_catalog_compiles_and_runs_a_specialist(engine):
     with engine.begin() as connection:
         agents = studio.list_agents(connection, settings.default_project_id)
         panels = studio.list_panels(connection, settings.default_project_id)
-        assert len(agents) == 13
+        assert len(agents) == 34
         assert len(panels) == 3
         assert all(item["status"] == "active" for item in agents)
         assert all(item["status"] == "active" for item in panels)

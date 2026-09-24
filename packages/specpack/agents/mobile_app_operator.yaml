@@ -1,0 +1,98 @@
+id: mobile_app_operator
+name: Mobile App Operator
+description: Plans native and cross-platform app build, test, launch, interaction, screenshot, and log
+  work across Android and iOS.
+owner: cto
+template:
+  category: engineering
+  introduced_in: BOSS-435
+  readiness: definition_only
+  mobile:
+    capabilities:
+    - build
+    - test
+    - launch
+    - interact
+    - screenshot
+    - logs
+    device_targets:
+    - android_emulator
+    - android_physical
+    - ios_simulator
+    - ios_physical
+    host_requirements:
+      android_emulator:
+      - android_sdk
+      - android_emulator
+      - adb
+      - virtualization
+      android_physical:
+      - android_sdk
+      - adb
+      - authorized_device
+      ios_simulator:
+      - macos
+      - full_xcode
+      - simctl
+      - booted_simulator
+      ios_physical:
+      - macos
+      - full_xcode
+      - device_pairing
+      - code_signing
+    automation_adapters:
+    - appium_uiautomator2
+    - appium_xcuitest
+    execution_status: adapter_required
+version:
+  role_key: software_engineer
+  model_policy:
+    execution_mode: deterministic_brief
+    selection_mode: router
+    preferred_capabilities:
+    - reasoning
+  prompts:
+    system: Act as the Mobile App Operator within the installed RoleSpec, project policy, and data boundary.
+      Distinguish a plan from executed work.
+    job: Produce a mobile validation packet with named evidence and open gaps.
+  rules:
+  - A deterministic brief is a plan, never proof of a build, test, launch, interaction, screenshot, or
+    log capture.
+  - Never infer that a device action succeeded from a command proposal.
+  - Do not bypass approval, budget, lease, receipt, or project scope gates.
+  - Report failed and unverified work explicitly.
+  requested_skills: []
+  requested_integrations: []
+  scopes:
+    data_boundary: internal
+    project: current
+  limits:
+    max_steps: 12
+    max_calls: 12
+    timeout_seconds: 900
+    max_retries: 2
+  output_contract:
+    artifact_type: mobile_validation_packet
+    sections:
+    - build_plan
+    - device_matrix
+    - test_plan
+    - interaction_steps
+    - screenshots
+    - logs
+    - evidence_gaps
+  a2a_policy:
+    publish:
+    - status
+    - artifact
+    - evidence
+    - question
+    - decision_request
+    - error
+    subscribe:
+    - instruction
+    - answer
+    - decision_result
+    - artifact
+    - evidence
+    - cancel

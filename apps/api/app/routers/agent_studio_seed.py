@@ -40,6 +40,93 @@ class SeedCatalogRequest(BaseModel):
     actor: str = "vp_agents"
 
 
+@router.get("/v1/agent-studio/templates")
+def list_agent_templates(project_id: str) -> dict[str, Any]:
+    """Catalog cards for Org Chart; installation is separate from execution."""
+    service = AgentStudioService(get_settings())
+    with begin(get_engine()) as connection:
+        _project_scope(connection, project_id)
+        ready, missing = service._catalog_tables_ready(connection)
+        if not ready:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent Studio schema is not applied: " + ", ".join(missing),
+            )
+        installed = {
+            item["agent_key"]: item
+            for item in service.list_agents(connection, project_id)
+        }
+        return {
+            "project_id": project_id,
+            "items": [
+                {
+                    **item,
+                    "installed": item["id"] in installed,
+                    "active": bool(installed.get(item["id"], {}).get("active_version_id")),
+                }
+                for item in service.list_templates()
+            ],
+        }
+
+
+@router.post("/v1/agent-studio/templates/{template_id}/install")
+def install_agent_template(
+    template_id: str, payload: SeedCatalogRequest
+) -> dict[str, Any]:
+    """Install one project-scoped definition with the existing Studio gates."""
+    settings = get_settings()
+    service = AgentStudioService(settings)
+    receipts = ReceiptService()
+    with begin(get_engine()) as connection:
+        from apps.api.app.main import require_project_actor
+
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        scope = _project_scope(connection, payload.project_id)
+        template = next(
+            (item for item in service.list_templates() if item["id"] == template_id),
+            None,
+        )
+        if template is None:
+            raise HTTPException(status_code=404, detail="Agent template not found.")
+        dedupe_key = f"agent-studio:template-install:{payload.project_id}:{template_id}"
+        receipt, _created = receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            payload.project_id,
+            dedupe_key,
+            "agent_studio.template_install",
+            {"project_id": payload.project_id, "template_id": template_id},
+            {"project_id": payload.project_id, "actor": payload.actor,
+             "external_effects": 0, "model_calls": 0, "jobs_enqueued": 0},
+        )
+        try:
+            seeded = service.seed_template(
+                connection, payload.project_id, template_id, payload.actor
+            )
+        except (AgentStudioSchemaMissingError, ProgrammingError, ValueError) as error:
+            raise _schema_http_error(error) from error
+        receipts.mark_succeeded(
+            connection,
+            receipt["id"],
+            None,
+            {"agent_key": seeded["agent_key"], "status": "installed",
+             "external_effects": 0, "model_calls": 0, "jobs_enqueued": 0},
+        )
+        return {
+            **seeded,
+            "status": "installed",
+            "receipt_id": receipt["id"],
+            "dedupe_key": dedupe_key,
+            "external_effects": 0,
+            "model_calls": 0,
+            "jobs_enqueued": 0,
+            "launched_live_agent": False,
+        }
+
+
 def _project_scope(connection: Any, project_id: str) -> dict[str, str]:
     row = connection.execute(
         text(

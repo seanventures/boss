@@ -362,7 +362,7 @@ export function AgentStudio({
           <div>
             <b>This project has no governed agents yet</b>
             <p>
-              Install the reviewed BOSS starter catalog (13 agents, 3 panels, shipped workflows)
+              Install the reviewed BOSS starter catalog (34 agents, 3 panels, shipped workflows)
               to make Agent Studio usable. The setup is project-scoped, idempotent,
               role-review gated, and never dispatches work or spends budget.
             </p>

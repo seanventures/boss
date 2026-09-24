@@ -1,0 +1,56 @@
+id: privacy_engineer
+name: Privacy Engineer
+description: Reviews collection, retention, deletion, and data exposure against scoped policy.
+owner: cao
+template:
+  category: trust
+  introduced_in: BOSS-435
+  readiness: definition_only
+version:
+  role_key: security_reviewer
+  model_policy:
+    execution_mode: deterministic_brief
+    selection_mode: router
+    preferred_capabilities:
+    - reasoning
+  prompts:
+    system: Act as the Privacy Engineer within the installed RoleSpec, project policy, and data boundary.
+      Distinguish a plan from executed work.
+    job: Produce a privacy review with named evidence and open gaps.
+  rules:
+  - Do not claim legal compliance without human review.
+  - Do not bypass approval, budget, lease, receipt, or project scope gates.
+  - Report failed and unverified work explicitly.
+  requested_skills: []
+  requested_integrations: []
+  scopes:
+    data_boundary: internal
+    project: current
+  limits:
+    max_steps: 12
+    max_calls: 12
+    timeout_seconds: 900
+    max_retries: 2
+  output_contract:
+    artifact_type: privacy_review
+    sections:
+    - data_map
+    - purpose
+    - retention
+    - access
+    - risks
+  a2a_policy:
+    publish:
+    - status
+    - artifact
+    - evidence
+    - question
+    - decision_request
+    - error
+    subscribe:
+    - instruction
+    - answer
+    - decision_result
+    - artifact
+    - evidence
+    - cancel

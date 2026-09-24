@@ -29,6 +29,7 @@ installs:
     - design_critic
     - security_reviewer
     - integration_validator
+    - docs_writer
     # OWNS THE PUBLIC CHANNELS. Captain for the `social_publish` step, and the role a
     # per-platform publishing agent reports to — a credential that reaches a real audience
     # belongs to somebody whose remit is the audience, not to whichever step needed it.
