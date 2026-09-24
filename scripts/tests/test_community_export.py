@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
+
+from scripts.generate_feature_docs import parse_traceability
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "community_export.py"
 spec = importlib.util.spec_from_file_location("community_export", MODULE_PATH)
@@ -74,6 +78,41 @@ def test_public_issue_forms_are_exact_manifest_paths() -> None:
         ".github/ISSUE_TEMPLATE/feature.yml",
         ".github/ISSUE_TEMPLATE/config.yml",
     ])
+
+
+def test_community_traceability_is_pinned_and_references_exported_files() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    rewrite = manifest["traceability_export_rewrite"]
+    source = export.ROOT / rewrite["source"]
+    source_bytes = source.read_bytes()
+    assert hashlib.sha256(source_bytes).hexdigest() == rewrite["sha256"]
+    assert rewrite["destination"] in manifest["required_runtime"]
+    assert not any(marker in source_bytes for marker in export.PRIVATE_MARKERS)
+    assert not any(marker in source_bytes for marker in export.PAID_SOURCE_MARKERS)
+    assert not re.search(r"\b(?:Cloud|Enterprise|customer|commercial|hosted)\b", source.read_text(), re.I)
+
+    features = parse_traceability(source)
+    labels = {feature.label for feature in features}
+    assert "MET-001" in labels and "DOC-001" in labels
+    assert "NFR-002" in labels
+    assert not labels.intersection({"COM-PKG-001", "ACC-001", "ENT-CLUST-001", "MEB-V2-001"})
+
+    sha = export.git(export.ROOT, "rev-parse", "HEAD^{commit}").decode().strip()
+    report, selected = export.analyze(export.ROOT, sha, manifest)
+    assert report["traceability_export_rewrite_applied"] is True
+    assert selected[rewrite["destination"]] == source_bytes
+    assert rewrite["source"] not in selected
+    assert not any(
+        blocker.get("path") == rewrite["destination"]
+        or blocker.get("to") == rewrite["destination"]
+        for blocker in report["blockers"]
+    )
+    for feature in features:
+        for column in (feature.implementation, feature.tests):
+            refs = re.findall(r"`([^`]+)`", column)
+            assert refs, feature.label
+            assert all(ref in selected for ref in refs), feature.label
 
 
 def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:
