@@ -196,6 +196,7 @@ import { fetchTaskFeed } from "../lib/tasks";
 import { API_URL, PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
 import { fetchIdentityProvidersFeed } from "../lib/identity-providers";
+import { fetchIdentityRegistryFeed } from "../lib/identity-registry";
 import { IdentityProvidersCatalogView } from "./identity-providers-ui";
 import { fetchOncallSreStatus } from "../lib/oncall-sre";
 import { OncallSreHome } from "./oncall-sre-ui";
@@ -672,6 +673,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // already produced, so the positions below are unchanged and nothing is reordered.
   const platformOpsWaveP = Promise.all([
     fetchIdentityProvidersFeed(activeProjectId, needs("enterprise")),
+    fetchIdentityRegistryFeed(activeProjectId, needs("enterprise")),
     fetchOncallSreStatus(activeProjectId, needs("reliability")),
     Promise.resolve(assuranceArea.securityScanners),
     Promise.resolve(assuranceArea.latestSecurityScan),
@@ -862,6 +864,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // Platform ops panels nested into existing Mission Control areas (no new nav).
   const [
     identityProvidersFeed,
+    identityRegistry,
     oncallSreStatus,
     securityScanners,
     latestSecurityScan,
@@ -3902,6 +3905,384 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             feed={identityProvidersFeed}
             projectId={activeProjectId}
           />
+        </section>
+        ) : null}
+
+        {shows("enterprise") ? (
+        <section className="panel-stack" data-area="enterprise" aria-label="Self-hosted SSO management">
+          <div className="stack-grid">
+            <article
+              className="stack-card"
+              data-testid="sso-enterprise-identity-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="Self-hosted identity providers"
+                editionId={editionId}
+                communityIncluded
+              />
+              <p className="detail" style={{ marginTop: 8 }}>
+                Self-hosted OIDC, SAML, and SCIM IdP registry — included in Community.
+              </p>
+              {!identityRegistry.apiReachable ? (
+                <p className="detail">
+                  {identityRegistry.blockedReason ?? "Identity provider API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {identityRegistry.identityProviders.length === 0 ? (
+                    <p className="detail">
+                      No OIDC, SAML, or SCIM identity provider metadata has been
+                      registered.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {identityRegistry.identityProviders.slice(0, 6).map((provider) => (
+                        <div className="feed-row" key={provider.id}>
+                          <div>
+                            <h4>{provider.displayName}</h4>
+                            <p className="detail">
+                              {provider.providerKey} /{" "}
+                              {titleCaseToken(provider.providerType)} /{" "}
+                              {provider.testStatus}
+                            </p>
+                            <p className="detail">
+                              Ref{" "}
+                              {provider.issuer ??
+                                provider.entityId ??
+                                provider.scimBaseUrl ??
+                                "not configured"}{" "}
+                              / SecretRef {provider.secretRef ?? "not required"}
+                            </p>
+                            {provider.blockingGaps.length > 0 ? (
+                              <p className="detail">
+                                Gaps: {provider.blockingGaps.join(", ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              provider.status === "active" ? "" : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(provider.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={upsertEnterpriseIdentityProviderAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Provider key</span>
+                      <input className="input" name="provider_key" required />
+                    </label>
+                    <label className="field">
+                      <span>Provider type</span>
+                      <select className="input" name="provider_type" defaultValue="oidc">
+                        <option value="oidc">OIDC</option>
+                        <option value="saml">SAML</option>
+                        <option value="scim">SCIM</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Display name</span>
+                      <input className="input" name="display_name" required />
+                    </label>
+                    <label className="field">
+                      <span>Issuer</span>
+                      <input className="input" name="issuer" placeholder="https://idp.example" />
+                    </label>
+                    <label className="field">
+                      <span>Audience</span>
+                      <input className="input" name="audience" placeholder="boss-api" />
+                    </label>
+                    <label className="field">
+                      <span>JWKS URL</span>
+                      <input className="input" name="jwks_url" placeholder="https://idp.example/.well-known/jwks.json" />
+                    </label>
+                    <label className="field">
+                      <span>SAML entity ID</span>
+                      <input className="input" name="entity_id" />
+                    </label>
+                    <label className="field">
+                      <span>SAML SSO URL</span>
+                      <input className="input" name="sso_url" />
+                    </label>
+                    <label className="field">
+                      <span>SAML certificate fingerprint</span>
+                      <input className="input" name="certificate_fingerprint" />
+                    </label>
+                    <label className="field">
+                      <span>SCIM base URL</span>
+                      <input className="input" name="scim_base_url" />
+                    </label>
+                    <label className="field">
+                      <span>SecretRef</span>
+                      <input className="input" name="secret_ref" placeholder="secretref:idp-token" />
+                    </label>
+                    <label className="field">
+                      <span>Status</span>
+                      <select className="input" name="status" defaultValue="planned">
+                        <option value="planned">Planned</option>
+                        <option value="active">Active</option>
+                        <option value="disabled">Disabled</option>
+                      </select>
+                    </label>
+                    <SubmitButton className="button secondary" type="submit">
+                      Save identity provider
+                    </SubmitButton>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article
+              className="stack-card"
+              data-testid="sso-identity-rollout-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="Identity rollout policies"
+                editionId={editionId}
+                communityIncluded
+              />
+              {!identityRegistry.apiReachable ? (
+                <p className="detail">
+                  {identityRegistry.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {identityRegistry.identityRolloutPolicies.length === 0 ? (
+                    <p className="detail">
+                      No identity rollout policy is configured. SAML login and SCIM
+                      runtime provisioning stay blocked until a policy is approved.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {identityRegistry.identityRolloutPolicies.map((policy) => (
+                        <div className="feed-row" key={policy.id}>
+                          <div>
+                            <h4>{titleCaseToken(policy.providerType)}</h4>
+                            <p className="detail">
+                              {titleCaseToken(policy.runtimeMode)} / domains{" "}
+                              {policy.allowedDomains.join(", ") || "not restricted"}
+                            </p>
+                            <p className="detail">
+                              Updated by {policy.createdBy} at{" "}
+                              {formatDateTime(policy.updatedAt)}
+                            </p>
+                            {policy.rolloutNotes ? (
+                              <p className="detail">{policy.rolloutNotes}</p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              policy.runtimeMode === "auth_allowed" ||
+                              policy.runtimeMode === "provisioning_allowed"
+                                ? ""
+                                : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(policy.runtimeMode)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={upsertEnterpriseIdentityRolloutPolicyAction}
+                    className="composer compact"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Provider type</span>
+                      <select className="input" name="provider_type" defaultValue="saml">
+                        <option value="oidc">OIDC</option>
+                        <option value="saml">SAML</option>
+                        <option value="scim">SCIM</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Runtime mode</span>
+                      <select className="input" name="runtime_mode" defaultValue="disabled">
+                        <option value="disabled">Disabled</option>
+                        <option value="metadata_only">Metadata only</option>
+                        <option value="auth_allowed">Auth allowed</option>
+                        <option value="provisioning_allowed">Provisioning allowed</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Allowed domains</span>
+                      <textarea
+                        className="textarea"
+                        name="allowed_domains"
+                        placeholder="example.com"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Rollout notes</span>
+                      <textarea
+                        className="textarea"
+                        name="rollout_notes"
+                        placeholder="Approval, IdP environment, and rollback notes."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="textarea"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <SubmitButton className="button secondary" type="submit">
+                      Save rollout policy
+                    </SubmitButton>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article
+              className="stack-card"
+              data-testid="sso-scim-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="SCIM provisioning"
+                editionId={editionId}
+                communityIncluded
+              />
+              {!identityRegistry.apiReachable ? (
+                <p className="detail">
+                  {identityRegistry.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  <div className="feed-list">
+                    {identityRegistry.scimGroups.length === 0 ? (
+                      <p className="detail">No SCIM groups have been provisioned.</p>
+                    ) : (
+                      identityRegistry.scimGroups.slice(0, 4).map((group) => (
+                        <div className="feed-row" key={group.id}>
+                          <div>
+                            <h4>{group.displayName}</h4>
+                            <p className="detail">
+                              {group.externalId ?? "no external id"} / {group.status}
+                            </p>
+                            <p className="detail">
+                              Roles {group.roleKeys.join(", ") || "none"} / permissions{" "}
+                              {group.permissions.length}
+                            </p>
+                          </div>
+                          <span className="pill">{titleCaseToken(group.status)}</span>
+                        </div>
+                      ))
+                    )}
+                    {identityRegistry.scimUsers.length === 0 ? (
+                      <p className="detail">No SCIM users have been provisioned.</p>
+                    ) : (
+                      identityRegistry.scimUsers.slice(0, 4).map((user) => (
+                        <div className="feed-row" key={user.id}>
+                          <div>
+                            <h4>{user.displayName}</h4>
+                            <p className="detail">
+                              {user.userName} / member {user.memberId} /{" "}
+                              {user.active ? "active" : "inactive"}
+                            </p>
+                            <p className="detail">
+                              Roles {user.roleKeys.join(", ") || "none"} / groups{" "}
+                              {user.groups.join(", ") || "none"}
+                            </p>
+                          </div>
+                          <span className={`pill${user.active ? "" : " warn"}`}>
+                            {user.active ? "active" : "inactive"}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <form action={upsertEnterpriseScimGroupAction} className="composer">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Group display name</span>
+                      <input className="input" name="display_name" required />
+                    </label>
+                    <label className="field">
+                      <span>External group ID</span>
+                      <input className="input" name="external_id" />
+                    </label>
+                    <label className="field">
+                      <span>Role keys</span>
+                      <textarea className="input" name="role_keys" placeholder="operator" />
+                    </label>
+                    <label className="field">
+                      <span>Permissions</span>
+                      <textarea
+                        className="input"
+                        name="permissions"
+                        placeholder="command_submit&#10;enterprise_manage"
+                      />
+                    </label>
+                    <SubmitButton className="button secondary" type="submit">
+                      Upsert SCIM group
+                    </SubmitButton>
+                  </form>
+
+                  <form action={upsertEnterpriseScimUserAction} className="composer">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>User name</span>
+                      <input className="input" name="user_name" required />
+                    </label>
+                    <label className="field">
+                      <span>Display name</span>
+                      <input className="input" name="display_name" required />
+                    </label>
+                    <label className="field">
+                      <span>External user ID</span>
+                      <input className="input" name="external_id" />
+                    </label>
+                    <label className="field">
+                      <span>Role keys</span>
+                      <textarea className="input" name="role_keys" placeholder="operator" />
+                    </label>
+                    <label className="field">
+                      <span>Permissions</span>
+                      <textarea
+                        className="input"
+                        name="permissions"
+                        placeholder="command_submit&#10;enterprise_manage"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Groups</span>
+                      <textarea className="input" name="groups" placeholder="ops" />
+                    </label>
+                    <label className="check-row">
+                      <input type="hidden" name="active" value="false" />
+                      <input type="checkbox" name="active" value="true" defaultChecked />
+                      <span>Active user grants org-member access</span>
+                    </label>
+                    <SubmitButton className="button secondary" type="submit">
+                      Upsert SCIM user
+                    </SubmitButton>
+                  </form>
+                </>
+              )}
+            </article>
+          </div>
         </section>
         ) : null}
 
