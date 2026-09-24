@@ -167,6 +167,10 @@ def test_write_http_cli_refuses_missing_token_and_public_bind(monkeypatch, capsy
     )
     parser = build_parser()
     monkeypatch.delenv("BOSS_MCP_HTTP_TOKEN", raising=False)
+    public_read = parser.parse_args(["serve-mcp", "--http", "--host", "0.0.0.0"])
+    assert _cmd_serve_mcp(public_read) == 2
+    assert "read tools can expose project data" in capsys.readouterr().err
+
     args = parser.parse_args(["serve-mcp", "--http", "--allow-writes"])
     assert _cmd_serve_mcp(args) == 2
     assert "BOSS_MCP_HTTP_TOKEN" in capsys.readouterr().err
@@ -177,3 +181,14 @@ def test_write_http_cli_refuses_missing_token_and_public_bind(monkeypatch, capsy
     ])
     assert _cmd_serve_mcp(args) == 2
     assert "loopback" in capsys.readouterr().err
+
+
+def test_read_only_http_can_require_authentication():
+    client = TestClient(MCPServer(
+        ctx=None, project_id="p", registry=ToolRegistry(), read_only=True,
+        http_token="secret-token",
+    ).asgi_app())
+    assert client.get("/health").status_code == 401
+    assert client.get(
+        "/health", headers={"Authorization": "Bearer secret-token"}
+    ).status_code == 200

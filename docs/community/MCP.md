@@ -16,7 +16,8 @@ option or `BOSS_PROJECT_ID`. Stdio supports governed write tools by default.
 boss-engine --project boss-dogfood serve-mcp
 ```
 
-An HTTP server starts read-only, even if it binds a public interface:
+An HTTP server starts read-only. A non-loopback bind also requires
+`BOSS_MCP_HTTP_TOKEN`, because read tools can expose project data:
 
 ```bash
 boss-engine --project boss-dogfood serve-mcp --http --host 127.0.0.1
@@ -35,7 +36,8 @@ boss-engine --project boss-dogfood serve-mcp --http --allow-writes --host 127.0.
 HTTP clients send `Authorization: Bearer <BOSS_MCP_HTTP_TOKEN>` to `/mcp` and
 `/health`. The Mission Control snapshot page at `/` prompts for the token if
 the HTTP server requires it. Keep the token out of logs, command-line arguments,
-and repository files.
+and repository files. Use TLS or a tunnel for any connection that leaves the
+host so the bearer token is not sent over cleartext.
 
 ## What agents can do
 

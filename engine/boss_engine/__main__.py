@@ -214,9 +214,14 @@ def _cmd_serve_mcp(args) -> int:
     # advertising write tools there would invite a caller to take an action
     # that cannot create the required durable audit trail.
     read_only = _serve_mcp_read_only(args) or not ctx.durable_workspace_configured
-    http_token = (
-        os.environ.get("BOSS_MCP_HTTP_TOKEN") if args.http and not read_only else None
-    )
+    http_token = os.environ.get("BOSS_MCP_HTTP_TOKEN") if args.http else None
+    if args.http and args.host not in ("127.0.0.1", "localhost", "::1") and not http_token:
+        print(
+            "boss-engine: non-loopback HTTP MCP requires BOSS_MCP_HTTP_TOKEN; "
+            "read tools can expose project data.",
+            file=sys.stderr,
+        )
+        return 2
     if args.http and not read_only:
         if args.host not in ("127.0.0.1", "localhost", "::1"):
             print(

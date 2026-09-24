@@ -87,7 +87,9 @@ export DB='postgresql+psycopg://boss:boss@boss-db:5432/boss'
 docker run --rm --network boss -e DATABASE_URL=$DB boss-engine bootstrap
 docker run --rm --network boss -e DATABASE_URL=$DB boss-engine status
 docker run -i  --rm --network boss -e DATABASE_URL=$DB boss-engine serve-mcp   # stdio
-docker run -d  --name boss-mcp --network boss -p 8791:8791 -e DATABASE_URL=$DB \
+export BOSS_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+docker run -d --name boss-mcp --network boss -p 127.0.0.1:8791:8791 \
+  -e DATABASE_URL=$DB -e BOSS_MCP_HTTP_TOKEN \
   boss-engine serve-mcp --http --host 0.0.0.0                                  # HTTP (read-only)
 ```
 
@@ -97,7 +99,8 @@ docker run -d  --name boss-mcp --network boss -p 8791:8791 -e DATABASE_URL=$DB \
 page at `http://host:8791/` — project status, running work, code tasks,
 previews, discovery and meetings, rendered straight from the engine's read
 tools over the same `/mcp` JSON-RPC endpoint. HTTP mode defaults to
-**read-only** (no transport auth); write tools stay on stdio MCP or require
+**read-only** (loopback needs no transport auth; non-loopback requires a token);
+write tools stay on stdio MCP or require
 `--allow-writes` on loopback with `BOSS_MCP_HTTP_TOKEN`. Authenticated HTTP
 clients send `Authorization: Bearer <token>`; remote clients can use an SSH
 tunnel. The Mission Control page prompts for that token in write-capable mode
