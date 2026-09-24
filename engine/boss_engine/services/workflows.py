@@ -27,6 +27,7 @@ from .workflow_capabilities import (
     estimate_minutes as capability_minutes,
     project_requirements as capability_project_requirements,
     validate_step as capability_problems,
+    validate_captain,
 )
 
 logger = logging.getLogger(__name__)
@@ -297,6 +298,13 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 raise WorkflowValidationError(
                     f"step '{step_id}' does not say which custom step it runs."
                 )
+            # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
+            # had their captain checked — so a typo in a role on a customer's step published
+            # cleanly and was denied at run time, twenty minutes into a workflow, as
+            # "caller 'vidoe_editor' not in allowed_callers".
+            captain_problems = validate_captain(step)
+            if captain_problems:
+                raise WorkflowValidationError(" ".join(captain_problems))
             approval = dict(step.get("approval") or {})
             mode = str(approval.get("mode", "auto")).lower()
             if mode not in ("auto", "manual"):

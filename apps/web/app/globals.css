@@ -10306,3 +10306,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   font-size: 0.6rem; letter-spacing: .06em; color: var(--amber, #d8a657);
   border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; opacity: .8;
 }
+
+/* Which agent runs a step. Narrower than the approval control beside it: the role names are
+   long, and this is a choice most steps leave on their default. */
+.dw-draft-captain { max-width: 190px; font-size: 0.74rem; }

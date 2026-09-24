@@ -484,6 +484,18 @@ def execute(
     SkillRuntimeService, which is where permission, budget and effect receipts live — the same
     path the chat agent uses. A second, ungoverned way to call a customer's tools is exactly
     what a workflow product must not grow.
+
+    WHO RUNS IT. A step may name a captain, and for a BUILT-IN capability that captain has
+    always become the actor — which is why BOSS's own pipelines read as agents doing the work.
+    A custom step ignored it and ran as `workflow_runner` every time, so a customer's workflow
+    had no agent in it anywhere. Same mechanism, same validation, now the same behaviour.
+
+    AND NAMING ONE IS NOT A GRANT. Without a captain the runner is added to the skill's allowed
+    callers, because choosing the skill for a step IS the grant (see
+    `_spec_granting_the_runner`). With one, the ROLE has to be allowed on its own merits — no
+    widening. That asymmetry is the whole value of naming an agent: putting `video_editor` on a
+    publish step is refused, because that role is forbidden to publish. Auto-granting whatever
+    captain was typed would make the assignment decorative, which is worse than not having it.
     """
     binding = step.get("binding") or {}
     key = str(binding.get("custom_step") or "")
@@ -526,13 +538,20 @@ def execute(
     if knowledge.strip():
         inputs = {**inputs, "knowledge": knowledge.strip()}
 
+    # The agent this step names, if it names one. Validated at publish time by
+    # workflow_capabilities.validate_captain, which refuses a role the workforce does not have.
+    captain = str(step.get("captain") or "").strip().lower()
+
     if row["binding_kind"] == "skill":
         from .agent_loop import _invoke_agent_skill
 
         result = _invoke_agent_skill(
             connection, settings, project_id, str(row["skill_id"]),
-            RUNNER_CALLER, inputs, actor=actor,
-            skill_spec=_spec_granting_the_runner(
+            captain or RUNNER_CALLER, inputs, actor=captain or actor,
+            # No widening when an agent was named — see the docstring. The grant exists for the
+            # anonymous runner, which no skill could have listed because it did not exist when
+            # they were written; a role is something a skill can and does decide about.
+            skill_spec=None if captain else _spec_granting_the_runner(
                 connection, settings, project_id, str(row["skill_id"])
             ),
         )
@@ -569,7 +588,8 @@ def execute(
     result = _invoke_mcp_skill(
         connection, settings, project_id,
         dict(server), {"name": row["mcp_tool_name"]}, inputs,
-        run_id=run_id, step=step_index, actor=actor, caller=RUNNER_CALLER,
+        run_id=run_id, step=step_index, actor=captain or actor,
+        caller=captain or RUNNER_CALLER,
     )
     if str(result.get("status")) in ("denied", "failed"):
         raise CustomStepError(
