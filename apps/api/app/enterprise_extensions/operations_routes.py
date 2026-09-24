@@ -14,7 +14,7 @@ from sqlalchemy.engine import Connection, Engine
 from boss_engine.services.enterprise import EnterpriseService
 
 from ..db import begin
-from ..schemas import (
+from .paid_schemas import (
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
     EnterpriseClusterUpsertRequest,
