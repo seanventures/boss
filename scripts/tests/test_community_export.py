@@ -428,6 +428,11 @@ def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
     source = repo / "packages/api-client/src/community.ts"
     source.parent.mkdir(parents=True)
     source.write_text("export const community = true;\n")
+    (source.parent / "index.ts").write_text('export * from "./paid";\n')
+    (source.parent / "paid.ts").write_text("export const commercial = true;\n")
+    tests = repo / "packages/api-client/tests"
+    tests.mkdir()
+    (tests / "private-compat.test.ts").write_text('import "../src/index";\n')
     package = repo / "packages/api-client/package.json"
     package.write_text('{"name":"@boss/api-client","exports":{".":"./src/index.ts"}}\n')
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -451,7 +456,11 @@ def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
     manifest = {
         "schema_version": 1,
         "include": ["packages/api-client/"],
-        "exclude": ["packages/api-client/src/paid.ts"],
+        "exclude": [
+            "packages/api-client/src/index.ts",
+            "packages/api-client/src/paid.ts",
+            "packages/api-client/tests/private-compat.test.ts",
+        ],
         "requires_split": ["packages/api-client/src/private.ts"],
         "required_runtime": ["packages/api-client/src/community.ts"],
         "required_release": ["packages/api-client/package.json"],
@@ -468,6 +477,10 @@ def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
     assert json.loads(candidate["packages/api-client/package.json"])["exports"]["."] == (
         "./src/community.ts"
     )
+    assert "packages/api-client/src/index.ts" not in candidate
+    assert "packages/api-client/src/paid.ts" not in candidate
+    assert "packages/api-client/tests/private-compat.test.ts" not in candidate
+    assert not any(b["kind"] == "typescript-import" for b in report["blockers"])
     changed = json.loads(json.dumps(manifest))
     changed["package_export_rewrite"]["from"] = "./src/changed.ts"
     report, _ = export.analyze(repo, sha, changed)
