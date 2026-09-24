@@ -81,3 +81,25 @@ def test_the_builder_palette_endpoint_actually_runs():
     assert payload["roles"], "a step must have agents to offer"
     assert "media_publisher" in payload["roles"]
     assert isinstance(payload["manual_approval_risk_floor"], int)
+
+
+def test_an_agent_that_cannot_run_the_step_is_caught_when_the_workflow_is_saved():
+    """Not twenty minutes into a run.
+
+    The captain IS the permission identity, so assigning video_editor to a publish step is
+    refused by the runtime — correctly, and at the worst possible moment: the operator has
+    waited through a render to learn the last step could never have run. Both facts are known
+    at save time.
+    """
+    source = inspect.getsource(steps.validate_step)
+    assert "_allowed_callers(" in source
+    assert "which is not " in source and "allowed to run" in source
+
+
+def test_the_check_does_not_fail_closed_on_its_own_lookup():
+    """A skill whose spec cannot be read here must not make every workflow using it
+    unpublishable. The runtime performs the real check either way."""
+    source = inspect.getsource(steps._allowed_callers)
+    assert "return set()" in source
+    assert "if callers and captain not in callers" in inspect.getsource(steps.validate_step), \
+        "an empty set must mean 'do not judge', not 'refuse everything'"

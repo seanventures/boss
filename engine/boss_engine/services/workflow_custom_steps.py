@@ -462,7 +462,42 @@ def validate_step(
             f"{definition['binding_kind'].replace('_', ' ')} at risk tier "
             f"{definition['risk_tier']}. Only a reviewed one can be given that much reach."
         )
+
+    # CAN THE AGENT NAMED ACTUALLY RUN THIS? Asked HERE rather than discovered mid-run.
+    #
+    # The captain is the permission identity, so assigning `video_editor` to a publish step is
+    # refused — correctly — by the runtime. Refused twenty minutes into a workflow, as "caller
+    # 'video_editor' not in allowed_callers", which is the right rule delivered at the worst
+    # possible moment: the operator has waited for a render before learning the step could
+    # never have run. Both facts are known when the workflow is saved.
+    captain = str(step.get("captain") or "").strip().lower()
+    if captain and definition["binding_kind"] == "skill" and definition["skill_id"]:
+        callers = _allowed_callers(connection, project_id, str(definition["skill_id"]))
+        if callers and captain not in callers:
+            problems.append(
+                f"step '{step_id}' gives '{definition['label']}' to {captain}, which is not "
+                f"allowed to run {definition['skill_id']}. That skill accepts: "
+                f"{', '.join(sorted(callers))}."
+            )
     return problems
+
+
+def _allowed_callers(connection: Connection, project_id: str, skill_id: str) -> set[str]:
+    """Who the skill itself says may invoke it, or an empty set if that cannot be read.
+
+    EMPTY MEANS "DO NOT JUDGE". A skill whose spec cannot be loaded here must not make every
+    workflow using it unpublishable — the runtime performs the real check either way, and a
+    validator that fails closed on its own lookup error blocks correct work.
+    """
+    try:
+        from .entitlements import EntitlementBrokerService
+
+        spec = EntitlementBrokerService(None).get_skill(
+            skill_id, project_id, connection=connection) or {}
+        permissions = spec.get("permissions") or {}
+        return {str(c).strip().lower() for c in (permissions.get("allowed_callers") or [])}
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 # ── Execution ──────────────────────────────────────────────────────────────────

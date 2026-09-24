@@ -4454,6 +4454,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   //: Which step "Customize this step" sent them to, so the row can say so. Cleared on the
   //: next selection — a highlight that never goes away stops meaning anything.
   const [focusStep, setFocusStep] = useState<string | null>(null);
+  /** Which step has its inputs open. One at a time: a canvas with every step expanded is a
+   *  form, and the thing being edited is the ORDER as much as the wiring. */
+  const [wiringStep, setWiringStep] = useState<string | null>(null);
   //: MAKING ONE COMES FIRST, and the default has to agree with the tabs.
   //:
   //: The tab ORDER already says this — "somebody who opens 'Build your own' is usually here to
@@ -4702,6 +4705,48 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       approval: "auto",
       config: { ...(block.defaults ?? {}) },
     }]);
+
+  /** What this step takes, and whether each one is required — the customer's own steps declare
+   *  it, the built-in capabilities declare it, and the wiring panel needs one answer. */
+  const declaredInputs = useCallback((step: Draft) => {
+    if (step.customStep) {
+      const mine = customSteps.find((c) => c.step_key === step.customStep);
+      return (mine?.inputs ?? []).map((i) => ({ name: i.name, required: i.required }));
+    }
+    const capability = capabilities.find((c) => c.key === step.capability);
+    return [
+      ...(capability?.required_inputs ?? []).map((name) => ({ name, required: true })),
+      ...(capability?.optional_inputs ?? []).map((name) => ({ name, required: false })),
+    ];
+  }, [capabilities, customSteps]);
+
+  /** What the steps BEFORE this one produce. Only earlier steps: a workflow that reads from a
+   *  step which has not run yet cannot resolve, and the runtime would fail it mid-run rather
+   *  than at save — so the choice is not offered in the first place. */
+  const upstream = useCallback((index: number) =>
+    draft.slice(0, index).map((step) => {
+      const mine = step.customStep
+        ? customSteps.find((c) => c.step_key === step.customStep)
+        : undefined;
+      const capability = step.capability
+        ? capabilities.find((c) => c.key === step.capability)
+        : undefined;
+      return {
+        id: step.id,
+        label: mine?.label ?? capability?.label ?? step.id,
+        fields: (mine?.produces ?? capability?.produces ?? []) as string[],
+      };
+    }), [draft, capabilities, customSteps]);
+
+  /** Change one input's wiring on one step. */
+  const setWire = useCallback((stepId: string, input: string, value: unknown) =>
+    setDraft((current) => current.map((step) => {
+      if (step.id !== stepId) return step;
+      const inputs = { ...(step.inputs ?? {}) };
+      if (value === undefined) delete inputs[input];
+      else inputs[input] = value;
+      return { ...step, inputs };
+    })), []);
 
   const move = (from: number, to: number) =>
     setDraft((current) => {
@@ -5223,6 +5268,112 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                     <button type="button" className="cap-btn" aria-label={`Remove ${step.id}`}
                             onClick={() => setDraft((c) => c.filter((_, i) => i !== index))}>×</button>
                   </span>
+                  {/* WHERE EACH INPUT COMES FROM.
+                      Every input was written as "ask the operator for it by name", so a
+                      workflow built here could not feed one step into the next — the one thing
+                      a workflow is for. It also could not pin a value, which is how a publish
+                      step chooses between two connected channels. */}
+                  {step.kind === "capability" && declaredInputs(step).length ? (
+                    <button type="button" className="linklike dw-draft-wire-toggle"
+                            data-testid={`dw-wire-${step.id}`}
+                            onClick={() => setWiringStep(wiringStep === step.id ? null : step.id)}>
+                      {wiringStep === step.id ? "hide inputs" : `inputs (${declaredInputs(step).length})`}
+                    </button>
+                  ) : null}
+                  {wiringStep === step.id ? (
+                    <div className="dw-wire" data-testid={`dw-wire-panel-${step.id}`}>
+                      {declaredInputs(step).map((declared) => {
+                        const wire = (step.inputs ?? {})[declared.name] as
+                          Record<string, unknown> | string | undefined;
+                        const mode = wire && typeof wire === "object"
+                          ? ("from_step" in wire ? "step" : "run")
+                          : wire === undefined ? "run" : "fixed";
+                        const sources = upstream(index);
+                        return (
+                          <div key={declared.name} className="dw-wire-row">
+                            <label className="dw-wire-name">
+                              {declared.name}
+                              {declared.required ? null : <span className="detail"> (optional)</span>}
+                            </label>
+                            <select className="input dw-wire-mode" value={mode}
+                                    data-testid={`dw-wire-mode-${step.id}-${declared.name}`}
+                                    onChange={(e) => {
+                                      const next = e.target.value;
+                                      if (next === "run") {
+                                        setWire(step.id, declared.name, { from_input: declared.name });
+                                      } else if (next === "fixed") {
+                                        setWire(step.id, declared.name, "");
+                                      } else {
+                                        const first = sources[0];
+                                        setWire(step.id, declared.name, {
+                                          from_step: first?.id ?? "",
+                                          field: first?.fields[0] ?? "",
+                                        });
+                                      }
+                                    }}>
+                              <option value="run">asked when the run starts</option>
+                              <option value="step" disabled={sources.length === 0}>
+                                {sources.length ? "from an earlier step" : "from an earlier step (none yet)"}
+                              </option>
+                              <option value="fixed">a fixed value</option>
+                            </select>
+
+                            {mode === "run" ? (
+                              <input className="input dw-wire-value"
+                                     value={String((wire as { from_input?: string })?.from_input
+                                                   ?? declared.name)}
+                                     aria-label={`Name asked for ${declared.name}`}
+                                     onChange={(e) => setWire(step.id, declared.name,
+                                                              { from_input: e.target.value })} />
+                            ) : null}
+
+                            {mode === "fixed" ? (
+                              <input className="input dw-wire-value" value={String(wire ?? "")}
+                                     placeholder="e.g. youtube_2"
+                                     aria-label={`Fixed value for ${declared.name}`}
+                                     data-testid={`dw-wire-fixed-${step.id}-${declared.name}`}
+                                     onChange={(e) => setWire(step.id, declared.name, e.target.value)} />
+                            ) : null}
+
+                            {mode === "step" ? (
+                              <span className="dw-wire-pair">
+                                <select className="input"
+                                        value={String((wire as { from_step?: string })?.from_step ?? "")}
+                                        aria-label={`Step supplying ${declared.name}`}
+                                        data-testid={`dw-wire-step-${step.id}-${declared.name}`}
+                                        onChange={(e) => setWire(step.id, declared.name, {
+                                          from_step: e.target.value,
+                                          field: sources.find((u) => u.id === e.target.value)
+                                                   ?.fields[0] ?? "",
+                                        })}>
+                                  {sources.map((u) => (
+                                    <option key={u.id} value={u.id}>{u.label}</option>
+                                  ))}
+                                </select>
+                                {/* FREE TEXT, NOT A CLOSED LIST. `produces` is what a step
+                                    DECLARES; a skill can return more, and a picker that only
+                                    offered the declared ones would make the rest unreachable. */}
+                                <input className="input dw-wire-value"
+                                       list={`dw-fields-${step.id}-${declared.name}`}
+                                       value={String((wire as { field?: string })?.field ?? "")}
+                                       placeholder="which field"
+                                       aria-label={`Field supplying ${declared.name}`}
+                                       onChange={(e) => setWire(step.id, declared.name, {
+                                         from_step: (wire as { from_step?: string })?.from_step ?? "",
+                                         field: e.target.value,
+                                       })} />
+                                <datalist id={`dw-fields-${step.id}-${declared.name}`}>
+                                  {(sources.find(
+                                    (u) => u.id === (wire as { from_step?: string })?.from_step,
+                                  )?.fields ?? []).map((f) => <option key={f} value={f} />)}
+                                </datalist>
+                              </span>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
