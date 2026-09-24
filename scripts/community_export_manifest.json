@@ -88,6 +88,7 @@
   "requires_split": [
     "LICENSE",
     "Makefile",
+    "db/schema.sql",
     "apps/api/app/main.py",
     "apps/web/app/page.tsx"
   ],
@@ -98,6 +99,7 @@
   },
   "required_runtime": [
     "Dockerfile.community",
+    "db/schema.sql",
     "Makefile",
     "install.sh",
     "scripts/install/community-compose.yml",
@@ -145,5 +147,10 @@
     "source": "Makefile.community",
     "destination": "Makefile",
     "sha256": "a4a0aa8dc1fa56364f05fe7f5eab7d90b65510848900087146e5711e96c9e5d1"
+  },
+  "schema_export_rewrite": {
+    "source": "db/schema.community.sql",
+    "destination": "db/schema.sql",
+    "sha256": "c2736625d70ce510e5a904d46519da62f7bf21a05c834c6d26f0147312a64019"
   }
 }

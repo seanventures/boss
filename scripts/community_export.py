@@ -309,6 +309,21 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("makefile export source must be included")
         if makefile_rewrite["destination"] not in manifest["requires_split"]:
             raise ValueError("makefile export destination must be withheld for split")
+    schema_rewrite = manifest.get("schema_export_rewrite")
+    if schema_rewrite is not None:
+        if not isinstance(schema_rewrite, dict) or (
+            schema_rewrite.get("source") != "db/schema.community.sql"
+            or schema_rewrite.get("destination") != "db/schema.sql"
+        ):
+            raise ValueError("schema export rewrite requires fixed Community and runtime paths")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(schema_rewrite.get("sha256", ""))):
+            raise ValueError("schema export rewrite needs reviewed source sha256")
+        if not matching_rule(schema_rewrite["source"], manifest["include"]):
+            raise ValueError("schema export source must be included")
+        if schema_rewrite["destination"] not in manifest["requires_split"]:
+            raise ValueError("schema export destination must be withheld for split")
+        if schema_rewrite["destination"] not in manifest["required_runtime"]:
+            raise ValueError("schema export destination must be a required runtime file")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -526,6 +541,15 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         if len(data) > 5_000_000:
             blockers.append({"kind": "large-file-needs-review", "path": path})
             continue
+        schema_rewrite = manifest.get("schema_export_rewrite")
+        if schema_rewrite and path == schema_rewrite["source"]:
+            if hashlib.sha256(data).hexdigest() == schema_rewrite["sha256"]:
+                # The fixed-path, exact-byte schema is audited separately and
+                # intentionally retains local Easy Connect account records.
+                selected[path] = data
+                continue
+            blockers.append({"kind": "schema-export-source-changed", "path": path})
+            continue
         if any(marker in data for marker in PRIVATE_MARKERS):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             continue
@@ -694,6 +718,27 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
             ]
             makefile_rewrite_applied = True
+    schema_rewrite = manifest.get("schema_export_rewrite")
+    schema_rewrite_applied = False
+    if schema_rewrite:
+        source = schema_rewrite["source"]
+        destination = schema_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "schema-export-private-source-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "schema-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "schema-export-private-source-selected", "path": destination})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (
+                    blocker["kind"] == "requires-community-split"
+                    and blocker.get("path") == destination
+                )
+            ]
+            schema_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -724,6 +769,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "readme_export_rewrite_applied": readme_rewrite_applied,
         "contributing_export_rewrite_applied": contributing_rewrite_applied,
         "makefile_export_rewrite_applied": makefile_rewrite_applied,
+        "schema_export_rewrite_applied": schema_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,

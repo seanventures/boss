@@ -617,3 +617,71 @@ def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     assert report["makefile_export_rewrite_applied"] is False
     assert "makefile-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "Makefile" not in candidate
+
+
+def test_community_schema_rewrite_is_exact_and_preserves_easy_connect(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    db = repo / "db"
+    db.mkdir(parents=True)
+    (db / "schema.sql").write_text(
+        "CREATE TABLE account_connect_orgs ();\nCREATE TABLE enterprise_clusters ();\n"
+    )
+    community = b"CREATE TABLE account_connect_orgs ();\n"
+    (db / "schema.community.sql").write_bytes(community)
+    (db / "unreviewed.sql").write_text("CREATE TABLE hosted_marketplace_sync_runs ();\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "-c", "user.name=Test",
+            "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture",
+        ],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["db/"],
+        "exclude": ["db/unused.sql"],
+        "requires_split": ["db/schema.sql"],
+        "required_runtime": ["db/schema.sql"],
+        "required_release": ["db/schema.sql"],
+        "schema_export_rewrite": {
+            "source": "db/schema.community.sql",
+            "destination": "db/schema.sql",
+            "sha256": hashlib.sha256(community).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["schema_export_rewrite_applied"] is True
+    assert candidate == {"db/schema.sql": community}
+    assert any(
+        blocker["path"] == "db/unreviewed.sql"
+        and blocker["kind"] == "mixed-paid-source-needs-split"
+        for blocker in report["blockers"]
+    )
+    assert not any(blocker.get("path") == "db/schema.sql" for blocker in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["schema_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["schema_export_rewrite_applied"] is False
+    assert "schema-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "db/schema.sql" not in candidate
+
+    (db / "schema.community.sql").write_bytes(community + b"-- drift\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "-c", "user.name=Test",
+            "-c", "user.email=test@example.invalid", "commit", "-qm", "drift",
+        ],
+        check=True,
+    )
+    drift_sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    report, candidate = export.analyze(repo, drift_sha, manifest)
+    assert "schema-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "db/schema.sql" not in candidate
