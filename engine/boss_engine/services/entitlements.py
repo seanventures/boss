@@ -10,7 +10,6 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .commercial import CommercialService
 from .core import DATA_BOUNDARIES, emit_event, make_id, normalize_data_boundary
 
 
@@ -96,12 +95,29 @@ class EntitlementBrokerService:
         connection: Connection,
         project_id: str,
     ) -> set[str]:
-        edition = CommercialService(self.settings).edition_status(
-            connection,
-            project_id,
+        # The skill catalog is edition-scoped, but selecting its pack must not
+        # import the hosted billing/connection service. Edition status uses the
+        # same configured edition for its source pack; the database link only
+        # affects whether that edition is active, not which skills it installs.
+        del connection, project_id
+        configured = str(self.settings.boss_edition or "community").strip().lower()
+        configured = configured.replace("-", "_")
+        edition = (
+            "enterprise"
+            if configured in {"enterprise", "enterprise_cloud", "enterprise_self_hosted"}
+            else configured
+            if configured in {"community", "cloud"}
+            else "community"
         )
-        source_pack = Path(str(edition["source_pack"])).stem
-        return self._pack_skill_bundles(source_pack)
+        packs = [
+            path
+            for path in sorted((self.settings.specpack_root / "packs").glob("*_edition.yaml"))
+            if str(self._load_yaml(path).get("edition") or "").strip().lower()
+            == edition
+        ]
+        if len(packs) != 1:
+            raise ValueError(f"Expected one skill pack for edition {edition!r}; found {len(packs)}")
+        return self._pack_skill_bundles(packs[0].stem)
 
     def _pack_skill_bundles(
         self,
