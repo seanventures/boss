@@ -5,7 +5,7 @@
 SHELL := /bin/sh
 COMPOSE := docker compose -f scripts/install/community-compose.yml --env-file .env
 
-.PHONY: help dev seed status check stop
+.PHONY: help dev seed status check stop metatron
 
 help:
 	@printf '%s\n' 'BOSS Community' \
@@ -13,6 +13,7 @@ help:
 	  '  make seed    Rerun the idempotent project seed' \
 	  '  make status  Show service status' \
 	  '  make check   Check installation health' \
+	  '  make metatron  Open the local BOSS terminal' \
 	  '  make stop    Stop services and keep data' \
 	  'Install first: curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash'
 
@@ -27,6 +28,12 @@ status: .env
 
 check: .env
 	./scripts/install/checkup.sh
+
+metatron: .env
+	@set -a; . ./.env; set +a; \
+	  BOSS_API_URL="http://127.0.0.1:$${BOSS_API_PORT:-8000}" \
+	  BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" \
+	  python3 scripts/metatron_tui.py
 
 stop: .env
 	$(COMPOSE) --profile web stop

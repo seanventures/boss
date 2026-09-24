@@ -1232,6 +1232,15 @@ def test_public_docs_do_not_export_internal_product_brief() -> None:
     assert export.matching_rule("docs/product/V1_FEATURE_LOCK.md", manifest["include"])
     public_docs = (export.ROOT / "docs/community/FEATURES.md").read_text()
     assert internal not in public_docs
+def test_pinned_public_makefile_keeps_metatron_entrypoint() -> None:
+    import hashlib
+
+    public = (export.ROOT / "Makefile.community").read_bytes()
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    assert hashlib.sha256(public).hexdigest() == manifest["makefile_export_rewrite"]["sha256"]
+    assert b"\nmetatron:" in public
+    assert b"scripts/metatron_tui.py" in public
+
 
 def test_community_main_rewrite_removes_exact_paid_composition(tmp_path: Path) -> None:
     import hashlib
