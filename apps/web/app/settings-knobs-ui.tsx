@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
+import { HelpTip } from "./help-tip";
 
 /**
  * The knobs, and what each is worth RIGHT NOW.
@@ -100,10 +101,15 @@ export function SettingsKnobs(
       {shown.map((k) => (
         <div className="settings-knob" key={k.key}>
           <div className="settings-knob-head">
-            <label htmlFor={`knob-${k.key}`}>{k.label}</label>
+            <span className="settings-knob-title">
+              <label htmlFor={`knob-${k.key}`}>{k.label}</label>
+              <HelpTip label={k.label} text={k.help} />
+            </span>
             <span className="settings-source" data-source={k.source}>{k.source}</span>
           </div>
-          <p className="detail">{k.help}</p>
+          {k.key === "captain_leads_projects" ? (
+            <p className="detail">1 adds the Captain; 0 leaves builds unled.</p>
+          ) : null}
           <div className="settings-knob-row">
             {k.kind === "choice" && k.open_choices ? (
               // A SUGGESTION LIST, NOT A LIMIT. Typed freely, with the known names offered as

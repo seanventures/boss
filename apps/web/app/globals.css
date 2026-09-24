@@ -8437,11 +8437,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* ── Settings ────────────────────────────────────────────────────────────────── */
 .settings-knobs { display: grid; gap: 16px; margin-top: 10px; }
 .settings-knob {
-  display: grid; gap: 5px; padding: 12px 14px; border-radius: 10px;
-  border: 1px solid var(--border, #30363d);
-  background: color-mix(in srgb, var(--panel, #0d1117) 60%, transparent);
+  display: grid; gap: 5px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
 }
+.settings-knob:last-child { border-bottom: 0; }
 .settings-knob-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.settings-knob-title { display: inline-flex; align-items: center; gap: 3px; min-width: 0; }
 .settings-knob-head label { font-size: 13px; font-weight: 600; }
 .settings-knob .detail { margin: 0; }
 .settings-knob-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -8449,18 +8450,51 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* WHERE THE VALUE COMES FROM. "runs three agents" and "nobody chose, so it runs the
    deployment default" are different facts, and only one says whether this dial does anything. */
 .settings-source {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border, #30363d);
-  color: var(--muted, #8b949e);
+  font-size: 10px; white-space: nowrap; color: var(--muted);
 }
-.settings-source[data-source="project"] { color: var(--live, #58a6ff); border-color: currentColor; }
+.settings-source[data-source="project"] { color: var(--teal); }
 .settings-note { margin: 4px 0 0; font-size: 12px; color: var(--muted, #8b949e); }
+
+/* Contextual help stays with its label; the explanation escapes clipped panels. */
+.help-tip-trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; margin: -2px 0;
+  border: 0; border-radius: 4px; background: transparent;
+  color: var(--muted); font: 600 12px/1 var(--sans); vertical-align: middle;
+  cursor: help;
+}
+.help-heading { display: flex; align-items: center; gap: 2px; }
+.help-tip-trigger:hover, .help-tip-trigger[aria-expanded="true"] {
+  color: var(--ink); background: var(--surface-3);
+}
+.help-tip-trigger:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.help-tip-bubble {
+  position: fixed; z-index: 10000; display: block;
+  width: max-content; max-width: min(320px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px); overflow: auto;
+  padding: 10px 12px; border: 1px solid var(--border-strong);
+  border-radius: 6px; background: var(--surface-3);
+  box-shadow: var(--shadow); color: var(--ink);
+  font: 400 12px/1.5 var(--sans); letter-spacing: normal; text-align: left;
+  text-transform: none; white-space: normal;
+}
+@media (forced-colors: active) {
+  .help-tip-bubble { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+}
 
 /* ── Starting a project, on the page that watches it ─────────────────────────────
    This read as a form: a bare white box, a floating label, and a button the same
    weight as the thing it acts on. It is the same act as the Command Center's
    composer, done from a different page, so it should look like it. */
 .dw-new { display: grid; gap: 10px; margin-bottom: 18px; }
+@media (max-width: 600px) {
+  .panel-stack[data-area="delivery_workflows"] { min-width: 0; width: 100%; }
+  .panel-stack[data-area="delivery_workflows"] > * { min-width: 0; }
+  .panel-stack[data-area="delivery_workflows"] .dw { grid-template-columns: minmax(0, 1fr); }
+  .panel-stack[data-area="delivery_workflows"] .dw-tabs {
+    max-width: 100%; overflow-x: auto; white-space: nowrap;
+  }
+}
 .dw-new-head h3 { margin: 0 0 2px; font-size: 15px; }
 .dw-new-head .detail { margin: 0; }
 

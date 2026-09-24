@@ -15,6 +15,7 @@ import { previewRecordFromStepOutput } from "../lib/previews";
 import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { RunReportPanel } from "./run-report-ui";
+import { HelpTip } from "./help-tip";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -1466,14 +1467,12 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
 
       {step === 0 ? (
         <div className="dw-wiz-body" data-testid="dw-wiz-step-0">
-          <label className="dw-field">
-            <span className="dw-field-label">What should it do?</span>
-            <span className="dw-field-hint">
-              The panel argues from these words and the builder works from them. Say what it
-              does and what a person can accomplish with it — two or three sentences beats a
-              title.
-            </span>
+          <div className="dw-field">
+            <span className="dw-field-label"><label htmlFor="dw-new-directive">What should it do?</label> <HelpTip
+              label="Project description"
+              text="The panel and builder use your words. Describe what the product does and what a person can accomplish with it in two or three sentences." /></span>
             <textarea
+              id="dw-new-directive"
               className="dw-new-input" rows={5} value={draft.directive}
               data-testid="dw-new-directive"
               placeholder={"A shift-swap board where staff can offer a shift they cannot work "
@@ -1490,28 +1489,24 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
                 }
               }}
             />
-          </label>
+          </div>
 
-          <label className="dw-field">
-            <span className="dw-field-label">Who is it for? <em>optional</em></span>
-            <span className="dw-field-hint">
-              Named users change what gets built. &ldquo;A duty manager on a phone, mid-shift&rdquo;
-              produces a different app from &ldquo;staff&rdquo;.
-            </span>
-            <input className="input" value={draft.audience} data-testid="dw-new-audience"
+          <div className="dw-field">
+            <span className="dw-field-label"><label htmlFor="dw-new-audience">Who is it for?</label> <em>optional</em> <HelpTip
+              label="Intended users"
+              text="Describe the people and setting. A duty manager using a phone mid-shift needs a different interface from office staff." /></span>
+            <input id="dw-new-audience" className="input" value={draft.audience} data-testid="dw-new-audience"
                    placeholder="a duty manager on a phone, mid-shift"
                    onChange={(e) => set("audience", e.target.value)} />
-          </label>
+          </div>
 
           <fieldset className="dw-field">
             <legend className="dw-field-label">
-              How will you know it works? <em>optional</em>
+              How will you know it works? <em>optional</em> <HelpTip
+                label="Acceptance criteria"
+                text="These become checks for the build. Leave them blank and the panel will propose criteria for your approval." />
             </legend>
-            <span className="dw-field-hint">
-              These become the acceptance criteria the build is tested against. Leave them
-              blank and the panel will propose its own — this is your chance to be specific
-              before it does.
-            </span>
+            <span className="dw-field-hint">These become acceptance criteria.</span>
             {draft.criteria.map((c, i) => (
               <div className="dw-crit-row" key={i}>
                 <input className="input" value={c} data-testid={`dw-new-criterion-${i}`}
@@ -1541,12 +1536,9 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
 
       {step === 1 ? (
         <div className="dw-wiz-body" data-testid="dw-wiz-step-1">
-          <span className="dw-field-label">Which path should it take?</span>
-          <span className="dw-field-hint">
-            Every path ends in software you can look at. They differ in how much argument,
-            evidence and gating happens on the way — which is a question about risk, not about
-            speed.
-          </span>
+          <span className="dw-field-label">Which path should it take? <HelpTip
+            label="Workflow paths"
+            text="Every path produces software you can review. Paths differ in the review, evidence, and approval gates along the way." /></span>
           <div className="dw-wiz-choices" role="radiogroup" aria-label="Workflow">
             <button type="button" role="radio" className="dw-wiz-choice"
                     aria-checked={draft.workflowKey === ""}
@@ -1589,20 +1581,18 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
               Nothing renders for a workflow that declares none, which is every catalogue one. */}
           {declaredInputs.length ? (
             <div className="dw-wiz-inputs" data-testid="dw-workflow-inputs">
-              <span className="dw-field-label">What this path needs</span>
-              <span className="dw-field-hint">
-                Values these steps read when the run starts. Settings that do not change
-                between runs — a channel, an icon, a house style — belong in the skill or the
-                agent, not here.
-              </span>
+              <span className="dw-field-label">What this path needs <HelpTip
+                label="Workflow inputs"
+                text="These values are read when the run starts. Put lasting choices such as a channel, icon, or house style in the skill or agent instead." /></span>
               {declaredInputs.map((field) => (
-                <label className="dw-wiz-input" key={field.name}>
+                <div className="dw-wiz-input" key={field.name}>
                   <span className="dw-field-label">
-                    {field.label}
+                    <label htmlFor={`dw-workflow-input-${field.name}`}>{field.label}</label>
                     {field.required ? <em className="dw-req" aria-hidden> required</em> : null}
+                    {field.help ? <HelpTip label={field.label} text={field.help} /> : null}
                   </span>
-                  {field.help ? <span className="dw-field-hint">{field.help}</span> : null}
                   <input
+                    id={`dw-workflow-input-${field.name}`}
                     type={field.kind === "number" ? "number" : "text"}
                     inputMode={field.kind === "number" ? "numeric" : undefined}
                     value={draft.inputs[field.name] ?? ""}
@@ -1613,7 +1603,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
                       setDraft((d) => ({ ...d,
                         inputs: { ...d.inputs, [field.name]: e.target.value } }))}
                   />
-                </label>
+                </div>
               ))}
             </div>
           ) : null}
