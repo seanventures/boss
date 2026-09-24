@@ -100,6 +100,13 @@ configuration. The later restore completed, including both markers. Provider
 CLI session volumes are outside the backup, so a purged install requires
 provider sign-in again.
 
+After the ARM64 source-wheel image fix below, the retained Ubuntu VM also
+completed a **piped upgrade** from `c04a94b6` to `31a3e085` in 105.52
+seconds. The upgrade created its private backup, rebuilt API and worker with
+the source wheel, passed image imports, API health, seed and Community edition,
+and printed `Upgrade complete`. All four services remained running. This
+recheck guards the earlier Ubuntu result against the new Dockerfile stage.
+
 ## Debian 12 ARM64 clean-host drill
 
 The first disposable Debian VM (`6.1.0-44-cloud-arm64`) began without Docker
