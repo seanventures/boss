@@ -24,7 +24,7 @@ corrupt the one place BOSS answers "what did this cost".
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -64,6 +64,9 @@ class CliHarnessSpec:
     token_pattern: str = ""
     #: How the prompt reaches the process. argv is simplest; stdin survives a huge prompt.
     prompt_via: str = "argv"
+    #: Prefix appended to the prompt as one argv element. `--single=<prompt>` keeps a prompt
+    #: beginning with `-` from being mistaken for a Grok option.
+    prompt_prefix: str = ""
     #: Flag that selects a model, e.g. "--model". Empty means the CLI has no such flag.
     model_flag: str = ""
     #: Model names worth OFFERING for this harness. The console had one hardcoded Claude list
@@ -80,6 +83,9 @@ class CliHarnessSpec:
     review_timeout: int = 420
     #: Has a governed code task actually completed on this harness?
     verified: bool = False
+    #: Fail the stage when the process fails, rather than passing a failure message to the
+    #: next stage as if it were the agent's answer.
+    fail_on_nonzero: bool = False
     description: str = ""
     #: Env the CLI needs to find its own credentials, on top of the agent env allow-list.
     env_passthrough: tuple[str, ...] = ()
@@ -88,6 +94,12 @@ class CliHarnessSpec:
     version_args: tuple[str, ...] = ("--version",)
     #: Asks the CLI whether it is signed in, e.g. ("login", "status").
     auth_check_args: tuple[str, ...] = ()
+    #: Names removed from both the auth probe and child agent. An API key must not make a
+    #: subscription session look connected or silently switch its turns to API billing.
+    env_exclude: tuple[str, ...] = ()
+    #: Require an owner-local CLI session file to exist and be readable, without opening or
+    #: copying its contents. This is for CLIs whose API-key fallback masks signed-out state.
+    require_local_session_file: bool = False
     #: Matched against that command's output. Empty means the CLI has no login of its own
     #: (it reads an API key from the environment), so being installed is all there is to check.
     auth_ok_pattern: str = ""
@@ -310,6 +322,44 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
     ),
+    "grok": CliHarnessSpec(
+        name="grok",
+        binary="grok",
+        # Official Grok Build headless mode. The CLI session remains in the service user's
+        # own GROK_HOME; BOSS never reads or transports auth.json.
+        args=("--no-auto-update", "--no-subagents", "--output-format", "plain"),
+        write_args=("--sandbox", "workspace", "--always-approve", "--max-turns", "40"),
+        read_only_args=("--sandbox", "read-only", "--permission-mode", "plan",
+                        "--tools", "read_file,grep,list_dir", "--max-turns", "12"),
+        prompt_prefix="--single=",
+        model_flag="--model",
+        models_exhaustive=False,
+        verified=False,
+        fail_on_nonzero=True,
+        description="Official xAI Grok Build CLI using the owner-local Grok subscription "
+                    "session. Sign in as the BOSS service user.",
+        env_passthrough=("GROK_HOME",),
+        version_args=("--version",),
+        # `grok models` exits 0 and prints cached models even when signed out. The negative
+        # patterns and local-session-file check are essential; exit 0 is not proof of auth.
+        auth_check_args=("--no-auto-update", "models"),
+        auth_ok_pattern=r"(?m)^Available models:\s*$",
+        auth_fail_pattern=(r"(?i)you are not authenticated|no auth credentials|"
+                           r"auth\.json unreadable|failed to fetch models|"
+                           r"\bnot\s+(?:logged\s+in|signed\s+in|authenticated)\b"),
+        env_exclude=("XAI_API_KEY", "GROK_MODELS_BASE_URL",
+                     "GROK_CLI_CHAT_PROXY_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
+                     "ANTHROPIC_API_KEY"),
+        require_local_session_file=True,
+        signin_hint="grok login --device-auth (as the BOSS user in the API container)",
+        install_hint="curl -fsSL https://x.ai/cli/install.sh | bash",
+        home_env="GROK_HOME",
+        default_home="~/.grok",
+        auth_file_name="auth.json",
+        docs_url="https://docs.x.ai/build/cli/headless-scripting",
+        entitlement_source_id="xai_grok_build",
+        entitlement_provider="xai",
+    ),
     "cursor": CliHarnessSpec(
         name="cursor",
         binary="cursor-agent",
@@ -379,7 +429,8 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
         for key, value in patch.items():
             if key not in CliHarnessSpec.__dataclass_fields__:
                 continue
-            if key in ("args", "read_only_args", "env_passthrough") and isinstance(value, list):
+            if key in ("args", "write_args", "read_only_args", "env_passthrough",
+                       "env_exclude") and isinstance(value, list):
                 value = tuple(value)
             fields[key] = value
         fields["name"] = name
@@ -438,12 +489,16 @@ def _uses_env_route(spec: CliHarnessSpec) -> bool:
 
 
 def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
-               extra_env: Optional[dict] = None) -> tuple[int, str]:
+               extra_env: Optional[dict] = None,
+               exclude_env: tuple[str, ...] = ()) -> tuple[int, str]:
     """Run a short informational command. Never raises: a probe that explodes tells the
     operator less than one that reports what happened."""
     try:
+        env = {**os.environ, "CI": "1", **(extra_env or {})}
+        for name in exclude_env:
+            env.pop(name, None)
         proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout,
-                              env={**os.environ, "CI": "1", **(extra_env or {})})
+                              env=env)
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
     except OSError as exc:
@@ -529,7 +584,24 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
         result["ready"] = True
         result["next_step"] = None
         return result
-    code, out = _run_probe(found, spec.auth_check_args, extra_env=probe_env)
+    if spec.require_local_session_file:
+        home = os.path.expanduser(os.environ.get(spec.home_env, "") or spec.default_home)
+        session_file = os.path.join(home, spec.auth_file_name)
+        try:
+            session_stat = os.stat(session_file)
+            local_session = (os.path.isfile(session_file)
+                             and session_stat.st_uid == os.geteuid()
+                             and session_stat.st_mode & 0o077 == 0
+                             and os.access(session_file, os.R_OK))
+        except OSError:
+            local_session = False
+        if not local_session:
+            result["authenticated"] = False
+            result["auth_detail"] = "No readable, service-user-owned private CLI session (mode 0600)."
+            result["next_step"] = f"sign in with: {spec.signin_hint}"
+            return result
+    code, out = _run_probe(found, spec.auth_check_args, extra_env=probe_env,
+                           exclude_env=spec.env_exclude)
     # The line that ANSWERS the question, not merely the first one printed. These CLIs emit
     # warnings before their status — a fresh CODEX_HOME produces "WARNING: proceeding, even
     # though we could not create PATH aliases…" — and reporting that as `auth_detail` hands the
@@ -540,7 +612,7 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
     # The denial is checked first and wins outright: "Not logged in" contains "logged in", so
     # a positive-only test reports a signed-out CLI as ready.
     denied = bool(spec.auth_fail_pattern) and bool(_re.search(spec.auth_fail_pattern, out or ""))
-    signed_in = (not denied and bool(spec.auth_ok_pattern)
+    signed_in = (code == 0 and not denied and bool(spec.auth_ok_pattern)
                  and bool(_re.search(spec.auth_ok_pattern, out or "")))
     result["authenticated"] = signed_in
     result["ready"] = signed_in
@@ -704,6 +776,8 @@ class GenericCliCodeAgent:
             value = os.environ.get(name)
             if value:
                 env[name] = value
+        for name in self.spec.env_exclude:
+            env.pop(name, None)
         env.setdefault("HOME", os.environ.get("HOME", ""))
         env["CI"] = "1"
         # THE VARIABLE IS THE LOGIN, so it has to be here on every run. `env_passthrough`
@@ -725,7 +799,8 @@ class GenericCliCodeAgent:
         if model and self.spec.model_flag:
             argv += [self.spec.model_flag, model]
         if self.spec.prompt_via == "argv":
-            argv.append(prompt)
+            argv.append(f"{self.spec.prompt_prefix}{prompt}" if self.spec.prompt_prefix
+                        else prompt)
         return argv
 
     def ensure_authorised(self) -> dict:
@@ -962,6 +1037,13 @@ class GenericCliCodeAgent:
                 f"BOSS_CODE_REVIEW_ENGINE to a harness that can (any API lane), or give this "
                 f"one read_only_args via BOSS_CLI_HARNESSES_JSON."
             )
+        if self.spec.require_local_session_file:
+            found = detect(self.spec, self.settings)
+            if not found["ready"]:
+                raise CliHarnessUnavailable(
+                    f"{self.spec.name} is not authenticated for this service user. "
+                    f"{found.get('next_step') or self.spec.signin_hint}"
+                )
         import re as _re
         import tempfile
 
@@ -1056,6 +1138,9 @@ class GenericCliCodeAgent:
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])
+            if self.spec.fail_on_nonzero:
+                raise CliHarnessUnavailable(
+                    f"{self.spec.name} exited {proc.returncode}: {summary[:300]}")
         return {
             "summary": summary[:8000] or f"({self.spec.name} produced no output)",
             "usage": {"model": model or self.spec.name},
