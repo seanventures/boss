@@ -49,8 +49,8 @@ curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
 7. Verifies Community edition + ProviderOps surface
 
 On rerun, the existing database/API credentials, model keys, secret-store encryption key,
-console login, public URL, and port settings are retained. Take a private backup of `.env` and the
-Postgres volume before upgrading a long-lived install.
+console login, public URL, and port settings are retained. Use the lifecycle
+upgrade command below to back up state before updating a long-lived install.
 
 Mission Control has a separate single-operator password and signed session secret,
 generated on first install and stored only in the private `.env`. The password is
@@ -250,20 +250,82 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 # Mission Control: http://127.0.0.1:3000
 ```
 
+### Upgrade / recover
+
+```bash
+./scripts/install/upgrade.sh --dir "$PWD"                   # fast-forward and back up first
+./scripts/install/upgrade.sh --dir "$PWD" --dry-run         # inspect source change
+./scripts/install/upgrade.sh --dir "$PWD" --no-web          # if originally installed without web
+```
+
+Once `seanventures/boss` is public, a default `~/boss` install can use the
+one-line upgrade below (the URL is not available publicly yet):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/scripts/install/upgrade.sh | bash
+```
+
+Upgrades write a private backup under `~/boss-backups/` before changing source or
+containers. It contains the previous source commit, `.env`, BOSS and optional
+Infisical Postgres dumps, and artifacts. The API, worker, web and Infisical
+services pause during the snapshot and resume even if it fails. The backup
+does not contain Codex/Grok CLI sessions; their named volumes are retained
+during upgrade, and a data-purge recovery requires provider sign-in again.
+Keep the backup outside the checkout and protect it like `.env`.
+
+If a build fails, the backup path is printed. Inspect Compose logs and retry
+`upgrade.sh` once the cause is fixed. A database migration may already have
+run, so the script deliberately does not reset source or database behind your
+back. To return to the backed-up version, stop app writers, restore the source
+commit and `.env`, restore the dumps, and rebuild that version. Run this from
+the install directory, replacing the backup path first:
+
+```bash
+BACKUP=/absolute/path/from-upgrade
+docker compose -f scripts/install/community-compose.yml --env-file .env --profile web --profile secrets stop worker api web infisical
+git switch --detach "$(cat "$BACKUP/source-commit")"
+cp "$BACKUP/.env" .env && chmod 600 .env
+docker compose -f scripts/install/community-compose.yml --env-file .env up -d db
+docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_restore -U boss -d boss --clean --if-exists --no-owner < "$BACKUP/boss.dump"
+if [ -f "$BACKUP/infisical.dump" ]; then
+  docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_restore -U boss -d infisical --clean --if-exists --no-owner < "$BACKUP/infisical.dump"
+fi
+docker compose -f scripts/install/community-compose.yml --env-file .env run --rm --no-deps -T --entrypoint tar api -C /var/lib/boss/artifacts -xf - < "$BACKUP/artifacts.tar"
+docker compose -f scripts/install/community-compose.yml --env-file .env --profile web --profile secrets up -d --build
+```
+
+The artifact restore overlays the archive. Files created after the backup
+remain unless removed separately; review the current volume first. A remote archive
+install uses `.boss-shipped-commit` rather than Git; recover it by shipping
+that commit from the operator machine with `remote.sh --ref COMMIT install`,
+then restore the database and artifacts from the private host backup.
+The local `upgrade.sh` requires a Git checkout; for archive installs use
+`remote.sh update` from the operator machine, which now backs up first.
+For example:
+
+```bash
+scripts/install/remote.sh --host user@your-vm update --ref main
+scripts/install/remote.sh --host user@your-vm uninstall --yes
+# Intentional data purge only:
+scripts/install/remote.sh --host user@your-vm uninstall --yes --purge-data --confirm-purge DELETE-BOSS-DATA
+```
+
 ### Uninstall / reinstall
 
 ```bash
-./scripts/install/uninstall.sh                 # asks before destroying anything
-./scripts/install/uninstall.sh --yes           # scripted
-./scripts/install/uninstall.sh --yes --keep-images   # reinstall in ~80s instead of rebuilding
+./scripts/install/uninstall.sh --dir "$PWD" --dry-run
+./scripts/install/uninstall.sh --dir "$PWD" --yes           # safe: keeps data and credentials
+./install.sh --dir "$PWD" --yes --skip-model-key             # reuses the same volumes and keys
+./scripts/install/uninstall.sh --dir "$PWD" --purge-data     # backs up, then asks for DELETE-BOSS-DATA
 ```
 
-Removes containers, volumes (**including the database**), images and `.env`. `--keep-env`
-preserves the secret-store encryption key and your API key so a reinstall reuses the same
-credentials; without it they are gone and unrecoverable, which is why it asks first.
-
-An installer you cannot undo can only be tested once — this is what makes "install it again
-from nothing" a thing you can actually do.
+The default uninstall removes only this Compose stack's containers and network.
+It keeps the source, `.env`, named volumes, images, and backups. Rerunning it
+is safe. `--purge-data` removes this stack's named volumes, including Postgres,
+artifacts and CLI sessions, then deletes `.env` and the generated shell shim.
+It first requires a successful private backup unless you explicitly add
+`--skip-backup`. `--yes` alone never authorizes a data purge; for scripted
+purge add `--confirm-purge DELETE-BOSS-DATA`. Backups and checkout stay on disk.
 
 Stop:
 

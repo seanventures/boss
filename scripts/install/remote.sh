@@ -16,9 +16,8 @@
 # The installer on the far side is the SAME install.sh a local user runs. This does not
 # reimplement it — a second installation path is a second thing to keep true.
 #
-# SAFETY. `uninstall` destroys the database and the secret-store key on the remote host, so it
-# requires --yes explicitly; there is no interactive prompt over a non-interactive SSH session
-# to catch a mistake.
+# SAFETY. Remote uninstall keeps data and credentials by default. Purge needs a
+# separate explicit confirmation; the SSH session must not turn --yes into data loss.
 set -euo pipefail
 
 HOST=""
@@ -29,6 +28,9 @@ API_PORT="8000"
 WEB_PORT="3000"
 PG_PORT="5432"
 ASSUME_YES=0
+PURGE_DATA=0
+SKIP_BACKUP=0
+CONFIRM_PURGE=""
 WITH_CONSOLE=0
 ALL_SERVICES=0
 PROVIDER=""
@@ -57,7 +59,7 @@ usage:
 commands:
   install      stream this commit to the host and run the installer there
   update       ship a newer commit to an EXISTING install and rebuild it in place
-  uninstall    remove the install on the host (needs --yes; destroys its database)
+  uninstall    stop/remove the host stack; keep data and credentials by default
   check        run BOSS's own health check on the host
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
@@ -77,7 +79,11 @@ options:
   --api-port N         host port for the API (default 8000)
   --web-port N         host port for the console (default 3000)
   --postgres-port N    host port for Postgres (default 5432)
-  --yes                required by uninstall; also makes install non-interactive
+  --yes                required for remote uninstall; also makes install non-interactive
+  --purge-data         uninstall: remove this stack's volumes and .env after backup
+  --skip-backup        uninstall purge: explicitly skip the pre-purge backup
+  --confirm-purge DELETE-BOSS-DATA
+                       uninstall purge: required even with --yes
   --service NAME       which service `logs` should tail
   --with-console       update: also rebuild the web console. OFF by default because the
                        console build is the memory peak, and a host with under 8GB and no
@@ -116,6 +122,9 @@ while [[ $# -gt 0 ]]; do
     --token) SUB_TOKEN="${2:-}"; shift 2 ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
     --accept-database-fallback) ACCEPT_DB_FALLBACK=1; shift ;;
+    --purge-data) PURGE_DATA=1; shift ;;
+    --skip-backup) SKIP_BACKUP=1; shift ;;
+    --confirm-purge) CONFIRM_PURGE="${2:-}"; shift 2 ;;
     --provider) PROVIDER="${2:-}"; shift 2 ;;
     --api-key) MODEL_API_KEY="${2:-}"; shift 2 ;;
     --model) MODEL_NAME="${2:-}"; shift 2 ;;
@@ -225,24 +234,13 @@ cmd_install() {
   head_ "Install BOSS on $HOST"
   preflight
   report_capacity
+  if rshq "[ -f '$DIR/.env' ]"; then
+    backup_remote
+  fi
   ship_source
   local args=(--dir "$DIR" --api-port "$API_PORT" --web-port "$WEB_PORT" --postgres-port "$PG_PORT")
-  # 127.0.0.1 IS ALWAYS WRONG FOR A REMOTE INSTALL, so this does not wait to be asked.
-  #
-  # NEXT_PUBLIC_BOSS_API_URL is compiled into the console bundle at image BUILD time. The
-  # installer defaults it to 127.0.0.1, which is right on a laptop and means "the operator's
-  # own machine" on a server — the console then serves a perfect 200 while every link inside it
-  # points somewhere with nothing behind it. Installing over SSH we already know the address,
-  # so it is passed unless the caller said otherwise.
-  local supplied_public=0
-  for a in ${EXTRA_INSTALL_ARGS[@]+"${EXTRA_INSTALL_ARGS[@]}"}; do
-    [[ "$a" == "--public-url" ]] && supplied_public=1
-  done
-  if [[ $supplied_public -eq 0 ]]; then
-    local addr="${HOST##*@}"
-    args+=(--public-url "http://$addr:$API_PORT")
-    say "console will be built for http://$addr:$API_PORT"
-  fi
+  # Community ports remain on the VM's loopback. A laptop connects through
+  # the tunnel command, which makes 127.0.0.1 the correct browser API address.
   [[ -n "$SECRET_STORE" ]] && args+=(--secret-store "$SECRET_STORE")
   [[ "$ASSUME_YES" -eq 1 ]] && args+=(-y --skip-model-key)
   [[ ${#EXTRA_INSTALL_ARGS[@]} -gt 0 ]] && args+=("${EXTRA_INSTALL_ARGS[@]}")
@@ -253,19 +251,12 @@ cmd_install() {
     || die "the installer failed on $HOST (see output above)"
   ok "installer finished"
 
-  # THE INSTALLER'S OWN BANNER IS WRITTEN FROM THE SERVER'S POINT OF VIEW.
-  #
-  # It signs off with "API http://127.0.0.1:8000 · Mission Control http://127.0.0.1:3000 ·
-  # API key (in /opt/boss/.env — not printed)". Every one of those is true on the box and
-  # useless to the person reading it over SSH: 127.0.0.1 is their own laptop, and the key they
-  # are told exists is one they have not been shown how to read. So the last thing they see is
-  # addresses that do not work and a credential they cannot get.
-  #
-  # This is the last thing printed, so it is the one that sticks.
-  local addr; addr="${HOST##*@}"
+  # The tunnel makes the VM's loopback ports available on the operator laptop;
+  # do not suggest opening unencrypted public HTTP endpoints.
   printf "\n${B}Where it is${N}\n\n"
-  say "Console   http://${addr}:${WEB_PORT}"
-  say "API       http://${addr}:${API_PORT}    ${D}( / is a 404 — that is the API, not the console )${N}"
+  say "Tunnel    ${D}remote.sh --host $HOST${KEY:+ --key $KEY} tunnel${N}"
+  say "Console   http://127.0.0.1:${WEB_PORT} after connecting the tunnel"
+  say "API       http://127.0.0.1:${API_PORT} after connecting the tunnel"
   printf "\n${B}What next${N}\n\n"
   say "Check it:        ${D}remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
   say "An API key:      ${D}remote.sh --host $HOST${KEY:+ --key $KEY} model --provider openrouter --api-key KEY${N}"
@@ -283,6 +274,15 @@ cmd_install() {
 #
 # So this ships the tree and rebuilds only what needs it. Default is api and worker, because
 # that is where the engine lives and where nearly every fix lands. The console is opt-in.
+backup_remote() {
+  rshq "[ -f '$DIR/scripts/install/backup.sh' ]" ||
+    die "this remote checkout predates backup.sh; make a private database/artifact backup before updating"
+  local backup
+  backup="$(rsh "cd '$DIR' && bash scripts/install/backup.sh --dir '$DIR'")" ||
+    die "remote backup failed; source and containers were not changed"
+  say "private recovery backup on host: $backup"
+}
+
 cmd_update() {
   head_ "Update BOSS on $HOST"
   preflight
@@ -291,6 +291,10 @@ cmd_update() {
   local was
   was="$(rshq "cat '$DIR/.boss-shipped-commit' 2>/dev/null")"
   say "host is at ${was:-unknown}"
+
+  # The source swap must never be the first mutation of a long-lived install.
+  # This helper also snapshots the database and artifacts while writers pause.
+  backup_remote
 
   ship_source
 
@@ -328,32 +332,37 @@ cmd_update() {
 }
 
 cmd_uninstall() {
-  [[ "$ASSUME_YES" -eq 1 ]] || die "uninstall destroys the host's database and secret key — pass --yes"
+  [[ "$ASSUME_YES" -eq 1 ]] || die "remote uninstall requires --yes (data is kept by default)"
+  [[ "$PURGE_DATA" -eq 0 || "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] ||
+    die "data purge also requires --confirm-purge DELETE-BOSS-DATA"
   head_ "Remove BOSS from $HOST"
   preflight
   rshq "[ -f '$DIR/scripts/install/uninstall.sh' ]" \
     || die "no BOSS install found at $DIR (nothing to remove)"
-  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash scripts/install/uninstall.sh --yes --dir '$DIR'" \
+  rshq "grep -q -- '--confirm-purge' '$DIR/scripts/install/uninstall.sh'" \
+    || die "remote uninstaller predates safe data retention; update the remote source before uninstalling"
+  local flags=""
+  [[ "$PURGE_DATA" -eq 1 ]] && flags="--purge-data --confirm-purge DELETE-BOSS-DATA"
+  [[ "$SKIP_BACKUP" -eq 1 ]] && flags="$flags --skip-backup"
+  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash scripts/install/uninstall.sh --yes --dir '$DIR' $flags" \
     || die "the uninstaller reported an error"
   ok "uninstaller finished"
   verify_clean
 }
 
-# WHAT "CLEAN" HAS TO MEAN. Not "the script said it worked" — no containers, no volumes, no
-# images, no .env. Each one has been left behind by a failed removal at some point.
+# Verify the selected safety level. Default removal deliberately leaves volumes,
+# images and .env in place so a rerun can recover the same database and keys.
 verify_clean() {
-  head_ "Verifying the host is clean"
-  local c v i e rc=0
-  c="$(rshq "docker ps -aq --filter name=boss-community | wc -l" || echo 0)"
-  v="$(rshq "docker volume ls -q | grep -cE 'boss[-_]community' || true")"
-  i="$(rshq "docker images -q 'boss-community-*' | wc -l" || echo 0)"
+  head_ "Verifying the host"
+  local c e rc=0
+  c="$(rshq "docker ps -aq --filter label=com.docker.compose.project=boss-community | wc -l" || echo 0)"
   e="$(rshq "[ -f '$DIR/.env' ] && echo yes || echo no")"
   [[ "${c:-0}" -eq 0 ]] && ok "no containers" || { warn "$c container(s) left"; rc=1; }
-  [[ "${v:-0}" -eq 0 ]] && ok "no volumes"    || { warn "$v volume(s) left";   rc=1; }
-  [[ "${i:-0}" -eq 0 ]] && ok "no images"     || { warn "$i image(s) left";    rc=1; }
-  [[ "$e" == "no" ]]    && ok "no .env"       || { warn ".env still present";  rc=1; }
-  [[ $rc -eq 0 ]] && printf "\n  ${G}${B}Host is clean.${N}\n\n" \
-                  || printf "\n  ${Y}${B}Host is NOT clean — see above.${N}\n\n"
+  if [[ "$PURGE_DATA" -eq 1 ]]; then
+    [[ "$e" == "no" ]] && ok ".env removed" || { warn ".env still present"; rc=1; }
+  else
+    [[ "$e" == "yes" ]] && ok ".env retained" || { warn ".env missing"; rc=1; }
+  fi
   return $rc
 }
 
@@ -431,9 +440,8 @@ cmd_smoke() {
   if [[ -n "$baked" ]]; then
     # SAY WHERE TO GO, not just what was compiled in. Reported as "console: <api url>" this
     # sent an operator to the API port, where `/` is a 404 and the install looks broken.
-    host="${HOST##*@}"
     say ""
-    say "  ${B}Open the console:${N} http://${host}:${WEB_PORT}"
+    say "  ${B}Open the console through the SSH tunnel:${N} http://127.0.0.1:${WEB_PORT}"
     say "  ${D}it calls the API at: $baked${N}"
   fi
 

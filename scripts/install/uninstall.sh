@@ -1,103 +1,111 @@
 #!/usr/bin/env bash
-# Remove a BOSS Community install, so the next one starts from nothing.
-#
-# WHY THIS EXISTS. An installer that cannot be undone can only be tested once. Proving the
-# setup works means running it on a clean machine repeatedly, and "clean" has to mean
-# something precise: no containers, no images, no volumes, no .env — not "I deleted the
-# folder and hoped".
-#
-# WHAT IT REFUSES TO DO QUIETLY. The database holds every run, decision and cost record, and
-# the .env holds the secret-store encryption key — the only thing that can read what the
-# secret store wrote. Both are destroyed here and neither is recoverable, so nothing happens
-# without a typed confirmation unless --yes is passed.
-set -uo pipefail
+# Stop a Community install while retaining everything needed to reinstall it.
+set -euo pipefail
+umask 077
 
-INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)}"
+INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 ASSUME_YES=0
-KEEP_ENV=0
-KEEP_IMAGES=0
+DRY_RUN=0
+PURGE_DATA=0
+SKIP_BACKUP=0
+BACKUP_DIR=""
+CONFIRM_PURGE=""
 
-# A WHILE LOOP, BECAUSE `--dir PATH` TAKES A VALUE.
-#
-# This was `for arg in "$@"` with a `shift` inside it. A for-loop has already captured the list,
-# so shifting moves $1 without moving the loop — `--dir /opt/boss` set INSTALL_DIR to the
-# literal string "--dir" and silently ignored the path. It went unnoticed because the paths
-# that matter were computed from the script's own location before any of this ran, so the flag
-# had no effect either way: wrong twice, cancelling out, until someone passed --dir and meant it.
+usage() {
+  cat <<'EOF'
+Usage: uninstall.sh [--dir PATH] [--yes] [--dry-run]
+                    [--purge-data] [--backup-dir PATH] [--skip-backup]
+                    [--confirm-purge DELETE-BOSS-DATA]
+
+Default: remove this Compose stack's containers and network. Keep the checkout,
+private .env, database, artifacts, CLI sessions, images, and backups.
+
+--dry-run      show the intended action without changing Docker or files
+--yes          skip the default safe-uninstall prompt
+--purge-data   also remove this stack's named volumes and private .env
+--backup-dir   where to place a private backup before data purge
+--skip-backup  allow purge without a backup
+--confirm-purge DELETE-BOSS-DATA
+               explicit noninteractive purge confirmation; --yes alone never purges
+
+Data purge does not remove backups or the source checkout. Without
+--skip-backup, the database must be running so it can be backed up first.
+EOF
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --yes|-y)      ASSUME_YES=1 ;;
-    --keep-env)    KEEP_ENV=1 ;;
-    --keep-images) KEEP_IMAGES=1 ;;
-    --dir)         INSTALL_DIR="${2:?--dir needs a path}"; shift ;;
-    -h|--help)
-      cat <<'USAGE'
-usage: uninstall.sh [--yes] [--keep-env] [--keep-images] [--dir PATH]
-
-  --yes          do not ask (for scripted reinstall loops)
-  --keep-env     leave .env in place — keeps the secret-store encryption key and your
-                 API key, so a reinstall reuses the same credentials
-  --keep-images  leave the built images, so a reinstall skips the slow rebuild
-  --dir PATH     the install directory (default: this script's repo root)
-
-Removes: containers, volumes (INCLUDING THE DATABASE), images, .env, and the generated
-env shim. Does not remove the source checkout.
-USAGE
-      exit 0 ;;
-    *) printf "unknown option: %s (try --help)\n" "$1" >&2; exit 2 ;;
+    --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
+    --backup-dir) BACKUP_DIR="${2:?--backup-dir needs a path}"; shift 2 ;;
+    --yes|-y) ASSUME_YES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --purge-data) PURGE_DATA=1; shift ;;
+    --skip-backup) SKIP_BACKUP=1; shift ;;
+    --confirm-purge) CONFIRM_PURGE="${2:?--confirm-purge needs a value}"; shift 2 ;;
+    --keep-env|--keep-images) shift ;; # Older callers: both are now the default.
+    -h|--help) usage; exit 0 ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
-  shift
 done
-
-# AFTER parsing, so --dir actually points them somewhere.
-COMPOSE="$INSTALL_DIR/scripts/install/community-compose.yml"
+[[ "$SKIP_BACKUP" -eq 0 || "$PURGE_DATA" -eq 1 ]] || { echo '--skip-backup requires --purge-data.' >&2; exit 2; }
+[[ -z "$CONFIRM_PURGE" || "$PURGE_DATA" -eq 1 ]] || { echo '--confirm-purge requires --purge-data.' >&2; exit 2; }
+[[ -z "$CONFIRM_PURGE" || "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Incorrect purge confirmation; nothing was removed.' >&2; exit 2; }
+INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
+COMPOSE_FILE="$INSTALL_DIR/scripts/install/community-compose.yml"
 ENV_FILE="$INSTALL_DIR/.env"
+[[ -f "$COMPOSE_FILE" && -f "$ENV_FILE" ]] || { echo 'Community Compose file and .env are required; nothing was removed.' >&2; exit 1; }
 
-G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'
-say() { printf "  %s\n" "$1"; }
-
-printf "\n${B}Uninstall BOSS Community${N}  (%s)\n\n" "$INSTALL_DIR"
-printf "  This removes:\n"
-printf "    • all boss-community containers\n"
-printf "    ${R}• the database volume — every run, decision and cost record${N}\n"
-[ "$KEEP_IMAGES" -eq 0 ] && printf "    • the built images (a reinstall rebuilds them)\n"
-[ "$KEEP_ENV" -eq 0 ] && printf "    ${R}• .env — including the secret-store encryption key, which is unrecoverable${N}\n"
-printf "\n"
-
-if [ "$ASSUME_YES" -ne 1 ]; then
-  printf "  Type ${B}remove${N} to continue: "
-  read -r reply
-  [ "$reply" = "remove" ] || { printf "\n  Nothing was removed.\n\n"; exit 1; }
-  printf "\n"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  if [[ "$PURGE_DATA" -eq 1 ]]; then
+    echo 'Would back up the running database and artifacts (unless --skip-backup), then remove this Compose stack, its named volumes, .env, and env shim.'
+  else
+    echo 'Would remove this Compose stack containers and network; .env, volumes, images, backups, and checkout remain.'
+  fi
+  exit 0
 fi
 
-# Compose first, so it takes its own volumes and network with it. Every profile, or the
-# profiled services are left orphaned.
-if [ -f "$COMPOSE" ]; then
-  docker compose -f "$COMPOSE" --env-file "$ENV_FILE" --profile web --profile secrets \
-    down --volumes --remove-orphans >/dev/null 2>&1 \
-    && say "${G}✓${N} compose stack down (containers, volumes, network)" \
-    || say "${Y}!${N} compose down reported an error — falling back to direct removal"
+if [[ "$PURGE_DATA" -eq 1 ]]; then
+  if [[ "$CONFIRM_PURGE" != 'DELETE-BOSS-DATA' ]]; then
+    if [[ ! -r /dev/tty ]]; then
+      echo 'Data purge needs a terminal confirmation or --confirm-purge DELETE-BOSS-DATA; nothing was removed.' >&2
+      exit 1
+    fi
+    printf 'This removes the BOSS database, artifacts, CLI sessions, and .env. Type DELETE-BOSS-DATA: ' >/dev/tty
+    read -r CONFIRM_PURGE </dev/tty || true
+    [[ "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Confirmation did not match; nothing was removed.' >&2; exit 1; }
+  fi
+elif [[ "$ASSUME_YES" -eq 0 ]]; then
+  if [[ ! -r /dev/tty ]]; then
+    echo 'Pass --yes for a noninteractive safe uninstall; nothing was removed.' >&2; exit 1
+  fi
+  printf 'Stop BOSS Community? Data and credentials will be kept. [y/N] ' >/dev/tty
+  read -r reply </dev/tty || true
+  [[ "$reply" == y || "$reply" == Y || "$reply" == yes ]] || { echo 'Nothing was removed.'; exit 1; }
 fi
 
-# Belt and braces: anything the compose file no longer knows about.
-left=$(docker ps -aq --filter "name=boss-community" 2>/dev/null)
-[ -n "$left" ] && docker rm -f $left >/dev/null 2>&1 && say "${G}✓${N} removed leftover containers"
-vols=$(docker volume ls -q 2>/dev/null | grep -E 'boss[-_]community' || true)
-[ -n "$vols" ] && docker volume rm $vols >/dev/null 2>&1 && say "${G}✓${N} removed leftover volumes"
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1 && sudo -v && sudo docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+  else
+    echo 'Docker daemon is unavailable; nothing was removed.' >&2; exit 1
+  fi
+fi
+COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
+if [[ "$PURGE_DATA" -eq 1 && "$SKIP_BACKUP" -eq 0 ]]; then
+  args=(--dir "$INSTALL_DIR")
+  [[ -n "$BACKUP_DIR" ]] && args+=(--backup-dir "$BACKUP_DIR")
+  backup="$(bash "$INSTALL_DIR/scripts/install/backup.sh" "${args[@]}")" || {
+    echo 'Backup failed; data purge was cancelled.' >&2; exit 1;
+  }
+  printf 'Private backup: %s\n' "$backup"
+fi
 
-if [ "$KEEP_IMAGES" -eq 0 ]; then
-  imgs=$(docker images -q 'boss-community-*' 2>/dev/null)
-  [ -n "$imgs" ] && docker rmi -f $imgs >/dev/null 2>&1 && say "${G}✓${N} removed built images"
+if [[ "$PURGE_DATA" -eq 1 ]]; then
+  "${COMPOSE[@]}" down --volumes --remove-orphans
+  rm -f "$ENV_FILE" "$INSTALL_DIR/boss-community.env.sh"
+  echo 'BOSS Community data purged. Source checkout and any backups remain.'
 else
-  say "  kept images (--keep-images): a reinstall will skip the rebuild"
+  "${COMPOSE[@]}" down --remove-orphans
+  echo 'BOSS Community stopped. .env, volumes, images, backups, and checkout were kept.'
+  printf 'Reinstall: cd %s && ./install.sh --dir "%s" --yes --skip-model-key\n' "$INSTALL_DIR" "$INSTALL_DIR"
 fi
-
-if [ "$KEEP_ENV" -eq 0 ]; then
-  [ -f "$ENV_FILE" ] && rm -f "$ENV_FILE" && say "${G}✓${N} removed .env"
-  rm -f "$INSTALL_DIR/boss-community.env.sh" 2>/dev/null && say "${G}✓${N} removed env shim"
-else
-  say "  kept .env (--keep-env): a reinstall reuses the same keys and credentials"
-fi
-
-printf "\n  ${G}${B}Clean.${N}  Reinstall: %s/install.sh\n\n" "$INSTALL_DIR"
