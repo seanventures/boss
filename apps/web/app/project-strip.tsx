@@ -28,6 +28,12 @@ type StripProject = {
 /** ALL first, because most of the time you want the whole picture; the others narrow it. */
 const FILTERS = ["ALL", "RUNNING", "GATED", "DONE"] as const;
 type Filter = (typeof FILTERS)[number];
+const FILTER_LABELS: Record<Filter, string> = {
+  ALL: "All",
+  RUNNING: "Active projects",
+  GATED: "Gated",
+  DONE: "Shipped",
+};
 
 /** Which statuses each filter admits. STUCK belongs under RUNNING: it is work that started and
  *  has not finished, and hiding it under a tab nobody opens is how a stalled project stays
@@ -49,6 +55,10 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("ALL");
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState("");
+  const pickerRef = useRef<HTMLElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   // What exists versus what arrived. A strip that shows 40 of 59 and says nothing is making
   // the same false claim of absence as one that shows nothing at all.
@@ -127,9 +137,33 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
   }, [projects]);
 
   const shown = useMemo(
-    () => projects.filter((p) => ADMITS[filter](p.status)),
-    [projects, filter],
+    () => projects
+      .filter((p) => ADMITS[filter](p.status))
+      .filter((p) => p.title.toLowerCase().includes(query.trim().toLowerCase()))
+      .sort((a, b) => {
+        const priority = (status: string) =>
+          status === "STUCK" || status === "GATED" ? 0 : status === "RUNNING" ? 1 : 2;
+        return priority(a.status) - priority(b.status);
+      }),
+    [projects, filter, query],
   );
+
+  useEffect(() => {
+    if (!expanded) return;
+    searchRef.current?.focus();
+    const closeOutside = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setExpanded(false);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeEscape);
+    };
+  }, [expanded]);
 
   /** Open a project in the Factory area.
    *
@@ -242,6 +276,7 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
     window.history.pushState({}, "",
       `${window.location.pathname}${search}${window.location.hash}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
+    setExpanded(false);
   }, []);
 
   if (state === "loading") {
@@ -265,9 +300,17 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
   }
 
   return (
-    <nav className="bx-strip" aria-label="Projects" data-state="ready" data-testid="bx-strip">
+    <nav className="bx-strip" aria-label="Projects" data-state="ready" data-testid="bx-strip" ref={pickerRef}>
+      <button type="button" className="bx-project-trigger" aria-expanded={expanded}
+              aria-controls="boss-project-picker" onClick={() => setExpanded((open) => !open)}>
+        <span>Projects</span><strong>{total}</strong>
+        {counts.GATED + projects.filter((p) => p.status === "STUCK").length > 0 ?
+          <span className="bx-project-attention">
+            {counts.GATED + projects.filter((p) => p.status === "STUCK").length} need attention
+          </span> : null}
+        <span aria-hidden>{expanded ? "⌃" : "⌄"}</span>
+      </button>
       <span className="bx-strip-label">
-        Projects
         {/* WHAT IS MISSING, ON THE LABEL THAT CLAIMS TO LIST THEM.
             Shown only when the strip does not have them all — a count beside every list is
             noise, a count beside a truncated one is the whole point. */}
@@ -285,6 +328,20 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
         ) : null}
       </span>
 
+      {expanded ? <div className="bx-project-picker" id="boss-project-picker"
+                       role="region" aria-label="Find a project" data-testid="bx-project-picker">
+      <label className="bx-project-search-label" htmlFor="boss-project-search">Find a project</label>
+      <input ref={searchRef} id="boss-project-search" type="search" value={query}
+             placeholder="Search projects" onChange={(event) => setQuery(event.target.value)} />
+      <div className="bx-strip-filters" role="group" aria-label="Filter projects by status">
+        {FILTERS.map((f) => (
+          <button type="button" key={f} className="bx-strip-filter"
+            data-active={filter === f} aria-pressed={filter === f}
+            onClick={() => setFilter(f)} data-testid={`bx-strip-filter-${f.toLowerCase()}`}>
+            {FILTER_LABELS[f]} <span className="bx-strip-filter-n">{counts[f]}</span>
+          </button>
+        ))}
+      </div>
       <div className="bx-strip-scroll" ref={scroller}>
         {shown.map((p) => (
           <button
@@ -297,8 +354,8 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
           >
             <span className="bx-strip-dot" data-status={p.status} aria-hidden />
             <span className="bx-strip-name">{p.title}</span>
-            <span className="bx-strip-stage">{p.stage}</span>
-            <span className="bx-strip-pct">{p.pct}%</span>
+            <span className="bx-strip-stage">{p.status === "DONE" ? "Shipped" : p.stage}</span>
+            {p.status !== "DONE" ? <span className="bx-strip-pct">{p.pct}%</span> : null}
             {p.status === "GATED" ? <span className="bx-strip-alert">GATED</span> : null}
           </button>
         ))}
@@ -308,7 +365,8 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
               ? "No projects yet"
               /* Says which filter is hiding them. An empty strip under a filter reads as "there
                  is nothing", and the operator forgets they narrowed it two minutes ago. */
-              : `No ${filter.toLowerCase()} projects — ${projects.length} in total`}
+              : query.trim() ? "No projects match your search"
+              : `No ${FILTER_LABELS[filter].toLowerCase()} — ${projects.length} projects in total`}
           </span>
         ) : null}
       </div>
@@ -328,24 +386,10 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
 
       {/* The filter LAST in the DOM but pinned right: the projects are the content, and a
           keyboard user should reach them before the control that narrows them. */}
-      <div className="bx-strip-filters" role="group" aria-label="Filter projects by status">
-        {FILTERS.map((f) => (
-          <button
-            type="button"
-            key={f}
-            className="bx-strip-filter"
-            data-active={filter === f}
-            aria-pressed={filter === f}
-            onClick={() => setFilter(f)}
-            data-testid={`bx-strip-filter-${f.toLowerCase()}`}
-          >
-            {f}
-            {/* The count is the point: "GATED" alone does not say whether clicking it is worth
-                doing. Zero is shown too — a filter that leads nowhere should say so first. */}
-            <span className="bx-strip-filter-n">{counts[f]}</span>
-          </button>
-        ))}
-      </div>
+      {total > projects.length ? <p className="bx-project-limited">
+        Showing {projects.length} of {total}. Open Factory for the full list.
+      </p> : null}
+      </div> : null}
     </nav>
   );
 }

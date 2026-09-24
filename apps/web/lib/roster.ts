@@ -25,6 +25,10 @@ export type AgentRosterRow = {
   trust: number;
   state: AgentOperationalState;
   currentTask: string;
+  currentTaskId?: string;
+  currentTaskStatus?: string;
+  currentTaskOwner?: string;
+  currentTaskUpdatedAt?: string;
 };
 
 function normalizedIdentifier(value?: string): string {
@@ -112,6 +116,10 @@ export function buildAgentRoster(
       trust: role.trustScore,
       state: stateForTask(currentTask),
       currentTask: currentTaskLabel(currentTask),
+      currentTaskId: currentTask?.id,
+      currentTaskStatus: currentTask ? boardStatus(currentTask) : undefined,
+      currentTaskOwner: currentTask?.ownerRoleId,
+      currentTaskUpdatedAt: currentTask?.updatedAt,
     };
   });
 }

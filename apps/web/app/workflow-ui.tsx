@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import { formatTime } from "../lib/datetime";
 import { Markdown } from "./markdown";
 import { pushUrlParam, readUrlParam } from "./url-nav";
@@ -353,7 +353,7 @@ export function WorkBoard({
   initialTaskId?: string;
 }) {
   const [selected, setSelected] = useState<string | undefined>(
-    (initialTaskId && tasks.some((t) => t.id === initialTaskId) ? initialTaskId : undefined) ??
+    initialTaskId ??
       agentRuns[0]?.task_id ?? tasks[0]?.id,
   );
   // Honor a task deep-link (e.g. "View in Work →") on client-side navigation,
@@ -362,16 +362,24 @@ export function WorkBoard({
   // array reference) don't re-fire this and snap a manual selection back to the
   // URL's task.
   const appliedInitial = useRef<string | undefined>(initialTaskId);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const focusedDeepLink = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (
       initialTaskId &&
-      initialTaskId !== appliedInitial.current &&
-      tasks.some((t) => t.id === initialTaskId)
+      initialTaskId !== appliedInitial.current
     ) {
       setSelected(initialTaskId);
     }
     appliedInitial.current = initialTaskId;
-  }, [initialTaskId, tasks]);
+  }, [initialTaskId]);
+
+  useEffect(() => {
+    if (!initialTaskId || selected !== initialTaskId || focusedDeepLink.current === initialTaskId) return;
+    focusedDeepLink.current = initialTaskId;
+    detailRef.current?.focus({ preventScroll: true });
+    detailRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+  }, [initialTaskId, selected]);
 
   // Select a task AND reflect it in the URL (?task=…) as a back-able history
   // entry; keep state in sync when the user hits Back/Forward.
@@ -386,14 +394,16 @@ export function WorkBoard({
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  const active = tasks.find((t) => t.id === selected) ?? tasks[0];
+  const active = tasks.find((t) => t.id === selected) ?? (selected ? undefined : tasks[0]);
 
   const jobsByTask = (id: string) => jobs.filter((j) => j.task_id === id);
   const decisionsByTask = (id: string) => decisions.filter((d) => d.taskId === id);
   const artifactsByTask = (id: string) => artifacts.filter((a) => a.taskId === id);
 
   if (tasks.length === 0) {
-    return <p className="detail">No tasks yet. Issue a CEO command from Overview to start a workflow.</p>;
+    return <p className="detail">{initialTaskId
+      ? `Task ${initialTaskId} is unavailable in this project's task feed.`
+      : "No tasks yet. Issue a CEO command from Overview to start a workflow."}</p>;
   }
 
   const tJobs = active ? jobsByTask(active.id) : [];
@@ -451,7 +461,7 @@ export function WorkBoard({
       <div className="wf-detail">
         {active ? (
           <>
-            <div className="wf-detail-head">
+            <div className="wf-detail-head" ref={detailRef} tabIndex={-1}>
               <div>
                 <span className="eyebrow">Run trace</span>
                 <h3 className="wf-detail-title">{active.title.replace(/^CEO command:\s*/, "")}</h3>
@@ -657,7 +667,13 @@ export function WorkBoard({
               {tArtifacts.length === 0 && tDecisions.length === 0 ? <p className="detail">No outcome yet.</p> : null}
             </div>
           </>
-        ) : null}
+        ) : <div className="wf-detail-head" ref={detailRef} tabIndex={-1} role="status">
+          <div>
+            <span className="eyebrow">Run trace</span>
+            <h3 className="wf-detail-title">Task unavailable</h3>
+            <p className="detail">{selected} is unavailable in this project&apos;s task feed.</p>
+          </div>
+        </div>}
       </div>
     </div>
   );

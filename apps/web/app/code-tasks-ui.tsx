@@ -3102,6 +3102,8 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
         </div>
       </div>
 
+      {benchmarks.length > 0 ? <details className="ct-benchmark-disclosure">
+      <summary>QA benchmarks <span>{benchmarks.length} examples</span></summary>
       <QaBenchmarkCatalog
         benchmarks={benchmarks}
         builtBenchmarkIds={new Set(
@@ -3119,6 +3121,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
         defaultOwner={lastRepo?.owner}
         defaultRepo={lastRepo?.repo}
       />
+      </details> : null}
 
       {/* LOADING IS NOT ABSENCE.
           The list arrives after the page does, and an empty list rendered "No projects yet" —
