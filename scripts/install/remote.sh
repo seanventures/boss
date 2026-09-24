@@ -217,14 +217,17 @@ ship_source() {
     | rsh "tar -x -C '$stage'" \
     || die "could not copy the source to $HOST"
   rsh "for f in .env boss-community.env.sh; do
-         [ -f '$DIR'/\$f ] && cp -p '$DIR'/\$f '$stage'/\$f || true
-       done" || true
-  # The swap itself: old tree aside, new tree in, old tree gone. Ordered so a failure at any
-  # step leaves a complete tree at \$DIR rather than a half-written one.
-  rsh "rm -rf '$DIR.prev' \
-       && { [ -d '$DIR' ] && mv '$DIR' '$DIR.prev' || true; } \
-       && mv '$stage' '$DIR' \
-       && rm -rf '$DIR.prev'" || die "could not swap the new tree into place on $HOST"
+         if [ -f '$DIR'/\$f ]; then cp -p '$DIR'/\$f '$stage'/\$f || exit 1; fi
+       done" || die "could not carry private configuration into staging; live source unchanged"
+  # Retain the previous tree until install/recreation succeeds. If the stage
+  # cannot be moved into place, put the previous tree back immediately.
+  rsh "[ ! -e '$DIR.prev' ]" ||
+    die "previous source remains at $DIR.prev; recover or move it before another source swap"
+  rsh "if [ -d '$DIR' ]; then mv '$DIR' '$DIR.prev' || exit 1; fi
+       if ! mv '$stage' '$DIR'; then
+         [ -d '$DIR.prev' ] && mv '$DIR.prev' '$DIR'
+         exit 1
+       fi" || die "could not swap the new tree into place on $HOST; previous source restored if possible"
   rsh "printf '%s\n' '$sha' > '$DIR/.boss-shipped-commit'"
   ok "source on host at $sha (tree replaced, not merged)"
 }
@@ -248,7 +251,8 @@ cmd_install() {
   # -t so the installer's progress reaches this terminal as it happens rather than in one
   # silent block at the end.
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
-    || die "the installer failed on $HOST (see output above)"
+    || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
+  rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this install"
   ok "installer finished"
 
   # The tunnel makes the VM's loopback ports available on the operator laptop;
@@ -317,14 +321,15 @@ cmd_update() {
   say "building — this takes a few minutes"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
     "cd '$DIR' && $compose build $services" \
-    || die "the build failed on $HOST (see output above). The old containers are still running."
+    || die "the build failed on $HOST. Old containers still run; previous source is at $DIR.prev."
 
   # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
   # the whole reason these are two steps rather than `up -d --build`.
   say "recreating: ${services:-all}"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
     "cd '$DIR' && $compose up -d --no-deps --force-recreate $services" \
-    || die "could not recreate the containers on $HOST"
+    || die "could not recreate containers on $HOST; previous source remains at $DIR.prev"
+  rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
   ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
   say ""

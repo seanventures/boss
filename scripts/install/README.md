@@ -301,6 +301,14 @@ that commit from the operator machine with `remote.sh --ref COMMIT install`,
 then restore the database and artifacts from the private host backup.
 The local `upgrade.sh` requires a Git checkout; for archive installs use
 `remote.sh update` from the operator machine, which now backs up first.
+For remote installs, the new source is at the install path while the prior
+source remains at `PATH.prev` until installer/recreation succeeds. A failed
+build leaves the old containers running; after diagnosing the failure, you can
+move `PATH.prev` back to `PATH` before retrying. If recreation started, a
+database migration may have run: inspect the private backup and use the
+database/artifact recovery steps above instead of only moving source. A failed
+source swap itself restores the prior source path. The remote script refuses to
+discard a leftover `PATH.prev` on a later attempt.
 For example:
 
 ```bash

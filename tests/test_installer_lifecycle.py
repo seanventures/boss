@@ -10,6 +10,7 @@ REPO = Path(__file__).resolve().parents[1]
 UNINSTALL = REPO / "scripts/install/uninstall.sh"
 UPGRADE = REPO / "scripts/install/upgrade.sh"
 INSTALLER = REPO / "install.sh"
+REMOTE = REPO / "scripts/install/remote.sh"
 
 
 def _fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
@@ -217,3 +218,38 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
             "BOSS_CUSTOM_OPERATOR_SETTING=retain",
         ):
             assert retained in lines
+
+
+def test_remote_failed_build_retains_previous_source(tmp_path: Path) -> None:
+    install = tmp_path / "remote-boss"
+    (install / "scripts/install").mkdir(parents=True)
+    (install / ".env").write_text("BOSS_API_KEY=remote-private\n")
+    (install / ".boss-shipped-commit").write_text("old-commit\n")
+    (install / "prior-source-marker").write_text("old source\n")
+    (install / "scripts/install/backup.sh").write_text("#!/bin/sh\necho /tmp/private-backup\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text("#!/bin/sh\nwhile [ \"$#\" -gt 1 ]; do shift; done\nexec sh -c \"$1\"\n")
+    ssh.chmod(0o755)
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = info ]; then exit 0; fi\n'
+        'case " $* " in *" build "*) exit 7 ;; esac\n'
+        "exit 0\n"
+    )
+    docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    result = subprocess.run(
+        ["bash", str(REMOTE), "--host", "proof", "--dir", str(install),
+         "update", "--ref", "HEAD"],
+        env=env, text=True, capture_output=True, timeout=30, check=False,
+    )
+    assert result.returncode != 0
+    assert "previous source" in result.stderr
+    previous = tmp_path / "remote-boss.prev"
+    assert previous.joinpath("prior-source-marker").read_text() == "old source\n"
+    assert previous.joinpath(".env").read_text() == "BOSS_API_KEY=remote-private\n"
+    assert install.joinpath(".env").read_text() == "BOSS_API_KEY=remote-private\n"
