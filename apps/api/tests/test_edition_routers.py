@@ -346,6 +346,104 @@ def test_community_api_starts_without_paid_soc2_service():
     assert result.returncode == 0, result.stderr
 
 
+def test_community_api_starts_without_hosted_routes():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockHostedRoutes(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname == 'apps.api.app.enterprise_extensions.hosted_routes':
+                            raise ImportError('hosted routes deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockHostedRoutes())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/code-tasks' in paths
+                assert '/v1/cloud/easy-connect' in paths
+                assert '/v1/enterprise/identity-providers' in paths
+                assert not any(path.startswith('/v1/account-connect') for path in paths)
+                assert not any(path.startswith('/v1/marketplace') for path in paths)
+                assert 'apps.api.app.enterprise_extensions.hosted_routes' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_api_registers_hosted_route_contract():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "enterprise_self_hosted"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                from fastapi.routing import APIRoute
+                from apps.api.app.main import app
+
+                hosted = {
+                    (method, route.path)
+                    for route in app.routes
+                    if isinstance(route, APIRoute)
+                    and route.path.startswith(('/v1/account-connect', '/v1/marketplace'))
+                    for method in route.methods
+                }
+                expected = {
+                    ('POST', '/v1/account-connect/link'),
+                    ('POST', '/v1/account-connect/unlink'),
+                    ('POST', '/v1/account-connect/sync'),
+                    ('GET', '/v1/account-connect/health-checks'),
+                    ('POST', '/v1/account-connect/health-checks'),
+                    ('GET', '/v1/account-connect/auth-sessions'),
+                    ('POST', '/v1/account-connect/auth-sessions'),
+                    ('POST', '/v1/account-connect/auth-sessions/{session_id}/complete'),
+                    ('GET', '/v1/account-connect/team-invites'),
+                    ('POST', '/v1/account-connect/team-invites'),
+                    ('POST', '/v1/account-connect/team-invites/{invite_id}/revoke'),
+                    ('GET', '/v1/account-connect/billing-portal-sessions'),
+                    ('POST', '/v1/account-connect/billing-portal-sessions'),
+                    ('GET', '/v1/marketplace/listings'),
+                    ('GET', '/v1/marketplace/sync-runs'),
+                    ('POST', '/v1/marketplace/sync'),
+                }
+                assert hosted == expected, (hosted - expected, expected - hosted)
+                assert all(
+                    route.endpoint.__module__
+                    == 'apps.api.app.enterprise_extensions.hosted_routes'
+                    for route in app.routes
+                    if isinstance(route, APIRoute)
+                    and route.path.startswith(('/v1/account-connect', '/v1/marketplace'))
+                )
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_paid_api_registers_soc2_route():
     environment = os.environ.copy()
     environment["BOSS_EDITION"] = "enterprise_self_hosted"

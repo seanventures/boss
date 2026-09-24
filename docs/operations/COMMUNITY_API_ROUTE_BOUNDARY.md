@@ -21,3 +21,9 @@ Community engine. Community startup does not import that paid package; a paid
 edition registers the endpoint in `routers/enterprise.py` before route
 partitioning. The `audit_export` actor check and response remain the same. The
 Community export manifest must exclude `apps/api/app/enterprise_extensions/`.
+
+Hosted Account Connect and marketplace API routes are the next paid group in
+that package. Their 16 route contracts and denial audit helpers are registered
+only in paid editions. The separate Community `/v1/cloud/*` Easy Connect client
+remains mounted, so a self-hosted operator can choose to link later without
+making hosted Account Connect a startup dependency.
