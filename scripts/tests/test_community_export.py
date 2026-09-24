@@ -161,6 +161,49 @@ hosted_account_connect_required: false
     )
 
 
+def test_specpack_local_hosted_entitlement_filter_is_exactly_audited() -> None:
+    path = "engine/boss_engine/services/specpack.py"
+    source = b'''class SpecPackService:
+    def _project_capabilities(self):
+        active_account_connect_org_id = (
+            edition.get("account_connect_org") or {}
+        ).get("hosted_org_id")
+        sql = """
+                SELECT capability_key, capabilities, source, account_connect_org_id
+                FROM license_entitlements
+        """
+        for row in rows:
+            if (
+                row["source"] == "account_connect_hosted"
+                and row["account_connect_org_id"] != active_account_connect_org_id
+            ):
+                continue
+'''
+    masked, valid = export.reviewed_marker_bytes(path, source)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    changed = source.replace(
+        b'                row["source"] == "account_connect_hosted"',
+        b'                row["source"] == "account_connect_hosted_or_trial"',
+    )
+    assert export.reviewed_marker_bytes(path, changed)[1] is False
+    added = source + b"# account_connect_billing_portal_session\n"
+    masked, valid = export.reviewed_marker_bytes(path, added)
+    assert valid
+    assert any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    relocated = source.replace(
+        b"def _project_capabilities(self):",
+        b"def unrelated_method(self):",
+    )
+    assert export.reviewed_marker_bytes(path, relocated)[1] is False
+
+
+def test_paid_audit_extension_and_regression_stay_outside_community_manifest() -> None:
+    manifest = json.loads((MODULE_PATH.parent / "community_export_manifest.json").read_text())
+    assert "engine/boss_engine/services/enterprise_audit.py" in manifest["exclude"]
+    assert "engine/tests/test_enterprise_audit_boundary.py" in manifest["exclude"]
+
+
 def test_community_router_is_selected_after_source_audit() -> None:
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
     assert "apps/api/app/routers/community.py" not in manifest["requires_split"]
