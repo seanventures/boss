@@ -1,164 +1,110 @@
-# BOSS Community — quickstart
+# BOSS Community quickstart
 
-Goal: a working self-hosted control plane with BYO keys on a VM or developer machine.
+BOSS Community runs on an Ubuntu 22.04/24.04 or Debian 12/13 VM with `sudo`
+access. The installer provisions Docker Engine, Buildx, Compose and other host
+dependencies, starts Postgres, API, worker and Mission Control, seeds a project,
+and checks API health. Model work needs provider credentials you control, through
+an API key or a supported coding subscription. Leaving both unconnected starts
+the control plane and leaves model work visibly unavailable.
 
-> Invited onto the **private** repo as a design partner? Start at
-> [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](../operations/DESIGN_PARTNER_ONBOARDING.md)
-> (`make onboard`). Access is a human GitHub invite; this quickstart is not a
-> public-clone substitute.  
-> For production goldeneye-style deploy, see `docs/operations/GOLDENEYE_DEPLOYMENT.md`.  
-> For the full product contract, see [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md).
+## Install
 
-## One-line install (recommended)
-
-The planned public one-liner will install missing VM dependencies, start the Community
-stack, prompt for keys, seed a project, and verify the API:
+`seanventures/boss` is the intended public source. **Its raw installer URL is
+not available until the repository is published.** At release, the one-line
+command will be:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
 ```
 
-**Public launch pending:** `seanventures/boss` is not published yet, so the raw URL
-above is a preview of the command, not a working public download. Invited contributors
-can install from the private checkout:
+For an unattended VM without a model key, or to add the official Claude Code,
+Codex CLI and Grok Build binaries, pass flags to the piped installer:
 
 ```bash
-git clone https://github.com/seanheiney/boss.git ~/boss
-cd ~/boss
-BOSS_REPO_URL=https://github.com/seanheiney/boss.git ./install.sh --dir "$PWD"
+curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
+  bash -s -- --yes --skip-model-key --install-coding-clis
 ```
 
-Supported fresh VMs: Ubuntu 22.04/24.04 and Debian 12/13 with `sudo` or root.
-The installer provisions `git`, `curl`, OpenSSL, Python 3, Docker Engine,
-Buildx, and Compose as needed.
-It binds the API and console to loopback. To use the console from your laptop:
+Invited contributors can run the same installer from an authorized checkout:
+
+```bash
+cd /path/to/authorized/boss
+./install.sh --dir "$PWD" --install-coding-clis
+```
+
+On a fresh public install, the default checkout is `~/boss`. The installer
+writes secrets to `~/boss/.env` with mode 0600 and never prints the generated
+API key or console password. A rerun keeps existing credentials and data. It
+leaves the operator GitHub owner/repo unbound until you configure them; the
+installer's source repository is not your project repository.
+
+Installing coding CLIs does not sign in to subscriptions. A laptop login is
+not available on the VM. Codex and Claude have explicit connect steps after
+official VM login; see the [installer guide](../../scripts/install/README.md#optional-coding-subscriptions).
+For Grok, run device login as the BOSS service user in the API container:
+
+```bash
+cd ~/boss
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  exec -u boss api grok login --device-auth
+```
+
+## Open and verify
+
+The API, console and database bind to `127.0.0.1` on the VM. From your laptop,
+open an SSH tunnel:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Open `http://127.0.0.1:3000` locally. For a permanent public hostname, use a TLS
-reverse proxy, pass `--public-url https://boss.example.com` to the installer,
-and set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env`. The proxy
-must overwrite the forwarded host and scheme headers; see the installer guide.
-Details and flags: [installer guide](../../scripts/install/README.md) · [install.sh](../../install.sh).
-After installation, update with `./scripts/install/upgrade.sh --dir "$PWD"` from
-the checkout. It makes a private database, artifact, and configuration backup
-before rerunning the installer. To stop BOSS while keeping its data and keys,
-run `./scripts/install/uninstall.sh --dir "$PWD" --yes`; rerun the installer to
-resume. To remove data, use `--purge-data`, which backs up first and requires
-a separate typed confirmation. See [upgrade and recovery](../../scripts/install/README.md#upgrade--recover).
-Mission Control asks for its own password. On the VM, run
-`python3 scripts/install/console_password.py show` from the install directory
-to display it privately; `reset` rotates it and prints the web restart command.
+Open `http://127.0.0.1:3000` on the laptop. To retrieve the console password
+privately on the VM, run `python3 scripts/install/console_password.py show`
+from the install directory. For a remote hostname, terminate HTTPS at a trusted
+reverse proxy while keeping BOSS bound to loopback; follow the
+[installer guide](../../scripts/install/README.md) for the proxy and origin
+requirements.
 
-To add the official Claude Code, Codex CLI, and Grok Build binaries on the VM,
-pass `--install-coding-clis`. BOSS then reports local login status without
-transferring credentials. Authenticate with each provider on the VM; a laptop
-subscription session does not automatically follow an SSH connection. Explicit
-`--connect-claude` and `--connect-codex` import the supported CLI credential
-through BOSS and prove it works. Grok requires `grok login --device-auth` as
-the `boss` user inside the API container; its login volume is shared with the
-worker. See the
-[coding subscriptions guide](../../scripts/install/README.md#optional-coding-subscriptions).
-
-## What you will run
-
-| Process | Role |
-|---|---|
-| Postgres | Durable state |
-| `apps/api` | Control plane |
-| `apps/worker` | Leased job execution |
-| `apps/web` (optional) | Mission Control |
-| CLI / MCP client | Operator surfaces |
-
-## 1. Prerequisites
-
-- Docker (or local Postgres 16+)  
-- Python 3.11+ for engine/API (or use compose images)  
-- A model API key **you** control (OpenAI-compatible, Anthropic, etc.)  
-
-## 2. Configure
+Check health and the seeded Community edition on the VM:
 
 ```bash
-export BOSS_EDITION=community
-export DATABASE_URL=postgresql+psycopg://boss:boss@127.0.0.1:5432/boss
-# Bring your own key — never commit it
-export OPENAI_API_KEY=sk-...
-# Optional: local OpenAI-compatible endpoint
-# export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+cd ~/boss
+source ./boss-community.env.sh
+curl -fsS "$BOSS_API_URL/health"
+curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
+  "$BOSS_API_URL/v1/edition?project_id=$BOSS_PROJECT_ID"
 ```
 
-Leave `BOSS_ACCOUNT_CONNECT_URL` **unset** for pure Community.
-
-## 3. Start services
-
-From the repository root (see `Makefile` / `docker-compose.yaml` for the current recommended path):
+If you skipped the model-key prompt, add your own `OPENAI_API_KEY` to the
+private `.env` on the VM and recreate API and worker. Keep the key out of shell
+history and repository files:
 
 ```bash
-make dev          # when available in your checkout
-# or: docker compose up -d
-# or: run API + worker processes per docs/operations
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  up -d --force-recreate api worker
 ```
 
-Health check:
+## Upgrade or remove
+
+From the install checkout, back up and upgrade with:
 
 ```bash
-curl -sS "$BOSS_API_URL/health"
+cd ~/boss
+./scripts/install/upgrade.sh --dir "$PWD"
 ```
 
-## 4. Seed a project
+The upgrade backs up private configuration, Postgres and artifacts before it
+changes source or containers. It keeps named volumes and login sessions. To
+stop BOSS and retain `.env`, volumes, images, backups and the checkout:
 
 ```bash
-# Example — use the project’s seed path for your version
-make seed
-# Project id is often boss-dogfood in dogfood installs
+./scripts/install/uninstall.sh --dir "$PWD" --dry-run
+./scripts/install/uninstall.sh --dir "$PWD" --yes
 ```
 
-## 5. Drive the loop
-
-**CLI / MCP:** submit an outcome (command) and watch tasks, jobs, and receipts.
-
-**Mission Control:** open the web console → Command Center → Approvals → Task Board.
-
-**Prove it:** every external effect should appear as a receipt; budget pressure should show on the Budget surface.
-
-## 6. Optional: Software Factory
-
-1. Connect GitHub (project GitHub / easy-connect in Mission Control).  
-2. Submit a code-oriented outcome.  
-3. Require tests/evidence before treating the task as complete.  
-
-## 7. Optional: ProviderOps
-
-1. Add provider keys as SecretRefs (never plain agent-visible secrets).  
-2. Sync inventory.  
-3. Plan ChangeSets — approve before apply.  
-
-## 8. Optional: Easy Connect to BOSS Cloud
-
-Only when you want hosted team / marketplace / managed capacity:
-
-```http
-POST /v1/cloud/easy-connect
-{ "project_id": "...", "method": "device", "actor": "ceo" }
-```
-
-Or use **Editions → Connect with device code** in Mission Control.  
-Community remains fully usable if Cloud is not configured.
-
-## Verify independence
-
-| Check | Expected |
-|---|---|
-| Account Connect URL unset | Community work still succeeds |
-| `GET /v1/edition` | `edition_id=community`, `account_connect_required=false` |
-| `GET /v1/cloud/status` | `independent=true` when cloud APIs present |
-| Missing model key | Fail closed with visible decision/event — not a mock success |
-
-## Next reading
-
-- [FEATURES.md](./FEATURES.md)  
-- [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md)  
-- `docs/product/PRD-v2.0.md`  
-- https://boss.sean.network/community/  
+Run `./install.sh --dir "$PWD" --yes --skip-model-key` to resume. To remove
+data intentionally, add `--purge-data`; the script backs up first and requires
+the separate `DELETE-BOSS-DATA` confirmation. Purge also removes CLI session
+volumes, so provider sign-in is required after recovery. See
+[upgrade and recovery](../../scripts/install/README.md#upgrade--recover) for
+exact restore steps and limits.

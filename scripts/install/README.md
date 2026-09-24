@@ -6,12 +6,11 @@ One-line Community setup for a supported Linux VM.
 
 > **Public launch pending:** `seanventures/boss` is the intended public home, but the
 > repository and raw installer URL are not available yet. Until publication, invited
-> contributors can clone the private checkout and run its installer:
+> contributors can run the installer from their authorized checkout:
 >
 > ```bash
-> git clone https://github.com/seanheiney/boss.git ~/boss
-> cd ~/boss
-> BOSS_REPO_URL=https://github.com/seanheiney/boss.git ./install.sh --dir "$PWD"
+> cd /path/to/authorized/boss
+> ./install.sh --dir "$PWD"
 > ```
 
 After the public repository is live, the command will be:

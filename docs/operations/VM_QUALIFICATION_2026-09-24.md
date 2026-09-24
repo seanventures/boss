@@ -1,9 +1,9 @@
 # Community VM installer qualification — 2026-09-24
 
-**Scope:** disposable Ubuntu 24.04.4 ARM64 VM, 6 vCPU, 12 GiB assigned RAM,
-100 GiB disk, Lima/VZ, no host mounts. This is an isolated development smoke,
-not a public-release or provider-subscription qualification. Debian and x86-64
-remain untested in this run.
+**Scope:** disposable Ubuntu 24.04.4 and Debian 12 ARM64 VMs, each with 6 vCPU,
+12 GiB assigned RAM, 100 GiB disk, Lima/VZ, and no host mounts. This is an
+isolated development smoke, not a public-release or provider-subscription
+qualification. x86-64 remains untested in this run.
 
 ## Source and exact entry point
 
@@ -24,7 +24,7 @@ LIMA_HOME=/Volumes/DataSSD1/test/boss-vm-qa-lima limactl shell boss-vm-qa -- \
 ```
 
 The first run installed Docker Engine 29.8.1, Compose 5.5.1, Buildx 0.37.1,
-Git, curl, OpenSSL, Python 3 and the three official coding CLIs. The API, worker,
+ensured Git, curl, OpenSSL and Python 3, and installed the three official coding CLIs. The API, worker,
 web and Postgres images built and started. API and Postgres health passed, one
 project was seeded, `/v1/edition` reported Community, and web `/` returned 200.
 API, web and Postgres ports published on `127.0.0.1` only. The VM had about
@@ -100,6 +100,81 @@ configuration. The later restore completed, including both markers. Provider
 CLI session volumes are outside the backup, so a purged install requires
 provider sign-in again.
 
+After the ARM64 source-wheel image fix below, the retained Ubuntu VM also
+completed a **piped upgrade** from `c04a94b6` to `31a3e085` in 105.52
+seconds. The upgrade created its private backup, rebuilt API and worker with
+the source wheel, passed image imports, API health, seed and Community edition,
+and printed `Upgrade complete`. All four services remained running. This
+recheck guards the earlier Ubuntu result against the new Dockerfile stage.
+
+## Debian 12 ARM64 clean-host drill
+
+The first disposable Debian VM (`6.1.0-44-cloud-arm64`) began without Docker
+or any coding CLI. The piped install installed Docker and the three official
+CLIs, built all images, and started Postgres. Its API repeatedly exited 132
+(SIGILL) before health. `python -X faulthandler -c 'import apps.api.app.main'`
+located the crash in `cryptography==50.0.0`'s native `_rust` extension. The
+published ARM64 wheels for 48.0.1, 49.0.0, 50.0.0 and 50.0.1 reproduced it;
+a disposable source build of 50.0.1 imported successfully. The [PyCA ARM VM
+report](https://github.com/pyca/cryptography/issues/14764) describes a similar
+SIGILL in the published wheel. Downgrading to a pre-47 wheel was rejected:
+[PyCA's security advisory](https://github.com/pyca/cryptography/security/advisories/GHSA-537c-gmf6-5ccf)
+records vulnerable bundled OpenSSL in wheels before 48.0.1.
+
+The image now builds the **pinned** 50.0.0 package from source on ARM64 in a
+separate Docker stage, then installs that local wheel in API and worker. Both
+images fail their build if `cryptography.exceptions` cannot be imported. The
+source-built extension links the image's Debian system `libssl.so.3` and
+`libcrypto.so.3`; keep the base image and its distro security updates current.
+Other architectures continue to use their normal pinned wheel. The Rust and
+compiler packages stay in the wheel-builder stage, outside runtime images.
+On the first Debian VM, this fix brought API/worker up; a piped safe uninstall
+retained `.env` and the four named volumes.
+
+A **second clean** Debian 12 ARM64 VM (`boss-debian-final`) was then created
+from the stock Lima Debian 12 cloud image with no Docker or CLI binaries and
+no host mounts. The exact final-code entry point was:
+
+```bash
+LIMA_HOME=/Volumes/DataSSD1/test/boss-debian-final-lima limactl shell boss-debian-final -- \
+  env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u BOSS_GITHUB_TOKEN -u XAI_API_KEY \
+  BOSS_REPO_URL=/home/sean.guest/boss-debian-final.bundle \
+  BOSS_REPO_REF=ai/codex/community-installer-lifecycle \
+  bash -s -- --dir /home/sean.guest/boss --yes --skip-model-key \
+  --install-coding-clis < install.sh
+```
+
+At source commit `93e2c92b`, the command exited 0 after **445.62 seconds**
+(7m26s, including apt downloads, official CLI downloads, Rust source build,
+three application image builds, seed and health checks). The source wheel
+stage took about 100 seconds in this cold build. Docker Engine 29.8.1,
+Buildx 0.37.1 and Compose 5.5.1 were installed. Claude Code 2.1.281,
+Codex CLI 0.156.1 and Grok Build 1.0.41 ran both on the VM host and in the
+API container. The API and worker passed the native import check, four
+services ran, API health and seed passed, and an authenticated `/v1/edition`
+request with `project_id=boss-dogfood` returned `community`. API, web and
+Postgres published only on `127.0.0.1`. `.env` had mode 0600 and blank
+operator GitHub owner/repo fields. No subscription login or proof was run.
+
+A second **piped** install against the retained data exited 0 in **21.58
+seconds** with cached images and CLI binaries. Six sampled credentials matched
+their previous values, the seeded project count stayed one, and the full
+`BOSS Community is running.` marker printed. A piped uninstall dry run made
+no changes. Then the safe uninstall completed:
+
+```bash
+LIMA_HOME=/Volumes/DataSSD1/test/boss-debian-final-lima limactl shell boss-debian-final -- \
+  bash -s -- --dir /home/sean.guest/boss --yes \
+  < scripts/install/uninstall.sh
+```
+
+It left `.env` mode 0600, all four named volumes and source commit intact,
+and removed all Compose containers. Both disposable Debian VMs and the
+earlier Ubuntu VM were stopped after evidence capture. Docker's warmed build
+cache makes ordinary reruns much faster; changing the pinned cryptography
+version, the base image, or its build stage requires another ARM64 source
+build and a new image import check.
+
 ## Remaining release gates
 
 - The public `seanventures/boss` URL and OSS license decision are pending.
@@ -109,5 +184,6 @@ provider sign-in again.
 - Grok's governed harness is in a separate PR. No real provider subscription
   was exercised on the VM, and the optional Claude/Codex connect proof was not
   run without owner credentials.
-- Repeat the clean-host smoke on Debian and x86-64 before claiming those
-  platforms qualified. Ubuntu 22.04 was also not tested here.
+- Repeat the clean-host smoke on x86-64, Ubuntu 22.04 and Debian 13 before
+  claiming those platform variants qualified. Debian 12 ARM64 and Ubuntu
+  24.04 ARM64 are the only VM variants qualified here.
