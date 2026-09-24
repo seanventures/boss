@@ -53,7 +53,8 @@ python -m boss_engine ask "how many tasks are running right now?"
 python -m boss_engine chat --allow-writes          # interactive agent
 python -m boss_engine serve-mcp                     # MCP over stdio (default; writes OK)
 python -m boss_engine serve-mcp --http --port 8791  # HTTP + Mission Control (read-only)
-# HTTP has no auth — write tools require an explicit opt-in:
+# To enable authenticated HTTP writes for a local MCP client:
+# export BOSS_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
 # python -m boss_engine serve-mcp --http --allow-writes --host 127.0.0.1
 ```
 
@@ -97,8 +98,15 @@ page at `http://host:8791/` — project status, running work, code tasks,
 previews, discovery and meetings, rendered straight from the engine's read
 tools over the same `/mcp` JSON-RPC endpoint. HTTP mode defaults to
 **read-only** (no transport auth); write tools stay on stdio MCP or require
-`--allow-writes` on loopback. It is a snapshot viewer by design; approvals and
-multi-user operation live in the commercial console.
+`--allow-writes` on loopback with `BOSS_MCP_HTTP_TOKEN`. Authenticated HTTP
+clients send `Authorization: Bearer <token>`; remote clients can use an SSH
+tunnel. The Mission Control page prompts for that token in write-capable mode
+and keeps it in browser memory for the current page session. It is a snapshot
+viewer by design; approvals remain explicit operator actions.
+
+MCP exposes the engine tool layer (currently 106 tools), not every control
+plane HTTP route. See [Community MCP guide](../docs/community/MCP.md) for the
+capability map and security boundary.
 
 ### Local / open models (Ollama, vLLM, any OpenAI-compatible endpoint)
 

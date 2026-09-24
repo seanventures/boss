@@ -214,20 +214,28 @@ def _cmd_serve_mcp(args) -> int:
     # advertising write tools there would invite a caller to take an action
     # that cannot create the required durable audit trail.
     read_only = _serve_mcp_read_only(args) or not ctx.durable_workspace_configured
-    if (
-        args.http
-        and args.allow_writes
-        and not read_only
-        and args.host not in ("127.0.0.1", "localhost", "::1")
-    ):
-        print(
-            "boss-engine: WARNING — serving WRITE tools over unauthenticated "
-            f"HTTP on {args.host}:{args.port}. Prefer stdio MCP, or bind "
-            "loopback, or pass --read-only.",
-            file=sys.stderr,
-        )
+    http_token = (
+        os.environ.get("BOSS_MCP_HTTP_TOKEN") if args.http and not read_only else None
+    )
+    if args.http and not read_only:
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            print(
+                "boss-engine: write-capable HTTP MCP must bind loopback; "
+                "use an SSH tunnel for remote clients.",
+                file=sys.stderr,
+            )
+            return 2
+        if not http_token:
+            print(
+                "boss-engine: --allow-writes requires BOSS_MCP_HTTP_TOKEN "
+                "for HTTP MCP authentication.",
+                file=sys.stderr,
+            )
+            return 2
 
-    server = MCPServer(ctx, project_id=args.project, read_only=read_only)
+    server = MCPServer(
+        ctx, project_id=args.project, read_only=read_only, http_token=http_token
+    )
     if args.http:
         import uvicorn  # lazy: only for HTTP transport
 
@@ -404,7 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument(
         "--allow-writes",
         action="store_true",
-        help="HTTP only: expose write tools (off by default; HTTP has no auth)",
+        help="HTTP only: expose write tools on loopback with BOSS_MCP_HTTP_TOKEN",
     )
     m.set_defaults(func=_cmd_serve_mcp)
     return p

@@ -76,13 +76,22 @@ MISSION_CONTROL_HTML = """<!doctype html>
 "use strict";
 const SECTIONS = __SECTIONS__;
 let rpcId = 0;
+let authToken = "";
+let authPrompted = false;
 
 async function rpc(method, params) {
-  const res = await fetch("mcp", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({jsonrpc: "2.0", id: ++rpcId, method, params}),
-  });
+  const body = JSON.stringify({jsonrpc: "2.0", id: ++rpcId, method, params});
+  async function send() {
+    const headers = {"Content-Type": "application/json"};
+    if (authToken) headers.Authorization = "Bearer " + authToken;
+    return fetch("mcp", {method: "POST", headers, body});
+  }
+  let res = await send();
+  if (res.status === 401 && !authPrompted) {
+    authPrompted = true;
+    authToken = window.prompt("BOSS MCP token for this browser session") || "";
+    if (authToken) res = await send();
+  }
   if (!res.ok) throw new Error("HTTP " + res.status);
   const body = await res.json();
   if (body.error) throw new Error(body.error.message || "rpc error");
