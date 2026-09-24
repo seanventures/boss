@@ -97,3 +97,26 @@ describe("a custom step can be changed", () => {
     expect(patch.slice(0, 1400)).toContain("detail || `API returned ${r.status}`");
   });
 });
+
+describe("opening a workflow does not destroy how its steps feed each other", () => {
+  it("keeps the wiring a step was saved with", () => {
+    // toDraft dropped binding.inputs and save rebuilt every one as {from_input: <name>}, so
+    // viewing a workflow whose steps feed each other and pressing Save replaced
+    // {from_step: "fetch-link", field: "media_artifact_id"} with a demand that the operator
+    // type a media artifact id by hand. Nothing on screen had been changed.
+    expect(ui).toContain("inputs: (binding.inputs ?? undefined)");
+  });
+
+  it("only defaults the wiring for a step that has none", () => {
+    // The from_input default is a starting point for a step just dropped on the canvas, not a
+    // rule to impose on one that already has wiring.
+    expect(ui).toContain("inputs: step.inputs ?? Object.fromEntries(");
+    // Both branches: the customer's own steps and the built-in capabilities.
+    const occurrences = ui.split("inputs: step.inputs ?? Object.fromEntries(").length - 1;
+    expect(occurrences).toBe(2);
+  });
+
+  it("carries it on the draft rather than re-deriving it", () => {
+    expect(ui).toContain("inputs?: Record<string, unknown>;");
+  });
+});
