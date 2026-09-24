@@ -957,7 +957,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         #
         # This card reported the env pair and nothing else, so an install whose operator had
         # connected a repository — tested, passing, and the thing every build will use — was
-        # shown "seanheiney/boss-sandbox · CHECK FAILED" from a shipped default, with the
+        # shown a developer sandbox as failed from a shipped default, with the
         # working connection mentioned nowhere. A screen called "What BOSS is running on" has
         # to name the repository BOSS will run on.
         "environment": {"github": check_github_for_project(connection, settings, project_id),
