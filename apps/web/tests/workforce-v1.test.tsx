@@ -24,11 +24,14 @@ const wf = (over: Partial<Workforce> = {}): Workforce => ({
 const html = (w: Workforce) => renderToStaticMarkup(<WorkforceArea workforce={w} />);
 
 describe("v1 Workforce", () => {
-  it("shows what an agent produced, not just that it exists", () => {
+  it("shows the current state and recent outcome without turning every role into a scorecard", () => {
     const out = html(wf({ agents: [agent({ ok_calls: 565, success_rate: 0.96, turns: 17474 })] }));
-    expect(out).toContain("96%");
-    expect(out).toContain("565/590 ok");   // the denominator travels with the rate
-    expect(out).toContain("17,474");
+    expect(out).toContain("Software Engineer");
+    expect(out).toContain("Idle");
+    expect(out).toContain("Last: solo");
+    expect(out).toContain("Details");
+    expect(out).not.toContain("96%");
+    expect(out).not.toContain("17,474");
   });
 
   it("groups digits without toLocaleString", () => {
@@ -45,15 +48,15 @@ describe("v1 Workforce", () => {
     expect(out).not.toContain("0%");
   });
 
-  it("keeps the configured trust score visibly apart from the observed rate", () => {
-    // trust starts at 50 and has never moved; unlabelled beside an observed rate it reads as
-    // something the agent earned.
-    expect(html(wf())).toContain("set");
+  it("puts detail metrics behind each role's detail view", () => {
+    expect(html(wf())).not.toContain("trust 50");
+    expect(html(wf())).toContain('data-testid="wf-open-software_engineer"');
   });
 
   it("flags an agent running work with no registered role", () => {
     const out = html(wf({ agents: [agent({ registered: false })] }));
-    expect(out).toContain("no registered role");
+    expect(out).toContain("without");
+    expect(out).toContain("a registered role");
     expect(out).toContain("nothing governs them");
   });
 
@@ -62,18 +65,18 @@ describe("v1 Workforce", () => {
     expect(out).toContain("would read as a company with no agents");
   });
 
-  it("makes bar length volume and colour quality", () => {
-    // Success rate barely varies — nearly everyone is at 100% — so length carrying it would
-    // draw a column of identical full bars saying nothing.
+  it("avoids summary bars and exposes search plus navigation", () => {
     const src = codeOnly("app/workforce-ui.tsx");
-    expect(src).toContain("volumeOf(a) / busiest");
-    expect(src).toContain('data-tone={tone}');
+    expect(src).not.toContain("roster-scorebar");
+    expect(src).toContain('aria-label="Find an agent role"');
+    expect(src).toContain('openArea("org_chart")');
+    expect(src).toContain('openArea("studio")');
   });
 
   it("is styled, not a bare list", () => {
     // Shipping an unstyled table once was enough.
     const css = cssOnly("app/globals.css");
-    for (const cls of [".roster-card", ".roster-figs", ".roster-chip", ".org-node"]) {
+    for (const cls of [".roster-card", ".roster-actions", ".roster-search", ".org-node"]) {
       expect(css, `${cls} has no styling`).toContain(cls);
     }
   });
@@ -107,38 +110,43 @@ describe("v1 Org Chart", () => {
   it("does not print the role twice when it says the same as the name", () => {
     // "Product Manager / Product Manager" and "CTO / CTO" — the same duplication flagged
     // elsewhere on these screens.
+    const node = { id: "cto", name: "CTO", role: "cto", depth: 0 } as never;
     const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({
-      tree: [{ id: "cto", name: "CTO", role: "cto", depth: 0 } as never],
+      nodes: [node], tree: [node], declared: { cto: { reports_to: null } },
     })} />);
     expect(out.match(/CTO/g)?.length).toBe(1);
   });
 
   it("still shows a role that adds something", () => {
+    const node = { id: "pm", name: "Nova", role: "product_manager", depth: 0 } as never;
     const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({
-      tree: [{ id: "pm", name: "Nova", role: "product_manager", depth: 0 } as never],
+      nodes: [node], tree: [node], declared: { pm: { reports_to: null } },
     })} />);
     expect(out).toContain("Nova");
     expect(out).toContain("Product Manager");
   });
 
-  it("says the hierarchy is observed rather than declared", () => {
-    // BOSS has no reporting line. Presenting a derived shape as a declared one is a lie that
-    // looks like a diagram.
+  it("separates planned structure from read-only observed handoffs", () => {
     const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({ derived_from: "handoffs" })} />);
-    expect(out).toContain("Derived from handoffs");
+    expect(out).toContain("Planned structure");
+    expect(out).toContain("Observed handoffs");
+    expect(out).toContain("Set reporting lines for this project.");
+    expect(codeOnly("app/workforce-ui.tsx")).toContain("Read-only work handoffs");
   });
 
   it("says nothing rather than drawing an empty tree", () => {
     const out = renderToStaticMarkup(
       <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
-    expect(out).toContain("nothing to draw yet");
+    expect(out).toContain("No roles placed yet.");
   });
 
   it("invites the operator to place somebody", () => {
     // The chart was derived from observed handoffs and could not be edited, so it had no
     // effect anywhere in the product: a measurement nobody can act on is a report.
+    const node = { id: "pm", name: "Product Manager", role: "product_manager", depth: 0 } as never;
     const out = renderToStaticMarkup(
-      <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
-    expect(out).toContain("Drag an agent onto another");
+      <OrgChartArea chart={chart({ nodes: [node] })} projectId="p" actor="ceo" />);
+    expect(out).toContain("Browse agent templates");
+    expect(out).toContain("Open unassigned roles");
   });
 });

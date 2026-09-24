@@ -15,14 +15,15 @@ const CSS = codeOnly("app/globals.css");
 describe("the chart can be changed", () => {
   it("every seat can be dragged onto another", () => {
     expect(UI).toContain("onDragStart={() => setDragging(n.id)}");
-    expect(UI).toContain("if (dragging && dragging !== n.id) void place(dragging, n.id);");
+    expect(UI).toContain("view === \"planned\" && dragging && dragging !== n.id");
   });
 
   it("offers the agents nobody has placed yet", () => {
     // The list of agents BOSS knows about is the thing you build a chart FROM; without it the
     // only agents you could place would be the ones already placed.
     expect(UI).toContain('data-testid="org-bench"');
-    expect(UI).toContain("Not placed yet");
+    expect(UI).toContain("Unassigned roles");
+    expect(UI).toContain('aria-label={`Reports to for ${displayName(n)}`}');
   });
 
   it("can make a seat a root, and hand one back", () => {
@@ -40,6 +41,7 @@ describe("the declared chart never destroys the observed one", () => {
     expect(SVC).toContain('"declared":');
     expect(SVC).toContain('"has_declared": False');
     expect(SVC).toContain('"has_declared": True');
+    expect(SVC).toContain('"observed_tree": chart.get("tree") or []');
   });
 
   it("marks which seats were decided rather than measured", () => {

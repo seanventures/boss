@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { RoleFeedItem } from "../lib/roles";
 import type { SkillFeedItem } from "../lib/skills";
@@ -17,24 +17,6 @@ import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce"
  * that would arrive naked.
  */
 
-/**
- * Digit grouping WITHOUT toLocaleString.
- *
- * The server and the browser can disagree about locale, so toLocaleString() renders "16,428"
- * on one and "16 428" on the other and React tears the tree down on hydration. There is a test
- * that forbids it here, and it caught this.
- */
-function groupDigits(n: number): string {
-  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-}
-
-function money(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (n >= 10) return `$${n.toFixed(0)}`;
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  return `$${n.toFixed(3)}`;
-}
-
 /** Acronyms stay acronyms: "Qa" and "Cto" read as typos. */
 const ACRONYMS: Record<string, string> = {
   qa: "QA", cto: "CTO", coo: "COO", cao: "CAO", ux: "UX", vp: "VP", pm: "PM", sre: "SRE",
@@ -45,42 +27,15 @@ function humanise(key: string): string {
     .join(" ");
 }
 
-function toneFor(status: string): string {
-  if (status === "WORKING") return "green";
-  if (status === "STUCK") return "red";
-  if (status === "AT GATE") return "amber";
-  return "muted";
-}
-
-/**
- * How recently this agent did anything, as a word.
- *
- * The page is ranked by VOLUME, which says who has done the most but not who is doing it now —
- * a month of work and ten minutes ago otherwise render identically. Recency is its own signal
- * and it is what the motion is keyed to, so the movement on this page always means something.
- */
-function recency(a: V2Agent, now: number | null): "live" | "today" | "week" | "cold" {
-  // `now` is null until the component has mounted. Reading the clock DURING RENDER makes the
-  // server and the browser disagree — the server stamps one instant into the HTML and the
-  // browser computes another on hydration — and React tears the tree down. There is a test in
-  // this repo for exactly that, and it caught this.
-  if (now == null) return "cold";
-  const t = (a as { last_activity_at?: string | null }).last_activity_at;
-  if (!t) return "cold";
-  const ms = now - new Date(t).getTime();
-  if (Number.isNaN(ms)) return "cold";
-  if (ms < 15 * 60_000) return "live";
-  if (ms < 24 * 3_600_000) return "today";
-  if (ms < 7 * 24 * 3_600_000) return "week";
-  return "cold";
-}
-
-/** Whichever rate this agent has — it scores on the kind of work it does. */
-function rateOf(a: V2Agent): number | null {
-  return a.success_rate ?? a.step_success_rate ?? null;
-}
 function volumeOf(a: V2Agent): number {
   return (a.calls ?? 0) + (a.steps ?? 0);
+}
+
+function openArea(area: "org_chart" | "studio"): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("area", area);
+  window.history.pushState(null, "", url.toString());
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 /** Where to go to put a question to one of these agents, keeping who you are. */
@@ -119,6 +74,8 @@ export function WorkforceArea(
   { workforce, skills = [] }: { workforce: Workforce; skills?: SkillFeedItem[] },
 ) {
   const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
+  const [search, setSearch] = useState("");
+  const [showAll, setShowAll] = useState(false);
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
   const [openRole, setOpenRole] = useState("");
   useEffect(() => {
@@ -171,25 +128,18 @@ export function WorkforceArea(
       window.history.replaceState(null, "", url.toString());
     } catch { /* non-browser */ }
   }, []);
-  // Set after mount, so the first client paint matches the server HTML and the recency-driven
-  // motion starts on the frame after hydration rather than fighting it.
-  const [now, setNow] = useState<number | null>(null);
-  useEffect(() => {
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
   const agents = useMemo(() => {
     const list = workforce.agents ?? [];
-    if (filter === "working") return list.filter((a) => a.status === "WORKING" || a.status === "STUCK");
-    if (filter === "worked") return list.filter((a) => volumeOf(a) > 0);
-    return list;
-  }, [workforce.agents, filter]);
+    const scoped = filter === "working"
+      ? list.filter((a) => a.status === "WORKING" || a.status === "STUCK")
+      : filter === "worked" ? list.filter((a) => volumeOf(a) > 0) : list;
+    const query = search.trim().toLowerCase();
+    return query ? scoped.filter((a) => `${a.name} ${a.role} ${a.task}`.toLowerCase().includes(query)) : scoped;
+  }, [workforce.agents, filter, search]);
 
-  // The busiest agent sets the scale, so every bar is comparable.
-  const busiest = Math.max(1, ...(workforce.agents ?? []).map(volumeOf));
   const counts = workforce.counts ?? { WORKING: 0, STUCK: 0, IDLE: 0, total: 0 };
+  const shownAgents = filter === "all" && !search.trim() && !showAll
+    ? agents.slice(0, 8) : agents;
 
   if (!workforce.apiReachable) {
     return (
@@ -211,7 +161,7 @@ export function WorkforceArea(
     <div className="roster">
       <div className="roster-filterbar">
         <span className="detail">
-          {counts.total} agents · last {workforce.window_hours}h · scored over 30 days
+          {counts.total} roles · recent work in the last {workforce.window_hours}h
         </span>
         <span className="roster-filters">
           {(["all", "working", "worked"] as const).map((f) => (
@@ -223,16 +173,24 @@ export function WorkforceArea(
               onClick={() => setFilter(f)}
               data-testid={`wf-filter-${f}`}
             >
-              {f === "all" ? `All ${counts.total}` : f === "working" ? `Active ${counts.WORKING}` : "Has done work"}
+              {f === "all" ? `All ${counts.total}` : f === "working" ? `Working or stuck ${counts.WORKING + counts.STUCK}` : "Has done work"}
             </button>
           ))}
           {/* A ROSTER YOU CANNOT ADD TO. The page listed 26 agents and had no way to make a
               27th — the only wizard in BOSS is in Agent Studio, and it writes
               `agent_definitions`, which this roster does not read. */}
           <button type="button" className="cap-btn roster-new" data-testid="wf-new-agent"
-                  onClick={() => setCreating(true)}>+ New agent</button>
+                  onClick={() => setCreating(true)}>Create agent definition</button>
         </span>
       </div>
+      <div className="roster-guide">
+        <span>Agents shows observed work by role.</span>
+        <button type="button" onClick={() => openArea("org_chart")}>Plan reporting in Org Chart</button>
+        <button type="button" onClick={() => openArea("studio")}>Manage definitions in Agent Studio</button>
+      </div>
+      <input className="roster-search" type="search" aria-label="Find an agent role"
+             placeholder="Find an agent role" value={search}
+             onChange={(event) => setSearch(event.target.value)} />
 
       {creating ? (
         // SAME WIZARD, SO IT NEEDS THE SAME SKILLS. This passed `[]`, so the commission
@@ -255,97 +213,29 @@ export function WorkforceArea(
         <p className="detail">No agent matches this filter.</p>
       ) : (
         <div className="roster-grid" data-testid="roster-grid">
-          {agents.map((a, i) => {
-            const rate = rateOf(a);
-            const share = volumeOf(a) > 0 ? volumeOf(a) / busiest : null;
-            const tone = rate == null ? "none" : rate >= 0.9 ? "good" : rate >= 0.6 ? "warn" : "bad";
-            return (
-              /* OPENABLE. The card was an <article> with one button on it, so an agent was a
-                 row of numbers with nowhere to go. The whole card is the way in; the Ask button
-                 stops the click so it still only opens the chat. */
-              <article className="roster-card" key={a.id} data-status={a.status}
-                       onClick={() => openAgent(a.id)}
-                       role="button" tabIndex={0}
-                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") {
-                         e.preventDefault(); openAgent(a.id); } }}
-                       data-recency={recency(a, now)} data-rank={i + 1}
-                       style={{ ["--i" as string]: String(Math.min(i, 11)) }}
-                       data-testid={`wf-agent-${a.id}`}>
-                <header className="roster-card-head">
-                  {volumeOf(a) > 0 ? <span className="roster-rank">{i + 1}</span> : null}
-                  <span className="roster-name">{a.name}</span>
-                  <span className={`cap-badge tone-${toneFor(a.status)}`}>{a.status}</span>
-                  {/* PUT A QUESTION TO THIS ONE. The page listed what every agent had done and
-                      offered no way to say anything to any of them — read-only, on a screen
-                      about a workforce. This opens the chat with the message already addressed,
-                      so asking is a click from the card that named them. */}
-                  <button type="button" className="roster-ask"
-                          onClick={(e) => { e.stopPropagation(); askAgent(a.name); }}
-                          data-testid={`wf-ask-${a.id}`}
-                          title={`Ask ${a.name} something`}>Ask</button>
-                </header>
-
-                <p className="roster-task">{a.task}</p>
-
-                {/* THE SCOREBOARD — what this agent has produced. Absent entirely when it has
-                    done nothing, rather than a row of zeros that reads as "bad at its job". */}
-                {volumeOf(a) > 0 ? (
-                  <>
-                    <div className="roster-figs" data-testid={`wf-score-${a.id}`}>
-                      <span className="roster-fig" data-tone={tone}>
-                        <b>{rate != null ? `${Math.round(rate * 100)}%` : "—"}</b>
-                        <span className="roster-unit">
-                          {a.calls ? `${a.ok_calls}/${a.calls} ok` : `${a.steps_ok}/${a.steps} steps`}
-                        </span>
-                      </span>
-                      {a.turns ? (
-                        <span className="roster-fig"><b>{groupDigits(a.turns)}</b><span className="roster-unit">turns</span></span>
-                      ) : null}
-                      {a.runs ? (
-                        <span className="roster-fig"><b>{a.runs}</b><span className="roster-unit">runs</span></span>
-                      ) : null}
-                      {a.spend_usd ? (
-                        <span className="roster-fig"><b>{money(a.spend_usd)}</b><span className="roster-unit">spent</span></span>
-                      ) : null}
-                      {a.failed_calls ? (
-                        <span className="roster-fig" data-tone="bad"><b>{a.failed_calls}</b><span className="roster-unit">failed</span></span>
-                      ) : null}
-                    </div>
-                    {/* Length is VOLUME, colour is quality. Success rate barely varies here —
-                        nearly everyone sits at 100% — so length carrying it would draw a
-                        column of identical full bars saying nothing. */}
-                    {share != null ? (
-                      <span className="roster-scorebar" data-testid={`wf-bar-${a.id}`}>
-                        <span data-tone={tone} style={{ width: `${Math.max(3, Math.round(share * 100))}%` }} />
-                      </span>
-                    ) : null}
-                  </>
-                ) : null}
-
-                {a.top_stages?.length ? (
-                  <div className="roster-chips">
-                    {a.top_stages.map((s) => (
-                      <span className="roster-chip" key={s.stage}>{s.stage}<i>{s.calls}</i></span>
-                    ))}
-                  </div>
-                ) : null}
-
-                <footer className="roster-card-foot">
-                  <span>{a.model ?? "no model calls"}</span>
-                  {/* CONFIGURED, and labelled. It starts at 50 and has never moved; beside an
-                      observed rate it would otherwise read as earned. */}
-                  <span title="configured trust level, not an observed score">
-                    trust <b>{a.trust_score}</b> set
-                  </span>
-                  {!a.registered ? (
-                    <span className="roster-ungov" data-testid={`wf-unreg-${a.id}`}>no registered role</span>
-                  ) : null}
-                </footer>
-              </article>
-            );
-          })}
+          {shownAgents.map((a) => (
+            <article className="roster-card" key={a.id} data-status={a.status}
+                     data-testid={`wf-agent-${a.id}`}>
+              <header className="roster-card-head">
+                <span className="roster-name">{a.name}</span>
+                <span className="roster-state">{a.status === "IDLE" ? "Idle" : a.status === "WORKING" ? "Working" : a.status === "STUCK" ? "Stuck" : "At gate"}</span>
+              </header>
+              <p className="roster-task">{a.last_touched || (a.task === "No work in this window." ? "No recent work" : a.task.replace(/^last: /, "Last: "))}</p>
+              <div className="roster-actions">
+                <button type="button" className="roster-open" onClick={() => openAgent(a.id)}
+                        data-testid={`wf-open-${a.id}`}>Details</button>
+                <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
+                        data-testid={`wf-ask-${a.id}`}>Ask</button>
+              </div>
+            </article>
+          ))}
         </div>
       )}
+      {!showAll && filter === "all" && !search.trim() && agents.length > shownAgents.length ? (
+        <button type="button" className="roster-show-all" onClick={() => setShowAll(true)}>
+          Show all {agents.length} roles
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -365,12 +255,65 @@ export function WorkforceArea(
 export function OrgChartArea({ chart, projectId, actor }: {
   chart: OrgChart; projectId: string; actor: string;
 }) {
+  type AgentTemplate = {
+    id: string; name: string; description: string; role_key: string;
+    category: string; installed: boolean; active: boolean;
+    mobile?: { execution_status: string; device_targets: string[] } | null;
+  };
   const [live, setLive] = useState<OrgChart>(chart);
+  const [view, setView] = useState<"planned" | "observed">("planned");
+  const [roleSearch, setRoleSearch] = useState("");
+  const [placementTargets, setPlacementTargets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [templates, setTemplates] = useState<AgentTemplate[]>([]);
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installedTemplate, setInstalledTemplate] = useState<string | null>(null);
+  const unassignedRef = useRef<HTMLDetailsElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   useEffect(() => { setLive(chart); }, [chart]);
+
+  useEffect(() => {
+    if (!templateOpen) return;
+    let alive = true;
+    void fetch(`/v1/agent-studio/templates?project_id=${encodeURIComponent(projectId)}`,
+      { cache: "no-store" })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail ?? `Templates returned ${response.status}`);
+        return body;
+      })
+      .then((body) => { if (alive) { setTemplates(body.items ?? []); setTemplateError(null); } })
+      .catch((error) => { if (alive) setTemplateError(String(error.message ?? error)); });
+    return () => { alive = false; };
+  }, [templateOpen, projectId]);
+
+  const installTemplate = useCallback(async (templateId: string) => {
+    setInstalling(templateId); setTemplateError(null);
+    try {
+      const response = await fetch(
+        `/v1/agent-studio/templates/${encodeURIComponent(templateId)}/install`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_id: projectId, actor }),
+        });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail ?? `Install returned ${response.status}`);
+      setTemplates((current) => current.map((item) => item.id === templateId
+        ? { ...item, installed: true, active: true } : item));
+      setInstalledTemplate(templateId);
+      setNote(`${templateId.replaceAll("_", " ")} is installed as an Agent Studio definition. It has not been placed or started.`);
+    } catch (error) {
+      setTemplateError(String((error as Error).message ?? error));
+    } finally { setInstalling(null); }
+  }, [projectId, actor]);
+
+  const visibleTemplates = templates.filter((item) =>
+    `${item.name} ${item.description} ${item.category}`.toLowerCase()
+      .includes(templateSearch.trim().toLowerCase()));
 
   const reload = useCallback(async () => {
     try {
@@ -381,7 +324,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
   }, [projectId]);
 
   const place = useCallback(async (agentId: string, reportsTo: string | null) => {
-    setBusy(true); setNote(null);
+    setBusy(true); setNote(null); setInstalledTemplate(null);
     try {
       const r = await fetch(`/api/org`, {
         method: "PUT",
@@ -398,20 +341,23 @@ export function OrgChartArea({ chart, projectId, actor }: {
   }, [projectId, actor, reload]);
 
   const release = useCallback(async (agentId: string) => {
-    setBusy(true); setNote(null);
+    setBusy(true); setNote(null); setInstalledTemplate(null);
     try {
       const url = `/api/org?project_id=${encodeURIComponent(projectId)}`
-        + `&agent_id=${encodeURIComponent(agentId)}`;
+        + `&agent_id=${encodeURIComponent(agentId)}`
+        + `&actor=${encodeURIComponent(actor)}`;
       const r = await fetch(url, { method: "DELETE" });
       if (!r.ok) setNote("Could not reset it.");
       else await reload();
     } finally { setBusy(false); }
-  }, [projectId, reload]);
+  }, [projectId, actor, reload]);
 
   const chartNow = live;
   const declared = (chartNow as { declared?: Record<string, unknown> }).declared ?? {};
   const placedCount = Object.keys(declared).length;
-  const treeNow = chartNow.tree ?? [];
+  const treeNow = view === "observed"
+    ? (chartNow.observed_tree ?? (placedCount ? [] : chartNow.tree) ?? [])
+    : (placedCount ? chartNow.tree ?? [] : []);
   const levelsNow = new Map<number, OrgNode[]>();
   for (const n of treeNow) {
     const d = n.depth ?? 0;
@@ -421,51 +367,105 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const isolated = (chartNow.nodes ?? []).filter((n) => !n.connected);
   const unplaced = (chartNow.nodes ?? []).filter(
     (n) => !Object.prototype.hasOwnProperty.call(declared, n.id));
+  const matchingUnplaced = unplaced.filter((n) =>
+    `${n.name} ${n.role} ${n.id}`.toLowerCase().includes(roleSearch.trim().toLowerCase()));
+  const nameCounts = new Map<string, number>();
+  for (const n of chartNow.nodes ?? []) nameCounts.set(n.name, (nameCounts.get(n.name) ?? 0) + 1);
+  const displayName = (n: OrgNode) => (nameCounts.get(n.name) ?? 0) > 1
+    ? `${n.name} (${humanise(n.id) === n.name ? n.id : humanise(n.id)})` : n.name;
 
   return (
-    <div className="org" data-declared={placedCount > 0}>
-      {/* SAY WHAT THE PICTURE IS, WHERE THE PICTURE IS.
-          Drawn from handoffs, this chart put the CTO under a Product Manager — true as "the PM
-          passed work to the CTO", nonsense as "the CTO reports to the PM". The provenance line
-          existed but read as a caption; an operator sees boxes and lines and concludes
-          hierarchy long before they read prose. So it is a banner now, and it is only softened
-          once somebody has actually declared a structure. */}
-      {placedCount === 0 ? (
-        <p className="org-provenance-banner" data-testid="org-provenance">
-          <strong>This is not a reporting line.</strong>{" "}
-          {chartNow.note || `Derived from ${chartNow.derived_from}.`}
-          {chartNow.root_inferred
-            ? " Everyone here is handed work by someone, so the busiest was drawn at the top."
-            : ""}
-        </p>
-      ) : (
-        <p className="detail" data-testid="org-provenance">
-          Declared by your team. Handoffs BOSS observed are drawn underneath.
-        </p>
-      )}
-
-      {/* WHAT THIS CHART IS FOR. Placing a seat is the act that turns a measurement into a
-          structure; saying so beats a drag target nobody knows is a drag target. */}
+    <div className="org" data-declared={view === "planned" && placedCount > 0}
+         data-view={view}>
+      <div className="org-views" role="tablist" aria-label="Org Chart views">
+        <button type="button" role="tab" aria-selected={view === "planned"}
+                onClick={() => setView("planned")}>Planned structure</button>
+        <button type="button" role="tab" aria-selected={view === "observed"}
+                onClick={() => setView("observed")}>Observed handoffs</button>
+      </div>
+      <p className="detail" data-testid="org-provenance">
+        {view === "planned"
+          ? "Set reporting lines for this project."
+          : `Read-only work handoffs from the last ${chartNow.window_hours} hours.`}
+      </p>
       <div className="org-toolbar">
-        <span className="detail">
-          {placedCount
-            ? `${placedCount} placed by your team. Drag an agent onto another to change who it reports to.`
-            : "Nobody is placed yet. Drag an agent onto another to say who it reports to."}
-        </span>
-        {placedCount ? (
+        {view === "planned" && placedCount > 0 ? (
+          <span className="detail">{placedCount} placed role{placedCount === 1 ? "" : "s"}</span>
+        ) : null}
+        {view === "observed" && treeNow.length > 0 ? (
+          <span className="detail">{treeNow.length} recent handoff{treeNow.length === 1 ? "" : "s"}</span>
+        ) : null}
+        {view === "planned" && placedCount ? (
           <button type="button" className="cap-btn" disabled={busy} data-testid="org-reset-all"
-                  onClick={() => void release("*")}>
-            Back to observed
+                  onClick={() => {
+                    if (window.confirm("Clear all planned reporting lines for this project?")) void release("*");
+                  }}>
+            Clear planned structure
           </button>
         ) : null}
+        {view === "planned" ? <button type="button" className="cap-btn" aria-expanded={templateOpen}
+                aria-controls="org-template-picker" data-testid="org-template-toggle"
+                onClick={() => setTemplateOpen((value) => !value)}>
+          {templateOpen ? "Close templates" : "Browse agent templates"}
+        </button> : null}
       </div>
-      {note ? <p className="org-note" data-testid="org-note">{note}</p> : null}
+      {view === "planned" && templateOpen ? (
+        <section className="org-templates" id="org-template-picker"
+                 aria-label="Agent templates" data-testid="org-templates">
+          <div className="org-template-head">
+            <div>
+              <strong>Agent templates</strong>
+              <p>Install a scoped Agent Studio definition. This does not start work or grant device access.</p>
+            </div>
+            <input type="search" aria-label="Search agent templates" placeholder="Find a role"
+                   value={templateSearch} onChange={(event) => setTemplateSearch(event.target.value)} />
+          </div>
+          {templateError ? <p role="alert" className="org-template-error">{templateError}</p> : null}
+          <div className="org-template-list">
+            {visibleTemplates.map((item) => (
+              <article className="org-template" key={item.id}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.category} · {humanise(item.role_key)}</span>
+                  <p>{item.description}</p>
+                  {item.mobile ? (
+                    <small>Android needs an SDK runner. iOS build and Simulator need a macOS runner with full Xcode. Device automation needs an installed adapter.</small>
+                  ) : null}
+                </div>
+                <button type="button" className="cap-btn" disabled={item.installed || !!installing}
+                        data-testid={`org-template-${item.id}`}
+                        onClick={() => void installTemplate(item.id)}>
+                  {item.installed ? "In Studio" : installing === item.id ? "Adding…" : "Add"}
+                </button>
+              </article>
+            ))}
+          </div>
+          {!templateError && templates.length === 0 ? <p className="detail">Loading templates…</p> : null}
+          {templates.length > 0 && visibleTemplates.length === 0 ? <p className="detail">No matching templates.</p> : null}
+        </section>
+      ) : null}
+      {note ? <p className="org-note" data-tone={installedTemplate ? "ok" : "error"}
+                 data-testid="org-note">{note}</p> : null}
+      {installedTemplate ? (
+        <button type="button" className="org-next-action" onClick={() => openArea("studio")}>
+          Open {installedTemplate.replaceAll("_", " ")} in Agent Studio
+        </button>
+      ) : null}
 
       {treeNow.length === 0 ? (
-        <p className="detail" data-testid="org-empty">
-          Nothing is placed and no work has passed between agents in the last
-          {" "}{chartNow.window_hours} hours, so there is nothing to draw yet.
-        </p>
+        <div className="org-empty" data-testid="org-empty">
+          <p className="detail">{view === "planned"
+            ? "No roles placed yet."
+            : "No recent handoffs."}</p>
+          {view === "planned" && unplaced.length > 0 ? (
+            <button type="button" className="org-next-action" onClick={() => {
+              if (unassignedRef.current) {
+                unassignedRef.current.open = true;
+                unassignedRef.current.scrollIntoView({ block: "nearest" });
+              }
+            }}>Open unassigned roles</button>
+          ) : null}
+        </div>
       ) : (
         <div className="org-tree" data-testid="org-tree">
           {rowsNow.map(([depth, nodes]) => (
@@ -475,7 +475,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
                      data-testid={`org-node-${n.id}`}
                      data-placed={Object.prototype.hasOwnProperty.call(declared, n.id)}
                      data-over={over === n.id || undefined}
-                     draggable={!busy}
+                     draggable={view === "planned" && !busy}
                      onDragStart={() => setDragging(n.id)}
                      onDragEnd={() => { setDragging(null); setOver(null); }}
                      onDragOver={(e) => { e.preventDefault(); setOver(n.id); }}
@@ -483,28 +483,28 @@ export function OrgChartArea({ chart, projectId, actor }: {
                      onDrop={(e) => {
                        e.preventDefault();
                        setOver(null);
-                       if (dragging && dragging !== n.id) void place(dragging, n.id);
+                       if (view === "planned" && dragging && dragging !== n.id) void place(dragging, n.id);
                        setDragging(null);
                      }}>
-                  <span className="org-node-name">{n.name}</span>
+                  <span className="org-node-name">{displayName(n)}</span>
                   {/* Only when it ADDS something. "Product Manager / Product Manager" is the
                       same duplication flagged elsewhere. */}
                   {humanise(n.role || n.id) !== n.name ? (
                     <span className="org-node-role">{humanise(n.role || n.id)}</span>
                   ) : null}
-                  {n.task ? <span className="org-node-task">{n.task}</span> : null}
-                  <span className="org-node-tools">
+                  {view === "observed" && n.task ? <span className="org-node-task">{n.task}</span> : null}
+                  {view === "planned" ? <span className="org-node-tools">
                     <button type="button" className="org-node-act" disabled={busy}
                             title="Make this a top-level seat"
                             data-testid={`org-top-${n.id}`}
                             onClick={() => void place(n.id, null)}>move to top</button>
                     {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
                       <button type="button" className="org-node-act" disabled={busy}
-                              title="Hand this seat back to the observed chart"
+                              title="Remove this reporting line"
                               data-testid={`org-reset-${n.id}`}
-                              onClick={() => void release(n.id)}>reset</button>
+                              onClick={() => void release(n.id)}>remove</button>
                     ) : null}
-                  </span>
+                  </span> : null}
                 </div>
               ))}
             </div>
@@ -512,44 +512,46 @@ export function OrgChartArea({ chart, projectId, actor }: {
         </div>
       )}
 
-      {/* SEATS NOBODY HAS PLACED. The list of agents BOSS knows about is the thing you build a
-          chart FROM; without it the only agents you could place are the ones already placed. */}
-      {unplaced.length > 0 ? (
-        <>
-          <div className="ct-block-title" style={{ marginTop: 18 }}>Not placed yet</div>
-          <p className="detail">
-            Drag one onto a seat above to put it under them, or press top to make it a root.
-          </p>
-          <div className="org-bench" data-testid="org-bench">
-            {unplaced.map((n) => (
-              <span className="org-benchchip" key={n.id} draggable={!busy}
-                    data-testid={`org-bench-${n.id}`}
-                    onDragStart={() => setDragging(n.id)}
-                    onDragEnd={() => setDragging(null)}>
-                {n.name}
-                <button type="button" className="org-node-act" disabled={busy}
-                        onClick={() => void place(n.id, null)}>top</button>
-              </span>
+      {view === "planned" && unplaced.length > 0 ? (
+        <details className="org-unassigned" data-testid="org-unassigned" ref={unassignedRef}>
+          <summary>Unassigned roles <span>{unplaced.length}</span></summary>
+          <label className="org-unassigned-search">
+            <span>Find a role</span>
+            <input type="search" value={roleSearch}
+                   onChange={(event) => setRoleSearch(event.target.value)} />
+          </label>
+          <div className="org-unassigned-list" data-testid="org-bench">
+            {matchingUnplaced.map((n) => (
+              <div className="org-unassigned-row" key={n.id}
+                   data-testid={`org-bench-${n.id}`}>
+                <span>{displayName(n)}</span>
+                <select aria-label={`Reports to for ${displayName(n)}`}
+                        value={placementTargets[n.id] ?? ""}
+                        onChange={(event) => setPlacementTargets((current) =>
+                          ({ ...current, [n.id]: event.target.value }))}>
+                  <option value="">Top-level seat</option>
+                  {(chartNow.tree ?? []).map((parent) => (
+                    <option key={parent.id} value={parent.id}>{displayName(parent)}</option>
+                  ))}
+                </select>
+                <button type="button" className="org-place-btn" disabled={busy}
+                        onClick={() => void place(n.id, placementTargets[n.id] || null)}>
+                  Place
+                </button>
+              </div>
             ))}
+            {matchingUnplaced.length === 0 ? <p className="detail">No matching roles.</p> : null}
           </div>
-        </>
+        </details>
       ) : null}
 
-      {isolated.length > 0 ? (
-        <>
-          <div className="ct-block-title" style={{ marginTop: 18 }}>Working alone</div>
-          <p className="detail">
-            No work passed to or from these in {chart.window_hours}h — idle by design, or forgotten.
-          </p>
-          <div className="roster-alone" data-testid="roster-alone">
-            {isolated.map((n) => (
-              <span className="roster-alonechip" key={n.id}>
-                {n.name}
-                {humanise(n.role || n.id) !== n.name ? <i>{humanise(n.role || n.id)}</i> : null}
-              </span>
-            ))}
+      {view === "observed" && isolated.length > 0 ? (
+        <details className="org-unassigned" data-testid="roster-alone">
+          <summary>No recent handoffs <span>{isolated.length}</span></summary>
+          <div className="org-unassigned-list">
+            {isolated.map((n) => <div className="org-unassigned-row" key={n.id}>{displayName(n)}</div>)}
           </div>
-        </>
+        </details>
       ) : null}
     </div>
   );

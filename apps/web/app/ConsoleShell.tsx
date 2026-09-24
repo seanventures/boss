@@ -206,8 +206,8 @@ const AREAS: AreaDef[] = [
   // as being what an operator opens the console to look at.
   { id: "code_tasks", label: "Projects", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
   { id: "delivery_workflows", label: "Workflow", sub: "How work moves — pick a path, watch it, build your own", group: "Run", icon: ICONS.delivery_workflows },
-  { id: "workforce", label: "Agents", sub: "Every agent, what it has produced, and how well", group: "Run", icon: ICONS.org },
-  { id: "org_chart", label: "Org Chart", sub: "Who actually passes work to whom — observed, not declared", group: "Run", icon: ICONS.processes },
+  { id: "workforce", label: "Agents", sub: "Recent work by role", group: "Run", icon: ICONS.org },
+  { id: "org_chart", label: "Org Chart", sub: "Planned reporting and observed handoffs", group: "Run", icon: ICONS.processes },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "delivery", label: "Infra", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   // TOP LEVEL, NOT NESTED. Grouping these under an "Observability" heading put the two screens
@@ -244,7 +244,7 @@ const AREAS: AreaDef[] = [
   { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
   { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, worker scaling, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
-  { id: "studio", label: "Agent Studio", sub: "Build focused always-on agents, then compose full studio roles", group: "Platform", icon: ICONS.studio },
+  { id: "studio", label: "Agent Studio", sub: "Agent definitions, tests and runs", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
   { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },

@@ -1085,7 +1085,7 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: 0 10px 28px rgba(0, 0, 0, .34);
 }
 
-.dw-card-head { display: flex; align-items: start; gap: 10px; justify-content: space-between; }
+.dw-card-head { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .dw-card h4 { margin: 0; font-size: 1rem; line-height: 1.25; letter-spacing: -0.01em; }
 .dw-class {
   flex: 0 0 auto;
@@ -1439,7 +1439,7 @@ h1, h2, h3, h4, h5, h6 {
    The same flat row with different contents left an operator unsure whether they were editing
    the workflow in the dropdown or making a new one — which is the confusion that started
    this. */
-.dw-new { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; width: 100%; }
+.dw-new { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; width: 100%; }
 .dw-new .field { display: grid; gap: 3px; min-width: 186px; flex: 1 1 186px; }
 .dw-new .field > span {
   font-size: 0.62rem; letter-spacing: .1em; text-transform: uppercase;
@@ -7469,84 +7469,45 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-phase-name { min-width: 0; }
 }
 
-/* ── Workforce ────────────────────────────────────────────────────────────── */
-/*
- * A scoreboard, not a roster. The page exists to answer "who is doing the work and how well",
- * so the figures are the loudest thing on each card and the ordering is by volume.
- */
-/* The wrapper owns the gap from the section heading above it. Without it the filter row sat
-   under the heading and was clipped by it. */
-.roster { display: block; margin-top: 14px; }
+/* ── Agents: a concise observed-work list; detail metrics live in AgentDetail. ── */
+.roster { margin-top: 14px; }
 .roster-filterbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  flex-wrap: wrap; padding-bottom: 10px; margin-bottom: 2px;
-  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--border);
 }
-.roster-filters { display: inline-flex; gap: 6px; }
+.roster-filters { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .roster-filters .cap-btn[data-active="true"] { border-color: var(--accent); color: var(--accent); }
-.roster-ungoverned { color: var(--amber); margin: 10px 0 0; }
-
-.roster-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px; margin-top: 12px;
+.roster-ungoverned { color: var(--amber); margin: 10px 0; }
+.roster-guide { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 0; font-size: 12px; color: var(--muted); }
+.roster-guide button { border: 0; padding: 0; background: transparent;
+  color: var(--accent-text, #2ec5c5); cursor: pointer; font: inherit; }
+.roster-guide button:hover { text-decoration: underline; }
+.roster-search { width: min(320px, 100%); padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--panel, #0d1117); color: var(--ink); }
+.roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px; margin-top: 12px; }
+.roster-card { border: 1px solid var(--border); border-radius: 3px; padding: 11px 13px;
+  background: var(--panel, #0d1117); min-width: 0; }
+.roster-card[data-status="WORKING"] { border-left: 3px solid var(--accent); }
+.roster-card[data-status="STUCK"] { border-left: 3px solid var(--amber); }
+.roster-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.roster-name { font-size: 13px; font-weight: 650; color: var(--ink); }
+.roster-state { font-size: 11px; color: var(--muted); }
+.roster-card[data-status="STUCK"] .roster-state { color: var(--amber); }
+.roster-task { margin: 7px 0 10px; font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roster-actions { display: flex; gap: 12px; }
+.roster-actions button, .roster-show-all { border: 0; padding: 0; border-radius: 0;
+  background: transparent; color: var(--accent-text, #2ec5c5);
+  font: inherit; font-size: 12px; cursor: pointer; }
+.roster-actions button:hover, .roster-show-all:hover { text-decoration: underline; }
+.roster-show-all { margin-top: 14px; }
+.roster-actions button:focus-visible, .roster-guide button:focus-visible,
+.roster-show-all:focus-visible, .roster-search:focus-visible {
+  outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px;
 }
-.roster-card {
-  border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
-  background: var(--bg-tint, transparent);
-  display: flex; flex-direction: column; gap: 8px;
-  transition: border-color .15s ease;
-}
-.roster-card:hover { border-color: var(--border-strong); }
-/* An agent working right now earns the accent border — the one state worth interrupting for. */
-.roster-card[data-status="WORKING"] { border-color: var(--accent); }
-.roster-card[data-status="STUCK"] { border-color: var(--amber); }
-
-.roster-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.roster-rank {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 19px; padding: 0 6px; border-radius: 5px;
-  background: var(--border); color: var(--muted);
-  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
-}
-.roster-card:nth-child(-n+3) .roster-rank { background: var(--accent); color: var(--accent-ink, #06231D); }
-.roster-name { font-size: 14px; font-weight: 700; color: var(--ink); }
-.roster-task { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
-
-.roster-figs {
-  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-  padding: 9px 11px; border-radius: 8px; background: rgba(255,255,255,.03);
-}
-.roster-fig { display: inline-flex; align-items: baseline; gap: 5px; }
-.roster-fig b { font-size: 15px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
-.roster-unit { font-size: 10px; color: var(--faint, var(--muted)); letter-spacing: .03em; }
-.roster-fig[data-tone="good"] b { color: var(--accent); }
-.roster-fig[data-tone="warn"] b { color: var(--amber); }
-.roster-fig[data-tone="bad"]  b { color: var(--red, #F26D6D); }
-
-/* Length is VOLUME; colour is quality. Success rate barely varies — nearly everyone sits at
-   100% — so length carrying it would draw a column of identical full bars saying nothing. */
-.roster-card > .roster-scorebar {
-  display: block; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden;
-}
-.roster-card > .roster-scorebar > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
-.roster-card > .roster-scorebar > span[data-tone="warn"] { background: var(--amber); }
-.roster-card > .roster-scorebar > span[data-tone="bad"]  { background: var(--red, #F26D6D); }
-
-.roster-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.roster-chip {
-  display: inline-flex; align-items: baseline; gap: 5px;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
-  font-size: 10.5px; color: var(--muted); font-family: var(--mono, monospace);
-}
-.roster-chip i { font-style: normal; color: var(--faint, var(--muted)); }
-
-.roster-card-foot {
-  display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline;
-  padding-top: 8px; border-top: 1px solid var(--border);
-  font-size: 11px; color: var(--muted); font-family: var(--mono, monospace);
-}
-.roster-card-foot b { color: var(--ink); }
-.roster-ungov { color: var(--amber); }
 
 /* ── Org chart ────────────────────────────────────────────────────────────── */
 /*
@@ -8529,7 +8490,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; margin: 8px 0 12px;
 }
-.org-note { margin: 0 0 10px; font-size: 12px; color: var(--bad, #f85149); }
+.org-note { margin: 10px 0; font-size: 12px; color: var(--bad, #f85149); }
+.org-note[data-tone="ok"] { color: var(--accent-text, #2ec5c5); }
 .org-node { position: relative; cursor: grab; }
 .org-node:active { cursor: grabbing; }
 /* A seat somebody DECIDED, as opposed to one BOSS inferred. */
@@ -8553,37 +8515,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .org-benchchip:hover { color: inherit; border-color: var(--live, #58a6ff); }
 
-/* Asking one of them something, from the card that named them. */
-/* A BUTTON WITH NO BACKGROUND IS A WHITE BUTTON.
-   This declared a border and a colour and nothing else, so it fell through to the browser's
-   default control chrome — a pale grey pill with grey text, sitting on a near-black card. It
-   read as a disabled control from another application, which is the opposite of the one thing
-   it is there to do: invite you to say something to this agent.
-
-   Tinted with the accent rather than filled with it. Every card carries one, so a solid button
-   twelve times over would compete with the agent names and the status badges for a screen whose
-   subject is the workforce, not its buttons. Filling in on hover is what says "pressable". */
-.roster-ask {
-  margin-left: auto; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-  font-weight: 600; padding: 4px 12px; border-radius: 999px; text-decoration: none;
-  cursor: pointer;
-  background: color-mix(in srgb, var(--accent-text, #2EC5C5) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-text, #2EC5C5) 38%, transparent);
-  color: var(--accent-text, #2EC5C5);
-  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
-}
-.roster-ask:hover {
-  background: color-mix(in srgb, var(--accent-text, #2EC5C5) 22%, transparent);
-  border-color: var(--accent-text, #2EC5C5);
-  color: var(--ink, #E6EDF3);
-}
-.roster-ask:active { background: color-mix(in srgb, var(--accent-text, #2EC5C5) 30%, transparent); }
-/* Keyboard users get the same affordance as the mouse, and a ring that is visible on a dark
-   card — the default outline is a thin black line here, which is no outline at all. */
-.roster-ask:focus-visible {
-  outline: 2px solid var(--accent-text, #2EC5C5); outline-offset: 2px;
-}
-
 /* Failed, and the work went on. Not "not run" — that hides something worth fixing — and not a
    stopped run either, because the project carried on without it. */
 .dw-node[data-phase="failed_on"] .dw-dot { background: var(--bad, #f85149); color: #1a0503; }
@@ -8601,6 +8532,100 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
 }
 .org-provenance-banner strong { color: var(--warn, #d29922); }
+
+/* The catalog stays collapsed until requested; rows are scan-friendly, not a grid of pills. */
+.org-templates {
+  margin: 12px 0 18px; border: 1px solid var(--border, #30363d);
+  background: var(--panel, #0d1117); max-height: 560px; overflow: auto;
+}
+.org-template-head {
+  position: sticky; top: 0; z-index: 1; display: flex; gap: 16px;
+  justify-content: space-between; align-items: center;
+  padding: 13px 16px; background: var(--panel, #0d1117);
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.org-template-head strong { color: var(--ink, #e6edf3); }
+.org-template-head p { margin: 3px 0 0; color: var(--muted, #8b949e); font-size: 12px; }
+.org-template-head input {
+  min-width: 170px; max-width: 260px; padding: 7px 9px;
+  border: 1px solid var(--border, #30363d); border-radius: 3px;
+  background: var(--bg, #0d1117); color: var(--ink, #e6edf3);
+}
+.org-template-list { display: grid; }
+.org-template {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border, #30363d);
+}
+.org-template:last-child { border-bottom: 0; }
+.org-template strong { display: block; color: var(--ink, #e6edf3); font-size: 13px; }
+.org-template span, .org-template p, .org-template small {
+  display: block; margin: 2px 0 0; color: var(--muted, #8b949e); font-size: 11px;
+}
+.org-template small { color: var(--warn, #d29922); }
+.org-template .cap-btn { flex: 0 0 auto; border-radius: 3px; }
+.org-template-error { margin: 10px 16px; color: var(--bad, #f85149); }
+.org-next-action {
+  border: 0; padding: 0; background: transparent;
+  color: var(--accent-text, #2ec5c5); cursor: pointer;
+  font: inherit; font-size: 12px;
+}
+.org-next-action:hover { text-decoration: underline; }
+.org-next-action:focus-visible { outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px; }
+.org-empty { margin-top: 18px; }
+.org-views { display: flex; gap: 16px; border-bottom: 1px solid var(--border, #30363d); }
+.org-views button {
+  padding: 9px 2px; border: 0; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--muted, #8b949e); cursor: pointer;
+  font: inherit; font-size: 13px;
+}
+.org-views button[aria-selected="true"] {
+  color: var(--ink, #e6edf3); border-bottom-color: var(--accent-text, #2ec5c5);
+}
+.org-views button:focus-visible, .org-unassigned button:focus-visible,
+.org-unassigned select:focus-visible, .org-unassigned input:focus-visible {
+  outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px;
+}
+.org-views + .detail { margin: 10px 0 0; }
+.org-unassigned {
+  margin-top: 20px; border-top: 1px solid var(--border, #30363d);
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.org-unassigned summary { padding: 12px 2px; cursor: pointer; font-size: 13px; }
+.org-unassigned summary span { color: var(--muted, #8b949e); margin-left: 7px; }
+.org-unassigned-search { display: grid; gap: 5px; padding: 8px 0 12px; font-size: 12px; }
+.org-unassigned-search input, .org-unassigned-row select {
+  padding: 7px 9px; border: 1px solid var(--border, #30363d);
+  border-radius: 3px; background: var(--panel, #0d1117);
+  color: var(--ink, #e6edf3);
+}
+.org-place-btn {
+  padding: 7px 12px; border: 1px solid var(--accent-text, #2ec5c5);
+  border-radius: 3px; background: var(--accent-text, #2ec5c5);
+  color: #061b1c; font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer;
+}
+.org-place-btn:hover { filter: brightness(1.12); }
+.org-place-btn:disabled { opacity: .45; cursor: not-allowed; }
+.org-unassigned-search input { max-width: 320px; }
+.org-unassigned-list { max-height: 360px; overflow: auto; }
+.org-unassigned-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+  border-top: 1px solid var(--border, #30363d); font-size: 12px;
+}
+.org-unassigned-row > span { flex: 1 1 auto; min-width: 120px; }
+.org-unassigned-row .org-node-act { border-radius: 3px; }
+.org-node { border-radius: 4px; background: var(--panel, #0d1117); box-shadow: none; }
+.org-node:hover { transform: none; box-shadow: none; }
+.org-node[data-root="true"] { box-shadow: none; }
+.org-node[data-root="true"]::after { border-radius: 2px; }
+.org[data-view="observed"] .org-node { cursor: default; }
+.org[data-view="observed"] .org-node[data-root="true"]::after { content: "HANDOFF START"; }
+@media (max-width: 620px) {
+  .org-template-head { align-items: stretch; flex-direction: column; }
+  .org-template-head input { max-width: none; }
+  .org-unassigned-row { flex-wrap: wrap; }
+  .org-unassigned-row select { flex: 1 1 170px; }
+}
 
 /* Deployment Manager — the hosts it can see, then the conversation. */
 .dm-panel { display: grid; gap: 12px; }
