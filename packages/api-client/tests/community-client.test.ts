@@ -9,9 +9,12 @@ describe("Community client", () => {
     const client = createBossApiClient({ baseUrl: "https://boss.test", fetchImpl });
     expect(client).toHaveProperty("listProjects");
     expect(client).toHaveProperty("getEdition");
+    expect(client).toHaveProperty("getCloudCatalog");
     expect(client).toHaveProperty("listEnterpriseIdentityProviders");
-    expect(Object.keys(client)).toHaveLength(351);
+    expect(Object.keys(client)).toHaveLength(369);
     await client.listProjects();
+    await client.getCloudCatalog("p1");
+    expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/cloud/catalog?project_id=p1", expect.objectContaining({ method: "GET" }));
     expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/projects", expect.objectContaining({ method: "GET" }));
   });
 });
