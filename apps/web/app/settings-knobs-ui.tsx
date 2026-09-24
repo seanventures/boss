@@ -20,6 +20,10 @@ type Knob = {
    *  drive. A picker of eleven options on an install with one credential is a picker where
    *  ten choices fail at build time and nothing on screen says which. */
   choices?: string[] | null;
+  /** Whether `choices` is a LIMIT or a SUGGESTION. `codex --model` takes any name OpenAI
+   *  offers, so a closed dropdown makes a model that works unselectable the week after it
+   *  ships. Claude's aliases are the complete set, so that picker stays a real dropdown. */
+  open_choices?: boolean | null;
   value: number | string | null; default: number | string | null; source: string;
 };
 
@@ -101,7 +105,30 @@ export function SettingsKnobs(
           </div>
           <p className="detail">{k.help}</p>
           <div className="settings-knob-row">
-            {k.kind === "choice" ? (
+            {k.kind === "choice" && k.open_choices ? (
+              // A SUGGESTION LIST, NOT A LIMIT. Typed freely, with the known names offered as
+              // completions — the operator can pick gpt-5.2-codex from the list or type the
+              // model OpenAI shipped yesterday, and neither is second-class.
+              <>
+                <input
+                  id={`knob-${k.key}`}
+                  className="input"
+                  list={`knob-${k.key}-options`}
+                  placeholder="the engine's own default"
+                  defaultValue={String(k.value ?? "")}
+                  disabled={busy === k.key}
+                  data-testid={`knob-${k.key}`}
+                  onBlur={(e) => {
+                    if (String(k.value ?? "") !== e.target.value) void save(k.key, e.target.value);
+                  }}
+                />
+                <datalist id={`knob-${k.key}-options`}>
+                  {(k.choices ?? []).filter(Boolean).map((choice) => (
+                    <option key={choice} value={choice} />
+                  ))}
+                </datalist>
+              </>
+            ) : k.kind === "choice" ? (
               // A model is a choice among what this installation can actually drive, so the
               // options come from the API rather than being listed here — a list in the console
               // would drift from the harness registry, and the failure would be a provider the

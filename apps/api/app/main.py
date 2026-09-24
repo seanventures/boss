@@ -19878,6 +19878,14 @@ def get_project_settings(project_id: str) -> dict:
                 # fail at build time and nothing says which.
                 "choices": (ps.offered_choices(connection, settings, project_id, spec, value)
                             if spec["kind"] == "choice" else None),
+                # WHETHER THE LIST IS A LIMIT OR A SUGGESTION. `codex --model` takes any name
+                # OpenAI offers, so a closed dropdown would make a model that works
+                # unselectable the week after it ships. Claude's four aliases ARE the complete
+                # set — BOSS resolves them itself — so that picker stays closed.
+                "open_choices": (
+                    ps.model_choice_is_open(
+                        spec, ps.harness_for_model_knob(spec, settings))
+                    if spec["kind"] == "choice" else False),
                 "value": value,
                 "default": default,
                 "source": "project" if key in chosen else "deployment default",

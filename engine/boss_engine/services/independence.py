@@ -131,10 +131,17 @@ def shares_trace(review_context: str, builder_trace: str, *, min_run: int = 40) 
 def configured_contract(settings, *, required_level: Optional[str] = None) -> dict[str, Any]:
     """Audit BOSS's CURRENT configuration: is the reviewer independent of the builder? Reads the
     builder vs review engines/models from settings so an operator can check their setup at a glance."""
+    # BOTH SIDES USED TO READ THE SAME KNOB. builder and verifier were both
+    # (engine, code_agent_strong_model), so this audit could never report model diversity even
+    # when an operator had deliberately arranged it — the two model values were the same string
+    # by construction, and the only difference it could ever see was the harness.
     builder = (settings.code_agent_engine,
-               getattr(settings, "code_agent_strong_model", "") or None)
+               (getattr(settings, "code_agent_model", "")
+                or getattr(settings, "code_agent_strong_model", "")) or None)
     review_engine = (getattr(settings, "code_review_engine", "") or settings.code_agent_engine)
-    verifier = (review_engine, getattr(settings, "code_agent_strong_model", "") or None)
+    verifier = (review_engine,
+                (getattr(settings, "code_review_model", "")
+                 or getattr(settings, "code_agent_strong_model", "")) or None)
     verdict = assess_independence(builder, [verifier])
     level = required_level or getattr(settings, "independence_required_level", "family")
     return {**verdict, "gate": independence_gate(verdict, required_level=level)}

@@ -390,6 +390,7 @@ def materialize_route(
     route: dict, *, build_engine: str, review_engine: str,
     strong_engine: str = "", low_cost_engine: str = "",
     strong_model: str = "", low_cost_model: str = "",
+    build_model: str = "", review_model: str = "",
 ) -> tuple[str, Optional[str]]:
     """Turn a route_for_step result into a concrete (engine_name, model).
 
@@ -404,5 +405,13 @@ def materialize_route(
                    low_cost_model if cls == "low_cost" else "") or None
     lane_default = review_engine if route.get("lane") == "review" else build_engine
     engine_name = route.get("engine") or class_engine or lane_default
-    model = route.get("model") or class_model
+    # THE LANE MODEL BEATS THE CLASS MODEL, and the order is the whole point of it existing.
+    # An operator who sets "reviewer model = Opus" on the reviewer card means every review step,
+    # not "every review step whose class has no model of its own" — and review steps are classed
+    # `strong`, so class-wins would make the new knob do nothing in the one case it was added
+    # for. An explicit per-step pin in model_config still wins over both.
+    #
+    # Empty lane model changes nothing: the expression falls through to exactly what it was.
+    lane_model = (review_model if route.get("lane") == "review" else build_model) or None
+    model = route.get("model") or lane_model or class_model
     return engine_name, model

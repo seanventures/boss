@@ -1845,7 +1845,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             strong_engine=settings.code_agent_strong_engine,
             low_cost_engine=settings.code_agent_low_cost_engine,
             strong_model=settings.code_agent_strong_model,
-            low_cost_model=settings.code_agent_low_cost_model)
+            low_cost_model=settings.code_agent_low_cost_model,
+            build_model=getattr(settings, "code_agent_model", "") or "",
+            review_model=getattr(settings, "code_review_model", "") or "")
         stage_routes[step] = {"engine": eng, "model": model,
                               **({"budget_lite": True} if _lite else {})}
         return _agent_for(eng), model
@@ -1869,7 +1871,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             strong_engine=settings.code_agent_strong_engine,
             low_cost_engine=settings.code_agent_low_cost_engine,
             strong_model=settings.code_agent_strong_model,
-            low_cost_model=settings.code_agent_low_cost_model)
+            low_cost_model=settings.code_agent_low_cost_model,
+            build_model=getattr(settings, "code_agent_model", "") or "",
+            review_model=getattr(settings, "code_review_model", "") or "")
         stage_routes[step] = {"engine": eng, "model": model}
         return eng, model
 

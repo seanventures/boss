@@ -65,6 +65,27 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "disagrees with itself. Empty means the implementer reviews its own work.",
         "kind": "choice", "choices": "harnesses",
     },
+    # A MODEL FOR EACH LANE, beside the harness picker for that lane. Until now the lanes chose
+    # a harness and the CLASSES chose a model, so "review with Opus" was inexpressible: the
+    # reviewer got whatever its step's class routed to. Choosing claude_code as the reviewer when
+    # the builder is also claude_code therefore gave the SAME MODEL on both sides — exactly what
+    # the reviewer setting exists to prevent.
+    "code_review_model": {
+        "attr": "code_review_model",
+        "label": "Model for the reviewer",
+        "help": "Which model the adversarial reviewer uses. Worth differing from the "
+                "implementer's — the point of a second reviewer is a second opinion, and the "
+                "same model on both sides rarely disagrees with itself. Empty means whatever "
+                "the reviewer's lane would otherwise use.",
+        "kind": "choice", "choices": "models_for:code_review_engine",
+    },
+    "code_agent_model": {
+        "attr": "code_agent_model",
+        "label": "Model for the implementer",
+        "help": "Which model writes the code. Empty means the engine's own default, or the "
+                "per-lane model below if one is set.",
+        "kind": "choice", "choices": "models_for:code_agent_engine",
+    },
     "code_agent_strong_engine": {
         "attr": "code_agent_strong_engine",
         "label": "Hard problems",
@@ -99,6 +120,18 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "stages. Sonnet is the measured default; Haiku is cheaper and weaker. "
                 "Empty means the engine's own default.",
         "kind": "choice", "choices": "claude_models",
+    },
+    # WIRED INTO THE ADAPTER FOR A LONG TIME AND REACHABLE FROM NOWHERE. codex_cli_adapter
+    # reads settings.codex_cli_model on every call; the console never offered it, so an operator
+    # running codex could choose the harness and not the model. Same "built and unwired" shape
+    # as the rest of this file's history.
+    "codex_cli_model": {
+        "attr": "codex_cli_model",
+        "label": "Codex model",
+        "help": "Which model the Codex CLI uses when BOSS drives it. `codex --model` takes any "
+                "name OpenAI offers, so the list is a suggestion rather than a limit. Empty "
+                "means the CLI's own default.",
+        "kind": "choice", "choices": "models_for_harness:codex",
     },
     "claude_cli_model": {
         "attr": "claude_cli_model",
@@ -141,6 +174,62 @@ CHAT_ENGINES = ("claude_code", "codex", "native")
 CLAUDE_MODELS = ("", "opus", "sonnet", "fable", "haiku")
 
 
+def _harness_names() -> list[str]:
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        return sorted(BUILTIN_CLI_HARNESSES)
+    except Exception:  # noqa: BLE001 — a knob must not break because a registry did
+        return []
+
+
+def _models_of(harness: str) -> tuple[str, ...]:
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        spec = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
+        return tuple(spec.models) if spec else ()
+    except Exception:  # noqa: BLE001
+        return ()
+
+
+def model_choice_is_open(spec: dict[str, Any], harness: str) -> bool:
+    """Whether this model knob accepts a name outside its offered list.
+
+    True for a harness that does not enumerate. `codex --model` takes any name OpenAI offers,
+    and a closed list would reject a model that works the week after it ships — so the list is
+    shown as a suggestion and free text is kept. Claude's four aliases ARE the complete set,
+    because BOSS resolves them itself and a name outside it has nothing to resolve to.
+    """
+    if not str(spec.get("choices") or "").startswith(
+            ("models_for:", "models_for_harness:")):
+        return False
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        spec = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
+        return not (spec and spec.models_exhaustive)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def harness_for_model_knob(spec: dict[str, Any], settings: Any) -> str:
+    """Which harness a model knob's list should come from.
+
+    `models_for_harness:codex` names one outright. `models_for:code_review_engine` follows the
+    lane's harness setting, falling back to the implementer's when that lane has none — which is
+    what an empty reviewer means: the implementer reviews its own work.
+    """
+    choice = str(spec.get("choices") or "")
+    if choice.startswith("models_for_harness:"):
+        return choice.split(":", 1)[1]
+    if not choice.startswith("models_for:"):
+        return ""
+    attr = choice.split(":", 1)[1]
+    return (str(getattr(settings, attr, "") or "")
+            or str(getattr(settings, "code_agent_engine", "") or ""))
+
+
 def _allowed_choices(spec: dict[str, Any]) -> list[str]:
     """The values a choice knob will accept, asked of the registry rather than hardcoded.
 
@@ -151,6 +240,18 @@ def _allowed_choices(spec: dict[str, Any]) -> list[str]:
         return list(CHAT_ENGINES)
     if spec.get("choices") == "claude_models":
         return list(CLAUDE_MODELS)
+    # MODELS, AS THE ACCEPT BOUND. Which harness this lane runs is a per-project question and
+    # this function has no project — that split is the one the file already draws, so the
+    # narrowing happens in `offered_choices` and what is ACCEPTED here is every harness's
+    # models. A knob whose harness does not enumerate its models accepts anything: see
+    # `model_choice_is_open`.
+    if str(spec.get("choices") or "").startswith(("models_for:", "models_for_harness:")):
+        every: list[str] = [""]
+        for name in _harness_names():
+            for model in _models_of(name):
+                if model not in every:
+                    every.append(model)
+        return every
     if spec.get("choices") != "harnesses":
         return list(spec.get("choices") or [])
     try:
@@ -176,6 +277,14 @@ def offered_choices(connection, settings, project_id: str,
     next time they touch anything else on the form.
     """
     allowed = _allowed_choices(spec)
+    if str(spec.get("choices") or "").startswith(("models_for:", "models_for_harness:")):
+        # The models of the harness this lane actually runs — not every harness's, which is the
+        # accept bound and the wrong list for a dropdown.
+        harness = harness_for_model_knob(spec, settings)
+        offered = ["", *_models_of(harness)]
+        if current and str(current) not in offered:
+            offered.append(str(current))
+        return offered
     if spec.get("choices") not in ("harnesses", "chat_engines") or not allowed:
         return allowed
     try:
@@ -217,6 +326,22 @@ def coerce(key: str, value: Any) -> Any:
     if spec["kind"] == "choice":
         name = str(value or "").strip().lower()
         allowed = _allowed_choices(spec)
+        # A MODEL KNOB WHOSE HARNESS DOES NOT ENUMERATE ACCEPTS ANYTHING. `codex --model` takes
+        # any name OpenAI offers, so validating against a list BOSS wrote would reject a model
+        # that works the week after it ships — and the operator would read "BOSS cannot drive
+        # that" about a model their CLI runs fine.
+        if str(spec.get("choices") or "").startswith(
+                ("models_for:", "models_for_harness:")):
+            if not name:
+                return ""
+            for harness in _harness_names():
+                if name in _models_of(harness):
+                    return name
+            if any(model_choice_is_open(spec, harness) for harness in _harness_names()):
+                return name
+            raise ValueError(
+                f"{spec['label']}: '{name}' is not a model any connected harness offers. "
+                f"Available: {', '.join(x for x in allowed if x)}.")
         if allowed and name not in allowed:
             # Name what IS available. "Invalid value" sends somebody to the source to find out
             # what the valid ones are, and the answer changes as harnesses are registered.

@@ -918,6 +918,16 @@ class Settings(BaseSettings):
     # bias — the model that wrote the code isn't the one judging it. Empty = same as the builder
     # (single-model). e.g. builder=claude_code, reviewer=native (Azure GPT).
     code_review_engine: str = Field(default="", alias="BOSS_CODE_REVIEW_ENGINE")
+    # A MODEL PER LANE, which is what was missing. The knobs above choose a HARNESS for each
+    # lane; the only model knobs were per CLASS (strong/low_cost), so "review with Opus" was
+    # inexpressible — the reviewer got whatever class its step happened to route to. Picking
+    # claude_code as the reviewer when the builder is also claude_code then gave the same model
+    # on both sides, which is precisely what the reviewer setting exists to avoid: "a reviewer
+    # that is the same model rarely disagrees with itself".
+    #
+    # Empty keeps today's behaviour exactly — the class model still applies.
+    code_review_model: str = Field(default="", alias="BOSS_CODE_REVIEW_MODEL")
+    code_agent_model: str = Field(default="", alias="BOSS_CODE_AGENT_MODEL")
     # VAG Phase 1 (verifier hardening / #9): the adversarial code-review stage runs as an
     # N-member REFUTE PANEL — k independent reviewers, each with fresh context, each trying to
     # refute the change. The panel verdict is by quorum and yields a CONFIDENCE score

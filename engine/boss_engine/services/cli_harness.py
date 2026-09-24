@@ -66,6 +66,15 @@ class CliHarnessSpec:
     prompt_via: str = "argv"
     #: Flag that selects a model, e.g. "--model". Empty means the CLI has no such flag.
     model_flag: str = ""
+    #: Model names worth OFFERING for this harness. The console had one hardcoded Claude list
+    #: for every model knob, so an operator running codex as the reviewer was shown four Claude
+    #: names none of which codex accepts.
+    models: tuple[str, ...] = ()
+    #: Whether `models` is the complete set. Claude's is — BOSS maps those four aliases itself.
+    #: Codex's is not: `codex --model` takes free text and OpenAI adds names faster than this
+    #: file changes, so the list is a suggestion and anything else is still accepted. Pretending
+    #: to enumerate would reject a model that works.
+    models_exhaustive: bool = False
     #: Seconds before BOSS gives up on a build step. Review steps get review_timeout.
     timeout: int = 2400
     review_timeout: int = 420
@@ -210,6 +219,11 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         # as a first-class route rather than a workaround.
         prompt_via="stdin",
         model_flag="--model",
+        # The four aliases BOSS maps itself — opus -> claude-opus-5, sonnet -> claude-sonnet-5,
+        # fable -> claude-fable-5-1, haiku -> claude-haiku-4-5-20251001. Exhaustive because the
+        # mapping lives here: a name outside this set has nothing to resolve to.
+        models=("opus", "sonnet", "fable", "haiku"),
+        models_exhaustive=True,
         # A governed task HAS completed on claude_code; this is the same engine, reached
         # through its own adapter.
         verified=True,
@@ -265,6 +279,11 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         read_only_args=("--sandbox", "read-only"),
         prompt_via="argv",
         model_flag="--model",
+        # NOT ENUMERABLE. `codex --model <MODEL>` is free text — its own --help offers `o3` as
+        # an example and lists no set. These two are the names this repo already uses
+        # (gpt-5.2-codex is settings.openai_model's default) plus that example; the operator can
+        # type any other, which is why models_exhaustive stays False.
+        models=("gpt-5.2-codex", "o3"),
         final_message_flag="--output-last-message",
         token_pattern=r"tokens used\s+([\d,]+)",
         verified=False,
