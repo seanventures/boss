@@ -112,5 +112,10 @@
     "from": "dockerfile: Dockerfile",
     "to": "dockerfile: Dockerfile.community",
     "expected_count": 3
+  },
+  "page_export_rewrite": {
+    "source": "apps/web/app/page-community.tsx",
+    "destination": "apps/web/app/page.tsx",
+    "sha256": "fba108b9e86209a023c0dd0e250d9da317c5355441456013cf30160ce1e8a432"
   }
 }

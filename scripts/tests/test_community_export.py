@@ -314,3 +314,51 @@ def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
     missing["package_export_rewrite"]["to"] = "./src/missing.ts"
     report, _ = export.analyze(repo, sha, missing)
     assert "package-export-community-source-missing" in {b["kind"] for b in report["blockers"]}
+
+
+def test_community_page_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    app = repo / "apps/web/app"
+    app.mkdir(parents=True)
+    (app / "page.tsx").write_text("export const AccountConnect = true;\n")
+    community = b"export default function Page() { return null; }\n"
+    (app / "page-community.tsx").write_bytes(community)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["apps/web/app/"],
+        "exclude": ["apps/web/app/unused.tsx"],
+        "requires_split": ["apps/web/app/page.tsx"],
+        "required_runtime": ["apps/web/app/page.tsx"],
+        "required_release": ["apps/web/app/page.tsx"],
+        "page_export_rewrite": {
+            "source": "apps/web/app/page-community.tsx",
+            "destination": "apps/web/app/page.tsx",
+            "sha256": hashlib.sha256(community).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["page_export_rewrite_applied"] is True
+    assert candidate == {"apps/web/app/page.tsx": community}
+    assert not any(b["kind"] in {"requires-community-split", "missing-runtime-entrypoint"} for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["page_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["page_export_rewrite_applied"] is False
+    assert "page-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "apps/web/app/page.tsx" not in candidate
+
+    missing = json.loads(json.dumps(manifest))
+    missing["page_export_rewrite"]["source"] = "apps/web/app/missing.tsx"
+    report, _ = export.analyze(repo, sha, missing)
+    assert "page-export-community-source-withheld" in {b["kind"] for b in report["blockers"]}

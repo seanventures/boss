@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 import shlex
@@ -125,6 +126,21 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("package export target must match Community source")
         if not matching_rule(package_rewrite["path"], manifest["include"]):
             raise ValueError("package_export_rewrite path must be included")
+    page_rewrite = manifest.get("page_export_rewrite")
+    if page_rewrite is not None:
+        if not isinstance(page_rewrite, dict) or any(
+            not isinstance(page_rewrite.get(key), str) or not safe_path(page_rewrite[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("page_export_rewrite needs safe source and destination paths")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(page_rewrite.get("sha256", ""))):
+            raise ValueError("page_export_rewrite needs reviewed source sha256")
+        if page_rewrite["source"] == page_rewrite["destination"]:
+            raise ValueError("page export source and destination must differ")
+        if not matching_rule(page_rewrite["source"], manifest["include"]):
+            raise ValueError("page export source must be included")
+        if page_rewrite["destination"] not in manifest["requires_split"]:
+            raise ValueError("page export destination must be withheld for split")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -382,6 +398,29 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 exports["."] = package_rewrite["to"]
                 selected[package_path] = (json.dumps(package, indent=2) + "\n").encode()
                 package_rewrite_applied = True
+    page_rewrite = manifest.get("page_export_rewrite")
+    page_rewrite_applied = False
+    if page_rewrite:
+        source = page_rewrite["source"]
+        destination = page_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "page-export-private-route-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "page-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "page-export-private-route-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != page_rewrite["sha256"]:
+            blockers.append({"kind": "page-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (
+                    blocker["kind"] == "requires-community-split"
+                    and blocker["path"] == destination
+                )
+            ]
+            page_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -407,6 +446,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "candidate_file_count": len(selected),
         "compose_rewrite_applied": rewrite_applied,
         "package_export_rewrite_applied": package_rewrite_applied,
+        "page_export_rewrite_applied": page_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
