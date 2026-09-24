@@ -33,6 +33,17 @@ def test_grok_declares_only_the_official_owner_local_route() -> None:
     assert setup_service.PROVIDERS["grok"]["kind"] == "subscription"
 
 
+def test_grok_is_a_selectable_code_harness() -> None:
+    from boss_engine.services.harness_registry import get_harness
+
+    registered = get_harness("grok")
+    agent = registered.build(SimpleNamespace())
+
+    assert registered.kind == "cli" and not registered.verified
+    assert isinstance(agent, cli_harness.GenericCliCodeAgent)
+    assert agent.engine == "grok"
+
+
 def test_signed_out_grok_models_exit_zero_does_not_claim_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
