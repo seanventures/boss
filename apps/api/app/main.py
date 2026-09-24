@@ -22064,7 +22064,18 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
                 "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
                 "WHERE d.project_id=:p AND d.workflow_key=:k "
                 "AND COALESCE(d.namespace,'system')='product' "
-                "ORDER BY v.version DESC NULLS LAST LIMIT 1"
+                # THE VERSION THAT RUNS, not the highest-numbered one.
+                #
+                # Those are the same thing until a workflow is reverted, and then they are not:
+                # re-publishing an earlier spec makes THAT version active without creating a
+                # newer one, so `version DESC` returns the spec the operator just replaced. The
+                # builder loads from here — it would show the abandoned version, and saving
+                # would republish it over the one actually in use.
+                #
+                # Falls back to the newest when nothing is active, which is a definition with no
+                # published version yet: the same case the LEFT JOIN above exists for.
+                "ORDER BY (v.id = d.active_version_id) DESC NULLS LAST, "
+                "         v.version DESC NULLS LAST LIMIT 1"
             ),
             {"p": project_id, "k": workflow_key},
         ).mappings().first()

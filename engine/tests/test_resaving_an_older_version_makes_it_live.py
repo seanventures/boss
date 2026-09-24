@@ -89,3 +89,41 @@ def test_re_saving_what_is_already_live_changes_nothing(definition):
     assert again["duplicate"] is True
     assert again.get("reactivated") is not True, "nothing moved, so nothing to report"
     assert _active(engine, definition_id) == first["id"]
+
+
+def test_the_builder_is_shown_the_version_that_runs(definition):
+    """The spec endpoint ordered by version number, so after a revert it returned the spec the
+    operator had just replaced — and the builder loads from there. Editing and saving would
+    have republished the abandoned version over the one actually in use.
+
+    Asked of the query, not of the source: this is the third source-reading test today that
+    would have passed while the code did the wrong thing.
+    """
+    engine, definition_id = definition
+    with engine.begin() as connection:
+        first = workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition_id,
+            spec=_spec(60), actor="test")
+        workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition_id,
+            spec=_spec(120), actor="test")
+        # Revert: version 1 is live again while version 2 is still the highest number.
+        workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition_id,
+            spec=_spec(60), actor="test")
+
+    with engine.begin() as connection:
+        row = connection.execute(
+            text(
+                "SELECT v.id AS version_id, v.version FROM workflow_definitions d "
+                "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
+                "WHERE d.id=:i "
+                "ORDER BY (v.id = d.active_version_id) DESC NULLS LAST, "
+                "         v.version DESC NULLS LAST LIMIT 1"
+            ),
+            {"i": definition_id},
+        ).mappings().first()
+
+    assert row["version_id"] == first["id"], (
+        "the builder would open the version the operator replaced, "
+        f"not the one running (got version {row['version']})")
