@@ -7526,37 +7526,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .org-node {
   position: relative; min-width: 190px; max-width: 250px;
-  padding: 13px 15px; border-radius: 12px;
-  /* Lifted off the canvas: a subtle gradient plus a shadow, so it is a card rather than an
-     outline drawn on the background. */
-  background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
+  padding: 13px 15px; border-radius: 3px;
+  background: var(--panel);
   border: 1px solid var(--border-strong);
-  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 6px 18px rgba(0,0,0,.28);
   display: flex; flex-direction: column; gap: 5px;
-  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
 }
-.org-node:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent);
-  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 10px 26px rgba(0,0,0,.36);
-}
-/* The root earns the accent — it is the one node whose position is a claim. */
-.org-node[data-root="true"] {
-  border-color: var(--accent);
-  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 0 0 1px rgba(79,227,193,.18),
-              0 8px 24px rgba(0,0,0,.34);
-}
-/* NOT "ROOT". This chart is drawn from who handed work to whom, so the top node is simply the
-   busiest — and labelling it ROOT read as "this agent is the boss", which produced a chart
-   showing the CTO reporting to a Product Manager. The label now says what the position means.
-   A declared chart (org_assignments) overrides this and is labelled differently. */
-.org-node[data-root="true"]::after {
-  content: "MOST HANDOFFS"; position: absolute; top: -9px; left: 15px;
-  padding: 1px 4px; border-radius: 0;
-  background: var(--panel); color: var(--accent);
-  font-size: 9px; font-weight: 700; letter-spacing: .04em;
-}
-.org[data-declared="true"] .org-node[data-root="true"]::after { content: "TOP OF CHART"; }
+.org-node:hover, .org-node[data-root="true"] { border-color: var(--accent); }
 
 /* An action, not a badge. `text-transform: uppercase` on a one-word button turned "top" into
    "TOP" on every card, which reads as a status stamp — and a status stamp that says TOP on
@@ -7573,17 +7548,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   padding-top: 5px; margin-top: 2px; border-top: 1px solid var(--border);
 }
 
-/* Working alone: real chips, not a wall of text. */
-.roster-alone { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.roster-alonechip {
-  display: inline-flex; align-items: baseline; gap: 6px;
-  padding: 6px 12px; border-radius: 999px;
-  border: 1px solid var(--border); background: rgba(255,255,255,.025);
-  font-size: 12px; color: var(--muted);
-  transition: border-color .14s ease, color .14s ease;
-}
-.roster-alonechip:hover { border-color: var(--border-strong); color: var(--ink); }
-.roster-alonechip i { font-style: normal; font-size: 10px; color: var(--faint, var(--muted)); }
 
 @media (max-width: 700px) {
   .org-level { flex-direction: column; align-items: stretch; }
@@ -7666,75 +7630,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-live-dot { box-shadow: 0 0 0 3px rgba(63, 185, 80, .22); }
 }
 
-/* ── Workforce: motion that is still there when you look ──────────────────── */
-/*
- * The v2 version of this page shipped three times looking static, and each time the reason was
- * the same: the only persistent rule needed an agent to be WORKING at that instant, and on a
- * quiet afternoon that is nobody. Everything else was a sub-second entrance that had finished
- * before anyone looked.
- *
- * So the motion here is keyed to RECENCY, which is true of a real number of agents at any
- * moment, and it never stops. The amount of movement is the amount of recency.
- */
-@keyframes roster-in   { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes roster-ring { 0%,100% { box-shadow: 0 0 0 0 rgba(79,227,193,.05); }
-                          50%     { box-shadow: 0 0 0 5px rgba(79,227,193,.28); } }
-@keyframes roster-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(79,227,193,.04); }
-                          50%     { box-shadow: 0 0 18px 2px rgba(79,227,193,.20); } }
-@keyframes roster-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@keyframes roster-sweep { from { background-position: -150% 0; } to { background-position: 250% 0; } }
-
-/* Cards arrive in sequence, so a 26-card grid assembles rather than blinking into place. The
-   stagger stops after a dozen — past that it is a slow page pretending to be a lively one. */
-.roster-grid > .roster-card {
-  animation: roster-in .36s cubic-bezier(.22,.61,.36,1) both;
-  animation-delay: calc(var(--i, 0) * 35ms);
-}
-/* Worked in the last quarter hour: the strongest signal on the page, and rare. */
-.roster-card[data-recency="live"] {
-  border-color: var(--accent);
-  animation: roster-in .36s cubic-bezier(.22,.61,.36,1) both,
-             roster-ring 2.4s ease-in-out .5s infinite;
-}
-/* Worked today: slower and fainter, present without competing with `live`. */
-.roster-card[data-recency="today"] {
-  animation: roster-in .36s cubic-bezier(.22,.61,.36,1) both,
-             roster-glow 4.6s ease-in-out .7s infinite;
-}
-
-/* The score bar sweeps out to its width on load — the one piece of motion visible on EVERY
-   card that has done work, and its length is the number it is carrying. */
-.roster-card > .roster-scorebar > span {
-  transform-origin: left center;
-  animation: roster-fill .8s cubic-bezier(.22,.61,.36,1) both;
-  animation-delay: calc(var(--i, 0) * 35ms + 160ms);
-  position: relative; overflow: hidden;
-}
-/* And on the agents that worked today, a light keeps travelling along it. */
-.roster-card[data-recency="live"]  > .roster-scorebar > span::after,
-.roster-card[data-recency="today"] > .roster-scorebar > span::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%);
-  background-size: 40% 100%; background-repeat: no-repeat;
-  animation: roster-sweep 2.6s linear infinite;
-}
-
-/* Hover: the card lifts, so the grid answers the pointer. */
-.roster-card { transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
-.roster-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
-
-/* NON-NEGOTIABLE. Motion is a signal here, not decoration, and for a reader who has asked the
-   OS to stop animating things it becomes noise they cannot turn off. Status stays legible
-   because colour and text carry it too. */
-@media (prefers-reduced-motion: reduce) {
-  .roster-grid > .roster-card,
-  .roster-card[data-recency="live"],
-  .roster-card[data-recency="today"],
-  .roster-card > .roster-scorebar > span { animation: none !important; }
-  .roster-card[data-recency="live"]  > .roster-scorebar > span::after,
-  .roster-card[data-recency="today"] > .roster-scorebar > span::after { content: none; }
-  .roster-card:hover { transform: none; }
-}
+/* Recent work uses text status and a border, without decorative motion. */
+.roster-card:hover { border-color: var(--border-strong); }
 
 /* ── Ask BOSS ─────────────────────────────────────────────────────────────── */
 /*
