@@ -45,12 +45,16 @@
     "docs/product/BOSS_COMMUNITY_EDITION_SPEC.md",
     "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
-    "docs/product/TRACEABILITY.md"
+    "docs/product/TRACEABILITY.md",
+    "README.community.md",
+    "CONTRIBUTING.community.md"
   ],
   "exclude": [
     "apps/account_connect/",
     "apps/api/app/adapters_enterprise/",
     "apps/api/app/enterprise_extensions/",
+    "apps/api/tests/test_paid_schema_boundary.py",
+    "apps/api/tests/test_entitlement_pack_parity.py",
     "apps/api/app/services/commercial.py",
     "apps/api/app/services/enterprise.py",
     "apps/api/app/routers/enterprise.py",
@@ -83,8 +87,7 @@
     "Makefile",
     "apps/api/app/main.py",
     "apps/api/app/routers/community.py",
-    "apps/web/app/page.tsx",
-    "packages/specpack/packs/community_edition.yaml"
+    "apps/web/app/page.tsx"
   ],
   "safe_symlinks": {
     "packages/goldeneye/bin": "core/bin",
@@ -125,5 +128,15 @@
     "source": "apps/web/app/page-community.tsx",
     "destination": "apps/web/app/page.tsx",
     "sha256": "de9ce43f31e075c8bb7f35ba6f7cafb8cc9f6579f0cb10ab4cd49ee58f63b4ee"
+  },
+  "readme_export_rewrite": {
+    "source": "README.community.md",
+    "destination": "README.md",
+    "sha256": "96207d4954704b5297b4b1d227f83d65b74e7213e4aa6e1cf01cfbb4e9f39d57"
+  },
+  "contributing_export_rewrite": {
+    "source": "CONTRIBUTING.community.md",
+    "destination": "CONTRIBUTING.md",
+    "sha256": "60156f28d86e77a8f9cd4009c2cf3ed3cb387186242aa54753d71c5b08208077"
   }
 }

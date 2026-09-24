@@ -77,6 +77,66 @@ def test_public_issue_forms_are_exact_manifest_paths() -> None:
     ])
 
 
+def test_audited_shared_markers_are_exact_and_paid_gateway_still_blocks() -> None:
+    schemas = b"""from typing import Optional
+class BaseModel: pass
+class AccountConnectOrgSummary(BaseModel):
+    id: str
+class EditionStatusResponse(BaseModel):
+    account_connect_required: bool
+    account_connect_status: str
+    account_connect_org: Optional[AccountConnectOrgSummary] = None
+class LicenseEntitlementSummary(BaseModel):
+    account_connect_org_id: Optional[str] = None
+"""
+    path = "engine/boss_engine/schemas.py"
+    masked, valid = export.reviewed_marker_bytes(path, schemas)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    changed = schemas.replace(b"    account_connect_status: str", b"    account_connect_status: object")
+    assert export.reviewed_marker_bytes(path, changed)[1] is False
+    added = schemas + b"class HostedMarketplaceRequest(BaseModel): pass\n"
+    masked, valid = export.reviewed_marker_bytes(path, added)
+    assert valid
+    assert any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+
+    broker = b"""class Broker:
+    def _runtime_flags(self, source_id):
+        if source_id == "managed_cloud_model_gateway":
+            runtime_supported = bool(
+                self.settings.managed_cloud_model_gateway_enabled
+                and self.settings.account_connect_url
+            )
+            return runtime_supported, bool(
+                runtime_supported and self.settings.account_connect_token
+            )
+"""
+    broker_path = "engine/boss_engine/services/entitlements.py"
+    masked, valid = export.reviewed_marker_bytes(broker_path, broker)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    assert not export.has_semantic_paid_source(broker_path, broker)
+    assert export.has_semantic_paid_source(
+        broker_path, broker + b"enterprise_model_gateway\n"
+    )
+
+    pack = b"""id: community_edition
+license_candidate: Apache-2.0
+legal_review_required: true
+hosted_account_connect_required: false
+"""
+    pack_path = "packages/specpack/packs/community_edition.yaml"
+    masked, valid = export.reviewed_marker_bytes(pack_path, pack)
+    assert valid
+    assert not any(marker in masked for marker in export.PAID_SOURCE_MARKERS)
+    assert export.reviewed_marker_bytes(
+        pack_path, pack.replace(b"Apache-2.0", b"AGPLv3")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
+        pack_path, pack + b"commercial_packaging_policy\n"
+    )[1] is False
+
+
 def test_goldeneye_community_boundary_is_preserved() -> None:
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
     export.validate_manifest(manifest)

@@ -48,6 +48,79 @@ PAID_SOURCE_MARKERS = (
     b"cloud_edition",
 )
 
+# These are Community status/configuration contracts. Each exception applies to
+# complete, reviewed source lines in one file and is checked before marker scan.
+SHARED_MARKER_LINES = {
+    "engine/boss_engine/schemas.py": {
+        "class AccountConnectOrgSummary(BaseModel):": "AccountConnectOrgSummary",
+        "    account_connect_required: bool": "EditionStatusResponse",
+        "    account_connect_status: str": "EditionStatusResponse",
+        "    account_connect_org: Optional[AccountConnectOrgSummary] = None": "EditionStatusResponse",
+        "    account_connect_org_id: Optional[str] = None": "LicenseEntitlementSummary",
+    },
+    "engine/boss_engine/services/entitlements.py": {
+        "                and self.settings.account_connect_url": "_runtime_flags",
+        "                runtime_supported and self.settings.account_connect_token": "_runtime_flags",
+    },
+}
+SEMANTIC_PAID_MARKERS = {
+    "engine/boss_engine/services/entitlements.py": (b"enterprise_model_gateway",),
+}
+
+
+def has_semantic_paid_source(path: str, data: bytes) -> bool:
+    return any(marker in data for marker in SEMANTIC_PAID_MARKERS.get(path, ()))
+
+
+def reviewed_marker_bytes(path: str, data: bytes) -> tuple[bytes, bool]:
+    """Return source for paid-marker scan, with only audited Community lines masked.
+
+    A missing, duplicated, relocated, or changed line fails the contract. The
+    original bytes always enter the candidate when the contract passes.
+    """
+    rules = SHARED_MARKER_LINES.get(path)
+    if path == "packages/specpack/packs/community_edition.yaml":
+        lines = data.decode("utf-8", "replace").splitlines(keepends=True)
+        allowed = "hosted_account_connect_required: false"
+        valid = (
+            sum(line.rstrip("\r\n") == allowed for line in lines) == 1
+            and b"id: community_edition\n" in data
+            and b"license_candidate: Apache-2.0\n" in data
+            and b"legal_review_required: true\n" in data
+            and b"commercial_packaging_policy" not in data
+        )
+        if not valid:
+            return data, False
+        return b"".join(
+            b"\n" if line.rstrip("\r\n") == allowed else line.encode()
+            for line in lines
+        ), True
+    if rules is None:
+        return data, True
+    try:
+        text = data.decode("utf-8")
+        tree = ast.parse(text)
+    except (UnicodeDecodeError, SyntaxError):
+        return data, False
+    lines = text.splitlines(keepends=True)
+    for allowed, owner in rules.items():
+        positions = [i + 1 for i, line in enumerate(lines) if line.rstrip("\r\n") == allowed]
+        if len(positions) != 1:
+            return data, False
+        nodes = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+            and node.name == owner
+            and node.lineno <= positions[0] <= (node.end_lineno or node.lineno)
+        ]
+        if len(nodes) != 1:
+            return data, False
+    allowed_lines = set(rules)
+    return b"".join(
+        b"\n" if line.rstrip("\r\n") in allowed_lines else line.encode()
+        for line in lines
+    ), True
+
 
 def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     result = subprocess.run(
@@ -363,7 +436,14 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         if any(marker in data for marker in PRIVATE_MARKERS):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             continue
-        if any(marker in data for marker in PAID_SOURCE_MARKERS):
+        if has_semantic_paid_source(path, data):
+            blockers.append({"kind": "semantic-paid-source-needs-split", "path": path})
+            continue
+        marker_data, contract_ok = reviewed_marker_bytes(path, data)
+        if not contract_ok:
+            blockers.append({"kind": "shared-marker-contract-changed", "path": path})
+            continue
+        if any(marker in marker_data for marker in PAID_SOURCE_MARKERS):
             blockers.append({"kind": "mixed-paid-source-needs-split", "path": path})
             continue
         selected[path] = data
