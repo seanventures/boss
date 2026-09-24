@@ -330,3 +330,128 @@ def test_a_caption_burns_in_without_disturbing_the_rest(clip, tmp_path):
     source = v.probe(clip)
     assert (info["width"], info["height"]) == (source["width"], source["height"])
     assert info["has_audio"] is True
+
+
+# ---------------------------------------------------------------------------------------------
+# Edit plans. A model writes these from prose, which is why the interesting tests are the
+# refusals: the plan is the one place where something a model invented reaches ffmpeg.
+# ---------------------------------------------------------------------------------------------
+
+def test_a_plan_a_model_invented_cannot_widen_what_boss_can_do():
+    """An op BOSS does not have is refused, not skipped.
+
+    Skipping is the dangerous choice: the instruction asked for something, the render finished,
+    and the missing part is only discoverable by watching the whole video. Refusing turns it
+    into "BOSS cannot do that", which is a true sentence somebody can act on.
+    """
+    for op in ("speed_up", "remove_silence", "exec", "system", ""):
+        with pytest.raises(v.VideoEditError, match="unknown op"):
+            v.validate_plan([{"op": op}])
+
+
+def test_a_plan_is_refused_whole_rather_than_partway_through(clip, tmp_path):
+    """Operation 4 being invalid must not leave 1 through 3 rendered.
+
+    A half-edited file is indistinguishable from a finished one without watching it, and it is
+    the file a reviewer would be shown.
+    """
+    plan = [
+        {"op": "cut", "remove": [{"start": "1", "end": "2"}]},
+        {"op": "reframe", "aspect": "9:16"},
+        {"op": "caption", "text": "fine", "start": "1", "end": "2"},
+        {"op": "reframe", "aspect": "vertical"},          # not a known aspect
+    ]
+    with pytest.raises(v.VideoEditError, match="aspect"):
+        v.apply_plan(clip, plan, work_dir=str(tmp_path))
+    # Nothing was written: the whole plan was checked before the first encode.
+    assert not list(tmp_path.iterdir()), sorted(p.name for p in tmp_path.iterdir())
+
+
+def test_a_plan_may_not_name_a_file_only_an_artifact(clip, tmp_path):
+    """The overlay image is named as an artifact, so a plan cannot choose a host path.
+
+    This is the difference between a model picking WHAT to overlay and a model picking which
+    file on the control plane gets read.
+    """
+    with pytest.raises(v.VideoEditError, match="image_artifact_id"):
+        v.validate_plan([{"op": "overlay_image", "start": "1", "end": "2",
+                          "image": "/etc/passwd"}])
+
+
+def test_a_plan_that_captions_is_refused_when_text_cannot_be_burned_in():
+    """Better than rendering the other five operations and silently dropping the text."""
+    plan = [{"op": "cut", "remove": [{"start": "1", "end": "2"}]},
+            {"op": "caption", "text": "hello", "start": "3", "end": "5"}]
+    if v.drawtext_available():
+        assert len(v.validate_plan(plan)) == 2
+    else:
+        with pytest.raises(v.VideoEditError, match="drawtext"):
+            v.validate_plan(plan)
+
+
+def test_the_model_s_reason_is_carried_but_never_executed():
+    """`why` is what makes a plan reviewable without watching the output.
+
+    It is prose from a model, so the test that matters is that it stays data.
+    """
+    plan = v.validate_plan([{"op": "reframe", "aspect": "9:16",
+                             "why": "for the vertical short; :drawtext=x"}])
+    assert plan[0]["why"].startswith("for the vertical short")
+    assert "aspect" in plan[0] and plan[0]["aspect"] == "9:16"
+
+
+def test_a_plan_is_told_when_its_timecodes_will_not_mean_what_it_thinks():
+    """Cut first, then caption at 5:00, and 5:00 is no longer where the author looked.
+
+    Each operation applies to the output of the one before it, which is the only sane rule and
+    is NOT what someone reading timecodes off the original recording means. BOSS says so rather
+    than reordering the plan, because guessing at intent on somebody's video is worse.
+    """
+    timed = {"op": "overlay_image", "start": "300", "end": "304",
+             "image_artifact_id": "art_diagram"}
+    note = v.plan_timeline_warning(v.validate_plan([
+        {"op": "cut", "remove": [{"start": "60", "end": "120"}]}, timed,
+    ]))
+    assert note and "SHORTENED" in note
+
+    # The other order needs no warning: nothing has shifted the timeline yet.
+    assert v.plan_timeline_warning(v.validate_plan([
+        timed, {"op": "cut", "remove": [{"start": "60", "end": "120"}]},
+    ])) is None
+
+
+def test_an_absurdly_long_plan_is_refused():
+    """Each operation re-encodes the whole video, so 200 of them is a mistake, not a request."""
+    with pytest.raises(v.VideoEditError, match="25"):
+        v.validate_plan([{"op": "reframe", "aspect": "9:16"}] * 40)
+
+
+def test_a_plan_reports_what_each_operation_changed(clip, tmp_path):
+    """"The plan ran" is not evidence.
+
+    A reviewer approving a publish needs to see the duration fall where a cut was asked for and
+    the frame change where a reframe was — which is checkable, unlike a status.
+    """
+    out = v.apply_plan(clip, [
+        {"op": "cut", "remove": [{"start": "3", "end": "5"}], "why": "the fumble"},
+        {"op": "reframe", "aspect": "9:16", "why": "vertical short"},
+    ], work_dir=str(tmp_path))
+
+    info = v.verify_playable(out["path"])
+    assert abs(info["duration_seconds"] - 10.0) < 0.35     # 12 - 2
+    assert abs(info["width"] / info["height"] - 9 / 16) < 0.02
+
+    applied = out["applied"]
+    assert [a["op"] for a in applied] == ["cut", "reframe"]
+    # The cut is visible as a duration that fell, and the reframe as a frame that changed.
+    assert applied[0]["duration_after"] < applied[0]["duration_before"]
+    assert applied[1]["size_after"] != applied[1]["size_before"]
+    assert applied[0]["why"] == "the fumble"
+
+
+def test_a_plan_naming_an_artifact_nobody_fetched_says_so(clip, tmp_path):
+    """Rather than rendering everything up to that point and then failing."""
+    with pytest.raises(v.VideoEditError, match="no file was fetched"):
+        v.apply_plan(clip, [{"op": "overlay_image", "start": "1", "end": "3",
+                             "image_artifact_id": "art_missing"}],
+                     work_dir=str(tmp_path))

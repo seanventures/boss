@@ -874,6 +874,94 @@ def execute_video_caption(
     )
 
 
+@register_executor("video.apply_plan")
+def execute_video_apply_plan(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Run a whole edit plan in one step.
+
+    WHY ONE STEP AND NOT ONE STEP PER OPERATION. A workflow's step list is fixed when the
+    version is authored; an instruction a person writes is four operations this time and nine
+    the next. There is no number of steps to author, so the variability lives in the plan —
+    which a model writes, BOSS validates against the same vocabularies a hand-written step
+    faces, and this executes in order.
+
+    It is also the only shape that downloads and uploads once. Eleven steps would mean eleven
+    round trips through Drive for a video that is being re-encoded anyway.
+    """
+    from .drive_media import download, record_artifact, upload, workspace
+    from .video_edit import apply_plan, validate_plan, verify_playable
+
+    source_artifact = str(inputs.get("media_artifact_id") or "").strip()
+    if not source_artifact:
+        raise ValueError("media_artifact_id is required")
+    # VALIDATED BEFORE ANYTHING IS DOWNLOADED, let alone rendered. A plan with a bad operation
+    # in the middle must cost nothing, and the error must name the operation rather than arrive
+    # as a render failure twenty minutes in.
+    plan = validate_plan(inputs.get("plan"))
+
+    source = _media_artifact(context, source_artifact)
+    connection_key = str(inputs.get("connection_key") or "youtube_default")
+    folder_id = str(inputs.get("output_folder_id") or "")
+
+    # Every artifact the plan names, gathered from the plan itself rather than from fixed input
+    # fields — the point of a plan is that BOSS does not know in advance how many images it
+    # mentions. Deduplicated, because the same logo in four operations is one download.
+    wanted: list[str] = []
+    for entry in plan:
+        for field in ("image_artifact_id", "logo_artifact_id"):
+            value = str(entry.get(field) or "").strip()
+            if value and value not in wanted:
+                wanted.append(value)
+
+    with workspace("boss-apply-plan-") as work:
+        local = download(
+            context.connection, context.settings,
+            project_id=context.project_id, file_id=source["drive_file_id"],
+            dest_dir=work, connection_key=connection_key,
+        )["path"]
+
+        assets: dict[str, str] = {}
+        for artifact_id in wanted:
+            asset = _media_artifact(context, artifact_id)
+            assets[artifact_id] = download(
+                context.connection, context.settings,
+                project_id=context.project_id, file_id=asset["drive_file_id"],
+                dest_dir=work, connection_key=connection_key,
+            )["path"]
+
+        result = apply_plan(local, plan, work_dir=work, artifact_paths=assets)
+        info = verify_playable(
+            result["path"], expect_audio=bool(inputs.get("expect_audio", True)))
+
+        name = str(inputs.get("output_name") or "").strip() or os.path.basename(result["path"])
+        written = upload(
+            context.connection, context.settings,
+            project_id=context.project_id, local_path=result["path"], name=name,
+            folder_id=folder_id, connection_key=connection_key, actor=context.actor,
+        )
+
+    artifact_id = record_artifact(
+        context.connection, project_id=context.project_id, actor=context.actor,
+        kind="media_video", drive_file=written, source_artifact_id=source_artifact,
+        # The per-operation record goes ON THE ARTIFACT, because the person approving the
+        # publish is deciding about this file and "the plan ran" is not evidence. This lets them
+        # see the duration fall where a cut was asked for without watching the whole thing.
+        detail={"operation": "apply_plan", "applied": result["applied"],
+                "timeline_note": result.get("timeline_note"), **info},
+    )
+    return {
+        "media_artifact_id": artifact_id,
+        "drive_file_id": written["file_id"],
+        "view_url": written["view_url"],
+        "applied": result["applied"],
+        "timeline_note": result.get("timeline_note"),
+        "duration_seconds": info.get("duration_seconds"),
+        "width": info.get("width"),
+        "height": info.get("height"),
+    }
+
+
 @register_executor("publish_youtube")
 def execute_publish_youtube(
     context: "SkillExecutorContext", inputs: dict[str, Any]

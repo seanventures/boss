@@ -244,6 +244,58 @@ skills:
       allowed_values:
         style: [lower_third, bottom, top]
 
+  - id: video.apply_plan
+    kind: media_edit
+    # THE STEP A VIBE INSTRUCTION ACTUALLY RUNS. A workflow's step list is fixed when the
+    # version is authored and an instruction a person writes is not — four operations this time,
+    # nine the next. So the variability lives in `plan` rather than in the step graph: a model
+    # turns the prose into an ordered plan, BOSS validates every operation in it against the
+    # same vocabularies a hand-written step faces, and this runs the list.
+    #
+    # The model chooses WHAT to do. It never chooses what is possible: an op outside the fixed
+    # set is refused, an image is named as an artifact and never as a path, and an invalid plan
+    # is rejected whole before a single frame is encoded — a half-edited file is
+    # indistinguishable from a finished one without watching it.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Apply an ordered edit plan — cut, reframe, overlay, caption, trim, watermark — in one
+      pass, and record what each operation changed so a reviewer can check the result rather
+      than trust it.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      # A list of {op, ...arguments, why?}. `why` is the model's own reason, carried through to
+      # the artifact untouched: it is what makes a plan reviewable without watching the output.
+      plan: array
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      # Per operation: the duration and frame size before and after. "The plan ran" is not
+      # evidence; a duration that fell where a cut was asked for is.
+      applied: array
+      # Set when the plan places a timed operation after a cut, because those timecodes then
+      # refer to the shortened video rather than the original recording.
+      timeline_note: string?
+      duration_seconds: number
+      width: integer
+      height: integer
+    cost: { estimator: runtime_plus_model, category: tool }
+    # NOT RETRIED AUTOMATICALLY. Every other editing step is idempotent in the ways that matter;
+    # a plan is long enough that a retry re-renders everything, and a plan that failed has
+    # usually failed for a reason a retry cannot fix.
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
   - id: drive.import_video
     kind: media_edit
     # THE ENTRY POINT. Records where a video is; downloads nothing. Every editing step takes a

@@ -597,3 +597,229 @@ def caption(
         out,
     ])
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# EDIT PLANS: the variable-length half of a vibe instruction.
+#
+# WHY THIS EXISTS AT ALL. A workflow's step list is static — it is fixed when the version is
+# authored, and the engine's own fan-out does it with three hardcoded slots. An instruction a
+# person writes is not: "cut 3:10 to 3:40, make it vertical, caption the opening and the close"
+# is four operations, and the next one is two or nine. There is no number of steps to author.
+#
+# So the variability lives in DATA rather than in the step graph. A model turns the prose into
+# an ordered plan, BOSS validates every operation in it against the same vocabularies a
+# hand-written step would face, and one step executes the list. The model chooses what to do;
+# it never gets to choose what is possible.
+#
+# WHICH IS THE WHOLE GOVERNANCE ARGUMENT, so it is worth being exact about. A plan is refused
+# ENTIRELY before any rendering starts. Validating as you go would leave a half-edited video
+# that looks like a finished one, and "operation 4 of 6 was invalid" is a question about a file
+# somebody has to watch to answer.
+# ---------------------------------------------------------------------------------------------
+
+#: The operations a plan may name, and nothing else. An unknown op is refused rather than
+#: skipped: an instruction asking for something BOSS cannot do must come back as "it cannot do
+#: that", not as a video that quietly lacks it.
+PLAN_OPERATIONS = ("cut", "reframe", "overlay_image", "caption", "trim", "watermark")
+
+
+def validate_plan(plan: Any) -> list[dict]:
+    """Check an entire plan before anything is rendered, and normalise it.
+
+    The returned list is what `apply_plan` executes. Nothing is inferred and nothing is
+    defaulted away: an operation missing a required argument is an error, because a plan written
+    from prose is exactly where a missing timecode means the model misread the instruction.
+    """
+    if not isinstance(plan, list) or not plan:
+        raise VideoEditError(
+            "an edit plan must be a non-empty list of operations, in the order to apply them.")
+    if len(plan) > 25:
+        raise VideoEditError(
+            f"an edit plan may hold at most 25 operations — got {len(plan)}. Each one re-encodes "
+            "the video, so a plan this long is more likely a mistake than an instruction.")
+
+    checked: list[dict] = []
+    for index, raw in enumerate(plan):
+        where = f"plan[{index}]"
+        if not isinstance(raw, dict):
+            raise VideoEditError(f"{where} must be an object naming an op and its arguments.")
+        op = str(raw.get("op") or "").strip()
+        if op not in PLAN_OPERATIONS:
+            raise VideoEditError(
+                f"{where}: unknown op {op!r} — BOSS can do "
+                f"{', '.join(PLAN_OPERATIONS)}. Nothing in this plan has been rendered.")
+        args = {k: v for k, v in raw.items() if k not in ("op", "why")}
+
+        # Each op's arguments are checked HERE, by the same rules the standalone function
+        # applies, so an invalid plan fails before the first frame is encoded rather than
+        # partway down the list.
+        if op == "cut":
+            spans = args.get("remove")
+            if isinstance(spans, dict):
+                spans = [spans]
+            if not isinstance(spans, list) or not spans:
+                raise VideoEditError(f"{where}: cut needs remove — a list of {{start, end}}.")
+            for j, span in enumerate(spans):
+                if not isinstance(span, dict):
+                    raise VideoEditError(f"{where}.remove[{j}] must name start and end.")
+                begin = _checked_timecode(span.get("start"), f"{where}.remove[{j}].start")
+                finish = _checked_timecode(span.get("end"), f"{where}.remove[{j}].end")
+                if _seconds(finish) <= _seconds(begin):
+                    raise VideoEditError(f"{where}.remove[{j}]: end must be after start.")
+            args = {"remove": spans}
+
+        elif op == "reframe":
+            aspect = str(args.get("aspect") or "").strip()
+            if aspect not in ASPECTS:
+                raise VideoEditError(
+                    f"{where}: aspect must be one of {', '.join(ASPECTS)} — got {aspect!r}.")
+            strategy = str(args.get("strategy") or "center")
+            if strategy != "center":
+                raise VideoEditError(
+                    f"{where}: strategy {strategy!r} is not available — only a centre crop is. "
+                    "Asking for it and getting a centre crop would be worse than this refusal: "
+                    "cropping to the middle when told to follow the speaker loses the speaker.")
+            args = {"aspect": aspect, "strategy": strategy}
+
+        elif op in ("trim", "overlay_image", "caption"):
+            begin = _checked_timecode(args.get("start"), f"{where}.start")
+            finish = _checked_timecode(args.get("end"), f"{where}.end")
+            if _seconds(finish) <= _seconds(begin):
+                raise VideoEditError(f"{where}: end must be after start.")
+            args["start"], args["end"] = begin, finish
+            if op == "overlay_image":
+                position = str(args.get("position") or "center")
+                if position not in POSITIONS:
+                    raise VideoEditError(
+                        f"{where}: position must be one of {', '.join(sorted(POSITIONS))}.")
+                args["position"] = position
+                # The image is named as an ARTIFACT, never a path or a URL: a plan a model wrote
+                # must not be able to choose which file on the host gets read.
+                if not str(args.get("image_artifact_id") or "").strip():
+                    raise VideoEditError(
+                        f"{where}: overlay_image needs image_artifact_id — the image to show.")
+            if op == "caption":
+                style = str(args.get("style") or "lower_third")
+                if style not in CAPTION_STYLES:
+                    raise VideoEditError(
+                        f"{where}: style must be one of {', '.join(sorted(CAPTION_STYLES))}.")
+                args["style"] = style
+                if not str(args.get("text") or "").strip():
+                    raise VideoEditError(f"{where}: caption needs text.")
+
+        elif op == "watermark":
+            if not str(args.get("logo_artifact_id") or "").strip():
+                raise VideoEditError(f"{where}: watermark needs logo_artifact_id.")
+            corner = str(args.get("corner") or "top_right")
+            if corner not in CORNERS:
+                raise VideoEditError(
+                    f"{where}: corner must be one of {', '.join(sorted(CORNERS))}.")
+            args["corner"] = corner
+
+        entry = {"op": op, **args}
+        # `why` is the model's own reason, carried through untouched. It never reaches ffmpeg;
+        # it is what makes the plan reviewable by the person who wrote the instruction, who can
+        # otherwise only check the output by watching all of it.
+        if raw.get("why"):
+            entry["why"] = str(raw["why"])[:300]
+        checked.append(entry)
+
+    if any(e["op"] == "caption" for e in checked) and not drawtext_available():
+        raise VideoEditError(
+            "this plan captions the video and this ffmpeg has no drawtext filter. Refusing the "
+            "whole plan rather than rendering the other operations and dropping the text.")
+    return checked
+
+
+def plan_timeline_warning(plan: list[dict]) -> str | None:
+    """Whether this plan's timecodes mean what whoever wrote them probably thinks.
+
+    EACH OPERATION APPLIES TO THE OUTPUT OF THE ONE BEFORE IT. So a caption at 5:00 placed after
+    a cut that removed 1:00–2:00 lands at 6:00 of the original recording, because the timeline
+    it addresses is the shortened one. That is the only sane rule — but it is not what a person
+    writing "caption at 5:00, and take out the boring bit at the start" means.
+
+    This does not reorder the plan. Guessing at intent on someone's video is worse than saying
+    plainly what the timecodes will refer to and letting them look.
+    """
+    shifted = None
+    for entry in plan:
+        if entry["op"] in ("cut", "trim"):
+            shifted = entry["op"]
+        elif shifted and entry["op"] in ("overlay_image", "caption"):
+            return (
+                f"this plan {shifted}s the video before it places a timed operation "
+                f"({entry['op']}) — so that operation's timecodes refer to the SHORTENED "
+                f"video, not the original recording. If they were read off the original, put "
+                f"the timed operations before the {shifted}.")
+    return None
+
+
+def apply_plan(
+    source: str,
+    plan: list[dict],
+    *,
+    work_dir: str,
+    artifact_paths: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Run a validated plan in order and report what each operation did.
+
+    `artifact_paths` maps an artifact id from the plan to a local file already downloaded for
+    it. The plan names artifacts; resolving those to paths is the caller's job, which is what
+    keeps a model-authored plan from naming a path at all.
+
+    Returns the final file plus a per-operation record, because "the plan ran" is not evidence
+    and a reviewer needs to see the duration go down where a cut was asked for.
+    """
+    _require_ffmpeg()
+    steps = validate_plan(plan)
+    assets = artifact_paths or {}
+
+    current = source
+    applied: list[dict] = []
+    for index, entry in enumerate(steps):
+        op = entry["op"]
+        before = probe(current)
+        if op == "cut":
+            current = cut(current, remove=entry["remove"], work_dir=work_dir)
+        elif op == "reframe":
+            current = reframe(current, aspect=entry["aspect"], work_dir=work_dir,
+                              strategy=entry["strategy"])
+        elif op == "trim":
+            current = trim(current, start=entry["start"], end=entry["end"], work_dir=work_dir)
+        elif op == "caption":
+            current = caption(current, text=entry["text"], start=entry["start"],
+                              end=entry["end"], work_dir=work_dir,
+                              style=entry["style"], size=int(entry.get("size") or 48))
+        elif op in ("overlay_image", "watermark"):
+            field = "image_artifact_id" if op == "overlay_image" else "logo_artifact_id"
+            path = assets.get(entry[field])
+            if not path:
+                raise VideoEditError(
+                    f"plan[{index}]: no file was fetched for {entry[field]} "
+                    f"{entry[field] and entry[field]!r}. The step must download every artifact "
+                    "the plan names before running it.")
+            if op == "overlay_image":
+                current = overlay_image(current, image=path, start=entry["start"],
+                                        end=entry["end"], work_dir=work_dir,
+                                        position=entry["position"],
+                                        scale=float(entry.get("scale") or 0.6))
+            else:
+                current = watermark(current, image=path, work_dir=work_dir,
+                                    corner=entry["corner"],
+                                    scale=float(entry.get("scale") or 0.12),
+                                    margin=int(entry.get("margin") or 24),
+                                    opacity=float(entry.get("opacity") or 1.0))
+        after = probe(current)
+        applied.append({
+            "op": op,
+            "why": entry.get("why"),
+            "duration_before": before.get("duration_seconds"),
+            "duration_after": after.get("duration_seconds"),
+            "size_before": f"{before.get('width')}x{before.get('height')}",
+            "size_after": f"{after.get('width')}x{after.get('height')}",
+        })
+
+    return {"path": current, "applied": applied,
+            "timeline_note": plan_timeline_warning(steps)}
