@@ -6,6 +6,9 @@ Skipped when fastapi isn't installed — the HTTP transport is the optional
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -72,6 +75,20 @@ def test_mission_control_page_served_at_root():
     # the section manifest is injected as real JSON, not the placeholder
     assert "__SECTIONS__" not in html
     assert "project_status" in html and "list_running_work" in html
+
+
+def test_mission_control_inline_script_has_valid_javascript():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    html = _client().get("/").text
+    script = re.search(r"<script>(.*?)</script>", html, re.DOTALL)
+    assert script is not None
+    result = subprocess.run(
+        [node, "--check", "-"], input=script.group(1), text=True,
+        capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_http_cli_defaults_to_read_only():

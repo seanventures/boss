@@ -80,11 +80,11 @@ let authToken = "";
 let authPrompted = false;
 
 async function rpc(method, params) {
-  const body = JSON.stringify({jsonrpc: "2.0", id: ++rpcId, method, params});
+  const requestBody = JSON.stringify({jsonrpc: "2.0", id: ++rpcId, method, params});
   async function send() {
     const headers = {"Content-Type": "application/json"};
     if (authToken) headers.Authorization = "Bearer " + authToken;
-    return fetch("mcp", {method: "POST", headers, body});
+    return fetch("mcp", {method: "POST", headers, body: requestBody});
   }
   let res = await send();
   if (res.status === 401 && !authPrompted) {
