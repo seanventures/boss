@@ -155,7 +155,6 @@ describe("client action feedback (toasts + revalidate)", async () => {
     enableProviderAccountAction,
     revokeProviderAccountAction,
     rotateProviderCredentialsAction,
-    submitSelfImprovementProposalAction,
     updateProviderAccountAction,
     queueOutboxMessageAction,
   } = await import("../app/actions");
@@ -229,9 +228,8 @@ describe("client action feedback (toasts + revalidate)", async () => {
     expect(revalidatePath).toHaveBeenCalledWith("/");
   });
 
-  it("provider and self-imp actions succeed with revalidate (covers provider/self-imp toast states)", async () => {
+  it("provider actions succeed with revalidate (covers provider toast state)", async () => {
     vi.mocked(client.createProviderAccount).mockResolvedValueOnce({ id: "pa1", project_id: "boss-dogfood", provider: "digitalocean", account_label: "sandbox", credential_ref: "env:DO", scopes: [], status: "active", read_only: true, deploy_capable: false, billing_readable: true, destructive_actions_disabled: true, capabilities: [], missing_permissions: [], created_by: "ceo", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" } as any);
-    vi.mocked(client.createSelfImprovementProposal).mockResolvedValueOnce({ id: "sip1", project_id: "boss-dogfood", task_id: "t_sip", title: "Improve", summary: "s", change_ref: "https://ex", diff_summary: "d", expected_impact: [], test_plan: [], canary_scope: [], rollback_plan: [], success_metrics: [], status: "proposed", risk_tier: 2, created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" } as any);
 
     const provFd = new FormData();
     provFd.set("project_id", "boss-dogfood");
@@ -241,15 +239,6 @@ describe("client action feedback (toasts + revalidate)", async () => {
     await createProviderAccountAction(provFd);
     expect(revalidatePath).toHaveBeenCalledWith("/");
 
-    const impFd = new FormData();
-    impFd.set("project_id", "boss-dogfood");
-    impFd.set("actor", "exec");
-    impFd.set("title", "Improve");
-    impFd.set("summary", "s");
-    impFd.set("change_ref", "https://ex");
-    impFd.set("diff_summary", "d");
-    await submitSelfImprovementProposalAction(impFd);
-    expect(revalidatePath).toHaveBeenCalledWith("/");
   });
 
   it("parses named write-only provider slots and lifecycle controls", async () => {

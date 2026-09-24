@@ -1,3 +1,4 @@
+
 import {
   applyChangeSetAction,
   approveChangeSetAction,
@@ -12,14 +13,38 @@ import {
   createEntitlementConnectionSessionAction,
   createOpsDigestAction,
   createDeploymentRunAction,
+  installAgentModuleAction,
+  installPackAction,
+  dryRunOutboxMessageAction,
+  queueOutboxMessageAction,
+  refreshHealthSnapshotAction,
+  disconnectEntitlementSourceAction,
+  revokeBreakGlassGrantAction,
+  rollbackAgentModuleAction,
+  runAutoscalerPlanAction,
+  runDeploymentHealthCheckAction,
+  runResourceJanitorAction,
+  submitOutboxDraftAction,
+  submitCommandAction,
+  syncProviderResourcesAction,
+  uninstallAgentModuleAction,
+  upsertDeploymentEnvironmentPolicyAction,
+  upsertEnterpriseIdentityProviderAction,
+  upsertEnterpriseIdentityRolloutPolicyAction,
+  upsertEnterpriseScimGroupAction,
+  upsertEnterpriseScimUserAction,
+  upsertCommsChannelPolicyAction,
+  upsertOrgMemberAction,
+  upsertWorkerPoolAction,
+  uploadModelCredentialAction,
+} from "./actions";
+import {
   completeAccountConnectAuthSessionAction,
   createAccountConnectBillingPortalSessionAction,
   createAccountConnectAuthSessionAction,
   createAccountConnectTeamInviteAction,
   createEnterpriseSupportCaseAction,
   createEnterpriseClusterValidationRunAction,
-  installAgentModuleAction,
-  installPackAction,
   linkAccountConnectAction,
   startCloudEasyConnectAction,
   unlinkCloudAction,
@@ -27,48 +52,24 @@ import {
   syncCloudAction,
   inviteCloudTeamAction,
   saveCloudRetentionAction,
-  dryRunOutboxMessageAction,
-  queueOutboxMessageAction,
-  refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
-  disconnectEntitlementSourceAction,
-  revokeBreakGlassGrantAction,
-  rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
-
-  runAutoscalerPlanAction,
   runAccountConnectHealthCheckAction,
-  runDeploymentHealthCheckAction,
-  runResourceJanitorAction,
   submitSelfImprovementProposalAction,
-  submitOutboxDraftAction,
-  submitCommandAction,
   syncAccountConnectAction,
   syncHostedMarketplaceAction,
-  syncProviderResourcesAction,
   unlinkAccountConnectAction,
-  uninstallAgentModuleAction,
   revokeAccountConnectTeamInviteAction,
-  upsertDeploymentEnvironmentPolicyAction,
   upsertEnterpriseClusterAction,
-  upsertEnterpriseIdentityProviderAction,
-  upsertEnterpriseIdentityRolloutPolicyAction,
-  upsertEnterpriseScimGroupAction,
-  upsertEnterpriseScimUserAction,
-  upsertCommsChannelPolicyAction,
   updateEnterpriseSupportCaseAction,
-  upsertOrgMemberAction,
-  upsertWorkerPoolAction,
-  uploadModelCredentialAction,
-} from "./actions";
+} from "./actions-paid";
 import ConsoleShell from "./ConsoleShell";
 import {
   CommunityIncludedBadge,
-  PaidSurfaceGate,
-  PaidTierBadge,
   SurfaceHeading,
 } from "./edition-ui";
+import { PaidSurfaceGate, PaidTierBadge } from "./edition-ui-paid";
 import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
 import { OnboardingHelpCard } from "./onboarding-help-card";
 import { BossAgentHome } from "./boss-agent-home";
@@ -79,7 +80,7 @@ import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
-import { fetchAgentModuleFeed } from "../lib/agent-modules";
+import { fetchAgentModuleFeedWithMarketplace as fetchAgentModuleFeed } from "../lib/agent-modules-paid";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
 import { FocusedAgents } from "./focused-agents-ui";
@@ -115,7 +116,6 @@ import { PolicyEvalList, AnomalyScanCard, RunTraceViewer } from "./safety-ui";
 import { fetchLatestEval } from "../lib/evals";
 import { fetchSkillInvocations } from "../lib/skill-invocations";
 import {
-  SelfImprovementRuntime,
   EvalHarnessCard,
   AutonomyEvaluateCard,
   RouterHealthCard,
@@ -131,7 +131,9 @@ import {
 } from "./phase3-ui";
 import { fetchChaosRuns } from "../lib/chaos";
 import { fetchCommitmentReconciliations, fetchFinopsSummary } from "../lib/finops";
-import { ChaosCard, FinopsCard, Soc2Card } from "./phase4-ui";
+import { ChaosCard, FinopsCard } from "./phase4-ui";
+import { Soc2Card } from "./phase4-paid-ui";
+import { SelfImprovementRuntime } from "./phase2-paid-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";

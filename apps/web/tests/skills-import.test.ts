@@ -187,7 +187,6 @@ describe("skill import/export actions", async () => {
 
 describe("Community skill YAML island", async () => {
   const { SkillExportButton, SkillImportForm } = await import("../app/skills-import-ui");
-  const { PaidSurfaceGate } = await import("../app/edition-ui");
 
   it("renders import/export controls and does not render marketplace", () => {
     const html = renderToStaticMarkup(
@@ -217,21 +216,4 @@ describe("Community skill YAML island", async () => {
     expect(html).not.toContain("paid-surface-hidden-marketplace");
   });
 
-  it("keeps hosted marketplace hidden on Community", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(PaidSurfaceGate, {
-        editionId: "community",
-        surface: "marketplace",
-        title: "Hosted marketplace catalog",
-        children: React.createElement(
-          "article",
-          { "data-testid": "hosted-marketplace-card" },
-          "Sync hosted catalog",
-        ),
-      }),
-    );
-    expect(html).toContain("paid-surface-hidden-marketplace");
-    expect(html).not.toContain("hosted-marketplace-card");
-    expect(html).not.toContain("Sync hosted catalog");
-  });
 });

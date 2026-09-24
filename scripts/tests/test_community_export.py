@@ -97,6 +97,59 @@ def test_shared_config_exception_is_exact_and_still_blocks_paid_code() -> None:
     assert export.has_paid_source_markers(path, approved + b"CloudProduct = object()\n")
 
 
+def test_community_actions_do_not_depend_on_paid_server_actions() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    shared = export.ROOT / "apps/web/app/actions.ts"
+    paid = export.ROOT / "apps/web/app/actions-paid.ts"
+    assert shared.is_file() and paid.is_file()
+    assert not export.matching_rule("apps/web/app/actions.ts", manifest["requires_split"])
+    assert export.matching_rule("apps/web/app/actions-paid.ts", manifest["exclude"])
+    assert not any(marker in shared.read_bytes() for marker in export.PAID_SOURCE_MARKERS)
+    assert b"submitCommandAction" in shared.read_bytes()
+    assert b"upsertEnterpriseIdentityProviderAction" in shared.read_bytes()
+    assert b"linkAccountConnectAction" in paid.read_bytes()
+
+
+def test_community_edition_navigation_does_not_import_paid_chrome() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    for path in ("apps/web/lib/edition.ts", "apps/web/app/edition-ui.tsx"):
+        assert not any(
+            marker in (export.ROOT / path).read_bytes() for marker in export.PAID_SOURCE_MARKERS
+        )
+    for path in ("apps/web/lib/edition-paid.ts", "apps/web/app/edition-ui-paid.tsx"):
+        assert export.matching_rule(path, manifest["exclude"])
+    assert b"org_chart" in (export.ROOT / "apps/web/lib/edition.ts").read_bytes()
+
+
+def test_local_agent_modules_do_not_fetch_hosted_marketplace() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    local = (export.ROOT / "apps/web/lib/agent-modules.ts").read_bytes()
+    paid = (export.ROOT / "apps/web/lib/agent-modules-paid.ts").read_bytes()
+    assert not any(marker in local for marker in export.PAID_SOURCE_MARKERS)
+    assert b"listAgentModules" in local and b"listAgentModuleInstallRecords" in local
+    assert b"listHostedMarketplaceListings" not in local
+    assert b"listHostedMarketplaceListings" in paid
+    assert export.matching_rule("apps/web/lib/agent-modules-paid.ts", manifest["exclude"])
+
+
+def test_mixed_web_components_keep_community_forms_in_candidate() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    for path in (
+        "apps/web/app/client-forms.tsx",
+        "apps/web/app/phase2-ui.tsx",
+        "apps/web/app/phase4-ui.tsx",
+    ):
+        source = (export.ROOT / path).read_bytes()
+        assert b'"./actions-paid"' not in source
+        assert b"'./actions-paid'" not in source
+    for path in (
+        "apps/web/app/client-forms-paid.tsx",
+        "apps/web/app/phase2-paid-ui.tsx",
+        "apps/web/app/phase4-paid-ui.tsx",
+    ):
+        assert export.matching_rule(path, manifest["exclude"])
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()
@@ -216,3 +269,59 @@ def test_mechanically_complete_tree_has_no_blocked_marker(tmp_path: Path) -> Non
     status = json.loads((output / "EXPORT_CANDIDATE_STATUS.json").read_text())
     assert status["mechanically_complete"] is True
     assert status["ready_for_publication"] is False
+
+
+def test_public_api_client_export_rewrite_fails_closed(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    source = repo / "packages/api-client/src/community.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text("export const community = true;\n")
+    package = repo / "packages/api-client/package.json"
+    package.write_text('{"name":"@boss/api-client","exports":{".":"./src/index.ts"}}\n')
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["packages/api-client/"],
+        "exclude": ["packages/api-client/src/paid.ts"],
+        "requires_split": ["packages/api-client/src/private.ts"],
+        "required_runtime": ["packages/api-client/src/community.ts"],
+        "required_release": ["packages/api-client/package.json"],
+        "package_export_rewrite": {
+            "path": "packages/api-client/package.json",
+            "community_source": "packages/api-client/src/community.ts",
+            "from": "./src/index.ts",
+            "to": "./src/community.ts",
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["package_export_rewrite_applied"] is True
+    assert json.loads(candidate["packages/api-client/package.json"])["exports"]["."] == (
+        "./src/community.ts"
+    )
+    changed = json.loads(json.dumps(manifest))
+    changed["package_export_rewrite"]["from"] = "./src/changed.ts"
+    report, _ = export.analyze(repo, sha, changed)
+    assert {b["kind"] for b in report["blockers"]} == {"package-export-shape-changed"}
+    missing = json.loads(json.dumps(manifest))
+    missing["package_export_rewrite"]["community_source"] = "packages/api-client/src/missing.ts"
+    missing["package_export_rewrite"]["to"] = "./src/missing.ts"
+    report, _ = export.analyze(repo, sha, missing)
+    assert "package-export-community-source-missing" in {b["kind"] for b in report["blockers"]}
