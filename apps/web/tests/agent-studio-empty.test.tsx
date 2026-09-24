@@ -102,6 +102,9 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
     expect(markup).toContain("Build and run agents");
     expect(markup).toContain("as-workbench");
     expect(markup).toContain("UX Engineer");
+    expect(markup).toContain("Requested skills");
+    expect(markup).toContain("Data boundary");
+    expect(markup).not.toContain("as-agent-graph");
     expect(markup).toContain("Test all 1 agent");
     expect(markup).not.toContain("Add your first agents");
   });
@@ -129,6 +132,7 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
         },
       }),
     );
+    expect(markup).toContain("No active version. This agent cannot run yet.");
     expect(markup).toContain("Not configured");
     expect(markup).toContain("as-beacon quiet");
     expect(markup).not.toContain("as-beacon bad");

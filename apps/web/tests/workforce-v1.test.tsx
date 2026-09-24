@@ -125,6 +125,22 @@ describe("v1 Org Chart", () => {
     expect(out).toContain("Product Manager");
   });
 
+  it("keeps parent context and paths to work and definition on each role", () => {
+    // Planned tree rows carry depth, while their parent lives in `declared`.
+    const captain = { id: "captain", name: "Captain", role: "captain", depth: 0 } as never;
+    const engineer = { id: "engineer", name: "Engineer", role: "engineer", depth: 1 } as never;
+    const out = renderToStaticMarkup(<OrgChartArea projectId="p" actor="ceo" chart={chart({
+      nodes: [captain, engineer], tree: [captain, engineer],
+      declared: { captain: { reports_to: null }, engineer: { reports_to: "captain" } },
+    })} />);
+    expect(out.indexOf('data-testid="org-node-captain"')).toBeLessThan(
+      out.indexOf('data-testid="org-node-engineer"'));
+    expect(out).toContain("Reports to");
+    expect(out).toContain('class="org-node-parent">Captain');
+    expect(out).toContain('data-testid="org-work-engineer"');
+    expect(out).toContain('data-testid="org-definition-engineer"');
+  });
+
   it("separates planned structure from read-only observed handoffs", () => {
     const out = renderToStaticMarkup(<OrgChartArea projectId="boss-dogfood" actor="ceo" chart={chart({ derived_from: "handoffs" })} />);
     expect(out).toContain("Planned roles");
@@ -137,6 +153,14 @@ describe("v1 Org Chart", () => {
     const out = renderToStaticMarkup(
       <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
     expect(out).toContain("No planned roles yet.");
+  });
+
+  it("does not call an unreachable structure empty", () => {
+    const out = renderToStaticMarkup(
+      <OrgChartArea chart={chart({ apiReachable: false, blockedReason: "API returned 503" })}
+        projectId="p" actor="ceo" />);
+    expect(out).toContain("Team structure is unavailable");
+    expect(out).not.toContain("No planned roles yet.");
   });
 
   it("invites the operator to place somebody", () => {
