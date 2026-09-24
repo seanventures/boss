@@ -874,6 +874,85 @@ def execute_video_caption(
     )
 
 
+@register_executor("media.fetch_link")
+def execute_media_fetch_link(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Turn a link somebody pasted into a media artifact the editing steps can take.
+
+    THE ENTRY POINT FOR A LINK, which `drive.import_video` is not: that one takes a Drive file id,
+    and a person has a URL. This places the URL, fetches from wherever it lives, and leaves the
+    result in the project's own media store — so every step after it works the same way no matter
+    where the video came from.
+
+    A GOOGLE LINK IS NOT COPIED. It already sits in the store the editing steps read from, and
+    duplicating a multi-gigabyte file to achieve nothing is the kind of cost that only shows up on
+    somebody's bill. Anything else is fetched once and stored once.
+    """
+    from .media_storage import MediaStorageError, fetch, store
+    from .media_providers import resolve_link
+    from .drive_media import record_artifact, workspace
+
+    url = str(inputs.get("url") or inputs.get("link") or "").strip()
+    if not url:
+        raise ValueError("url is required — the link to the video")
+    # Placed before anything is fetched, so a link BOSS cannot use fails at the first step rather
+    # than three steps in when an editing step gets a login page instead of a video.
+    link = resolve_link(url)
+
+    if link.provider_key == "google":
+        # Delegated rather than reimplemented: the metadata read also rejects a file that is not
+        # a video, and having two versions of that check is having one of them be wrong later.
+        result = execute_drive_import_video(
+            context, {"file_id": link.file_ref,
+                      "connection_key": inputs.get("connection_key")})
+        return {**result, "provider": "google", "copied": False, "source_url": url}
+
+    connection_key = inputs.get("connection_key")
+    with workspace("boss-fetch-link-") as work:
+        fetched = fetch(context.connection, context.settings,
+                        project_id=context.project_id, link=link, dest_dir=work,
+                        connection_key=connection_key)
+        # Checked before it is stored. A link that served an HTML error page returns bytes and a
+        # 200, and storing that produces an artifact the editing steps will fail on with an
+        # ffmpeg error rather than "that link did not give us a video".
+        from .video_edit import probe, VideoEditError
+
+        try:
+            info = probe(fetched["path"])
+        except VideoEditError as exc:
+            raise MediaStorageError(
+                f"what {url} returned is not a video BOSS can read ({exc}). A share link that "
+                "needs a sign-in usually returns a web page, which is what this looks like."
+            ) from exc
+
+        name = str(inputs.get("output_name") or "").strip() or fetched["name"]
+        written = store(context.connection, context.settings,
+                        project_id=context.project_id, local_path=fetched["path"], name=name,
+                        provider_key=str(inputs.get("store_provider") or "google"),
+                        container=str(inputs.get("output_folder_id") or ""),
+                        actor=context.actor)
+
+    artifact_id = record_artifact(
+        context.connection, project_id=context.project_id, actor=context.actor,
+        kind="media_video", drive_file=written,
+        # WHERE IT CAME FROM, on the artifact. A published video has to be traceable to its
+        # source, and for a fetched link the source is a URL rather than another artifact.
+        detail={"operation": "fetch_link", "source_url": url,
+                "source_provider": link.provider_key, **info},
+    )
+    return {
+        "media_artifact_id": artifact_id,
+        "drive_file_id": written["file_id"],
+        "view_url": written["view_url"],
+        "name": name,
+        "provider": link.provider_key,
+        "copied": True,
+        "source_url": url,
+        "duration_seconds": info.get("duration_seconds"),
+    }
+
+
 @register_executor("video.apply_plan")
 def execute_video_apply_plan(
     context: "SkillExecutorContext", inputs: dict[str, Any]

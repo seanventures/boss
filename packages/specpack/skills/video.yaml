@@ -296,6 +296,53 @@ skills:
       requires_connection: google
       requires_connection_health: healthy
 
+  - id: media.fetch_link
+    kind: media_edit
+    # THE ENTRY POINT FOR A LINK, which drive.import_video is not: that takes a Drive file id and
+    # a person has a URL. The provider is worked out from the link itself — Google Drive,
+    # OneDrive/SharePoint, an S3-compatible bucket, or a plain HTTPS file — so "which storage
+    # holds the video" stops being a question the workflow has to be rebuilt to answer.
+    #
+    # A Google link is NOT copied: it already sits in the store the editing steps read from.
+    # Anything else is fetched once and stored once, and the artifact records the source URL so a
+    # published video is traceable back to the link it came from.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Turn a pasted video link into a media artifact the editing steps can take, whatever storage
+      it lives in. Refuses a link pointing inside BOSS's own network, and refuses a link that
+      returns a web page rather than a video.
+    data_boundary: internal
+    input_schema:
+      url: string
+      output_name: string?
+      output_folder_id: string?
+      # Where the fetched copy is kept. Google today; the port takes others as they are built.
+      store_provider: string?
+    output_schema:
+      media_artifact_id: string
+      name: string
+      provider: string
+      # False for a Google link, which needed no copy. Worth reporting: it is the difference
+      # between a step that moved several gigabytes and one that moved none.
+      copied: boolean
+      source_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      # CAPABILITIES, NOT A PROVIDER NAME. `requires_connection: google` is what the rest of this
+      # file still says, and it is both unenforced and wrong for three of the four providers this
+      # skill accepts. A capability is a claim about what the step needs; which provider satisfies
+      # it is the connection's business. See engine/boss_engine/services/media_providers.py.
+      requires_capabilities: [storage.read, storage.write]
+      requires_connection_health: healthy
+
   - id: drive.import_video
     kind: media_edit
     # THE ENTRY POINT. Records where a video is; downloads nothing. Every editing step takes a
