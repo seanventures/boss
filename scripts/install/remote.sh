@@ -112,7 +112,7 @@ USAGE
 CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
+    install|update|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
     --token) SUB_TOKEN="${2:-}"; shift 2 ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
     --accept-database-fallback) ACCEPT_DB_FALLBACK=1; shift ;;
