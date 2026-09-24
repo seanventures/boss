@@ -154,7 +154,7 @@ services:
       # Community: no Account Connect required
       BOSS_ACCOUNT_CONNECT_URL: ""
     ports:
-      - "${BOSS_API_PORT:-8000}:8000"
+      - "${BOSS_BIND_ADDRESS:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
@@ -163,6 +163,9 @@ services:
       # second finds a dead token. Sharing the directory gives them one credential and one
       # refresh chain. It also survives `up --build`, which a container-local file does not.
       - boss_community_cli_home:/home/boss/.codex
+      # Device login is local to the Unix user. Share the owner-only Grok home with the
+      # worker so API setup and governed jobs see the same renewable session.
+      - boss_community_grok_home:/home/boss/.grok
     healthcheck:
       test:
         - CMD
@@ -256,6 +259,7 @@ services:
       # second finds a dead token. Sharing the directory gives them one credential and one
       # refresh chain. It also survives `up --build`, which a container-local file does not.
       - boss_community_cli_home:/home/boss/.codex
+      - boss_community_grok_home:/home/boss/.grok
 
   web:
     profiles: ["web"]
@@ -284,10 +288,11 @@ services:
       NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:${BOSS_API_PORT:-8000}}
       NEXT_PUBLIC_BOSS_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
     ports:
-      - "${BOSS_WEB_PORT:-3000}:3000"
+      - "${BOSS_BIND_ADDRESS:-127.0.0.1}:${BOSS_WEB_PORT:-3000}:3000"
 
 volumes:
   boss_community_cli_home:
+  boss_community_grok_home:
   boss_community_infisical_redis:
   boss_community_pg:
   boss_community_artifacts:

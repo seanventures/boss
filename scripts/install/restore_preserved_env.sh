@@ -111,3 +111,15 @@ if [ "${BOSS_PUBLIC_URL_EXPLICIT:-0}" != "1" ]; then
   fi
 fi
 
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_POSTGRES_PORT BOSS_BIND_ADDRESS; do
+  case "$key" in
+    BOSS_API_PORT) explicit="${BOSS_API_PORT_EXPLICIT:-0}" ;;
+    BOSS_WEB_PORT) explicit="${BOSS_WEB_PORT_EXPLICIT:-0}" ;;
+    BOSS_POSTGRES_PORT) explicit="${BOSS_POSTGRES_PORT_EXPLICIT:-0}" ;;
+    BOSS_BIND_ADDRESS) explicit="${BOSS_BIND_ADDRESS_EXPLICIT:-0}" ;;
+  esac
+  if [ "$explicit" != "1" ]; then
+    old="$(old_val "$key")"
+    [ -z "$old" ] || set_val "$key" "$old"
+  fi
+done

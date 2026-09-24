@@ -147,6 +147,28 @@ def test_the_console_url_stays_unless_this_run_set_one(tmp_path):
     assert _val(new.read_text(), "NEXT_PUBLIC_BOSS_API_URL") == "http://198.51.100.8:8000"
 
 
+def test_custom_ports_and_bind_address_survive_a_plain_rerun(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_API_PORT=8111\nBOSS_WEB_PORT=3111\n"
+           "BOSS_POSTGRES_PORT=5544\nBOSS_BIND_ADDRESS=0.0.0.0\n")
+    _write(new, "BOSS_API_PORT=8000\nBOSS_WEB_PORT=3000\n"
+           "BOSS_POSTGRES_PORT=5432\nBOSS_BIND_ADDRESS=127.0.0.1\n")
+    _restore(old, new)
+    text = new.read_text()
+    assert _val(text, "BOSS_API_PORT") == "8111"
+    assert _val(text, "BOSS_WEB_PORT") == "3111"
+    assert _val(text, "BOSS_POSTGRES_PORT") == "5544"
+    assert _val(text, "BOSS_BIND_ADDRESS") == "0.0.0.0"
+
+    env = os.environ.copy()
+    env["BOSS_BIND_ADDRESS_EXPLICIT"] = "1"
+    # A caller's explicit new bind address wins when the candidate differs.
+    _write(new, "BOSS_BIND_ADDRESS=127.0.0.1\n")
+    subprocess.check_call(["sh", str(RESTORE), str(old), str(new)], env=env)
+    assert _val(new.read_text(), "BOSS_BIND_ADDRESS") == "127.0.0.1"
+
+
 def test_the_live_env_is_replaced_only_after_the_old_key_is_back():
     """The generator runs on the installed .env. The previous key has to already be in that
     file, and the live file must not be truncated before the restore succeeds."""
