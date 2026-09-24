@@ -4,6 +4,10 @@
   "include": [
     ".dockerignore",
     ".env.example",
+    ".github/ISSUE_TEMPLATE/bug.yml",
+    ".github/ISSUE_TEMPLATE/install.yml",
+    ".github/ISSUE_TEMPLATE/feature.yml",
+    ".github/ISSUE_TEMPLATE/config.yml",
     "README.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
@@ -105,7 +109,11 @@
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
-    "LICENSE"
+    "LICENSE",
+    ".github/ISSUE_TEMPLATE/bug.yml",
+    ".github/ISSUE_TEMPLATE/install.yml",
+    ".github/ISSUE_TEMPLATE/feature.yml",
+    ".github/ISSUE_TEMPLATE/config.yml"
   ],
   "compose_rewrite": {
     "path": "scripts/install/community-compose.yml",

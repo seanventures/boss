@@ -154,6 +154,19 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("readme_export_rewrite needs reviewed source sha256")
         if not all(matching_rule(readme_rewrite[key], manifest["include"]) for key in ("source", "destination")):
             raise ValueError("readme export source and destination must be included")
+    contributing_rewrite = manifest.get("contributing_export_rewrite")
+    if contributing_rewrite is not None:
+        if not isinstance(contributing_rewrite, dict) or any(
+            not isinstance(contributing_rewrite.get(key), str) or not safe_path(contributing_rewrite[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("contributing_export_rewrite needs safe source and destination paths")
+        if contributing_rewrite["destination"] != "CONTRIBUTING.md":
+            raise ValueError("contributing export destination must be root CONTRIBUTING.md")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(contributing_rewrite.get("sha256", ""))):
+            raise ValueError("contributing_export_rewrite needs reviewed source sha256")
+        if not all(matching_rule(contributing_rewrite[key], manifest["include"]) for key in ("source", "destination")):
+            raise ValueError("contributing export source and destination must be included")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -461,6 +474,33 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 )
             ]
             readme_rewrite_applied = True
+    contributing_rewrite = manifest.get("contributing_export_rewrite")
+    contributing_rewrite_applied = False
+    if contributing_rewrite:
+        source = contributing_rewrite["source"]
+        destination = contributing_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "contributing-export-private-source-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "contributing-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "contributing-export-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != contributing_rewrite["sha256"]:
+            blockers.append({"kind": "contributing-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (
+                    blocker.get("path") == destination
+                    and blocker["kind"] in {
+                        "private-source-or-host-reference",
+                        "mixed-paid-source-needs-split",
+                        "requires-community-split",
+                    }
+                )
+            ]
+            contributing_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -488,6 +528,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "package_export_rewrite_applied": package_rewrite_applied,
         "page_export_rewrite_applied": page_rewrite_applied,
         "readme_export_rewrite_applied": readme_rewrite_applied,
+        "contributing_export_rewrite_applied": contributing_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
