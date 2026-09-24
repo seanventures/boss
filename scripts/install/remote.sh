@@ -29,6 +29,8 @@ API_PORT="8000"
 WEB_PORT="3000"
 PG_PORT="5432"
 ASSUME_YES=0
+WITH_CONSOLE=0
+ALL_SERVICES=0
 PROVIDER=""
 MODEL_API_KEY=""
 MODEL_NAME=""
@@ -54,6 +56,7 @@ usage:
 
 commands:
   install      stream this commit to the host and run the installer there
+  update       ship a newer commit to an EXISTING install and rebuild it in place
   uninstall    remove the install on the host (needs --yes; destroys its database)
   check        run BOSS's own health check on the host
   smoke        prove the install works: API, database, console, model wiring
@@ -76,6 +79,11 @@ options:
   --postgres-port N    host port for Postgres (default 5432)
   --yes                required by uninstall; also makes install non-interactive
   --service NAME       which service `logs` should tail
+  --with-console       update: also rebuild the web console. OFF by default because the
+                       console build is the memory peak, and a host with under 8GB and no
+                       swap gets it OOM-killed — which would take a working install down to
+                       fix something in the engine.
+  --all-services       update: rebuild every service
   --provider NAME      model: openrouter | openai | anthropic | custom
   --api-key KEY        model: the provider key to store
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
@@ -114,6 +122,8 @@ while [[ $# -gt 0 ]]; do
     --project) PROJECT_ID="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
     --key) KEY="${2:-}"; shift 2 ;;
+    --with-console) WITH_CONSOLE=1; shift ;;
+    --all-services) ALL_SERVICES=1; shift ;;
     --dir) DIR="${2:-}"; shift 2 ;;
     --ref) REF="${2:-}"; shift 2 ;;
     --api-port) API_PORT="${2:-}"; shift 2 ;;
@@ -262,6 +272,59 @@ cmd_install() {
   say "A subscription:  ${D}claude setup-token | remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider claude_code${N}"
   say "Shell variables: ${D}eval \"\$(remote.sh --host $HOST${KEY:+ --key $KEY} env)\"${N}"
   printf "\n"
+}
+
+# UPDATING IS NOT REINSTALLING, and until now the only way to ship a fix was `install`.
+#
+# That works and it is the wrong tool: `install` rebuilds every image including the web console,
+# which is the memory peak. On the host this was written for — 3.8GB RAM, no swap, two cores —
+# rebuilding the console to deploy a Python fix in the engine risks OOM-killing the build and
+# taking a working install down with it.
+#
+# So this ships the tree and rebuilds only what needs it. Default is api and worker, because
+# that is where the engine lives and where nearly every fix lands. The console is opt-in.
+cmd_update() {
+  head_ "Update BOSS on $HOST"
+  preflight
+  rshq "[ -f '$DIR/.env' ]" || die "no install at $DIR on $HOST — use \`install\`, not \`update\`"
+
+  local was
+  was="$(rshq "cat '$DIR/.boss-shipped-commit' 2>/dev/null")"
+  say "host is at ${was:-unknown}"
+
+  ship_source
+
+  local services="api worker"
+  [[ "$WITH_CONSOLE" -eq 1 ]] && services="api worker web"
+  [[ "$ALL_SERVICES"  -eq 1 ]] && services=""
+  if [[ -n "$services" ]]; then
+    say "rebuilding: $services  ${D}(console left alone; --with-console to include it)${N}"
+  else
+    say "rebuilding every service"
+  fi
+
+  # PROFILES MUST MATCH WHAT IS RUNNING or compose treats the bundled secret store as unwanted
+  # and takes it down mid-update, stranding every secret behind it.
+  local profiles=""
+  rshq "docker ps --filter name=boss-community-infisical- -q | grep -q ." \
+    && profiles="--profile secrets"
+  local compose="docker compose -f scripts/install/community-compose.yml --env-file .env $profiles"
+
+  say "building — this takes a few minutes"
+  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
+    "cd '$DIR' && $compose build $services" \
+    || die "the build failed on $HOST (see output above). The old containers are still running."
+
+  # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
+  # the whole reason these are two steps rather than `up -d --build`.
+  say "recreating: ${services:-all}"
+  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
+    "cd '$DIR' && $compose up -d --no-deps --force-recreate $services" \
+    || die "could not recreate the containers on $HOST"
+
+  ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
+  say ""
+  say "now run:  ${D}scripts/install/remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
 }
 
 cmd_uninstall() {
@@ -534,6 +597,7 @@ cmd_logs() {
 
 case "$CMD" in
   install)   cmd_install ;;
+  update)    cmd_update ;;
   uninstall) cmd_uninstall ;;
   check)     cmd_check ;;
   smoke)     cmd_smoke ;;
