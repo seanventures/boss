@@ -1053,15 +1053,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("studio") ? (
         <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
-          <FocusedAgents
-            projectId={activeProjectId}
-            actor={activeActorId}
-          />
           <AgentStudio
             feed={agentStudioFeed}
             roles={roles.items}
             skills={skills.items}
           />
+          <details className="studio-duty-details">
+            <summary>On-duty automations</summary>
+            <FocusedAgents
+              projectId={activeProjectId}
+              actor={activeActorId}
+            />
+          </details>
         </section>
         ) : null}
 
@@ -6990,8 +6993,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="workforce" aria-label="Workforce">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Agents</span>
-              <h3>Recent work by role.</h3>
+              <span className="eyebrow">Agent work</span>
+              <h3>What each role has done</h3>
             </div>
           </div>
           <WorkforceArea workforce={workforceData} skills={skills.items} />
@@ -6999,11 +7002,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("org_chart") ? (
-        <section className="panel-stack" data-area="org_chart" aria-label="Org Chart">
+        <section className="panel-stack" data-area="org_chart" aria-label="Team structure">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Org Chart</span>
-              <h3>Reporting lines and handoffs</h3>
+              <span className="eyebrow">Team structure</span>
+              <h3>Plan roles and inspect handoffs</h3>
             </div>
           </div>
           <OrgChartArea projectId={activeProjectId} actor={activeActorId} chart={orgChartData} />

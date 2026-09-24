@@ -132,13 +132,15 @@ describe("community nav honesty helpers", () => {
       "code_tasks",
       "budget",
       "enterprise",
+      "workforce",
+      "org_chart",
+      "studio",
     ];
     const hidden = [
       "infra",
       "metatron",
       "ops",
       "org",
-      "studio",
       "sandboxes",
       "github",
       "pipeline",

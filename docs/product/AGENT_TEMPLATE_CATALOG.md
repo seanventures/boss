@@ -1,6 +1,8 @@
 # Project agent templates (BOSS-435)
 
-The existing 13 Agent Studio specialists remain. These 21 additions are available through **Browse agent templates** in the Org Chart and the project-scoped `GET /v1/agent-studio/templates` API. Each template binds to an installed RoleSpec, creates an immutable AgentVersion through the existing validation/publish path, and starts in `deterministic_brief` mode. Installation creates no job, model call, device action, or provider effect.
+The existing 13 Agent Studio specialists remain. These 21 additions are available through **Add agent from template** in Team structure and the project-scoped `GET /v1/agent-studio/templates` API. Each template binds to an installed RoleSpec, creates an immutable AgentVersion through the existing validation/publish path, and starts in `deterministic_brief` mode. Installation creates no job, model call, device action, or provider effect.
+
+The UI uses three separate views: **Agent work** groups recent activity by role; **Team structure** stores a planned role layout and separately shows observed handoffs; **Agent Studio** holds the definitions that can be tested and run. Placing a role on the chart does not change task routing. Installing a template does not place a role on the chart.
 
 | Template | RoleSpec | Intended project work |
 | --- | --- | --- |
