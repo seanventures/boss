@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -30,7 +30,11 @@ def _test_app(edition: str) -> FastAPI:
     def enterprise_route():
         return {"surface": "enterprise"}
 
-    mount_edition_routers(app, edition)
+    mount_edition_routers(
+        app,
+        edition,
+        paid_router=APIRouter() if edition != "community" else None,
+    )
     return app
 
 
@@ -48,6 +52,49 @@ def test_paid_editions_mount_both_router_sets(edition):
     client = TestClient(_test_app(edition))
     assert client.get("/v1/code-tasks").status_code == 200
     assert client.get("/v1/account-connect/link").status_code == 200
+
+
+def test_paid_edition_requires_explicit_paid_router():
+    app = FastAPI()
+    app.get("/v1/account-connect/link")(lambda: {"surface": "paid"})
+    with pytest.raises(ValueError, match="requires an explicit paid router"):
+        mount_edition_routers(app, "cloud")
+    assert any(route.path == "/v1/account-connect/link" for route in app.routes)
+
+
+def test_community_router_imports_without_paid_module(tmp_path):
+    """A Community source tree can omit the paid router implementation."""
+
+    package = tmp_path / "community_only" / "routers"
+    package.mkdir(parents=True)
+    (package.parent / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("from .community import mount_edition_routers\n")
+    source = ROOT / "apps" / "api" / "app" / "routers"
+    for name in ("community.py", "route_ownership.py"):
+        (package / name).write_bytes((source / name).read_bytes())
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from fastapi import FastAPI; "
+                "from fastapi.testclient import TestClient; "
+                "from community_only.routers import mount_edition_routers; "
+                "app=FastAPI(); "
+                "app.get('/v1/code-tasks')(lambda: {'surface': 'community'}); "
+                "app.get('/v1/account-connect/link')(lambda: {'surface': 'paid'}); "
+                "mount_edition_routers(app, 'community'); "
+                "client=TestClient(app); "
+                "assert client.get('/v1/code-tasks').status_code == 200; "
+                "assert client.get('/v1/account-connect/link').status_code == 404"
+            ),
+        ],
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
