@@ -889,15 +889,19 @@ github_reconciler = GitHubReconciliationService(
 )
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
-specpack = SpecPackService(settings)
+commercial = CommercialService(settings)
+specpack = SpecPackService(settings, edition_service=commercial)
 agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
 model_gateway = ModelGatewayService(settings)
 capability_bundles = CapabilityBundleService(settings)
-commercial = CommercialService(settings)
 cloud_product = CloudProductService(settings, commercial)
 enterprise = SelfHostedIdentityService(settings)
 audit = AuditTrailService(settings)
+if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from boss_engine.services.enterprise_audit import EnterpriseAuditTrailService
+
+    audit = EnterpriseAuditTrailService(settings)
 comms = CommsService(settings)
 infrastructure = InfrastructureService(settings)
 reliability = ReliabilityService(settings)
