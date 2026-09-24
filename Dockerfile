@@ -61,9 +61,6 @@ RUN apt-get update \
 
 FROM python-base AS api
 
-ARG TARGETARCH
-COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
-
 COPY --from=grok-cli /opt/grok/grok /usr/local/bin/grok
 COPY --from=claude-cli /opt/claude/claude /usr/local/bin/claude
 
@@ -117,6 +114,8 @@ RUN mkdir -p /home/boss/.codex /home/boss/.claude /home/boss/.grok \
     && chown -R boss:boss /home/boss/.codex /home/boss/.claude /home/boss/.grok \
     && chmod 700 /home/boss/.codex /home/boss/.claude /home/boss/.grok
 
+ARG TARGETARCH
+COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && if [ "$TARGETARCH" = arm64 ]; then \
@@ -161,9 +160,6 @@ CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM python-base AS worker
 
-ARG TARGETARCH
-COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
-
 COPY --from=grok-cli /opt/grok/grok /usr/local/bin/grok
 
 # Worker must carry the same coding toolchain as the api stage for any path where
@@ -191,6 +187,8 @@ RUN apt-get update \
     ffmpeg libavfilter-extra fonts-dejavu-core \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+ARG TARGETARCH
+COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
