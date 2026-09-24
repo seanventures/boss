@@ -409,6 +409,12 @@ def test_community_issue_forms_route_reports_without_auto_work():
     assert feature["verdict"] == "accept"
     assert feature["intent"] == "feature_request"
 
+    bug_related_feature = agent._classify(
+        "[Feature] Show linked bug reports on each project task. "
+        "Success means the task detail opens the related bug report.", []
+    )
+    assert bug_related_feature["intent"] == "feature_request"
+
 
 def test_pr_review_is_inline_idempotent_receipted_and_never_merges(
     client, engine, monkeypatch

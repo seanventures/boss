@@ -156,7 +156,11 @@ class GitHubTriageAgent(GitHubCommunityAgentBase):
             return self._classification(
                 "spam/off-topic", "decline", message, "This appears off-topic or automated."
             )
-        if re.search(
+        explicit_feature = (
+            message.lstrip().lower().startswith("[feature]")
+            or "community:feature" in normalized_labels
+        )
+        if not explicit_feature and re.search(
             r"\b(bug|crash|exception|regression|broken|fails?|error|incorrect|installation|install|setup)\b",
             lowered,
         ):
@@ -167,11 +171,9 @@ class GitHubTriageAgent(GitHubCommunityAgentBase):
                 "A maintainer will review the report and request reproduction details if needed.",
             )
         intent_name, _ = self.router.classify_message(message)
-        feature_signal = (
-            message.lstrip().lower().startswith("[feature]")
-            or "community:feature" in normalized_labels
-            or intent_name in {"create_code_task", "propose_command", "create_prd"}
-        )
+        feature_signal = explicit_feature or intent_name in {
+            "create_code_task", "propose_command", "create_prd"
+        }
         if not feature_signal:
             return self._classification(
                 "question_or_feedback",
