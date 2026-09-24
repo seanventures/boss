@@ -175,6 +175,12 @@
     "destination": "apps/api/tests/conftest.py",
     "sha256": "b9def88e799e5327a03584347ee09c2951279b9f8e2c44f4402a8c9242e900e2"
   },
+  "package_export_rewrite": {
+    "path": "packages/api-client/package.json",
+    "community_source": "packages/api-client/src/community.ts",
+    "from": "./src/index.ts",
+    "to": "./src/community.ts"
+  },
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",
     "destination": "apps/web/app/page.tsx",
