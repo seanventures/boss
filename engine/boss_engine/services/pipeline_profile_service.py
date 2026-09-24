@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import text
 
 from ..config import Settings
+from .community_edition import CommunityEditionService
 from .core import emit_event, make_id
 from .pipeline_profiles import DEFAULT_PROFILE, PROFILES
 
@@ -99,9 +100,7 @@ def default_profile_name(connection, project_id: str, settings: Settings) -> str
         return row["name"]
     # No project default chosen: community-edition trials default to the lowest-cost profile so
     # a first trial never looks expensive; paid editions use the configured default.
-    from .commercial import CommercialService
-
-    if CommercialService(settings).normalize_edition() == "community":
+    if CommunityEditionService(settings).normalize_edition() == "community":
         return "lean"
     return settings.pipeline_profile or DEFAULT_PROFILE
 
@@ -128,9 +127,7 @@ def create_custom_profile(
     tier_floor: int, tier_cap: int, model_routing: dict, caching: bool,
     parallel_checks: bool, actor: str, settings: Settings,
 ) -> dict:
-    from .commercial import CommercialService
-
-    if CommercialService(settings).normalize_edition() == "community":
+    if CommunityEditionService(settings).normalize_edition() == "community":
         raise PermissionError(
             "Custom pipeline profiles require BOSS Enterprise; community edition uses the "
             "lean / balanced / strict presets."
