@@ -25,6 +25,7 @@
     "apps/worker/",
     "apps/web/",
     "api/openapi.yaml",
+    "api/openapi.community.yaml",
     "db/",
     "engine/boss_engine/",
     "engine/tests/",
@@ -88,6 +89,7 @@
   "requires_split": [
     "LICENSE",
     "Makefile",
+    "api/openapi.yaml",
     "db/schema.sql",
     "apps/api/app/main.py",
     "apps/web/app/page.tsx"
@@ -102,6 +104,7 @@
     "db/schema.sql",
     "Makefile",
     "install.sh",
+    "api/openapi.yaml",
     "scripts/install/community-compose.yml",
     "apps/api/app/main.py",
     "apps/worker/boss_worker/main.py",
@@ -152,5 +155,10 @@
     "source": "db/schema.community.sql",
     "destination": "db/schema.sql",
     "sha256": "c2736625d70ce510e5a904d46519da62f7bf21a05c834c6d26f0147312a64019"
+  },
+  "openapi_export_rewrite": {
+    "source": "api/openapi.community.yaml",
+    "destination": "api/openapi.yaml",
+    "sha256": "c15453ea9e9de2471ba80176b7cc0d4e294dd891d985ff7e06af7818de8b4825"
   }
 }

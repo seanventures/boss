@@ -324,6 +324,21 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("schema export destination must be withheld for split")
         if schema_rewrite["destination"] not in manifest["required_runtime"]:
             raise ValueError("schema export destination must be a required runtime file")
+    openapi_rewrite = manifest.get("openapi_export_rewrite")
+    if openapi_rewrite is not None:
+        if not isinstance(openapi_rewrite, dict) or (
+            openapi_rewrite.get("source") != "api/openapi.community.yaml"
+            or openapi_rewrite.get("destination") != "api/openapi.yaml"
+        ):
+            raise ValueError("OpenAPI export rewrite requires fixed Community and runtime paths")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(openapi_rewrite.get("sha256", ""))):
+            raise ValueError("OpenAPI export rewrite needs reviewed source sha256")
+        if not matching_rule(openapi_rewrite["source"], manifest["include"]):
+            raise ValueError("OpenAPI export source must be included")
+        if openapi_rewrite["destination"] not in manifest["requires_split"]:
+            raise ValueError("OpenAPI export destination must be withheld for split")
+        if openapi_rewrite["destination"] not in manifest["required_runtime"]:
+            raise ValueError("OpenAPI export destination must be a required runtime file")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -550,6 +565,13 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 continue
             blockers.append({"kind": "schema-export-source-changed", "path": path})
             continue
+        openapi_rewrite = manifest.get("openapi_export_rewrite")
+        if openapi_rewrite and path == openapi_rewrite["source"]:
+            if hashlib.sha256(data).hexdigest() == openapi_rewrite["sha256"]:
+                selected[path] = data
+                continue
+            blockers.append({"kind": "openapi-export-source-changed", "path": path})
+            continue
         if any(marker in data for marker in PRIVATE_MARKERS):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             continue
@@ -739,6 +761,26 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 )
             ]
             schema_rewrite_applied = True
+    openapi_rewrite = manifest.get("openapi_export_rewrite")
+    openapi_rewrite_applied = False
+    if openapi_rewrite:
+        source = openapi_rewrite["source"]
+        destination = openapi_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "openapi-export-private-source-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "openapi-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "openapi-export-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != openapi_rewrite["sha256"]:
+            blockers.append({"kind": "openapi-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
+            ]
+            openapi_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -770,6 +812,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "contributing_export_rewrite_applied": contributing_rewrite_applied,
         "makefile_export_rewrite_applied": makefile_rewrite_applied,
         "schema_export_rewrite_applied": schema_rewrite_applied,
+        "openapi_export_rewrite_applied": openapi_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,
