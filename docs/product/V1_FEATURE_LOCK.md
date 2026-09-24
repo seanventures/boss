@@ -2,7 +2,7 @@
 
 **Status:** Locked Community v1 contract (not a shipment claim)  
 **Not public GA.** Do not invent shipped.  
-**Companions:** [FEATURES.md](../community/FEATURES.md) · [Community spec](./BOSS_COMMUNITY_EDITION_SPEC.md) · [Cloud & Enterprise spec](./BOSS_CLOUD_ENTERPRISE_SPEC.md) · [V1 verification](./V1_FEATURE_VERIFICATION.md)
+**Companion:** [Community feature checklist](../community/FEATURES.md)
 
 This file is the explicit **v1 lock**: what is **in** Community v1, what is **out**,
 and what is **Cloud / Enterprise only**. Release-planning `POST /sync-from-features`
@@ -177,9 +177,5 @@ Mission Control must not present a Cloud/Enterprise row as a Community ship.
 |---|---|
 | This file | v1 lock (in / out / Cloud-Enterprise) |
 | `docs/community/FEATURES.md` | Public checklist; ✦ stay ✦ |
-| `docs/product/BOSS_COMMUNITY_EDITION_SPEC.md` | Community product contract |
-| `docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md` | Paid path |
-| `docs/product/V1_FEATURE_VERIFICATION.md` | Evidence-only verification ledger |
-| `docs/product/PRD-v2.0.md` + `TECHNICAL_SPEC-v2.0.md` | Governing intent |
 | `POST /v1/release-planning/sync-from-features` | Applies lock metadata; does not rewrite catalog |
 | `GET /v1/v1-lock` + `GET /v1/release-planning/status` | in / out / cloud counts only |
