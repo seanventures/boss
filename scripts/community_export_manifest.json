@@ -47,6 +47,7 @@
     "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md",
+    "docs/product/TRACEABILITY.community.md",
     "README.community.md",
     "CONTRIBUTING.community.md",
     "Makefile.community"
@@ -91,6 +92,7 @@
     "Makefile",
     "api/openapi.yaml",
     "db/schema.sql",
+    "docs/product/TRACEABILITY.md",
     "apps/api/app/main.py",
     "apps/web/app/page.tsx"
   ],
@@ -102,6 +104,7 @@
   "required_runtime": [
     "Dockerfile.community",
     "db/schema.sql",
+    "docs/product/TRACEABILITY.md",
     "Makefile",
     "install.sh",
     "api/openapi.yaml",
@@ -160,5 +163,10 @@
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
     "sha256": "c15453ea9e9de2471ba80176b7cc0d4e294dd891d985ff7e06af7818de8b4825"
+  },
+  "traceability_export_rewrite": {
+    "source": "docs/product/TRACEABILITY.community.md",
+    "destination": "docs/product/TRACEABILITY.md",
+    "sha256": "c3a71a94b0de92ddddbca9187f887ee0740fc948fff870b3030adc65f545c324"
   }
 }
