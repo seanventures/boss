@@ -16,6 +16,23 @@ RUN addgroup --system boss \
     && mkdir -p /home/boss && chown -R boss:boss /home/boss
 ENV HOME=/home/boss
 
+# Some ARM64 VM kernels crash with SIGILL while importing the upstream
+# cryptography wheel. Build the pinned release against this image's patched
+# system OpenSSL instead. Keep the Rust/build toolchain out of runtime images.
+FROM python-base AS arm64-cryptography-wheel
+ARG TARGETARCH
+COPY apps/api/requirements.txt /tmp/api-requirements.txt
+RUN mkdir -p /opt/crypto-wheels \
+    && if [ "$TARGETARCH" = arm64 ]; then \
+         apt-get update \
+         && apt-get install -y --no-install-recommends \
+              cargo rustc build-essential pkg-config libssl-dev libffi-dev python3-dev \
+         && crypto_spec="$(grep -E '^cryptography==' /tmp/api-requirements.txt)" \
+         && test -n "$crypto_spec" \
+         && pip wheel --no-cache-dir --no-deps --no-binary cryptography \
+              --wheel-dir /opt/crypto-wheels "$crypto_spec"; \
+       fi
+
 # Grok Build's official installer places a versioned binary under its home and
 # symlinks `grok` to it. Resolve that symlink while building so the runtime
 # binary lives outside the persistent login volume and survives an empty mount.
@@ -43,6 +60,9 @@ RUN apt-get update \
     && /opt/claude/claude --version
 
 FROM python-base AS api
+
+ARG TARGETARCH
+COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
 
 COPY --from=grok-cli /opt/grok/grok /usr/local/bin/grok
 COPY --from=claude-cli /opt/claude/claude /usr/local/bin/claude
@@ -99,7 +119,11 @@ RUN mkdir -p /home/boss/.codex /home/boss/.claude /home/boss/.grok \
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt
+    && if [ "$TARGETARCH" = arm64 ]; then \
+         pip install --no-cache-dir --no-index --no-deps /opt/crypto-wheels/cryptography-*.whl; \
+       fi \
+    && pip install --no-cache-dir -r /tmp/api-requirements.txt \
+    && python -c 'import cryptography.exceptions'
 
 COPY apps ./apps
 COPY api ./api
@@ -137,6 +161,9 @@ CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM python-base AS worker
 
+ARG TARGETARCH
+COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
+
 COPY --from=grok-cli /opt/grok/grok /usr/local/bin/grok
 
 # Worker must carry the same coding toolchain as the api stage for any path where
@@ -167,7 +194,11 @@ RUN apt-get update \
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
+    && if [ "$TARGETARCH" = arm64 ]; then \
+         pip install --no-cache-dir --no-index --no-deps /opt/crypto-wheels/cryptography-*.whl; \
+       fi \
+    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt \
+    && python -c 'import cryptography.exceptions'
 
 COPY apps ./apps
 COPY api ./api
