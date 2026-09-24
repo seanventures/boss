@@ -91,6 +91,13 @@ SHARED_MARKER_LINES = {
         "                and self.settings.account_connect_url": "_runtime_flags",
         "                runtime_supported and self.settings.account_connect_token": "_runtime_flags",
     },
+    "engine/boss_engine/services/specpack.py": {
+        "        active_account_connect_org_id = (": "_project_capabilities",
+        '            edition.get("account_connect_org") or {}': "_project_capabilities",
+        "                SELECT capability_key, capabilities, source, account_connect_org_id": "_project_capabilities",
+        '                row["source"] == "account_connect_hosted"': "_project_capabilities",
+        '                and row["account_connect_org_id"] != active_account_connect_org_id': "_project_capabilities",
+    },
 }
 SEMANTIC_PAID_MARKERS = {
     "engine/boss_engine/services/entitlements.py": (b"enterprise_model_gateway",),
