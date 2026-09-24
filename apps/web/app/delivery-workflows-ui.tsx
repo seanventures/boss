@@ -272,6 +272,9 @@ type Draft = {
    *  type a media artifact id by hand. The chain was destroyed by viewing and saving, with
    *  nothing on screen having been changed. */
   inputs?: Record<string, unknown>;
+  /** WHICH AGENT RUNS THIS STEP. A capability step's captain has always become the actor; a
+   *  custom step ignored it, so a customer's workflow had no agent in it anywhere. */
+  captain?: string;
   approval?: string;
   config?: Record<string, unknown>;
 };
@@ -471,6 +474,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [riskFloor, setRiskFloor] = useState(2);
+  /** The agents a step can be given to. Taken from the capabilities payload rather than the
+   *  agent directory, because THIS list is the one the publish-time captain check validates
+   *  against — offering a role that would then be refused is worse than offering none. */
+  const [stepRoles, setStepRoles] = useState<string[]>([]);
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
@@ -610,6 +617,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setCapabilities((caps as { capabilities: Capability[] }).capabilities ?? []);
     setBlocks((caps as { blocks?: Block[] }).blocks ?? []);
     setRiskFloor((caps as { manual_approval_risk_floor: number }).manual_approval_risk_floor ?? 2);
+    setStepRoles((caps as { roles?: string[] }).roles ?? []);
     setCatalogue((cat as { items: CatalogueEntry[] }).items ?? []);
     setInstalled((inst as { items: Installed[] }).items ?? []);
     setRuns((live as { runs: Run[] }).runs ?? []);
@@ -1043,6 +1051,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           justMade={justMade} onDismissJustMade={() => setJustMade(null)}
           onManageSteps={() => setTab("steps")}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
+          stepRoles={stepRoles}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
           onCreate={async (name, spec, fromKey) => {
             // TWO CALLS, AND THE ORDER MATTERS.
@@ -4398,7 +4407,7 @@ function StepsView({
 }
 
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
-                      customSteps, bindable, onManageSteps,
+                      customSteps, bindable, onManageSteps, stepRoles,
                       justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate }: {
   capabilities: Capability[];
@@ -4411,6 +4420,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   /** Take the operator to where steps are authored. The palette places them; it does not
    *  make them. */
   onManageSteps: () => void;
+  /** Agents a step can be assigned to, exactly as the publish-time check will accept them. */
+  stepRoles: string[];
   /** The workflow created a moment ago, so the builder can confirm it rather than looking
    *  identical to the state before the click. */
   justMade: { id: string; name: string; from?: string } | null;
@@ -4513,6 +4524,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         // Carried through untouched. The builder cannot yet AUTHOR a step-to-step reference,
         // which is a gap; silently discarding one somebody else authored is a bug.
         inputs: (binding.inputs ?? undefined) as Record<string, unknown> | undefined,
+        captain: step.captain ? String(step.captain) : undefined,
         // Everything that is not id/kind/binding/approval/next is the block's own
         // configuration — wait_seconds, workflow_version_id — and must survive a round trip
         // or editing one step would quietly reset another.
@@ -4724,6 +4736,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
             ),
           },
           approval: { mode: step.approval },
+          // Only when one was chosen. An absent captain is the existing behaviour — the step
+          // runs as the anonymous workflow runner — and writing an empty string would make
+          // every step look like it had been assigned to nobody on purpose.
+          ...(step.captain ? { captain: step.captain } : {}),
           next,
         };
       }
@@ -4741,6 +4757,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           ),
         },
         approval: { mode: step.approval },
+        // A capability already has a default captain; naming one here overrides it for this
+        // workflow, which the runtime has honoured all along.
+        ...(step.captain ? { captain: step.captain } : {}),
         next,
       };
     }),
@@ -5161,6 +5180,28 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       </span>
                     ) : null}
                   </span>
+                  {/* WHO RUNS IT. The premise of the product is that agents do the work and
+                      the steps track it — which is already true of BOSS's own pipelines, where
+                      a capability's captain becomes the actor. A customer's step ignored it and
+                      the builder never offered it, so their workflows had no agent anywhere.
+                      Empty is the existing behaviour: the anonymous workflow runner. */}
+                  {step.kind === "capability" && stepRoles.length ? (
+                    <select className="input dw-draft-captain" value={step.captain ?? ""}
+                            onChange={(e) => setDraft((c) =>
+                              c.map((st, i) => (i === index
+                                ? { ...st, captain: e.target.value || undefined } : st)))}
+                            aria-label={`Agent for ${step.id}`}
+                            data-testid={`dw-draft-captain-${step.id}`}>
+                      <option value="">
+                        {capability?.captain
+                          ? `${capability.captain} (default)`
+                          : "no agent — runs as the workflow"}
+                      </option>
+                      {stepRoles.map((role) => (
+                        <option key={role} value={role}>{role}</option>
+                      ))}
+                    </select>
+                  ) : null}
                   <select className="input dw-draft-approval" value={step.approval}
                           disabled={step.kind !== "capability"
                                     || capability?.approval_forced_manual

@@ -120,3 +120,35 @@ describe("opening a workflow does not destroy how its steps feed each other", ()
     expect(ui).toContain("inputs?: Record<string, unknown>;");
   });
 });
+
+describe("a step can be given to an agent", () => {
+  it("offers the agents on every work step", () => {
+    // BOSS's own pipelines read as agents doing the work because a capability's captain becomes
+    // the actor. A customer's step ignored it and the builder never offered it, so their
+    // workflows had no agent in them anywhere.
+    expect(ui).toContain("dw-draft-captain-");
+    expect(ui).toContain("Agent for ${step.id}");
+  });
+
+  it("offers the list the publish-time check will actually accept", () => {
+    // Taken from the capabilities payload rather than the agent directory: offering a role that
+    // would then be refused at save is worse than offering none.
+    expect(ui).toContain("stepRoles: string[];");
+    expect(ui).toContain('setStepRoles((caps as { roles?: string[] }).roles ?? [])');
+  });
+
+  it("says what empty means rather than leaving it blank", () => {
+    expect(ui).toContain("no agent — runs as the workflow");
+    expect(ui).toContain("(default)");
+  });
+
+  it("writes a captain into the spec only when one was chosen", () => {
+    // An empty string would make every step look deliberately assigned to nobody.
+    const occurrences = ui.split("...(step.captain ? { captain: step.captain } : {})").length - 1;
+    expect(occurrences).toBe(2);
+  });
+
+  it("keeps the captain a workflow was saved with", () => {
+    expect(ui).toContain('captain: step.captain ? String(step.captain) : undefined');
+  });
+});
