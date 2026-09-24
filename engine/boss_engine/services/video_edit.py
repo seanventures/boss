@@ -49,6 +49,29 @@ _TIMECODE = re.compile(r"^(?:\d+(?:\.\d+)?|\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)$")
 #: for the rest of the day.
 DEFAULT_TIMEOUT_SECONDS = 1800
 
+#: Aspect ratios a channel actually publishes in. A fixed set, because this value becomes part
+#: of a crop expression — an operator-supplied ratio would be a string reaching a filter.
+ASPECTS = {
+    "9:16": (9, 16),    # vertical: Shorts, Reels, TikTok
+    "16:9": (16, 9),    # landscape
+    "1:1": (1, 1),      # square
+    "4:5": (4, 5),      # portrait feed
+}
+
+#: Where a timed image sits. Same shape as CORNERS, plus the middle, which a logo never wants
+#: and a pop-up usually does.
+POSITIONS = {
+    **{k: v for k, v in CORNERS.items()},
+    "center": ("(W-w)/2", "(H-h)/2"),
+}
+
+#: Caption placement, as y expressions. `lower_third` is where a broadcast caption goes.
+CAPTION_STYLES = {
+    "lower_third": "h-(text_h*2.5)",
+    "bottom": "h-text_h-40",
+    "top": "40",
+}
+
 
 class VideoEditError(RuntimeError):
     """Something the operator can fix, phrased for them."""
@@ -56,6 +79,22 @@ class VideoEditError(RuntimeError):
 
 def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+
+def drawtext_available() -> bool:
+    """Whether this ffmpeg can burn text.
+
+    `drawtext` needs libfreetype and is NOT in the base filter set — Debian keeps it in
+    libavfilter-extra. An image without it fails only when the filter is reached, which is
+    after the render has already spent its minutes, and the message ("No such filter") names
+    the filter rather than the missing package.
+    """
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+                             capture_output=True, text=True, timeout=30).stdout
+    except Exception:  # noqa: BLE001 — absent ffmpeg is _require_ffmpeg's answer to give
+        return False
+    return " drawtext " in out
 
 
 def _require_ffmpeg() -> None:
@@ -116,6 +155,16 @@ def _checked_timecode(value: Any, field: str) -> str:
         raise VideoEditError(
             f"{field} must be seconds (90, 90.5) or HH:MM:SS — got {text!r}.")
     return text
+
+
+def _seconds(value: str) -> float:
+    """A validated timecode as a number. Only ever called on a string `_checked_timecode`
+    has already accepted, so the parse cannot fail on operator input."""
+    text = str(value).strip()
+    if ":" not in text:
+        return float(text)
+    hours, minutes, secs = text.split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(secs)
 
 
 def _output(work_dir: str, base: str, suffix: str) -> str:
@@ -306,3 +355,245 @@ def verify_playable(path: str, *, expect_audio: bool = True) -> dict[str, Any]:
             "The rendered file has no audio. A silent publish is almost never intended, so "
             "this fails rather than uploads.")
     return info
+
+
+def cut(source: str, *, remove: list, work_dir: str) -> str:
+    """Remove one or more ranges and join what is left.
+
+    NOT `trim` WITH DIFFERENT ARGUMENTS. `trim` keeps a single range; this keeps everything
+    except the ranges named, which is what "take that bit out" means and cannot be expressed as
+    one range the moment the removal is in the middle.
+
+    The keeps are computed here rather than in a filter expression, for the same reason the
+    watermark's width is: a literal is deterministic and an expression is a thing ffmpeg has
+    opinions about. Overlapping removals are merged first, so asking twice for overlapping
+    ranges removes the union rather than producing an empty segment ffmpeg refuses to encode.
+    """
+    _require_ffmpeg()
+    if not isinstance(remove, list) or not remove:
+        raise VideoEditError("remove must be a non-empty list of {start, end} ranges.")
+
+    duration = float(probe(source).get("duration_seconds") or 0)
+    if duration <= 0:
+        raise VideoEditError("Could not read the video's duration, so nothing can be cut.")
+
+    spans = []
+    for i, span in enumerate(remove):
+        if not isinstance(span, dict):
+            raise VideoEditError(f"remove[{i}] must be an object with start and end.")
+        begin = _seconds(_checked_timecode(span.get("start"), f"remove[{i}].start"))
+        finish = _seconds(_checked_timecode(span.get("end"), f"remove[{i}].end"))
+        if finish <= begin:
+            raise VideoEditError(f"remove[{i}]: end must be after start.")
+        spans.append((begin, min(finish, duration)))
+    spans.sort()
+
+    merged: list = []
+    for begin, finish in spans:
+        if merged and begin <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], finish))
+        else:
+            merged.append((begin, finish))
+
+    keeps, cursor = [], 0.0
+    for begin, finish in merged:
+        if begin - cursor > 0.05:      # a keep shorter than a frame or two is not a keep
+            keeps.append((cursor, begin))
+        cursor = finish
+    if duration - cursor > 0.05:
+        keeps.append((cursor, duration))
+    if not keeps:
+        raise VideoEditError("Those removals would leave nothing behind.")
+
+    # Same concat approach bookend uses: one filter graph, no intermediate files to clean up
+    # and no chance of a half-written temp surviving a failure.
+    parts, labels = [], ""
+    for n, (begin, finish) in enumerate(keeps):
+        parts.append(
+            f"[0:v]trim=start={begin:.3f}:end={finish:.3f},setpts=PTS-STARTPTS[v{n}];"
+            f"[0:a]atrim=start={begin:.3f}:end={finish:.3f},asetpts=PTS-STARTPTS[a{n}]"
+        )
+        labels += f"[v{n}][a{n}]"
+    chain = ";".join(parts) + f";{labels}concat=n={len(keeps)}:v=1:a=1[v][a]"
+
+    out = _output(work_dir, source, "cut")
+    _run([
+        "ffmpeg", "-nostdin", "-y", "-i", source,
+        "-filter_complex", chain, "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        out,
+    ])
+    return out
+
+
+def reframe(source: str, *, aspect: str, work_dir: str, strategy: str = "center") -> str:
+    """Change the shape of the frame — landscape to vertical, and back.
+
+    CROPS, IT DOES NOT PAD. Letterboxing a landscape video into a 9:16 box technically produces
+    a vertical file and wastes two thirds of the screen, which is the thing vertical formats
+    exist to avoid. The crop is centred; picking the interesting third of the frame is subject
+    tracking, a genuinely different problem, and pretending otherwise here would produce
+    confidently wrong crops.
+    """
+    _require_ffmpeg()
+    if aspect not in ASPECTS:
+        raise VideoEditError(
+            f"aspect must be one of {', '.join(sorted(ASPECTS))} — got {aspect!r}.")
+    if strategy != "center":
+        raise VideoEditError(
+            "only the centre crop exists today; subject tracking is not implemented, and "
+            "guessing where the subject is would produce confidently wrong crops.")
+
+    info = probe(source)
+    width, height = int(info.get("width") or 0), int(info.get("height") or 0)
+    if not width or not height:
+        raise VideoEditError("Could not read the video's dimensions, so it cannot be reframed.")
+
+    aw, ah = ASPECTS[aspect]
+    # The largest box of the requested shape that fits inside the source, in even numbers
+    # because h264 rejects odd dimensions with a message about pixel formats.
+    if width * ah > height * aw:
+        crop_h = height
+        crop_w = int(height * aw / ah)
+    else:
+        crop_w = width
+        crop_h = int(width * ah / aw)
+    crop_w = max(2, crop_w // 2 * 2)
+    crop_h = max(2, crop_h // 2 * 2)
+
+    out = _output(work_dir, source, f"{aspect.replace(':', 'x')}")
+    _run([
+        "ffmpeg", "-nostdin", "-y", "-i", source,
+        "-vf", f"crop={crop_w}:{crop_h}:(iw-{crop_w})/2:(ih-{crop_h})/2",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-c:a", "copy",       # reshaping the picture has nothing to do with the sound
+        "-movflags", "+faststart",
+        out,
+    ])
+    return out
+
+
+def overlay_image(
+    source: str,
+    *,
+    image: str,
+    start: str,
+    end: str,
+    work_dir: str,
+    position: str = "center",
+    scale: float = 0.6,
+) -> str:
+    """Show a still over the video between two timecodes, with the audio still running.
+
+    THE AUDIO IS NOT TOUCHED — `-c:a copy` — which is the whole point of the operation: the
+    speaker keeps talking while the picture they are describing is on screen. Cutting to an
+    image would silence them.
+
+    `enable='between(t,a,b)'` is what makes it timed rather than permanent, and is the only
+    difference from `watermark` worth the second function.
+    """
+    _require_ffmpeg()
+    begin, finish = _checked_timecode(start, "start"), _checked_timecode(end, "end")
+    if _seconds(finish) <= _seconds(begin):
+        raise VideoEditError("end must be after start.")
+    if position not in POSITIONS:
+        raise VideoEditError(
+            f"position must be one of {', '.join(sorted(POSITIONS))} — got {position!r}.")
+    if not 0.05 <= float(scale) <= 1.0:
+        raise VideoEditError("scale must be between 0.05 and 1.0 of the video width.")
+    if not os.path.exists(image):
+        raise VideoEditError(f"No image at {image}.")
+
+    info = probe(source)
+    video_width = int(info.get("width") or 0)
+    if not video_width:
+        raise VideoEditError("Could not read the video's width, so the image cannot be sized.")
+    image_width = max(2, int(video_width * float(scale)) // 2 * 2)
+
+    x_expr, y_expr = POSITIONS[position]
+    m = "24"
+    chain = (
+        f"[1:v]scale={image_width}:-2[img];"
+        f"[0:v][img]overlay={x_expr.format(m=m)}:{y_expr.format(m=m)}:"
+        f"enable='between(t,{_seconds(begin):.3f},{_seconds(finish):.3f})'"
+    )
+    out = _output(work_dir, source, "overlay")
+    _run([
+        "ffmpeg", "-nostdin", "-y", "-i", source, "-i", image,
+        "-filter_complex", chain,
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        out,
+    ])
+    return out
+
+
+def caption(
+    source: str,
+    *,
+    text: str,
+    start: str,
+    end: str,
+    work_dir: str,
+    style: str = "lower_third",
+    size: int = 48,
+) -> str:
+    """Burn a line of text over the video between two timecodes.
+
+    THE TEXT GOES IN A FILE, NEVER INTO THE FILTER STRING. This is the only operation here that
+    takes free-form operator text, and `drawtext` parses its own argument: a colon separates
+    options, a single quote ends a quoted section, a backslash escapes. Interpolating a caption
+    into that string means an apostrophe in "BOSS's roadmap" silently truncates the filter, and
+    a deliberate one rewrites it. `textfile=` takes a path and reads the bytes, so no character
+    in the caption can mean anything to the parser.
+
+    The path itself is generated here and never operator-supplied, so it needs no escaping of
+    its own.
+    """
+    _require_ffmpeg()
+    if not drawtext_available():
+        raise VideoEditError(
+            "this ffmpeg has no drawtext filter, so text cannot be burned in. It needs the "
+            "libavfilter-extra package and a font (fonts-dejavu-core) — the BOSS images "
+            "install both; a hand-built environment often has neither.")
+    begin, finish = _checked_timecode(start, "start"), _checked_timecode(end, "end")
+    if _seconds(finish) <= _seconds(begin):
+        raise VideoEditError("end must be after start.")
+    if style not in CAPTION_STYLES:
+        raise VideoEditError(
+            f"style must be one of {', '.join(sorted(CAPTION_STYLES))} — got {style!r}.")
+    if not 8 <= int(size) <= 200:
+        raise VideoEditError("size must be between 8 and 200 pixels.")
+    body = str(text or "").strip()
+    if not body:
+        raise VideoEditError("text is required.")
+    if len(body) > 300:
+        raise VideoEditError("text must be 300 characters or fewer — a caption, not a script.")
+    if "\n" in body or "\r" in body:
+        raise VideoEditError("text must be a single line.")
+
+    text_path = os.path.join(work_dir, "caption.txt")
+    with open(text_path, "w", encoding="utf-8") as handle:
+        handle.write(body)
+
+    y_expr = CAPTION_STYLES[style]
+    chain = (
+        f"drawtext=textfile={text_path}:"
+        f"fontcolor=white:fontsize={int(size)}:"
+        f"box=1:boxcolor=black@0.5:boxborderw=12:"
+        f"x=(w-text_w)/2:y={y_expr}:"
+        f"enable='between(t,{_seconds(begin):.3f},{_seconds(finish):.3f})'"
+    )
+    out = _output(work_dir, source, "caption")
+    _run([
+        "ffmpeg", "-nostdin", "-y", "-i", source,
+        "-vf", chain,
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        out,
+    ])
+    return out

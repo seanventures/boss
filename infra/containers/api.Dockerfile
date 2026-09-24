@@ -21,6 +21,13 @@ ENV HOME=/home/boss
 # developer laptop has ssh; the container is the only place that truth was tested.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    `# VIDEO EDITING IS A BOSS CAPABILITY, and the API runs skills as well as the worker does` \
+    `# (app/main.py imports the skill executors), so a video skill can land in EITHER process.` \
+    `# The worker image has carried ffmpeg since the video skills landed and this one did not,` \
+    `# which made the tool present or absent depending on which process picked the step up.` \
+    `# libavfilter-extra + a font bring drawtext — see worker.Dockerfile for why that is split` \
+    `# out of the base filter set.` \
+    ffmpeg libavfilter-extra fonts-dejavu-core \
          openssh-client \
     && npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force \

@@ -143,3 +143,190 @@ def test_a_silent_render_fails_rather_than_uploads(tmp_path):
         v.verify_playable(silent, expect_audio=True)
     # And the caller can opt out deliberately when silence IS the point.
     assert v.verify_playable(silent, expect_audio=False)["duration_seconds"] > 0
+
+
+# ---------------------------------------------------------------------------------------------
+# The vibe-editing primitives: cut, reframe, overlay_image, caption.
+#
+# These tests BUILD THEIR OWN SOURCE rather than reaching into the operator's Downloads folder,
+# because the four above them skip on a machine that lacks those files — and a safety test that
+# skips in CI is a safety test that does not exist. ffmpeg can synthesise a clip with a real
+# video stream and real audio, which is all any of these need.
+# ---------------------------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def clip(tmp_path_factory):
+    """A 12-second 640x360 landscape clip with a tone, so cuts and crops are measurable."""
+    path = str(tmp_path_factory.mktemp("clip") / "src.mp4")
+    subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=12",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", path],
+        check=True, capture_output=True)
+    return path
+
+
+@pytest.fixture(scope="module")
+def logo(tmp_path_factory):
+    path = str(tmp_path_factory.mktemp("logo") / "logo.png")
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=c=red:size=64x64:duration=1",
+                    "-frames:v", "1", path], check=True, capture_output=True)
+    return path
+
+
+def test_a_cut_removes_the_ranges_and_keeps_the_rest(clip, tmp_path):
+    """"Take out the bit where I fumble" is a removal, and the result has to be shorter.
+
+    The arithmetic is the point. 12 seconds minus 3–5 and 8–9 is 9, and a filter graph that
+    silently kept everything would still exit 0 and still play — which is how a cut that did
+    nothing would otherwise reach a human reviewer looking correct.
+    """
+    out = v.cut(clip, remove=[{"start": "3", "end": "5"}, {"start": "8", "end": "9"}],
+                work_dir=str(tmp_path))
+    info = v.verify_playable(out)
+    assert abs(info["duration_seconds"] - 9.0) < 0.35, info["duration_seconds"]
+    assert info["has_audio"] is True, "a cut must not drop the audio track"
+
+
+def test_overlapping_removals_remove_their_union_rather_than_failing(clip, tmp_path):
+    """An operator writing ranges by hand overlaps them, and that is not an error.
+
+    Naively this produces a zero-length keep between the two, which ffmpeg refuses to encode —
+    so the editing step would fail on an instruction whose meaning was never ambiguous.
+    """
+    out = v.cut(clip, remove=[{"start": "3", "end": "6"}, {"start": "5", "end": "8"}],
+                work_dir=str(tmp_path))
+    # 12 - (3..8) = 7, not 12 - 3 - 3 = 6.
+    assert abs(v.probe(out)["duration_seconds"] - 7.0) < 0.35
+
+
+def test_a_cut_that_would_leave_nothing_is_refused(clip, tmp_path):
+    with pytest.raises(v.VideoEditError):
+        v.cut(clip, remove=[{"start": "0", "end": "12"}], work_dir=str(tmp_path))
+
+
+def test_a_removal_range_is_validated_like_every_other_timecode(clip, tmp_path):
+    for bad in ([{"start": "5", "end": "3"}],          # backwards
+                [{"start": "$(id)", "end": "5"}],      # not a timecode
+                [{"start": "1"}],                      # half a range
+                ["3-5"],                               # not a range at all
+                []):                                   # nothing to do
+        with pytest.raises(v.VideoEditError):
+            v.cut(clip, remove=bad, work_dir=str(tmp_path))
+
+
+def test_reframe_makes_a_landscape_clip_vertical(clip, tmp_path):
+    """"Make it portrait" is the most common instruction in the set, and it must CROP.
+
+    Padding would technically produce a 9:16 file — with the original letterboxed inside it and
+    black bars top and bottom, which is the thing vertical video exists to avoid.
+    """
+    out = v.reframe(clip, aspect="9:16", work_dir=str(tmp_path))
+    info = v.verify_playable(out)
+    ratio = info["width"] / info["height"]
+    assert abs(ratio - 9 / 16) < 0.02, (info["width"], info["height"])
+    # Cropping, not padding: the tall side keeps the source's height.
+    assert info["height"] == v.probe(clip)["height"]
+    assert info["has_audio"] is True
+
+
+def test_an_aspect_is_a_fixed_vocabulary(clip, tmp_path):
+    """The ratio becomes part of a crop expression, so it may never be free text."""
+    assert set(v.ASPECTS) == {"9:16", "16:9", "1:1", "4:5"}
+    for bad in ("9x16", "1920:1080", "iw/2:ih", ""):
+        with pytest.raises(v.VideoEditError):
+            v.reframe(clip, aspect=bad, work_dir=str(tmp_path))
+
+
+def test_a_strategy_this_cannot_honour_is_refused_rather_than_approximated(clip, tmp_path):
+    """Silently centre-cropping when asked to follow the speaker would crop out the speaker.
+
+    Refusing names the gap; doing something else hides it in a file a human then approves.
+    """
+    with pytest.raises(v.VideoEditError):
+        v.reframe(clip, aspect="9:16", work_dir=str(tmp_path), strategy="face")
+
+
+def test_an_image_pops_up_while_the_audio_keeps_playing(clip, logo, tmp_path):
+    """This is the operator's own use case, and the audio is the half that gets lost.
+
+    Re-encoding audio for a video-only change is both slower and lossy; the risk is a filter
+    graph that drops the track entirely, which looks like success until somebody watches it.
+    """
+    out = v.overlay_image(clip, image=logo, start="2", end="4", work_dir=str(tmp_path))
+    info = v.verify_playable(out)
+    assert info["has_audio"] is True, "the audio must survive a visual-only edit"
+    source = v.probe(clip)
+    assert (info["width"], info["height"]) == (source["width"], source["height"])
+    assert abs(info["duration_seconds"] - source["duration_seconds"]) < 0.35
+
+
+def test_a_position_is_a_fixed_vocabulary(clip, logo, tmp_path):
+    assert "center" in v.POSITIONS and set(v.CORNERS) <= set(v.POSITIONS)
+    with pytest.raises(v.VideoEditError):
+        v.overlay_image(clip, image=logo, start="2", end="4",
+                        work_dir=str(tmp_path), position="middle-ish")
+
+
+def test_an_overlay_window_must_be_a_window(clip, logo, tmp_path):
+    for start, end in (("4", "2"), ("4", "4")):
+        with pytest.raises(v.VideoEditError):
+            v.overlay_image(clip, image=logo, start=start, end=end, work_dir=str(tmp_path))
+
+
+def test_caption_text_never_reaches_a_filter_expression(clip, tmp_path):
+    """Caption text is the one input that is genuinely free-form prose.
+
+    drawtext parses its own options, so a colon or a single quote in ordinary English ends the
+    option list — and `text=` is where an instruction file could otherwise smuggle in
+    `drawtext`'s own `textfile` or a second filter. BOSS writes the prose to a file and passes
+    the PATH, which makes the content unparseable as options no matter what it says.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(v.caption)
+    assert "textfile=" in source, "caption must pass a path, not the prose"
+
+    # The filter chain is the only string that reaches ffmpeg's parser. The prose variable must
+    # not appear anywhere in it — `drawtext=textfile=<path>` is the whole point, and the path is
+    # generated here rather than supplied.
+    chain = re.search(r"chain = \((.*?)\n    \)", source, re.S)
+    assert chain, "the filter chain is no longer a single assignment; re-check this by hand"
+    assert "{body}" not in chain.group(1), "the caption prose must never be interpolated"
+    assert "{text}" not in chain.group(1), "the caption prose must never be interpolated"
+    assert "textfile={text_path}" in chain.group(1)
+
+
+def test_a_caption_style_is_a_fixed_vocabulary(clip, tmp_path):
+    assert set(v.CAPTION_STYLES) == {"lower_third", "bottom", "top"}
+    with pytest.raises(v.VideoEditError):
+        v.caption(clip, text="hello", start="1", end="3",
+                  work_dir=str(tmp_path), style="wherever")
+
+
+def test_caption_says_what_is_missing_when_this_ffmpeg_cannot_burn_text():
+    """An ffmpeg without libavfilter-extra fails on REACHING drawtext, not on being called.
+
+    That is after the render has spent its minutes, and the message names the filter rather
+    than the missing package — so the operator learns "No such filter" and not "this image
+    needs libavfilter-extra". The images install it; a hand-built environment may not.
+    """
+    if v.drawtext_available():
+        pytest.skip("this ffmpeg has drawtext, so there is no failure to describe")
+    with pytest.raises(v.VideoEditError, match="libavfilter"):
+        v.caption("/nonexistent.mp4", text="hello", start="1", end="3", work_dir="/tmp")
+
+
+@pytest.mark.skipif(not v.ffmpeg_available() or not v.drawtext_available(),
+                    reason="this ffmpeg cannot burn text (needs libavfilter-extra)")
+def test_a_caption_burns_in_without_disturbing_the_rest(clip, tmp_path):
+    out = v.caption(clip, text="Thanks for watching: it's free!", start="1", end="3",
+                    work_dir=str(tmp_path))
+    info = v.verify_playable(out)
+    source = v.probe(clip)
+    assert (info["width"], info["height"]) == (source["width"], source["height"])
+    assert info["has_audio"] is True

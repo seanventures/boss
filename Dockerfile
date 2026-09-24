@@ -31,6 +31,16 @@ FROM python-base AS api
 # because a developer machine has git and node, which is exactly why nobody noticed.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    `# VIDEO EDITING IS A BOSS CAPABILITY, so its tool ships with the image rather than` \
+    `# being something an operator installs. infra/containers/worker.Dockerfile has said so` \
+    `# since the video skills landed — but that file builds the goldeneye images, and the` \
+    `# community install builds from THIS one, where ffmpeg appeared nowhere. So every video` \
+    `# step refused on a community install with "ffmpeg is not installed".` \
+    `#` \
+    `# libavfilter-extra brings drawtext, which needs libfreetype and is not in the base` \
+    `# filter set: without it video.caption fails with "No such filter: 'drawtext'" only when` \
+    `# it runs, which is after the render has already spent its time.` \
+    ffmpeg libavfilter-extra fonts-dejavu-core \
     # Both coding CLIs, for the same reason git is here: a harness the control plane cannot
     # start is a harness that accepts work and never performs it. claude-code authorises from
     # CLAUDE_CODE_OAUTH_TOKEN; codex from CODEX_ACCESS_TOKEN via `codex login
@@ -114,6 +124,16 @@ FROM python-base AS worker
 # a half-empty worker image.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    `# VIDEO EDITING IS A BOSS CAPABILITY, so its tool ships with the image rather than` \
+    `# being something an operator installs. infra/containers/worker.Dockerfile has said so` \
+    `# since the video skills landed — but that file builds the goldeneye images, and the` \
+    `# community install builds from THIS one, where ffmpeg appeared nowhere. So every video` \
+    `# step refused on a community install with "ffmpeg is not installed".` \
+    `#` \
+    `# libavfilter-extra brings drawtext, which needs libfreetype and is not in the base` \
+    `# filter set: without it video.caption fails with "No such filter: 'drawtext'" only when` \
+    `# it runs, which is after the render has already spent its time.` \
+    ffmpeg libavfilter-extra fonts-dejavu-core \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
