@@ -26,17 +26,15 @@ import {
   isCommunityPrimaryNavVisible,
   isCommunitySurfaceVisible,
   isPaidEdition,
-  isPaidSurfaceVisible,
   normalizeEditionId,
-  paidSurfaceReason,
   shouldShowPaidNavBadge,
 } from "../lib/edition";
+import { isPaidSurfaceVisible, paidSurfaceReason } from "../lib/edition-paid";
 import {
   CommunityIncludedBadge,
   EditionChip,
-  PaidSurfaceGate,
-  PaidTierBadge,
 } from "../app/edition-ui";
+import { PaidSurfaceGate, PaidTierBadge } from "../app/edition-ui-paid";
 import ConsoleShell from "../app/ConsoleShell";
 
 describe("edition classification (mirrors API paid surface map)", () => {

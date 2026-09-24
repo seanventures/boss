@@ -99,6 +99,17 @@ def test_community_actions_do_not_depend_on_paid_server_actions() -> None:
     assert b"linkAccountConnectAction" in paid.read_bytes()
 
 
+def test_community_edition_navigation_does_not_import_paid_chrome() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    for path in ("apps/web/lib/edition.ts", "apps/web/app/edition-ui.tsx"):
+        assert not any(
+            marker in (export.ROOT / path).read_bytes() for marker in export.PAID_SOURCE_MARKERS
+        )
+    for path in ("apps/web/lib/edition-paid.ts", "apps/web/app/edition-ui-paid.tsx"):
+        assert export.matching_rule(path, manifest["exclude"])
+    assert b"org_chart" in (export.ROOT / "apps/web/lib/edition.ts").read_bytes()
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()

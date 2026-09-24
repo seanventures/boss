@@ -187,7 +187,7 @@ describe("skill import/export actions", async () => {
 
 describe("Community skill YAML island", async () => {
   const { SkillExportButton, SkillImportForm } = await import("../app/skills-import-ui");
-  const { PaidSurfaceGate } = await import("../app/edition-ui");
+  const { PaidSurfaceGate } = await import("../app/edition-ui-paid");
 
   it("renders import/export controls and does not render marketplace", () => {
     const html = renderToStaticMarkup(

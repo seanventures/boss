@@ -198,7 +198,7 @@ describe("pack import/export actions", async () => {
 
 describe("Company Pack YAML island", async () => {
   const { PackExportButton, PackImportForm } = await import("../app/packs-import-ui");
-  const { PaidSurfaceGate } = await import("../app/edition-ui");
+  const { PaidSurfaceGate } = await import("../app/edition-ui-paid");
 
   it("renders import/export controls and does not render marketplace", () => {
     const html = renderToStaticMarkup(

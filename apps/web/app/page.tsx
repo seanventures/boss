@@ -67,10 +67,9 @@ import {
 import ConsoleShell from "./ConsoleShell";
 import {
   CommunityIncludedBadge,
-  PaidSurfaceGate,
-  PaidTierBadge,
   SurfaceHeading,
 } from "./edition-ui";
+import { PaidSurfaceGate, PaidTierBadge } from "./edition-ui-paid";
 import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
 import { OnboardingHelpCard } from "./onboarding-help-card";
 import { BossAgentHome } from "./boss-agent-home";
