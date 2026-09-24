@@ -46,6 +46,29 @@ PAID_SOURCE_MARKERS = (
     b"enterprise_edition",
     b"cloud_edition",
 )
+# This exact block is shared configuration consumed by the private paid
+# extensions. It contains no adapter, route, or paid behavior. Keep it in the
+# Community settings module so the private edition retains its configuration
+# after composition, but never exempt any other paid marker in that file.
+SHARED_CONFIG_PAID_FIELDS = b'''    account_connect_url: Optional[str] = Field(
+        default=None, alias="BOSS_ACCOUNT_CONNECT_URL"
+    )
+    account_connect_token: Optional[str] = Field(
+        default=None, alias="BOSS_ACCOUNT_CONNECT_TOKEN"
+    )
+    account_connect_timeout_seconds: int = Field(
+        default=10, alias="BOSS_ACCOUNT_CONNECT_TIMEOUT_SECONDS"
+    )
+'''
+
+
+def has_paid_source_markers(path: str, data: bytes) -> bool:
+    scan_data = data
+    if path == "engine/boss_engine/config.py":
+        # Exact replacement is intentionally brittle: any new paid field or
+        # changed implementation blocks the export until it is reviewed.
+        scan_data = data.replace(SHARED_CONFIG_PAID_FIELDS, b"", 1)
+    return any(marker in scan_data for marker in PAID_SOURCE_MARKERS)
 
 
 def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
@@ -303,7 +326,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         if any(marker in data for marker in PRIVATE_MARKERS):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             continue
-        if any(marker in data for marker in PAID_SOURCE_MARKERS):
+        if has_paid_source_markers(path, data):
             blockers.append({"kind": "mixed-paid-source-needs-split", "path": path})
             continue
         selected[path] = data
