@@ -246,7 +246,7 @@ From `community_edition.yaml`:
 
 **Installs (defaults):** roles metatron/coo/cto/pm/qa/release_manager; workflows ceo_command_to_pr, decision_inbox, budget_gated_job, model_entitlement_routing; core safety + budget + entitlement + work orchestration policies.
 
-**License posture:** `license_candidate: AGPLv3` with `legal_review_required: true` — treat as policy-in-progress for public flip; engine packaging may carry separate notices. Do not invent a final license claim beyond what legal has approved.
+**License posture:** The product owner approved Apache License 2.0 for the full Community repository. The pack records `license_candidate: Apache-2.0` with `legal_review_required: true` while the promised counsel reference and release record remain outstanding. The private commercial packaging policy is not installed by Community. Do not publish or claim public OSS readiness until BOSS-300 and the public-flip gates pass.
 
 ---
 

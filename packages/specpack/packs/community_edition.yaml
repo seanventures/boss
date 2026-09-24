@@ -5,7 +5,7 @@ description: >
   hosted Account Connect. Includes self-hosted SSO (OIDC/SAML/SCIM). Optional
   Easy Connect (/v1/cloud/*) links to BOSS Cloud.
 edition: community
-license_candidate: AGPLv3
+license_candidate: Apache-2.0
 legal_review_required: true
 hosted_account_connect_required: false
 includes:
@@ -39,7 +39,7 @@ requires:
 installs:
   roles: [metatron, coo, cto, pm, qa, release_manager]
   workflows: [ceo_command_to_pr, decision_inbox, budget_gated_job, model_entitlement_routing]
-  policies: [default_safety, budget_governor_policy, model_entitlement_policy, commercial_packaging_policy, work_orchestration_policy]
+  policies: [default_safety, budget_governor_policy, model_entitlement_policy, work_orchestration_policy]
   # `youtube` and `video` are the media pipeline. In COMMUNITY deliberately: enterprise
   # and cloud both require this pack, so listing them here is what makes publishing
   # available in every edition rather than only the paid ones.
