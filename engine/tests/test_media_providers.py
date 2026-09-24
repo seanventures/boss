@@ -83,6 +83,11 @@ def test_an_ordinary_https_link_is_a_direct_file():
     "172.16.4.4",
     "0.0.0.0",
     "[::1]",
+    # RFC 6598 shared space. is_private is False for this whole block, which is why a check
+    # written against is_private lets it through. 100.100.100.200 is Alibaba Cloud metadata;
+    # 100.64.0.10 is a tailnet address.
+    "100.100.100.200",
+    "100.64.0.10",
 ])
 def test_a_link_pointing_back_inside_the_network_is_refused(host):
     """THE ONE THAT MATTERS.

@@ -275,6 +275,59 @@ def _s3_link(host: str, path: str, suffix: str, style: str, raw: str) -> Resolve
     return ResolvedLink("s3", file_ref=key, container=bucket, original_url=raw)
 
 
+def _address_is_unroutable(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether this address is inside a network a media link must not reach.
+
+    ``is_private`` IS THE WRONG TEST BY ITSELF. Python documents that ``100.64.0.0/10``
+    (RFC 6598 shared address space) has ``is_private is False`` — and ``is_global`` is False
+    too, which is the only flag that catches it. That range is not a curiosity: ``100.100.100.200``
+    is Alibaba Cloud's instance-metadata address, and ``100.64.0.0/10`` is the CGNAT block a
+    tailnet uses. Checking only the private/loopback/link-local/reserved flags lets a pasted
+    link fetch either one.
+
+    Multicast stays listed on its own because ``224.0.0.0/4`` reports ``is_global`` True.
+    """
+    return (
+        not ip.is_global
+        or ip.is_multicast
+        or ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _resolved_addresses(host: str) -> Optional[list[str]]:
+    """TCP addresses for ``host``. None when DNS fails, so a placement-time check can
+    stay lenient while a fetch treats that as a refusal."""
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return None
+    addresses: list[str] = []
+    for info in infos:
+        address = info[4][0]
+        if address not in addresses:
+            addresses.append(address)
+    return addresses
+
+
+def _refuse_addresses(host: str, addresses: list[str]) -> None:
+    for address in addresses:
+        literal = address.split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(literal)
+        except ValueError:
+            raise MediaProviderError(
+                f"{host} resolves to {address}, which BOSS will not fetch.") from None
+        if _address_is_unroutable(ip):
+            raise MediaProviderError(
+                f"{host} resolves to {ip}, which is inside BOSS's own network. A media link "
+                "must point at something on the public internet — cloud metadata endpoints and "
+                "internal services are refused.")
+
+
 def _refuse_unroutable(host: str) -> None:
     """Refuse a direct link that points back inside the network BOSS runs in.
 
@@ -284,29 +337,36 @@ def _refuse_unroutable(host: str) -> None:
     plane's own cloud role to whoever asked, or reaches the BOSS API on localhost as a caller
     with no authentication to answer for.
 
-    Resolution is done here rather than left to the fetch so the refusal happens before any
-    request. It is imperfect against a name that resolves differently on the second lookup; the
-    fetcher must therefore ALSO pin what it connected to, which is noted where it is fetched.
+    A name that does not resolve here is not refused: a DNS blip at the moment someone pastes
+    a link should not reject a public file. The fetch resolves again and pins that answer, so
+    a blip cannot become a second, unchecked lookup.
     """
-    candidates: list[str] = []
-    try:
-        infos = socket.getaddrinfo(host, None)
-        candidates = [info[4][0] for info in infos]
-    except OSError:
+    addresses = _resolved_addresses(host)
+    if not addresses:
         # A name that does not resolve here is not necessarily hostile, and refusing on a DNS
-        # blip would reject good links. The fetch will fail honestly on its own.
+        # blip would reject good links. The fetch resolves again and refuses if that fails too.
         return
-    for address in candidates:
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            continue
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
-            raise MediaProviderError(
-                f"{host} resolves to {ip}, which is inside BOSS's own network. A media link "
-                "must point at something on the public internet — cloud metadata endpoints and "
-                "internal services are refused.")
+    _refuse_addresses(host, addresses)
+
+
+def public_address_for(host: str) -> str:
+    """The single address a fetch of ``host`` must open a TCP connection to.
+
+    ONE LOOKUP, USED FOR THE CONNECTION. Resolving again inside the HTTP client is how a name
+    that passed this check connects to a different address — a public answer here, then
+    ``169.254.169.254`` on the lookup the client does itself. The caller pins the returned
+    address and must not resolve the name a second time.
+
+    DNS failure is a refusal here, unlike placement. There is no safe fetch of a name that
+    did not resolve to a public address.
+    """
+    addresses = _resolved_addresses(host)
+    if not addresses:
+        raise MediaProviderError(
+            f"{host} did not resolve, so BOSS will not fetch it. A media link has to resolve "
+            "to a public address.")
+    _refuse_addresses(host, addresses)
+    return addresses[0]
 
 
 def describe_providers() -> list[dict]:

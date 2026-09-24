@@ -28,7 +28,6 @@ additive — nothing above this module changes.
 from __future__ import annotations
 
 import os
-import socket
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -37,7 +36,6 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .media_providers import (
     AUTH_NONE,
-    MediaProviderError,
     ResolvedLink,
     provider,
     resolve_link,
@@ -185,14 +183,15 @@ def _fetch_direct(target: ResolvedLink, *, dest_dir: str) -> dict[str, Any]:
     THE GUARD IS APPLIED TWICE AND THAT IS NOT REDUNDANT. `resolve_link` checked the hostname
     when the link was placed; between then and now the name can resolve to something else, which
     is a DNS-rebinding fetch of exactly the metadata endpoint the first check refused. So the
-    address is re-checked here, and redirects are refused outright rather than followed — a
-    public URL that 302s to 169.254.169.254 is the same attack wearing a hat.
+    address is resolved again here, and the TCP connection is pinned to THAT address — the HTTP
+    client must not look the name up itself. Redirects are refused outright rather than
+    followed: a public URL that 302s to 169.254.169.254 is the same attack wearing a hat.
     """
-    from .media_providers import _refuse_unroutable
+    from .media_providers import public_address_for
 
     url = target.original_url or target.file_ref
     host = urlparse(url).hostname or ""
-    _refuse_unroutable(host)
+    pinned_ip = public_address_for(host)
 
     try:
         import httpx
@@ -206,7 +205,10 @@ def _fetch_direct(target: ResolvedLink, *, dest_dir: str) -> dict[str, Any]:
     try:
         # follow_redirects=False DELIBERATELY. See the docstring: a redirect is how a link that
         # passed the address check reaches an address that would not have.
-        with httpx.Client(timeout=60.0, follow_redirects=False) as client:
+        # The transport connects to pinned_ip while the URL keeps the original host, so TLS
+        # still checks the name on the certificate and a later DNS answer cannot redirect it.
+        with httpx.Client(timeout=60.0, follow_redirects=False,
+                          transport=_transport_pinned_to(host, pinned_ip)) as client:
             with client.stream("GET", url) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     raise MediaStorageError(
@@ -239,6 +241,39 @@ def _fetch_direct(target: ResolvedLink, *, dest_dir: str) -> dict[str, Any]:
         raise MediaStorageError(f"{url} returned an empty file.")
     return {"path": path, "name": os.path.basename(path), "bytes": written,
             "provider": "http", "source_url": url}
+
+
+def _transport_pinned_to(hostname: str, ip: str):
+    """An HTTP transport that dials ``ip`` whenever the request names ``hostname``.
+
+    The URL itself is left alone. Rewriting it to the IP would make TLS check a certificate
+    for the address rather than the name, and would put the raw IP in the Host header. Dialing
+    the pinned address with the original URL keeps both, and leaves no second DNS lookup.
+    """
+    import httpcore
+    import httpx
+
+    aliases = {hostname, hostname.lower()}
+    try:
+        aliases.add(hostname.encode("idna").decode("ascii"))
+    except UnicodeError:
+        pass
+
+    class _PinnedBackend(httpcore.SyncBackend):
+        def connect_tcp(self, host, port, timeout=None, local_address=None,
+                        socket_options=None):
+            if host in aliases:
+                host = ip
+            return super().connect_tcp(
+                host, port, timeout=timeout, local_address=local_address,
+                socket_options=socket_options,
+            )
+
+    transport = httpx.HTTPTransport(retries=0)
+    # ConnectionPool takes the backend only at construction, and HTTPTransport does not expose
+    # that argument. The pool has not connected yet, so replacing the backend is the dial.
+    transport._pool._network_backend = _PinnedBackend()
+    return transport
 
 
 def _size(count: int) -> str:

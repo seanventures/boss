@@ -59,6 +59,56 @@ def test_writing_to_a_read_only_provider_is_refused_before_anything_is_uploaded(
                 provider_key="http")
 
 
+def test_a_fetch_dials_the_address_it_checked_and_not_the_next_lookup(tmp_path, monkeypatch):
+    """DNS rebinding is a second lookup.
+
+    The check resolves example.com to a public address. The lookup after that — the one the
+    HTTP client would do itself — answers with the metadata address. The connection has to use
+    the first answer. Dialing the second is the fetch the check exists to stop.
+    """
+    import socket
+
+    from boss_engine.services.media_providers import ResolvedLink
+
+    real_getaddrinfo = socket.getaddrinfo
+    calls = {"n": 0}
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "example.com":
+            calls["n"] += 1
+            ip = "8.8.8.8" if calls["n"] == 1 else "169.254.169.254"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 0))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    seen: dict[str, tuple] = {}
+
+    def fake_connect(address, *args, **kwargs):
+        seen["address"] = address
+        raise OSError("stopped before a socket was opened")
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    link = ResolvedLink("http", file_ref="https://example.com/clip.mp4",
+                        original_url="https://example.com/clip.mp4")
+    with pytest.raises(s.MediaStorageError):
+        s._fetch_direct(link, dest_dir=str(tmp_path))
+    assert seen["address"][0] == "8.8.8.8"
+    assert seen["address"][0] != "169.254.169.254"
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_direct_fetch_refuses_shared_address_space(tmp_path):
+    """100.64.0.0/10 is not marked private, and it is where metadata and tailnets live."""
+    from boss_engine.services.media_providers import ResolvedLink
+
+    link = ResolvedLink(
+        "http", file_ref="http://100.100.100.200/latest/meta-data/",
+        original_url="http://100.100.100.200/latest/meta-data/")
+    with pytest.raises(MediaProviderError, match="BOSS's own network"):
+        s._fetch_direct(link, dest_dir=str(tmp_path))
+    assert not list(tmp_path.iterdir())
+
+
 def test_a_direct_fetch_refuses_an_address_inside_our_own_network(tmp_path):
     """Checked again at fetch time, not only when the link was placed.
 
