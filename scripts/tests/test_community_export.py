@@ -86,6 +86,17 @@ def test_goldeneye_community_boundary_is_preserved() -> None:
     assert b"COPY packages/goldeneye ./packages/goldeneye" in dockerfile
 
 
+def test_shared_config_exception_is_exact_and_still_blocks_paid_code() -> None:
+    path = "engine/boss_engine/config.py"
+    approved = b"class Settings:\n" + export.SHARED_CONFIG_PAID_FIELDS
+    assert not export.has_paid_source_markers(path, approved)
+    assert export.has_paid_source_markers("engine/boss_engine/other.py", approved)
+    assert export.has_paid_source_markers(path, approved + b"account_connect_callback = True\n")
+    changed = approved.replace(b"BOSS_ACCOUNT_CONNECT_URL", b"BOSS_ACCOUNT_CONNECT_API_URL")
+    assert export.has_paid_source_markers(path, changed)
+    assert export.has_paid_source_markers(path, approved + b"CloudProduct = object()\n")
+
+
 def test_fixed_commit_candidate_withholds_private_and_reports_edges(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()
