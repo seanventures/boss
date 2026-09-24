@@ -94,18 +94,18 @@ COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --prof
 if [[ "$PURGE_DATA" -eq 1 && "$SKIP_BACKUP" -eq 0 ]]; then
   args=(--dir "$INSTALL_DIR")
   [[ -n "$BACKUP_DIR" ]] && args+=(--backup-dir "$BACKUP_DIR")
-  backup="$(bash "$INSTALL_DIR/scripts/install/backup.sh" "${args[@]}")" || {
+  backup="$(bash "$INSTALL_DIR/scripts/install/backup.sh" "${args[@]}" </dev/null)" || {
     echo 'Backup failed; data purge was cancelled.' >&2; exit 1;
   }
   printf 'Private backup: %s\n' "$backup"
 fi
 
 if [[ "$PURGE_DATA" -eq 1 ]]; then
-  "${COMPOSE[@]}" down --volumes --remove-orphans
+  "${COMPOSE[@]}" down --volumes --remove-orphans </dev/null
   rm -f "$ENV_FILE" "$INSTALL_DIR/boss-community.env.sh"
   echo 'BOSS Community data purged. Source checkout and any backups remain.'
 else
-  "${COMPOSE[@]}" down --remove-orphans
+  "${COMPOSE[@]}" down --remove-orphans </dev/null
   echo 'BOSS Community stopped. .env, volumes, images, backups, and checkout were kept.'
   printf 'Reinstall: cd %s && ./install.sh --dir "%s" --yes --skip-model-key\n' "$INSTALL_DIR" "$INSTALL_DIR"
 fi

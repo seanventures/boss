@@ -48,7 +48,7 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
-"${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss >/dev/null || {
+"${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss </dev/null >/dev/null || {
   echo 'BOSS Postgres is not ready; backup cannot continue.' >&2; exit 1;
 }
 
@@ -74,7 +74,7 @@ resume() {
   local service
   for service in infisical api worker web; do
     if [[ " ${PAUSED[*]} " == *" $service "* ]]; then
-      "${COMPOSE[@]}" start "$service" >&2 || return 1
+      "${COMPOSE[@]}" start "$service" </dev/null >&2 || return 1
     fi
   done
 }
@@ -94,14 +94,14 @@ trap on_exit EXIT
 
 if [[ ${#PAUSED[@]} -gt 0 ]]; then
   echo 'Pausing BOSS writers for a consistent backup...' >&2
-  "${COMPOSE[@]}" stop "${PAUSED[@]}" >&2
+  "${COMPOSE[@]}" stop "${PAUSED[@]}" </dev/null >&2
 fi
-"${COMPOSE[@]}" exec -T db pg_dump -U boss -d boss -Fc > "$BACKUP/boss.dump"
-if [[ "$("${COMPOSE[@]}" exec -T db psql -U boss -d boss -Atc "SELECT 1 FROM pg_database WHERE datname='infisical'")" == 1 ]]; then
-  "${COMPOSE[@]}" exec -T db pg_dump -U boss -d infisical -Fc > "$BACKUP/infisical.dump"
+"${COMPOSE[@]}" exec -T db pg_dump -U boss -d boss -Fc </dev/null > "$BACKUP/boss.dump"
+if [[ "$("${COMPOSE[@]}" exec -T db psql -U boss -d boss -Atc "SELECT 1 FROM pg_database WHERE datname='infisical'" </dev/null)" == 1 ]]; then
+  "${COMPOSE[@]}" exec -T db pg_dump -U boss -d infisical -Fc </dev/null > "$BACKUP/infisical.dump"
 fi
 "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint tar api \
-  -C /var/lib/boss/artifacts -cf - . > "$BACKUP/artifacts.tar"
+  -C /var/lib/boss/artifacts -cf - . </dev/null > "$BACKUP/artifacts.tar"
 [[ -s "$BACKUP/boss.dump" && -s "$BACKUP/artifacts.tar" ]] || {
   echo 'Database or artifact archive was empty; refusing this backup.' >&2; exit 1;
 }

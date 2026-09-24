@@ -40,7 +40,7 @@ INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
   { echo 'Tracked local changes need to be committed or moved before upgrade; nothing changed.' >&2; exit 1; }
 
 OLD_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
-git -C "$INSTALL_DIR" fetch origin "$REF"
+git -C "$INSTALL_DIR" fetch origin "$REF" </dev/null
 NEW_COMMIT="$(git -C "$INSTALL_DIR" rev-parse FETCH_HEAD)"
 git -C "$INSTALL_DIR" merge-base --is-ancestor "$OLD_COMMIT" "$NEW_COMMIT" ||
   { echo 'Upstream cannot fast-forward this checkout; nothing changed.' >&2; exit 1; }
@@ -60,7 +60,7 @@ git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$FETCHED_BACK
 git -C "$INSTALL_DIR" show FETCH_HEAD:install.sh > "$FETCHED_INSTALLER"
 backup_args=(--dir "$INSTALL_DIR")
 [[ -n "$BACKUP_DIR" ]] && backup_args+=(--backup-dir "$BACKUP_DIR")
-BACKUP="$(bash "$FETCHED_BACKUP" "${backup_args[@]}")" || {
+BACKUP="$(bash "$FETCHED_BACKUP" "${backup_args[@]}" </dev/null)" || {
   echo 'Backup failed; source and containers were not changed.' >&2; exit 1;
 }
 printf 'Private recovery backup: %s\n' "$BACKUP"
@@ -69,7 +69,7 @@ printf 'Private recovery backup: %s\n' "$BACKUP"
 # rerun. Execute that version so new installer fixes apply during this upgrade.
 install_args=(--dir "$INSTALL_DIR" --ref "$REF" --yes --skip-model-key)
 [[ "$NO_WEB" -eq 1 ]] && install_args+=(--no-web)
-if ! bash "$FETCHED_INSTALLER" "${install_args[@]}"; then
+if ! bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
   echo "Upgrade failed. Recovery backup: $BACKUP" >&2
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2
   exit 1

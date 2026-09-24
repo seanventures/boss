@@ -196,6 +196,7 @@ def test_upgrade_bootstraps_backup_helper_from_target_ref(tmp_path: Path) -> Non
     (upstream / "scripts/install/backup.sh").write_text(
         "#!/bin/sh\n"
         'test -f "$2/.env" || exit 9\n'
+        "cat >/dev/null\n"
         "echo /tmp/fetched-backup\n"
     )
     (upstream / "install.sh").write_text(
@@ -220,6 +221,12 @@ def test_upgrade_bootstraps_backup_helper_from_target_ref(tmp_path: Path) -> Non
     assert "Private recovery backup: /tmp/fetched-backup" in result.stdout
     assert (install / "upgrade-ran").exists()
     assert (install / ".env").read_text() == "BOSS_API_KEY=keep\n"
+    piped = subprocess.run(
+        ["bash", "-s", "--", "--dir", str(install)], input=UPGRADE.read_text(),
+        text=True, capture_output=True, timeout=20, check=False,
+    )
+    assert piped.returncode == 0, piped.stdout + piped.stderr
+    assert "Upgrade complete:" in piped.stdout
 
 
 def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
@@ -254,7 +261,7 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
         "#!/bin/sh\n"
         'case "$1" in\n'
         "  info) exit 0 ;;\n"
-        "  compose) if [ \"$2\" = version ]; then echo 'Docker Compose version v2'; fi; exit 0 ;;\n"
+        "  compose) if [ \"$2\" = version ]; then echo 'Docker Compose version v2'; else cat >/dev/null; fi; exit 0 ;;\n"
         "esac\n"
         "exit 1\n"
     )
@@ -300,6 +307,14 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
     fresh_lines = (fresh / ".env").read_text().splitlines()
     assert "BOSS_GITHUB_OWNER=" in fresh_lines
     assert "BOSS_GITHUB_REPO=" in fresh_lines
+    piped = subprocess.run(
+        ["bash", "-s", "--", "--dir", str(fresh), "--yes", "--skip-model-key",
+         "--no-web", "--no-install-deps"],
+        input=INSTALLER.read_text(), env=test_env, text=True,
+        capture_output=True, timeout=20, check=False,
+    )
+    assert piped.returncode == 0, piped.stdout + piped.stderr
+    assert "BOSS Community is running." in piped.stdout
 
 
 def test_remote_failed_build_retains_previous_source(tmp_path: Path) -> None:
