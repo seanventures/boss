@@ -677,7 +677,7 @@ from .services.entitlements import (
     InvalidEntitlementConnectionError,
     SkillNotFoundError,
 )
-from .services.enterprise import EnterpriseService
+from boss_engine.services.self_hosted_identity import SelfHostedIdentityService
 from .services.health import HealthSnapshotService
 from .services.event_subscription_service import (
     create_event_subscription,
@@ -902,7 +902,7 @@ model_gateway = ModelGatewayService(settings)
 capability_bundles = CapabilityBundleService(settings)
 commercial = CommercialService(settings)
 cloud_product = CloudProductService(settings, commercial)
-enterprise = EnterpriseService(settings)
+enterprise = SelfHostedIdentityService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
 infrastructure = InfrastructureService(settings)
@@ -24524,6 +24524,7 @@ if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
     from .enterprise_extensions.operations_routes import (
         register_enterprise_operations_routes,
     )
+    from boss_engine.services.enterprise import EnterpriseService
     from .routers.enterprise import enterprise_router, register_soc2_route
 
     register_hosted_routes(
@@ -24534,7 +24535,7 @@ if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
         edition_status_from_service,
     )
     register_enterprise_operations_routes(
-        app, engine, enterprise, require_project_actor
+        app, engine, EnterpriseService(settings), require_project_actor
     )
     register_soc2_route(app, engine, settings, require_project_actor)
     paid_router = enterprise_router

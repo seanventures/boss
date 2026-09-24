@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
 
@@ -51,14 +52,21 @@ class EntitlementBrokerService:
         "suspended",
         "unavailable",
     }
-    GATEWAY_SOURCE_KINDS = {
-        "enterprise_model_gateway",
-        "managed_cloud_model_gateway",
-    }
+    GATEWAY_SOURCE_KINDS = {"managed_cloud_model_gateway"}
 
     def __init__(self, settings: Settings):
         self.settings = settings
         self.budget = BudgetGovernor(settings)
+        edition = str(settings.boss_edition or "community").strip().lower()
+        self._paid_gateway = None
+        if edition in {
+            "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted"
+        }:
+            extension = import_module("boss_engine.services.enterprise_gateway")
+            self._paid_gateway = extension.EnterpriseGatewayPolicy(settings)
+        self._gateway_source_kinds = set(self.GATEWAY_SOURCE_KINDS)
+        if self._paid_gateway is not None:
+            self._gateway_source_kinds.add(self._paid_gateway.source_kind)
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -67,7 +75,10 @@ class EntitlementBrokerService:
         return payload
 
     def _provider_registry(self) -> dict[str, Any]:
-        return self._load_yaml(self.settings.specpack_root / "models" / "providers.yaml")
+        registry = self._load_yaml(self.settings.specpack_root / "models" / "providers.yaml")
+        if self._paid_gateway is not None:
+            return self._paid_gateway.merge_registry(registry)
+        return registry
 
     def _source_record_defaults(self) -> dict[str, dict[str, Any]]:
         defaults: dict[str, dict[str, Any]] = {}
@@ -381,14 +392,8 @@ class EntitlementBrokerService:
                 self.settings.local_model_enabled and self.settings.local_model_id
             )
             return local_ready, local_ready
-        if source_id == "enterprise_model_gateway":
-            runtime_supported = bool(
-                self.settings.enterprise_model_gateway_enabled
-                and self.settings.enterprise_model_gateway_url
-            )
-            return runtime_supported, bool(
-                runtime_supported and self.settings.enterprise_model_gateway_token
-            )
+        if self._paid_gateway is not None and source_id == self._paid_gateway.source_id:
+            return self._paid_gateway.runtime_flags()
         if source_id == "managed_cloud_model_gateway":
             runtime_supported = bool(
                 self.settings.managed_cloud_model_gateway_enabled
@@ -418,8 +423,8 @@ class EntitlementBrokerService:
             return "BOSS_CURSOR_CLI_ENABLED"
         if source_id == "approved_local_model_host":
             return "BOSS_LOCAL_MODEL_ID"
-        if source_id == "enterprise_model_gateway":
-            return "BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN"
+        if self._paid_gateway is not None and source_id == self._paid_gateway.source_id:
+            return self._paid_gateway.credential_ref()
         if source_id == "managed_cloud_model_gateway":
             return "BOSS_ACCOUNT_CONNECT_TOKEN"
         return None
@@ -427,9 +432,8 @@ class EntitlementBrokerService:
     def _runtime_supported_models(
         self, source_id: str, source_defaults: dict[str, Any]
     ) -> list[str]:
-        if source_id == "enterprise_model_gateway":
-            configured = list(self.settings.enterprise_model_gateway_model_values)
-            return configured or list(source_defaults.get("supported_models") or [])
+        if self._paid_gateway is not None and source_id == self._paid_gateway.source_id:
+            return self._paid_gateway.supported_models(source_defaults)
         if source_id == "managed_cloud_model_gateway":
             configured = list(self.settings.managed_cloud_model_gateway_model_values)
             return configured or list(source_defaults.get("supported_models") or [])
@@ -720,7 +724,7 @@ class EntitlementBrokerService:
             return "official_api"
         if source_kind in {"official_cli", "official_coding_agent"}:
             return "official_cli"
-        if source_kind in self.GATEWAY_SOURCE_KINDS:
+        if source_kind in self._gateway_source_kinds:
             return source_kind
         return source_kind
 
@@ -729,7 +733,7 @@ class EntitlementBrokerService:
         entitlement_kind = source.get("entitlement_kind")
         if source_kind == "approved_local_model":
             return "local_model"
-        if source_kind in self.GATEWAY_SOURCE_KINDS:
+        if source_kind in self._gateway_source_kinds:
             return str(source_kind)
         if source_kind == "official_api":
             return "official_api"
@@ -745,8 +749,8 @@ class EntitlementBrokerService:
             return ["budget_safe", "quality_first"]
         if source_kind in {"official_cli", "official_coding_agent"}:
             return ["subscription_first", "owner_sandbox"]
-        if source_kind == "enterprise_model_gateway":
-            return ["enterprise_policy", "quality_first", "budget_safe"]
+        if self._paid_gateway is not None and source_kind == self._paid_gateway.source_kind:
+            return self._paid_gateway.routing_modes()
         if source_kind == "managed_cloud_model_gateway":
             return ["quality_first", "budget_safe"]
         return ["budget_safe"]
@@ -842,7 +846,7 @@ class EntitlementBrokerService:
             if not owner_type:
                 owner_type = (
                     "project"
-                    if source_kind in {"official_api", *self.GATEWAY_SOURCE_KINDS}
+                    if source_kind in {"official_api", *self._gateway_source_kinds}
                     else "workspace_operator"
                 )
             self.upsert_source(
@@ -885,7 +889,7 @@ class EntitlementBrokerService:
                         source_defaults.get(
                             "risk_tier_max",
                             3
-                            if source_kind in {"official_api", *self.GATEWAY_SOURCE_KINDS}
+                            if source_kind in {"official_api", *self._gateway_source_kinds}
                             else 1,
                         )
                     ),
@@ -906,6 +910,11 @@ class EntitlementBrokerService:
             )
 
     def list_sources(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
+        declared_boss_sources = {
+            source_id
+            for source_id, defaults in self._source_record_defaults().items()
+            if defaults.get("provider") == "boss"
+        }
         rows = connection.execute(
             text(
                 """
@@ -926,6 +935,13 @@ class EntitlementBrokerService:
         items: list[dict[str, Any]] = []
         for row in rows:
             payload = dict(row)
+            # A previously paid database can be started as Community. Never
+            # route a BOSS-owned source absent from this edition's catalog.
+            if (
+                payload["provider"] == "boss"
+                and payload["source_id"] not in declared_boss_sources
+            ):
+                continue
             payload["effective_status"] = self._effective_status(payload)
             payload["connection_status"] = self._effective_connection_status(payload)
             runtime_supported, credential_present = self._runtime_context(payload)
@@ -1156,6 +1172,8 @@ class EntitlementBrokerService:
         emit_events: bool = True,
     ) -> dict[str, Any]:
         defaults = self._source_record_defaults().get(payload["source_id"], {})
+        if payload.get("provider") == "boss" and not defaults:
+            raise ValueError("BOSS-owned model source is unavailable in this edition")
         record = {**defaults, **payload}
         computed_runtime_supported, computed_credential_present = self._runtime_flags(
             record["source_id"]
@@ -1759,11 +1777,14 @@ class EntitlementBrokerService:
             if isinstance(configured, list) and configured:
                 return {normalize_data_boundary(str(item)) for item in configured}
             return set(DATA_BOUNDARIES)
-        if source.get("source_kind") == "enterprise_model_gateway":
-            configured = boundary_policy.get("enterprise_model_gateway_default")
-            if isinstance(configured, list) and configured:
-                return {normalize_data_boundary(str(item)) for item in configured}
-            return {"public", "internal", "confidential", "restricted"}
+        if (
+            self._paid_gateway is not None
+            and source.get("source_kind") == self._paid_gateway.source_kind
+        ):
+            configured = boundary_policy.get(f"{self._paid_gateway.source_kind}_default")
+            if not isinstance(configured, list) or not configured:
+                configured = self._paid_gateway.data_boundaries()
+            return {normalize_data_boundary(str(item)) for item in configured}
         if source.get("source_kind") == "managed_cloud_model_gateway":
             configured = boundary_policy.get("managed_cloud_model_gateway_default")
             if isinstance(configured, list) and configured:

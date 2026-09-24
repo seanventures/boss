@@ -484,6 +484,50 @@ def test_community_api_starts_without_paid_operations_module():
     assert result.returncode == 0, result.stderr
 
 
+def test_community_api_starts_without_paid_enterprise_service():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockPaidEnterpriseService(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname in {
+                            'boss_engine.services.enterprise',
+                            'apps.api.app.services.enterprise',
+                        }:
+                            raise ImportError('paid enterprise service deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockPaidEnterpriseService())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/enterprise/identity-providers' in paths
+                assert '/v1/enterprise/identity-rollout-policies' in paths
+                assert '/v1/enterprise/scim/users' in paths
+                assert '/v1/identity-providers' in paths
+                assert '/v1/enterprise/clusters' not in paths
+                assert '/v1/enterprise/support-cases' not in paths
+                assert 'boss_engine.services.enterprise' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_paid_api_registers_operations_route_contract():
     environment = os.environ.copy()
     environment["BOSS_EDITION"] = "enterprise_self_hosted"
