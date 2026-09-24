@@ -512,15 +512,10 @@ class Settings(BaseSettings):
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
     )
-    github_owner: str = Field(default="seanheiney", alias="BOSS_GITHUB_OWNER")
-    github_repo: str = Field(default="boss", alias="BOSS_GITHUB_REPO")
-    # EMPTY, NOT SOMEBODY'S REPOSITORY. These shipped defaulting to `seanheiney/boss-sandbox`,
-    # so every install on earth claimed to be pointed at one developer's private sandbox: the
-    # setup screen reported "seanheiney/boss-sandbox — GitHub has no such repository visible to
-    # this token" as if the operator had configured it, about a repository they have never
-    # heard of and cannot see. A default that names a real private repository is worse than no
-    # default: unset is a state the product can describe, and `resolve_repository_target` now
-    # says "no repository registered for this project" instead of pointing somewhere real.
+    # Webhook routing and target-repository setup must never assume a developer's repo.
+    # A new installation starts unbound until its operator connects a repository.
+    github_owner: str = Field(default="", alias="BOSS_GITHUB_OWNER")
+    github_repo: str = Field(default="", alias="BOSS_GITHUB_REPO")
     target_github_owner: str = Field(default="", alias="BOSS_TARGET_GITHUB_OWNER")
     target_github_repo: str = Field(default="", alias="BOSS_TARGET_GITHUB_REPO")
     # --- Repo-host extension seam (BOSS-267): SCM providers as add-ins ---------------------

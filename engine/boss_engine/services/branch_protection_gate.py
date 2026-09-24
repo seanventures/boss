@@ -81,8 +81,8 @@ def dry_run_checklist() -> list[dict[str, Any]]:
             "evidence": None,
             "how": (
                 "Configure on GitHub → Settings → Branches → Branch protection rules "
-                f"for the default branch, or PUT /repos/{{owner}}/{{repo}}/branches/"
-                "{{branch}}/protection with the matching fields."
+                "for the default branch, or PUT /repos/{owner}/{repo}/branches/"
+                "{branch}/protection with the matching fields."
             ),
         }
         for item in REQUIRED_CHECKS
@@ -315,14 +315,15 @@ class BranchProtectionGateService:
     def default_target(self) -> dict[str, str]:
         owner = (
             getattr(self.settings, "target_github_owner", None)
-            or getattr(self.settings, "github_owner", "seanheiney")
+            or getattr(self.settings, "github_owner", "")
         )
         repo = (
-            getattr(self.settings, "target_github_repo", None) or "boss-sandbox"
+            getattr(self.settings, "target_github_repo", None)
+            or getattr(self.settings, "github_repo", "")
         )
         return {
-            "owner": str(owner).strip() or "seanheiney",
-            "repo": str(repo).strip() or "boss-sandbox",
+            "owner": str(owner or "").strip(),
+            "repo": str(repo or "").strip(),
             "branch": "main",
         }
 
@@ -330,6 +331,14 @@ class BranchProtectionGateService:
         self, owner: str, repo: str, branch: str
     ) -> dict[str, Any]:
         """Fetch protection via adapter or raw request. Never raises for 403/404."""
+        if not owner or not repo:
+            return {
+                "mode": "unconfigured",
+                "http_status": None,
+                "protection": {},
+                "error": "repository_not_configured",
+                "entitlement_blocked": False,
+            }
         path = f"/repos/{owner}/{repo}/branches/{branch}/protection"
         if self._request_fn is not None:
             try:
@@ -454,14 +463,16 @@ class BranchProtectionGateService:
             )
             live_passed = False
 
-        simulated = get_simulated(owner, repo, branch) if accept_simulated else None
+        simulated = get_simulated(owner, repo, branch) if accept_simulated and owner and repo else None
         sim_passed = bool(simulated and simulated.get("satisfies_requirements"))
 
         # Fail closed: ready only if live passes OR (explicit simulated all-pass)
         live_demo_ready = bool(live_passed or sim_passed)
         blocker: Optional[str] = None
         if not live_demo_ready:
-            if live.get("entitlement_blocked"):
+            if live.get("error") == "repository_not_configured":
+                blocker = "No repository configured; connect a project repository first."
+            elif live.get("entitlement_blocked"):
                 blocker = (
                     "GitHub entitlement blocked branch protection on this private "
                     "repository (typically Pro-or-public). Owner must upgrade plan, "
