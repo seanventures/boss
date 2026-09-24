@@ -124,7 +124,7 @@ Options:
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
   --connect-codex        Explicitly import this VM user's Codex ChatGPT login into BOSS
-  --connect-claude       Explicitly mint/import a Claude Code token into BOSS
+  --connect-claude       Explicitly import a provider-minted Claude Code setup token
   --accept-database-fallback  Allow a subscription credential in Postgres if no secret store
   --secret-store WHICH    database (default) or infisical. Both stay on your own machine:
                             database   4 containers. Credentials are held by BOSS's own
@@ -452,6 +452,11 @@ BOSS_DB_PASSWORD="boss"
 if need_cmd openssl; then
   BOSS_DB_PASSWORD="$(openssl rand -hex 12)"
 fi
+# The console gate has its own credentials. The API bearer key must never be used
+# as a browser login secret; each value is random on first install and preserved
+# by restore_preserved_env.sh on reruns.
+BOSS_CONSOLE_PASSWORD="$(openssl rand -hex 24)"
+BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
 
 # ---- fetch source ----------------------------------------------------------
 ui_step "Fetching BOSS Community source"
@@ -558,6 +563,8 @@ BOSS_API_KEY=${BOSS_API_KEY}
 BOSS_API_KEYS=${BOSS_API_KEY}
 BOSS_API_KEY_PRINCIPALS=${BOSS_API_KEY}:ceo
 BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
+BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
+BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood
@@ -786,6 +793,7 @@ echo -e "  ${BOLD}API${NC}              ${API_URL}"
 echo -e "  ${BOLD}Health${NC}           ${API_URL}/health"
 if [[ "$WITH_WEB" -eq 1 ]]; then
   echo -e "  ${BOLD}Mission Control${NC}  http://127.0.0.1:${WEB_PORT}"
+  echo -e "  ${BOLD}Console password${NC} python3 \"$INSTALL_DIR/scripts/install/console_password.py\" show --env-file \"$ENV_FILE\""
 fi
 echo -e "  ${BOLD}Project${NC}          boss-dogfood"
 echo -e "  ${BOLD}API key${NC}          (in $ENV_FILE — not printed)"

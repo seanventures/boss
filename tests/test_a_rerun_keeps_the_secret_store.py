@@ -169,6 +169,18 @@ def test_custom_ports_and_bind_address_survive_a_plain_rerun(tmp_path):
     assert _val(new.read_text(), "BOSS_BIND_ADDRESS") == "127.0.0.1"
 
 
+def test_console_login_secrets_survive_a_rerun(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_CONSOLE_PASSWORD=" + "a" * 48 + "\n"
+           "BOSS_CONSOLE_SESSION_SECRET=" + "b" * 64 + "\n")
+    _write(new, "BOSS_CONSOLE_PASSWORD=" + "c" * 48 + "\n"
+           "BOSS_CONSOLE_SESSION_SECRET=" + "d" * 64 + "\n")
+    _restore(old, new)
+    assert _val(new.read_text(), "BOSS_CONSOLE_PASSWORD") == "a" * 48
+    assert _val(new.read_text(), "BOSS_CONSOLE_SESSION_SECRET") == "b" * 64
+
+
 def test_the_live_env_is_replaced_only_after_the_old_key_is_back():
     """The generator runs on the installed .env. The previous key has to already be in that
     file, and the live file must not be truncated before the restore succeeds."""

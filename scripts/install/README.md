@@ -49,8 +49,23 @@ curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
 7. Verifies Community edition + ProviderOps surface
 
 On rerun, the existing database/API credentials, model keys, secret-store encryption key,
-public URL, and port settings are retained. Take a private backup of `.env` and the
+console login, public URL, and port settings are retained. Take a private backup of `.env` and the
 Postgres volume before upgrading a long-lived install.
+
+Mission Control has a separate single-operator password and signed session secret,
+generated on first install and stored only in the private `.env`. The password is
+never the BOSS API key. On the VM, retrieve or rotate it deliberately:
+
+```bash
+cd ~/boss
+python3 scripts/install/console_password.py show
+python3 scripts/install/console_password.py reset
+# After reset, run the web recreate command printed by the helper.
+```
+
+`show` requires a terminal so the password is not piped into logs. Keep the
+console on loopback or behind an HTTPS reverse proxy; the web login refuses
+non-HTTPS requests outside loopback.
 
 No BOSS Cloud / Account Connect required.
 
@@ -82,9 +97,11 @@ grok login --device-auth
 `--discover-subscriptions` only checks status; it sends no credentials. For
 Claude or Codex, an explicit `--connect-claude` or `--connect-codex` stores the
 official CLI credential through BOSS's credential endpoint and runs a real,
-read-only proof in BOSS's container. Claude uses `claude setup-token`; Codex uses
-its CLI auth JSON, read only from the current VM user's private file. The token
-or file contents are never printed. A database-backed install asks you to add
+read-only proof in BOSS's container. For Claude, run `claude setup-token` in a
+VM terminal so its official prompts remain visible; the installer accepts the
+token through a hidden terminal prompt or `CLAUDE_CODE_OAUTH_TOKEN` environment
+variable. Codex uses its CLI auth JSON, read only from the current VM user's
+private file. BOSS never prints either credential. A database-backed install asks you to add
 `--accept-database-fallback` before a subscription credential can be stored in
 Postgres; the `--secret-store infisical` option provisions a dedicated store.
 

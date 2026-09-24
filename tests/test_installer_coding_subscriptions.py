@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import builtins
+from contextlib import nullcontext
 import os
 from pathlib import Path
 
@@ -30,7 +32,7 @@ def test_discovery_is_read_only_and_does_not_claim_grok_auth(monkeypatch, capsys
 
     assert calls == [["codex", "login", "status"], ["claude", "auth", "status"]]
     assert found == {"claude": False, "codex": False, "grok": True}
-    assert "Grok login: check inside the BOSS worker account" in output
+    assert "Grok login: check inside the BOSS API container" in output
     assert "Not logged in" not in output
 
 
@@ -56,3 +58,14 @@ def test_connect_requires_explicit_flag_and_does_not_send_on_discovery(monkeypat
     monkeypatch.setattr(module, "connect", lambda *args, **kwargs: pytest.fail("proof called"))
     monkeypatch.setattr(module.sys, "argv", ["coding_subscriptions.py", "--api-url", "http://127.0.0.1:9"])
     assert module.main() == 0
+
+
+def test_claude_setup_token_stays_with_official_interactive_cli(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/bin/claude")
+    monkeypatch.setattr(module, "checked_output", lambda *args, **kwargs: pytest.fail("CLI must not be captured"))
+    monkeypatch.setattr(module.getpass, "getpass", lambda prompt: "a" * 48)
+    real_open = builtins.open
+    monkeypatch.setattr(builtins, "open", lambda path, *args, **kwargs:
+                        nullcontext() if path == "/dev/tty" else real_open(path, *args, **kwargs))
+    assert module.claude_credential() == "a" * 48

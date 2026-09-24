@@ -4,11 +4,12 @@
 The installer and worker run in different containers/accounts. Host login discovery is
 informational. Claude's official setup token and Codex's own auth file can be imported
 through BOSS's governed credential endpoint; a Grok device session stays local to the
-worker's account and is never copied or parsed here.
+API/worker's shared account and is never copied or parsed here.
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import shutil
@@ -20,7 +21,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from store_subscription_token import read_piped_token, read_whole_file, send_to_boss  # noqa: E402
+from store_subscription_token import read_whole_file, send_to_boss  # noqa: E402
 
 
 def checked_output(argv: list[str], timeout: int = 15) -> tuple[int, str]:
@@ -53,7 +54,7 @@ def discover() -> dict[str, bool]:
         print(f"  {name}: {'installed' if found[name] else 'missing'}")
     print(f"  Claude subscription login: {'detected' if claude_subscription else 'not verified'}")
     print(f"  Codex ChatGPT login: {'detected' if codex_subscription else 'not verified'}")
-    print("  Grok login: check inside the BOSS worker account; host status is not a worker login")
+    print("  Grok login: check inside the BOSS API container; host status is not a container login")
     print("These checks do not transfer credentials. A laptop login is not visible to the VM.")
     return {"claude": claude_subscription, "codex": codex_subscription,
             "grok": found["grok"]}
@@ -78,21 +79,18 @@ def claude_credential() -> str:
         return token
     if not shutil.which("claude"):
         raise RuntimeError("Claude CLI missing; use --install-coding-clis first")
-    if not Path("/dev/tty").exists():
-        raise RuntimeError("Run claude setup-token on this VM and supply CLAUDE_CODE_OAUTH_TOKEN")
+    print("Run `claude setup-token` in another VM terminal, then paste its token here.")
+    print("The official CLI handles browser/device prompts; BOSS never displays the token.")
     try:
-        with open("/dev/tty", "r") as tty:
-            result = subprocess.run(["claude", "setup-token"], stdin=tty,
-                                    capture_output=True, text=True, timeout=600, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("Claude setup-token did not finish on this VM") from exc
-    if result.returncode:
-        raise RuntimeError("Claude setup-token failed; run claude login on this VM and retry")
-    import io
-    try:
-        return read_piped_token(io.StringIO(result.stdout))
-    except SystemExit as exc:
-        raise RuntimeError("Claude setup-token did not return a usable token") from exc
+        with open("/dev/tty", "r"):
+            pass
+        token = getpass.getpass("Claude setup token (hidden): ").strip()
+    except (EOFError, OSError) as exc:
+        raise RuntimeError("No terminal available; supply CLAUDE_CODE_OAUTH_TOKEN in the environment") from exc
+    if len(token) < 20 or any(char.isspace() for char in token) or \
+            token.startswith(("http://", "https://", "<")):
+        raise RuntimeError("No usable Claude setup token was entered")
+    return token
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
@@ -124,8 +122,10 @@ def main() -> int:
     args = parser.parse_args()
     found = discover()
     if not (args.connect_codex or args.connect_claude):
-        print("To authenticate on a headless VM: codex login --device-auth; grok login --device-auth")
-        print("For Claude: claude login, then use installer --connect-claude to mint a setup token")
+        print("To authenticate Codex on a headless VM: codex login --device-auth")
+        print("For Grok: docker compose -f scripts/install/community-compose.yml "
+              "--env-file .env exec -u boss api grok login --device-auth")
+        print("For Claude: claude login, then claude setup-token in a VM terminal")
         print("To bind Codex/Claude, rerun with --connect-codex or --connect-claude explicitly.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
