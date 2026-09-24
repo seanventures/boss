@@ -1331,6 +1331,24 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--faint, var(--muted)); border: 1px solid var(--border);
   border-radius: 4px; padding: 1px 5px;
 }
+/* WHAT THE STEP DOES, on its own line under the name.
+   The row was a single flex line — name, badge, approval, buttons — and there was nowhere for
+   the answer to "what does this step actually run?" to go. Wrapping gives it a full-width
+   second line, indented to the label so the sequence down the left stays readable. */
+.dw-draft-step { flex-wrap: wrap; }
+.dw-draft-what {
+  flex-basis: 100%; padding-left: 34px; display: flex; flex-wrap: wrap; gap: 4px 12px;
+  font-size: 0.72rem; line-height: 1.5; color: var(--muted);
+}
+.dw-draft-runs { font-family: var(--mono, monospace); color: var(--faint, var(--muted)); }
+.dw-draft-summary { flex-basis: 100%; }
+.dw-draft-inputs { font-family: var(--mono, monospace); font-size: 0.66rem; opacity: .85; }
+/* Amber, like the badge on the step list: this is the one line on the row that explains a
+   control the operator cannot change. */
+.dw-draft-forced { flex-basis: 100%; color: var(--amber, #d8a657); font-size: 0.68rem; }
+/* Edit and Remove sit together rather than Remove alone — a step that could be defined and
+   deleted but never corrected is why this row needed two. */
+.dw-step-actions { display: inline-flex; gap: 12px; align-items: center; }
 .dw-palette-heading {
   margin: 12px 0 2px; font-size: 0.68rem; letter-spacing: .1em; text-transform: uppercase;
   color: var(--faint, var(--muted));
@@ -10088,3 +10106,19 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
            border: 1px solid var(--border, #30363d); opacity: 0.75; }
 .rr-empty, .rr-problem { margin: 8px 0 0; font-size: 0.78rem; opacity: 0.7; }
 .rr-problem { color: var(--amber, #d29922); }
+
+/* The steps on a workflow card. A count says how big it is; these say what it does. */
+.dw-card-steps {
+  margin: 10px 0 0; padding: 0; list-style: none;
+  display: grid; gap: 3px; font-size: 0.74rem;
+}
+.dw-card-steps li { display: flex; align-items: baseline; gap: 7px; }
+.dw-card-step-n {
+  font-family: var(--mono, monospace); font-size: 0.62rem; color: var(--faint, var(--muted));
+  min-width: 12px;
+}
+.dw-card-step-label { color: var(--text-2, var(--muted)); }
+.dw-card-step-gate {
+  font-size: 0.6rem; letter-spacing: .06em; color: var(--amber, #d8a657);
+  border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; opacity: .8;
+}

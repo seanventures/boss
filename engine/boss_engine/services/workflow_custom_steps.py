@@ -289,6 +289,118 @@ def get(connection: Connection, project_id: str, step_key: str) -> Optional[dict
     return serialize(connection, project_id, row) if row else None
 
 
+def update(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_key: str,
+    actor: str,
+    label: Optional[str] = None,
+    summary: Optional[str] = None,
+    binding_kind: Optional[str] = None,
+    skill_id: Optional[str] = None,
+    mcp_server_id: Optional[str] = None,
+    mcp_tool_name: Optional[str] = None,
+    inputs: Any = None,
+    produces: Any = None,
+    knowledge: Optional[str] = None,
+) -> dict[str, Any]:
+    """Change a step that already exists.
+
+    WHY THIS WAS MISSING AND WHY THAT MATTERED. A step could be defined and removed and never
+    corrected, so fixing a typo in a summary — or pointing a step at a different skill — meant
+    deleting it and making a new one. That is not the same operation: the new step gets a NEW
+    KEY, and every workflow referencing the old one silently loses that step. Destroying a
+    published workflow is a steep price for a wording change.
+
+    THE KEY NEVER CHANGES. It is what workflow specs bind to, so renaming the label leaves the
+    key alone on purpose — a step called "Publish to YouTube" whose key is `publish_to_youtube`
+    can become "Publish the short" without breaking a single workflow.
+
+    THE RISK TIER IS STILL NOT ACCEPTED FROM THE CALLER. It is re-resolved from whatever the
+    step now binds, exactly as on create, which is the property that stops "edit the step" being
+    a way around the approval floor: repointing a step at a tier-3 skill makes it tier 3, and
+    every workflow using it starts requiring a person.
+    """
+    row = connection.execute(
+        text("SELECT * FROM workflow_custom_steps WHERE project_id=:p AND step_key=:k"),
+        {"p": project_id, "k": step_key},
+    ).mappings().first()
+    if row is None:
+        raise CustomStepError(f"no step called '{step_key}'.")
+
+    kind = (binding_kind or row["binding_kind"]).strip()
+    if kind not in BINDING_KINDS:
+        raise CustomStepError(f"binding must be one of: {', '.join(BINDING_KINDS)}.")
+
+    # What the step will bind AFTER this change, so the checks below judge the result rather
+    # than the arguments — a step switched from mcp_tool to skill must be required to name a
+    # skill even though `skill_id` was the only field sent.
+    new_skill = skill_id if skill_id is not None else row["skill_id"]
+    new_server = mcp_server_id if mcp_server_id is not None else row["mcp_server_id"]
+    new_tool = mcp_tool_name if mcp_tool_name is not None else row["mcp_tool_name"]
+    if kind == "skill" and not new_skill:
+        raise CustomStepError("choose the skill this step runs.")
+    if kind == "mcp_tool" and not (new_server and new_tool):
+        raise CustomStepError("choose the MCP server and the tool this step calls.")
+    if kind == "skill":
+        # The other binding's fields are cleared rather than left behind: a row carrying both a
+        # skill and an MCP tool is a row where the next reader has to guess which one runs.
+        new_server = new_tool = None
+    else:
+        new_skill = None
+
+    new_label = (label if label is not None else row["label"]).strip()
+    if not new_label:
+        raise CustomStepError("a custom step needs a name.")
+
+    import json as _json
+
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_custom_steps SET
+                label = :label, summary = :summary, binding_kind = :kind,
+                skill_id = :skill, mcp_server_id = :server, mcp_tool_name = :tool,
+                inputs = CAST(:inputs AS JSONB), produces = CAST(:produces AS JSONB),
+                knowledge = :knowledge
+            WHERE project_id = :p AND step_key = :k
+            RETURNING *
+            """
+        ),
+        {
+            "label": new_label,
+            "summary": ((summary if summary is not None else row["summary"]) or "").strip()
+                       or None,
+            "kind": kind, "skill": new_skill, "server": new_server, "tool": new_tool,
+            "inputs": _json.dumps(
+                _clean_inputs(inputs if inputs is not None else row["inputs"])),
+            "produces": _json.dumps([
+                str(x) for x in (produces if produces is not None else row["produces"]) or []
+                if str(x).strip()]),
+            "knowledge": ((knowledge if knowledge is not None else row["knowledge"])
+                          or "").strip()[:8000] or None,
+            "p": project_id, "k": step_key,
+        },
+    ).mappings().one()
+
+    before, after = resolve_risk(connection, project_id, row), \
+        resolve_risk(connection, project_id, updated)
+    emit_event(
+        connection, project_id, "workflow.custom_step_updated", actor,
+        "workflow_custom_step", updated["id"],
+        {
+            "step_key": step_key, "binding_kind": kind,
+            # RECORDED WHEN IT MOVES. A step that was tier 1 and is now tier 3 changes the
+            # approval behaviour of every published workflow using it, without any of those
+            # workflows being touched — so the ledger is the only place that connection can be
+            # made afterwards.
+            "risk_tier_before": before["risk_tier"], "risk_tier_after": after["risk_tier"],
+        },
+    )
+    return serialize(connection, project_id, updated)
+
+
 def delete(connection: Connection, project_id: str, step_key: str, actor: str) -> bool:
     result = connection.execute(
         text("DELETE FROM workflow_custom_steps WHERE project_id=:p AND step_key=:k"),

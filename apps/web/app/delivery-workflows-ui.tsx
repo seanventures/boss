@@ -62,6 +62,9 @@ type CustomStep = {
   mcp_tool_name: string | null;
   inputs: { name: string; required: boolean; description: string }[];
   produces: string[];
+  /** The operator's own house rules for this step, handed to whatever it runs. Served by the
+   *  API all along and never typed here, so the console could not show it. */
+  knowledge?: string | null;
   enabled: boolean;
   risk_tier: number;
   risk_source: string | null;
@@ -103,6 +106,9 @@ type Installed = {
   /** Enough to DRAW an operator's own workflow rather than only count it. Optional because a
    *  definition with no published version has neither. */
   step_count?: number;
+  /** WHICH steps, not just how many. "Steps 4" says how big a workflow is and nothing about
+   *  what it does, so the only way to find out was to open the editor. */
+  steps?: { id: string; label: string; kind: string; mine: boolean; approval: string }[];
   active_version?: number | null;
   /** What starting it will ask for. Absent on a workflow that declares nothing, which is
    *  every catalogue workflow today. */
@@ -943,6 +949,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           customSteps={customSteps} bindable={bindable} riskFloor={riskFloor}
           projectId={projectId} busy={busy}
           onDefineStep={async (fields) => {
+            // A step_key means the form was editing one that exists. Different verb, different
+            // route: the key lives in the PATH for an edit, which is what keeps it out of the
+            // fields an edit can change — a renamed step must not orphan the workflows placing
+            // it.
+            if (fields.step_key) {
+              setBusy(`Save ${fields.label}`);
+              try {
+                const r = await fetch("/api/delivery-workflows", {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ ...fields, actor }),
+                });
+                const body = await r.json();
+                if (!r.ok) return { ok: false, error: body?.error ?? `API returned ${r.status}` };
+                setNotice(`Saved ${fields.label}`);
+                await load();
+                return { ok: true };
+              } catch (e) {
+                return { ok: false, error: String((e as Error)?.message ?? e) };
+              } finally {
+                setBusy(null);
+              }
+            }
             const result = await act(`Define ${fields.label}`, "define_step", fields);
             if (result.ok) await load();
             return result;
@@ -3913,6 +3942,25 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
                   <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
                   <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
                 </dl>
+                {/* THE STEPS THEMSELVES, in order. A count answers "how big" and the question
+                    an operator has before starting a run is "what will this do" — which used to
+                    need a trip into the editor. The one that stops for a person is marked,
+                    because that is the other thing worth knowing in advance. */}
+                {item.steps?.length ? (
+                  <ol className="dw-card-steps" data-testid={`dw-mine-steps-${item.workflow_key}`}>
+                    {item.steps.map((step, i) => (
+                      <li key={step.id || i}>
+                        <span className="dw-card-step-n">{i + 1}</span>
+                        <span className="dw-card-step-label">{step.label}</span>
+                        {step.approval === "manual" ? (
+                          <span className="dw-card-step-gate" title="stops for a person">
+                            needs you
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
                 <div className="dw-card-actions">
                   {/* Startable only once a version exists — a definition with no published
                       version has nothing to run, and offering the button anyway is how an
@@ -4030,23 +4078,35 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
  *  and is shown here as a consequence of that choice — a customer who could type their own
  *  number would have a documented way past every approval gate in the product.
  */
-function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCancel }: {
+function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCancel,
+                         editing }: {
   bindable: Bindable;
   riskFloor: number;
   busy: string | null;
   projectId: string;
   onDefine: (fields: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
   onCancel: () => void;
+  /** The step being changed, or absent when defining a new one. ONE FORM FOR BOTH: an edit
+   *  form that drifted from the define form would accept fields the other rejects, and the
+   *  operator would meet two different sets of rules for the same object. */
+  editing?: CustomStep | null;
 }) {
-  const [label, setLabel] = useState("");
-  const [summary, setSummary] = useState("");
+  const [label, setLabel] = useState(editing?.label ?? "");
+  const [summary, setSummary] = useState(editing?.summary ?? "");
   // One control, not two. "skill:github.create_pr" / "mcp:<server>:<tool>" keeps the choice a
   // single decision — picking a kind and then a thing is two ways to get it half-made.
-  const [bindingRef, setBindingRef] = useState("");
-  const [inputs, setInputs] = useState("");
+  const [bindingRef, setBindingRef] = useState(
+    editing
+      ? (editing.binding_kind === "skill"
+          ? `skill:${editing.skill_id ?? ""}`
+          : `mcp:${(editing as { mcp_server_id?: string }).mcp_server_id ?? ""}:`
+            + `${editing.mcp_tool_name ?? ""}`)
+      : "");
+  const [inputs, setInputs] = useState(
+    (editing?.inputs ?? []).map((i) => i.name).join(", "));
   // WHAT THE STEP KNOWS. A binding says which tool runs; it says nothing about the standard
   // the step has to hold to, and that lived in the head of whoever defined it.
-  const [knowledge, setKnowledge] = useState("");
+  const [knowledge, setKnowledge] = useState(editing?.knowledge ?? "");
   const [failure, setFailure] = useState<string | null>(null);
 
   const chosen = useMemo(() => {
@@ -4095,8 +4155,15 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
         fields.mcp_server_id = rest[0];
         fields.mcp_tool_name = rest.slice(1).join(":");
       }
+      // The KEY, when this is an edit. It is what workflow specs bind to, so it travels as an
+      // identifier and is never one of the fields being changed — renaming a step must not
+      // orphan every workflow that places it.
+      if (editing) fields.step_key = editing.step_key;
       const result = await onDefine(fields);
-      if (!result.ok) setFailure(result.error ?? "could not define the step");
+      if (!result.ok) {
+        setFailure(result.error
+                   ?? (editing ? "could not change the step" : "could not define the step"));
+      }
     }}>
       <label className="field">
         <span>Name</span>
@@ -4177,7 +4244,7 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
       <div className="dw-define-actions">
         <button type="submit" className="cap-btn" data-testid="dw-define-save"
                 disabled={!!busy || !label.trim() || !bindingRef || choices === 0}>
-          Define
+          {editing ? "Save changes" : "Define"}
         </button>
         <button type="button" className="cap-btn" onClick={onCancel}>Cancel</button>
       </div>
@@ -4227,6 +4294,10 @@ function StepsView({
   onRemoveStep: (stepKey: string) => void;
 }) {
   const [defining, setDefining] = useState(false);
+  /** The step being changed. A step could be defined and removed and never corrected, so
+   *  fixing a summary meant deleting it — and delete gives the replacement a NEW KEY, which
+   *  every workflow placing the old one silently loses. */
+  const [editing, setEditing] = useState<CustomStep | null>(null);
   const unusable = customSteps.filter((c) => !c.usable);
 
   return (
@@ -4241,7 +4312,7 @@ function StepsView({
             workflow.
           </p>
         </div>
-        {!defining ? (
+        {!defining && !editing ? (
           <button type="button" className="cap-btn primary" disabled={!!busy}
                   onClick={() => setDefining(true)} data-testid="dw-define-step">
             + Define a step
@@ -4249,13 +4320,16 @@ function StepsView({
         ) : null}
       </div>
 
-      {defining ? (
+      {defining || editing ? (
         <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
-                        projectId={projectId}
-                        onCancel={() => setDefining(false)}
+                        projectId={projectId} editing={editing}
+                        // Keyed by the step, so switching from one step to another rebuilds
+                        // the form rather than leaving the first one's values in the fields.
+                        key={editing?.step_key ?? "new"}
+                        onCancel={() => { setDefining(false); setEditing(null); }}
                         onDefine={async (fields) => {
                           const result = await onDefineStep(fields);
-                          if (result.ok) setDefining(false);
+                          if (result.ok) { setDefining(false); setEditing(null); }
                           return result;
                         }} />
       ) : null}
@@ -4295,11 +4369,18 @@ function StepsView({
                 {c.usable ? `runs ${c.risk_source}` : c.unusable_reason}
               </span>
               {c.summary ? <span className="detail">{c.summary}</span> : null}
-              <button type="button" className="linklike" disabled={!!busy}
-                      data-testid={`dw-step-remove-${c.step_key}`}
-                      onClick={() => onRemoveStep(c.step_key)}>
-                Remove
-              </button>
+              <span className="dw-step-actions">
+                <button type="button" className="linklike" disabled={!!busy}
+                        data-testid={`dw-step-edit-${c.step_key}`}
+                        onClick={() => { setDefining(false); setEditing(c); }}>
+                  Edit
+                </button>
+                <button type="button" className="linklike" disabled={!!busy}
+                        data-testid={`dw-step-remove-${c.step_key}`}
+                        onClick={() => onRemoveStep(c.step_key)}>
+                  Remove
+                </button>
+              </span>
             </li>
           ))}
         </ul>
@@ -4362,6 +4443,19 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   //: Every reset `beginCreating` performs is already the initial value of the state it clears,
   //: so starting here needs nothing stashed: there is no canvas yet to put back.
   const [creating, setCreating] = useState(true);
+  // EXCEPT WHEN SOMEBODY ASKED TO EDIT A PARTICULAR ONE.
+  //
+  // Making "Create" the default tab left the Edit button on a workflow card doing nothing
+  // visible: it set the target and switched to this tab, which then opened on Create — so the
+  // control named Edit reliably landed on the create screen. The builder's OWN target changes
+  // come from a picker that is only rendered while editing, so a target arriving while
+  // `creating` is true can only have come from outside, which makes this unambiguous.
+  useEffect(() => {
+    if (target) setCreating(false);
+    // Deliberately keyed on `target` alone: re-running when `creating` changes would fight the
+    // tabs, snapping the operator back out of Create every time they pressed it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
   const [newName, setNewName] = useState("");
   const [importFrom, setImportFrom] = useState("");
   /** The canvas as it was before "New workflow" was pressed, so Cancel puts it back rather
@@ -5011,6 +5105,47 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   {step.kind !== "capability" ? (
                     <span className="dw-draft-kind">flow</span>
                   ) : null}
+                  {/* WHAT THE STEP ACTUALLY DOES.
+                      The row said "Plan the edit · yours · auto" and nothing else, so a
+                      workflow could be reordered, saved and started by somebody who could not
+                      find out which skill any of it ran, what it needed, or why one step said
+                      manual. Every field here was already on the client; none of it was drawn. */}
+                  <span className="dw-draft-what">
+                    <span className="dw-draft-runs">
+                      {mine
+                        ? (mine.usable ? `runs ${mine.risk_source}` : mine.unusable_reason)
+                        : capability
+                          ? `${capability.skills.length} skill${
+                              capability.skills.length === 1 ? "" : "s"}${
+                              capability.captain ? ` · ${capability.captain}` : ""}`
+                          : null}
+                    </span>
+                    {(mine?.summary || capability?.summary) ? (
+                      <span className="dw-draft-summary">
+                        {mine?.summary || capability?.summary}
+                      </span>
+                    ) : null}
+                    {mine?.inputs?.length ? (
+                      <span className="dw-draft-inputs">
+                        needs {mine.inputs.map((i) => i.name).join(", ")}
+                      </span>
+                    ) : null}
+                    {mine?.knowledge ? (
+                      // House rules an operator wrote for this step. Shown as a hint rather
+                      // than in full: it can be pages, and the row is not where it is read.
+                      <span className="dw-draft-inputs" title={mine.knowledge}>
+                        carries your notes
+                      </span>
+                    ) : null}
+                    {/* WHY it is manual, where it is not the operator's choice. A locked
+                        control with no reason reads as a broken control. */}
+                    {(mine?.approval_forced_manual || capability?.approval_forced_manual) ? (
+                      <span className="dw-draft-forced">
+                        always needs a person — risk tier{" "}
+                        {mine?.risk_tier ?? capability?.risk_tier} is at or above the floor
+                      </span>
+                    ) : null}
+                  </span>
                   <select className="input dw-draft-approval" value={step.approval}
                           disabled={step.kind !== "capability"
                                     || capability?.approval_forced_manual

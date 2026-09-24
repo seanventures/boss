@@ -717,6 +717,12 @@ def list_definitions(
                    COALESCE((SELECT jsonb_array_length(v.spec->'steps')
                              FROM workflow_versions v
                              WHERE v.id = d.active_version_id), 0) AS step_count,
+                   -- AND WHICH STEPS THEY ARE. A card reading "Steps 4" tells an operator how
+                   -- big their workflow is and nothing about what it does, so the only way to
+                   -- find out was to open the editor. The names are three fields away in the
+                   -- spec that was already being measured here.
+                   (SELECT v.spec->'steps' FROM workflow_versions v
+                     WHERE v.id = d.active_version_id) AS step_specs,
                    (SELECT v.version FROM workflow_versions v
                      WHERE v.id = d.active_version_id) AS active_version,
                    -- WHAT STARTING IT WILL ASK FOR. The console's start form renders FROM
@@ -733,15 +739,56 @@ def list_definitions(
         ),
         {"project_id": project_id, **({"namespace": namespace} if namespace else {})},
     ).mappings().all()
+    # Labels for the customer's own steps, resolved once for the whole list rather than per
+    # workflow: a project has a handful of them and every workflow draws from the same set.
+    step_labels: dict[str, str] = {}
+    if _table_exists(connection, "workflow_custom_steps"):
+        step_labels = {
+            r["step_key"]: r["label"] for r in connection.execute(
+                text("SELECT step_key, label FROM workflow_custom_steps WHERE project_id=:p"),
+                {"p": project_id},
+            ).mappings()
+        }
+
     items = []
     for row in rows:
         item = _serialize_definition(row)
         item["version_count"] = int(row["version_count"])
         item["step_count"] = int(row["step_count"] or 0)
+        item["steps"] = _step_outline(row["step_specs"], step_labels)
         item["active_version"] = (
             int(row["active_version"]) if row["active_version"] is not None else None)
         items.append(item)
     return items
+
+
+def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any]]:
+    """Just enough of each step to DRAW a workflow rather than count it.
+
+    Name, whether it is the customer's own, and whether it stops for a person — which is the
+    set of facts somebody deciding whether to start a run actually needs. Not the bindings or
+    the input wiring: those belong on the step itself, and a card that carried them would be a
+    worse version of the editor.
+    """
+    if not isinstance(specs, list):
+        return []
+    outline: list[dict[str, Any]] = []
+    for step in specs:
+        if not isinstance(step, dict):
+            continue
+        binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+        custom = str(binding.get("custom_step") or "")
+        capability = str(binding.get("capability") or "")
+        outline.append({
+            "id": str(step.get("id") or ""),
+            # The operator's own name for it where there is one. Falling back to the key beats
+            # falling back to nothing: a step whose definition was deleted still has to appear.
+            "label": step_labels.get(custom) or custom or capability or str(step.get("id") or ""),
+            "kind": str(step.get("kind") or ""),
+            "mine": bool(custom),
+            "approval": str((step.get("approval") or {}).get("mode") or "auto"),
+        })
+    return outline
 
 
 def get_definition(

@@ -21502,6 +21502,37 @@ def create_delivery_custom_step(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.patch("/v1/delivery-workflows/custom-steps/{step_key}")
+def update_delivery_custom_step(step_key: str, payload: dict) -> dict:
+    """Change a step that exists, keeping its key.
+
+    PATCH rather than PUT, and the key is not in the body: the key is what workflow specs bind
+    to, so a step's name can change without any workflow noticing and the key cannot change at
+    all. The risk tier is still resolved from what the step binds, never accepted here — that
+    is what stops editing a step being a way around the approval floor.
+    """
+    from boss_engine.services import workflow_custom_steps as custom_steps
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    # Only the fields actually sent are applied; anything absent keeps its current value, which
+    # is what makes a rename safe to send on its own.
+    optional = {
+        name: payload[name]
+        for name in ("label", "summary", "binding_kind", "skill_id", "mcp_server_id",
+                     "mcp_tool_name", "inputs", "produces", "knowledge")
+        if name in payload
+    }
+    try:
+        with begin(engine) as connection:
+            return custom_steps.update(
+                connection, project_id=project_id, step_key=step_key,
+                actor=str(payload.get("actor") or "operator"), **optional)
+    except custom_steps.CustomStepError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.delete("/v1/delivery-workflows/custom-steps/{step_key}")
 def delete_delivery_custom_step(step_key: str, project_id: str, actor: str = "operator") -> dict:
     from boss_engine.services import workflow_custom_steps as custom_steps

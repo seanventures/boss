@@ -169,6 +169,50 @@ export async function POST(req: Request) {
 /** Removing a step a customer defined. Separate from POST because it is the one destructive
  *  thing this screen does, and routing it through the same `action` switch as "save" would
  *  make a typo in an action name capable of deleting something. */
+/** Change a step that already exists.
+ *
+ *  Its own verb rather than another POST action, because the key stays in the PATH: the key is
+ *  what workflow specs bind to, so it is the one thing an edit must not be able to change. A
+ *  body that carried it would invite exactly that. */
+export async function PATCH(req: Request) {
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
+  }
+  const key = String(body.step_key ?? "").trim();
+  if (!key) {
+    return NextResponse.json({ error: "step_key is required" }, { status: 400 });
+  }
+  const { step_key: _drop, ...payload } = body;
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/delivery-workflows/custom-steps/${encodeURIComponent(key)}`,
+      {
+        method: "PATCH",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      },
+    );
+    const raw = await r.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+    if (!r.ok) {
+      // Forwarded verbatim, like every other message from the API here: "choose the skill this
+      // step runs" is the sentence the form shows, and "request failed" would waste it.
+      const detail = (parsed as { detail?: string })?.detail;
+      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+                               { status: r.status });
+    }
+    return NextResponse.json(parsed);
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
+
 export async function DELETE(req: Request) {
   const params = new URL(req.url).searchParams;
   const project = params.get("project_id")?.trim() ?? "";
