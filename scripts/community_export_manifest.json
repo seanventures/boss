@@ -47,7 +47,8 @@
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md",
     "README.community.md",
-    "CONTRIBUTING.community.md"
+    "CONTRIBUTING.community.md",
+    "Makefile.community"
   ],
   "exclude": [
     "apps/account_connect/",
@@ -138,5 +139,10 @@
     "source": "CONTRIBUTING.community.md",
     "destination": "CONTRIBUTING.md",
     "sha256": "60156f28d86e77a8f9cd4009c2cf3ed3cb387186242aa54753d71c5b08208077"
+  },
+  "makefile_export_rewrite": {
+    "source": "Makefile.community",
+    "destination": "Makefile",
+    "sha256": "a4a0aa8dc1fa56364f05fe7f5eab7d90b65510848900087146e5711e96c9e5d1"
   }
 }

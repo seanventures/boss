@@ -12,6 +12,7 @@ import argparse
 import ast
 import hashlib
 import json
+import posixpath
 import re
 import shlex
 import shutil
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +31,7 @@ TS_IMPORT_RE = re.compile(
     r"(?:\b(?:import|export)\s+(?:[^;]*?\s+from\s+)?|\b(?:import|require)\s*\()\s*['\"]([^'\"]+)['\"]",
     re.MULTILINE,
 )
+MARKDOWN_LINK_RE = re.compile(r"\]\(([^)]+)\)")
 PRIVATE_MARKERS = (
     b"seanheiney/boss",
     b".sean.network",
@@ -80,7 +83,10 @@ def reviewed_marker_bytes(path: str, data: bytes) -> tuple[bytes, bool]:
     """
     rules = SHARED_MARKER_LINES.get(path)
     if path == "packages/specpack/packs/community_edition.yaml":
-        lines = data.decode("utf-8", "replace").splitlines(keepends=True)
+        try:
+            lines = data.decode("utf-8").splitlines(keepends=True)
+        except UnicodeDecodeError:
+            return data, False
         allowed = "hosted_account_connect_required: false"
         valid = (
             sum(line.rstrip("\r\n") == allowed for line in lines) == 1
@@ -240,6 +246,21 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("contributing_export_rewrite needs reviewed source sha256")
         if not all(matching_rule(contributing_rewrite[key], manifest["include"]) for key in ("source", "destination")):
             raise ValueError("contributing export source and destination must be included")
+    makefile_rewrite = manifest.get("makefile_export_rewrite")
+    if makefile_rewrite is not None:
+        if not isinstance(makefile_rewrite, dict) or any(
+            not isinstance(makefile_rewrite.get(key), str) or not safe_path(makefile_rewrite[key])
+            for key in ("source", "destination")
+        ):
+            raise ValueError("makefile_export_rewrite needs safe source and destination paths")
+        if makefile_rewrite["destination"] != "Makefile":
+            raise ValueError("makefile export destination must be root Makefile")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(makefile_rewrite.get("sha256", ""))):
+            raise ValueError("makefile_export_rewrite needs reviewed source sha256")
+        if not matching_rule(makefile_rewrite["source"], manifest["include"]):
+            raise ValueError("makefile export source must be included")
+        if makefile_rewrite["destination"] not in manifest["requires_split"]:
+            raise ValueError("makefile export destination must be withheld for split")
 
 
 def tracked_blobs(repo: Path, sha: str) -> dict[str, tuple[str, str]]:
@@ -393,6 +414,30 @@ def packaging_edges(selected: dict[str, bytes]) -> list[dict]:
                         "line": line_number,
                     }
                 )
+    return edges
+
+
+def markdown_link_edges(selected: dict[str, bytes]) -> list[dict]:
+    """Find local document links that would break in the exported root tree."""
+    paths = set(selected)
+    edges: list[dict] = []
+    for source, data in selected.items():
+        if not source.endswith(".md"):
+            continue
+        content = data.decode("utf-8", "replace")
+        for match in MARKDOWN_LINK_RE.finditer(content):
+            raw = match.group(1).strip().strip("<>")
+            target_url = urlsplit(raw)
+            if target_url.scheme or target_url.netloc or not target_url.path:
+                continue
+            target = posixpath.normpath(
+                posixpath.join(posixpath.dirname(source), unquote(target_url.path))
+            )
+            if target.startswith("../") or target.startswith("/") or target == "..":
+                edges.append({"kind": "markdown-link-outside-export", "from": source, "to": raw})
+            elif target not in paths and not any(path.startswith(target.rstrip("/") + "/") for path in paths):
+                line = content.count("\n", 0, match.start()) + 1
+                edges.append({"kind": "markdown-link-target-missing", "from": source, "to": target, "line": line})
     return edges
 
 
@@ -581,6 +626,26 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 )
             ]
             contributing_rewrite_applied = True
+    makefile_rewrite = manifest.get("makefile_export_rewrite")
+    makefile_rewrite_applied = False
+    if makefile_rewrite:
+        source = makefile_rewrite["source"]
+        destination = makefile_rewrite["destination"]
+        if destination not in source_paths:
+            blockers.append({"kind": "makefile-export-private-source-missing", "path": destination})
+        elif source not in selected:
+            blockers.append({"kind": "makefile-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "makefile-export-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != makefile_rewrite["sha256"]:
+            blockers.append({"kind": "makefile-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            blockers = [
+                blocker for blocker in blockers
+                if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
+            ]
+            makefile_rewrite_applied = True
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:
@@ -594,6 +659,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         elif path.endswith((".ts", ".tsx", ".js", ".jsx")):
             blockers.extend(typescript_edges(path, data, source_paths, selected_paths))
     blockers.extend(packaging_edges(selected))
+    blockers.extend(markdown_link_edges(selected))
     unique: dict[tuple, dict] = {}
     for blocker in blockers:
         identity = (blocker["kind"], blocker.get("path"), blocker.get("from"), blocker.get("to"))
@@ -609,6 +675,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "page_export_rewrite_applied": page_rewrite_applied,
         "readme_export_rewrite_applied": readme_rewrite_applied,
         "contributing_export_rewrite_applied": contributing_rewrite_applied,
+        "makefile_export_rewrite_applied": makefile_rewrite_applied,
         "executable_paths": sorted(p for p in selected if entries[p][0] == "100755"),
         "symlink_paths": symlink_paths,
         "candidate_is_new_root_tree": True,

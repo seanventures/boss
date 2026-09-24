@@ -137,6 +137,17 @@ hosted_account_connect_required: false
     )[1] is False
 
 
+def test_exported_markdown_links_must_resolve_inside_candidate() -> None:
+    selected = {
+        "README.md": b"[Guide](docs/community/guide.md) [Web](https://example.org)\n",
+        "docs/community/guide.md": b"[Local](../../README.md) [Missing](../product/spec.md) [Here](#section)\n",
+    }
+    edges = export.markdown_link_edges(selected)
+    assert [(edge["kind"], edge["to"]) for edge in edges] == [
+        ("markdown-link-target-missing", "docs/product/spec.md"),
+    ]
+
+
 def test_goldeneye_community_boundary_is_preserved() -> None:
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
     export.validate_manifest(manifest)
@@ -524,3 +535,45 @@ def test_community_contributing_rewrite_is_checksum_pinned(tmp_path: Path) -> No
     assert report["contributing_export_rewrite_applied"] is False
     assert "contributing-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "CONTRIBUTING.md" not in candidate
+
+
+def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "Makefile").write_text("private:\n\t@echo private\n")
+    public = b"help:\n\t@echo BOSS Community\n"
+    (repo / "Makefile.community").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["Makefile", "Makefile.community"],
+        "exclude": ["unused.md"],
+        "requires_split": ["Makefile"],
+        "required_runtime": ["Makefile"],
+        "required_release": ["Makefile"],
+        "makefile_export_rewrite": {
+            "source": "Makefile.community",
+            "destination": "Makefile",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["makefile_export_rewrite_applied"] is True
+    assert candidate == {"Makefile": public}
+    assert not any(b.get("path") == "Makefile" for b in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["makefile_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["makefile_export_rewrite_applied"] is False
+    assert "makefile-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert "Makefile" not in candidate
