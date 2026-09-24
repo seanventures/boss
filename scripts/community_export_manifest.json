@@ -145,5 +145,10 @@
     "source": "Makefile.community",
     "destination": "Makefile",
     "sha256": "a4a0aa8dc1fa56364f05fe7f5eab7d90b65510848900087146e5711e96c9e5d1"
+  },
+  "main_export_rewrite": {
+    "path": "apps/api/app/main.py",
+    "source_sha256": "52e3e208904dc1ad33ea05a49ba682127e7f580354b25cd3c7cdf02f4d19a581",
+    "output_sha256": "8a9acbcdce2dc8f0f3423cad6f5971b6ba20c348f63f80c5133e07953e5c39fa"
   }
 }

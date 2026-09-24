@@ -606,3 +606,58 @@ def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     assert report["makefile_export_rewrite_applied"] is False
     assert "makefile-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "Makefile" not in candidate
+
+
+def test_community_main_rewrite_removes_exact_paid_composition(tmp_path: Path) -> None:
+    import hashlib
+
+    repo = tmp_path / "source"
+    main = repo / "apps/api/app/main.py"
+    main.parent.mkdir(parents=True)
+    source = (
+        b"".join(old for old, _new in export.MAIN_COMMUNITY_REPLACEMENTS[:3])
+        + b"SERVICE_APPROVAL_GATES = [\n"
+        + export.MAIN_COMMUNITY_ACCOUNT_GATE
+        + b"]\n"
+        + export.MAIN_COMMUNITY_REPLACEMENTS[3][0]
+    )
+    main.write_bytes(source)
+    public = export.rewrite_community_main(source)
+    assert public is not None
+    assert b"CloudProductService" not in public
+    assert b"EnterpriseAuditTrailService" not in public
+    assert b"register_paid_cloud_routes" not in public
+    assert b"CommunityCloudService(settings, commercial)" in public
+    assert export.rewrite_community_main(source.replace(b"register_paid_cloud_routes", b"register_new_paid_routes")) is None
+
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["apps/api/app/main.py"],
+        "exclude": ["unused.py"],
+        "requires_split": ["apps/api/app/main.py"],
+        "required_runtime": ["apps/api/app/main.py"],
+        "required_release": ["apps/api/app/main.py"],
+        "main_export_rewrite": {
+            "path": "apps/api/app/main.py",
+            "source_sha256": hashlib.sha256(source).hexdigest(),
+            "output_sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["main_export_rewrite_applied"] is True
+    assert candidate["apps/api/app/main.py"] == public
+    assert not any(blocker.get("path") == "apps/api/app/main.py" for blocker in report["blockers"])
+
+    changed = json.loads(json.dumps(manifest))
+    changed["main_export_rewrite"]["output_sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert "main-export-output-changed" in {blocker["kind"] for blocker in report["blockers"]}
+    assert "apps/api/app/main.py" not in candidate
