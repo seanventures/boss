@@ -9,9 +9,31 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
+
+
+def _tls_context() -> ssl.SSLContext | None:
+    """Trust what curl trusts.
+
+    The stock macOS Python ships its own narrow CA bundle, so an HTTPS BOSS behind an ordinary
+    certificate raises CERTIFICATE_VERIFY_FAILED while `curl` to the same URL is fine. The
+    error surfaces as "cannot reach <host>", which reads as the server being down — a bad first
+    experience on a install that is working perfectly.
+
+    None means "use the default", which is right everywhere certifi is absent.
+    """
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return None
+
+
+TLS = _tls_context()
 
 
 def die(message: str) -> None:
@@ -31,7 +53,7 @@ class Api:
             headers={"Authorization": f"Bearer {self.key}",
                      "Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=180) as response:
+            with urllib.request.urlopen(request, timeout=180, context=TLS) as response:
                 return response.status, json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as error:
             raw = error.read().decode()[:600]
@@ -40,8 +62,13 @@ class Api:
             except json.JSONDecodeError:
                 return error.code, {"detail": raw}
         except urllib.error.URLError as error:
-            die(f"cannot reach {self.base}: {error.reason}\n"
-                f"       From your laptop the API is http://<host>:8000, not 127.0.0.1.")
+            hint = ("       From your laptop the API is http://<host>:8000, not 127.0.0.1.")
+            if "CERTIFICATE_VERIFY" in str(error.reason):
+                # Say what it actually is. "cannot reach" sends somebody to check the server.
+                hint = ("       That is a certificate TRUST problem on this machine, not a\n"
+                        "       problem with BOSS — curl to the same URL will work. Install\n"
+                        "       certifi (pip install certifi) and run this again.")
+            die(f"cannot reach {self.base}: {error.reason}\n{hint}")
 
     def check(self):
         code, _ = self("GET", f"/v1/settings?project_id={self.project}")
