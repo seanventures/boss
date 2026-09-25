@@ -16,6 +16,28 @@ examples/<name>/
     setup.py     the same thing as a script — --dry-run first, safe to re-run
 ```
 
+## Install all of them at once
+
+```bash
+python3 examples/setup_all.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY"
+```
+
+| Option | What it does |
+|---|---|
+| `--dry-run` | Say what would happen and change nothing. Worth doing first |
+| `--only a,b` | A subset — `--only video-workflow,sales-signal` |
+| `--schedule TZ` | Also schedule the newsletter for Monday 08:00, e.g. `--schedule Europe/London` |
+| `--no-agents` | Leave steps unassigned, so each runs as the workflow itself |
+| `--project` / `--actor` | Which project, and who is doing it |
+
+It runs the individual scripts rather than reimplementing them, so there is no second copy to
+drift from the first.
+
+**One failing example does not stop the others.** They have different prerequisites — one needs
+a work tracker, three need email — so you end up with the ones you can actually run, plus a
+list of what was skipped and why. Everything is safe to re-run: already-installed examples are
+reused, not duplicated.
+
 ---
 
 ## Available
