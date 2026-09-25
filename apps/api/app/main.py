@@ -21425,7 +21425,7 @@ def test_email_config(payload: dict) -> dict:
         settings = email_config.settings_for(connection, get_settings(), project_id)
     try:
         message_id = EmailAdapter(settings).send_message(
-            to, "BOSS test message",
+            to if to.startswith("email:") else f"email:{to}", "BOSS test message",
             "This is BOSS checking that it can send email from this project.\n\n"
             "If you are reading it, sending works.")
     except Exception as error:  # noqa: BLE001 — the server's own words are the useful part

@@ -102,3 +102,18 @@ def test_sending_refuses_rather_than_pretending(monkeypatch):
         se.execute_email_send(Ctx(), {"body": "hello"})
     with pytest.raises(ValueError, match="body is required"):
         se.execute_email_send(Ctx(), {"to": "a@b.c"})
+
+
+def test_a_plain_address_is_accepted_even_though_the_adapter_wants_a_channel():
+    """EmailAdapter takes `email:someone@example.com` and refuses a bare address.
+
+    That is a sensible rule for a channel abstraction and a trap for a workflow input called
+    `to` — nobody types a scheme into a To field. Found on a live install: the test endpoint and
+    this executor both failed with "Email channels must use the email:recipient@example.com
+    format" on an address a person had typed correctly.
+    """
+    import inspect
+
+    source = inspect.getsource(se.execute_email_send)
+    assert 'to.startswith("email:")' in source
+    assert 'f"email:{to}"' in source

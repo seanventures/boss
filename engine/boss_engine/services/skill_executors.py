@@ -953,7 +953,12 @@ def execute_email_send(
     # THIS PROJECT'S MAIL SERVER, falling back to the environment. An install that configured
     # SMTP with env vars keeps working; one that set it up in the console no longer needs to.
     settings = settings_for(context.connection, context.settings, context.project_id)
-    message_id = EmailAdapter(settings).send_message(to, subject, body)
+    # THE ADAPTER TAKES A CHANNEL, NOT AN ADDRESS. It wants `email:someone@example.com` and
+    # refuses a bare address — which is a sensible rule for a channel abstraction and a trap
+    # for a workflow input called `to`. Nobody types a scheme into a To field, so it is added
+    # here rather than made the operator's problem.
+    channel = to if to.startswith("email:") else f"email:{to}"
+    message_id = EmailAdapter(settings).send_message(channel, subject, body)
     return {"to": to, "subject": subject, "message_id": message_id,
             "characters": len(body)}
 
