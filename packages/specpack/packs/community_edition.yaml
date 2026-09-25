@@ -45,6 +45,11 @@ installs:
   # available in every edition rather than only the paid ones.
   # `meeting_ops` turns a transcript into tickets through whichever tracker `work_tracker`
   # adapts — same reasoning as the media pair: in COMMUNITY so every edition has it.
+  # `email` joined them when its executor was written. The skills and the SMTP adapter had both
+  # existed for a long time with nothing binding them, so the bundle sat in no pack and no
+  # edition's catalogue offered it — a sending step could be declared in a workflow and never
+  # enabled. Sending is still off until BOSS_EMAIL_REAL_SEND_ALLOWED says otherwise; being in
+  # the catalogue is not being switched on.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
-           mattermost, youtube, video, meeting_ops]
+           mattermost, youtube, video, meeting_ops, email]
 status: active  # Independent product; Cloud is opt-in via Easy Connect

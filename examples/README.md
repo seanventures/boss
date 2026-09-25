@@ -32,6 +32,30 @@ approval before it reaches your channel.
 Shows: a model writing a validated plan rather than touching the work; two agents with
 different authority; an approval that cannot be switched off.
 
+### [meeting-to-tickets](meeting-to-tickets/) — a transcript becomes tracked work
+
+Paste a meeting transcript. BOSS writes down what was decided and what somebody has to do, you
+read that as sentences, and the tickets are created in your tracker.
+
+**Steps:** read → create (stops for you)
+**Skills:** `meeting.extract_actions`, `tracker.issues.create`
+**Needs:** a connected model, and a work tracker — Plane, Jira, Linear, GitHub Issues or Azure DevOps
+
+Shows: a tier-0 reading step separated from a tier-2 writing one, so the approval is over a
+list you can read rather than a step you have to trust.
+
+### [weekly-newsletter](weekly-newsletter/) — research, written up, in your inbox
+
+Name the sectors you care about. BOSS researches them into a cited dossier, writes a
+newsletter, and emails it after you have read it. `--schedule` makes it arrive on Monday.
+
+**Steps:** gather → write → send (stops for you)
+**Skills:** the `research` capability, `model.generate_text`, `email.send_real_guarded`
+**Needs:** a connected model, and SMTP configured for the last step
+
+Shows: a built-in capability and your own steps in one workflow; a step taking an earlier
+step's output as material; and the scheduler, with the time zone stored where it belongs.
+
 ---
 
 ## Candidates
@@ -42,13 +66,10 @@ thing worth knowing before picking one.
 
 ### Everything needed already ships
 
-**Clip factory — one recording, several shorts.**
-Give it a long video and a list of moments; it produces a vertical short for each, captioned
-and watermarked, all waiting for one approval.
-*Uses:* `media.fetch_link`, `video.plan_edit`, `video.apply_plan`, `publish_youtube`.
-*New work:* none in skills — it needs the workflow to repeat a step per clip, which today
-means one step per clip or one plan covering them all.
-*Worth validating:* is one approval for six shorts right, or one each?
+**Clip factory — STRUCK.** It is the video workflow run once per clip, which already works:
+`trim` takes a start and an end. Batching would need fan-out over a list with per-item binding,
+which the engine does not have — and running it per clip gives you an approval per clip, which
+is the better shape for review anyway.
 
 **Release announcement.**
 When a deploy succeeds, draft the note, hold it for approval, then post it to the team.
