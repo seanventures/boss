@@ -412,6 +412,7 @@ and the one that answers the chat and the panel.
 | | |
 |---|---|
 | [**Setup**](SETUP.md) | Install, connect a model, move it to a server, manual setup, troubleshooting |
+| [**Examples**](examples/) | Workflows built from the skills BOSS ships — read one, or run its setup script |
 | [Features](docs/community/FEATURES.md) | What Community includes |
 | [Capabilities](docs/product/CAPABILITIES.md) | Governed runtime in detail — budgets, audit, comms, entitlements |
 | [Architecture](docs/ARCHITECTURE.md) | The invariants BOSS holds itself to, and the API that enforces them |
