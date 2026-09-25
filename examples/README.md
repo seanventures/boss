@@ -81,79 +81,44 @@ make. Chains into video-workflow.
 
 ---
 
-## Candidates
+## What these examples cannot do yet
 
-Sketches, not built. Each says honestly what exists and what does not — the difference between
-"a day of wiring" and "a new connector with its own OAuth app and platform review" is the
-thing worth knowing before picking one.
+Worth knowing before you plan around them.
 
-### Everything needed already ships
+### Publishing to social platforms
 
-**Clip factory — STRUCK.** It is the video workflow run once per clip, which already works:
-`trim` takes a start and an end. Batching would need fan-out over a list with per-item binding,
-which the engine does not have — and running it per clip gives you an approval per clip, which
-is the better shape for review anyway.
-
-**Release announcement.**
-When a deploy succeeds, draft the note, hold it for approval, then post it to the team.
-*Uses:* `model.generate_text`, `slack.post_real_guarded` or `mattermost.post_real`, `email.send_real_guarded`.
-*New work:* none. All three are risk tier 2, which is the approval floor, so a workflow step
-running any of them stops for a person whatever the workflow asks. Slack and email also have
-`_guarded` variants that require approval in their own policy; Mattermost has no guarded
-variant, so the tier is the only thing holding it — worth knowing before you rely on one.
-*Worth validating:* who approves a post that goes to a public channel?
-
-**Weekly digest.**
-Gather what shipped, what is waiting and what is over budget; write it; email it.
-*Uses:* `model.generate_text`, `email.send_real_guarded`, plus BOSS's own read skills.
-*New work:* a schedule trigger — workflows start on demand today.
-*Worth validating:* is a digest more useful pushed weekly, or pulled when asked?
-
-**Podcast to clips.**
-An audio or video episode in, captioned vertical clips out, one per topic.
-*Uses:* the video skills.
-*New work:* finding the topics. Today you say where they are; detecting them needs a
-transcript step BOSS does not have.
-*Worth validating:* would you rather mark the moments yourself than trust detection?
-
-### Needs a new connector first
-
-BOSS has **no** Facebook, Instagram, LinkedIn, X or TikTok skills. Each is a real piece of
-work, and not mainly a coding one:
+BOSS can publish to **YouTube**. It has **no** Facebook, Instagram, LinkedIn, X or TikTok
+skills, and adding one is mostly not a coding problem:
 
 | Platform | What it takes |
 |---|---|
-| **Instagram / Facebook** | Meta Graph API, a Business account, an app through App Review. Posting is a two-step publish — container, then publish — and video has its own limits |
-| **LinkedIn** | Community Management API, partner access for organisation posting |
-| **X / Twitter** | API access is paid and tiered; media upload is a separate endpoint |
+| **Instagram / Facebook** | Meta Graph API, a Business account, and an app through App Review. Posting is a two-step publish — create a container, then publish it — and video has its own limits |
+| **LinkedIn** | Community Management API, and partner access to post as an organisation |
+| **X / Twitter** | Paid, tiered API access; media upload is a separate endpoint |
 | **TikTok** | Content Posting API, app review, and an audited scope for direct posting |
 
-The BOSS side is the smaller half: a provider entry, an OAuth flow, one `*.post` skill, a role
-that may call it. The platform side — an app, review, and a business account — is what decides
-how long it takes.
+The BOSS side of any of them is small: a provider entry, an OAuth flow, one `*.post` skill and
+a role permitted to call it. The platform side — an app, a review, a business account — is what
+decides how long it takes. The editing lane in
+[video-workflow](video-workflow/) already feeds all of them; only the last step differs.
 
-**If you want one of these, the useful question is which single platform earns it first.** The
-same editing lane feeds all of them; only the last step differs.
+### Starting on something that happened
 
-### Worth considering before any of that
+Every example here starts **on demand**, and `weekly-newsletter` can also start **on a
+schedule**. None starts because something happened elsewhere — a form was submitted, a meeting
+ended, a deploy finished.
 
-**Scheduled publishing.** Publish at a time, not on approval. Needs a schedule trigger, which
-is the same missing piece as the weekly digest — and it makes every publishing example better.
+BOSS can do that: an event subscription can start a workflow, and the event's data becomes the
+run's input. What it cannot do is *notice* the thing happening — that needs whatever watches
+your site, your calendar or your CI to call BOSS. The examples are written to start by hand for
+that reason, and wiring a real trigger later changes the first step and nothing else.
 
-**Cross-posting.** One approval, several destinations. Cheap *once* a second destination
-exists, and pointless before.
+### Repeating a step per item
 
----
+A workflow's step list is fixed when you publish it. A step cannot be repeated once per item in
+a list, so "make six clips from this recording" is six runs rather than one run making six.
 
-## Which to build next
-
-My reading, for what it is worth:
-
-1. **Clip factory** — it needs nothing new, and it is the video lane earning its keep on a
-   real week's work rather than one file.
-2. **A schedule trigger** — not an example, a gap. Three of the sketches above want it.
-3. **One social connector**, chosen by where you actually publish. Instagram is the most
-   asked-for and the most work; LinkedIn is the least work if you post as a company.
-
-Tell me which of these you would actually use and I will build that one properly rather than
-guess.
+That is usually the better shape anyway — six runs means six approvals, so you can accept four
+and reject two. Where it genuinely hurts, a skill can take a list instead: `video.apply_plan`
+takes a whole edit plan and `tracker.issues.create` takes all the actions from a meeting, both
+for this reason.
