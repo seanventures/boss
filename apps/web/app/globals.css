@@ -10165,3 +10165,14 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .dw-wire-value { max-width: 210px; font-size: 0.74rem; }
 .dw-wire-pair { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .dw-wire-pair .input { max-width: 160px; font-size: 0.74rem; }
+
+/* When a workflow of your own runs without anybody asking. On the card, because that is where
+   somebody asks "does this happen by itself?" */
+.dw-card-schedules {
+  margin: 10px 0 0; padding: 8px 0 0; list-style: none;
+  border-top: 1px dashed var(--border); display: grid; gap: 6px; font-size: 0.74rem;
+}
+.dw-card-schedules li { display: grid; gap: 1px; }
+.dw-card-schedules li[data-enabled="false"] { opacity: .6; }
+.dw-sched-when { color: var(--text-2, var(--muted)); }
+.dw-sched-actions { display: inline-flex; gap: 10px; margin-top: 2px; }

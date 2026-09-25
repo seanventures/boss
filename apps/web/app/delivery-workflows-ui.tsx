@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
+import { formatDateTime } from "../lib/datetime";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
 import { AgentChip } from "./agent-chip";
@@ -113,6 +114,19 @@ type Installed = {
   /** What starting it will ask for. Absent on a workflow that declares nothing, which is
    *  every catalogue workflow today. */
   input_schema?: unknown;
+};
+
+/** When a workflow runs without anybody asking. `describes` is rendered by the API so the
+ *  console cannot word a schedule differently from the thing that fires it. */
+type Schedule = {
+  id: string;
+  workflow_key: string;
+  name: string;
+  describes: string;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_error: string | null;
 };
 
 export type RunStep = {
@@ -351,7 +365,7 @@ type WorkflowSpec = {
 //: buried in the builder's palette, below however many steps already existed, so the way to
 //: make one was the thing you had to scroll to find. The palette still LISTS them, because
 //: that is where you place one; it no longer tries to be where you author one too.
-const TABS = ["running", "catalogue", "design", "steps"] as const;
+const TABS = ["running", "yours", "catalogue", "design", "steps"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -591,6 +605,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [composerOpen, setComposerOpen] = useState(false);
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
   // WHAT WAS JUST MADE, so the builder can SAY it was made.
   //
   // Import worked and looked like it had not: the form closed, the toolbar came back looking
@@ -600,20 +615,26 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [justMade, setJustMade] = useState<{ id: string; name: string; from?: string } | null>(null);
 
   const load = useCallback(async () => {
-    const [caps, cat, inst, live, mine] = await Promise.all([
+    const [caps, cat, inst, live, mine, sched] = await Promise.all([
       get<{ capabilities: Capability[]; blocks: Block[]; manual_approval_risk_floor: number }>(
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
       get<{ runs: Run[] }>("runs", projectId),
       get<{ steps: CustomStep[]; bindable: Bindable }>("custom_steps", projectId),
+      get<{ schedules: Schedule[] }>("schedules", projectId),
     ]);
+    // SCHEDULES ARE NOT LOAD-BEARING. An install whose schedule table predates this feature
+    // must still show its workflows, so a failure here empties the list rather than failing
+    // the screen — unlike the five above it, without which there is nothing to draw.
     const failure = [caps, cat, inst, live, mine].find((r) => "error" in r) as { error: string } | undefined;
     if (failure) {
       setState("failed");
       setError(failure.error);
       return;
     }
+    setSchedules(("error" in (sched as object))
+      ? [] : ((sched as { schedules?: Schedule[] }).schedules ?? []));
     setCapabilities((caps as { capabilities: Capability[] }).capabilities ?? []);
     setBlocks((caps as { blocks?: Block[] }).blocks ?? []);
     setRiskFloor((caps as { manual_approval_risk_floor: number }).manual_approval_risk_floor ?? 2);
@@ -786,7 +807,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   className="dw-tab" data-active={tab === t}
                   onClick={() => setTab(t)} data-testid={`dw-tab-${t}`}>
             {t === "running" ? `Running (${runs.length})`
-              : t === "catalogue" ? `Catalogue (${catalogue.length + ownWorkflows(installed).length})`
+              : t === "yours" ? `Yours (${ownWorkflows(installed).length})`
+              // The catalogue counts what BOSS ships, and only that. It used to add the
+              // customer's own to the total, so the number answered no question anybody had.
+              : t === "catalogue" ? `Catalogue (${catalogue.length})`
               : t === "design" ? "Design a workflow"
               : `Your steps (${customSteps.length})`}
           </button>
@@ -909,6 +933,56 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             work_class: "project.new", from_run: run.id,
             input: inputForRerun(run.input),
           })}
+        />
+      ) : tab === "yours" ? (
+        <YoursView
+          installed={installed} schedules={schedules} busy={busy}
+          onStart={(key, workClass) =>
+            act(`Start ${key}`, "start", { workflow_key: key, work_class: workClass,
+                                           sample: true })}
+          onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
+          onSchedule={async (key, name) => {
+            // ASKED, NOT ASSUMED. Monday 08:00 is the common case and the zone is not
+            // guessable — a report arriving at 3am because the browser's zone was used and
+            // nobody said so is the failure this avoids.
+            const zone = window.prompt(
+              `Run "${name}" every Monday at 08:00 — in which time zone?\n\n`
+              + "An IANA name: Europe/London, America/New_York, Asia/Kolkata, UTC.",
+              Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+            if (!zone) return;
+            const result = await act(`Schedule ${name}`, "schedule", {
+              workflow_key: key, name: `${name} — weekly`,
+              cadence: "weekly", weekday: 0, hour: 8, minute: 0, timezone: zone,
+            });
+            if (result.ok) await load();
+          }}
+          onToggleSchedule={async (id, enabled) => {
+            setBusy(enabled ? "Resume schedule" : "Pause schedule");
+            try {
+              const r = await fetch("/api/delivery-workflows", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "schedule_enabled", schedule_id: id,
+                                       enabled, project_id: projectId, actor }),
+              });
+              const body = await r.json();
+              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
+              await load();
+            } finally { setBusy(null); }
+          }}
+          onDeleteSchedule={async (id) => {
+            setBusy("Remove schedule");
+            try {
+              const r = await fetch(
+                `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
+                  + `&project_id=${encodeURIComponent(projectId)}`
+                  + `&actor=${encodeURIComponent(actor)}`,
+                { method: "DELETE" });
+              const body = await r.json();
+              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
+              await load();
+            } finally { setBusy(null); }
+          }}
         />
       ) : tab === "catalogue" ? (
         <CatalogueView
@@ -3904,6 +3978,141 @@ function ownWorkflows(installed: Installed[]): Installed[] {
 }
 
 
+/** A CUSTOMER'S OWN WORKFLOWS, ON THEIR OWN SCREEN.
+ *
+ *  These sat under the twelve BOSS ships, on a tab called Catalogue — so the thing somebody
+ *  built was filed beneath the things they did not, and the count on the tab was the two added
+ *  together. Examples make that worse: install three and your own work is below a list you did
+ *  not write.
+ *
+ *  Same cards, their own tab, plus the one thing a workflow of your own needs that a catalogue
+ *  entry does not — a way to say when it should run without anybody asking. */
+function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule,
+                     onToggleSchedule, onDeleteSchedule }: {
+  installed: Installed[];
+  schedules: Schedule[];
+  busy: string | null;
+  onStart: (key: string, workClass: string) => void;
+  onEditMine: (definitionId: string) => void;
+  onSchedule: (key: string, name: string) => void;
+  onToggleSchedule: (id: string, enabled: boolean) => void;
+  onDeleteSchedule: (id: string) => void;
+}) {
+  const ours = useMemo(() => ownWorkflows(installed), [installed]);
+  const byWorkflow = useMemo(() => {
+    const map = new Map<string, Schedule[]>();
+    for (const s of schedules) {
+      map.set(s.workflow_key, [...(map.get(s.workflow_key) ?? []), s]);
+    }
+    return map;
+  }, [schedules]);
+
+  if (ours.length === 0) {
+    return (
+      <div className="dw-catalogue">
+        <p className="detail" data-testid="dw-yours-empty">
+          Nothing of your own yet. Build one on <b>Design a workflow</b>, or run one of the
+          setup scripts in <code>examples/</code> to get a working one to take apart.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dw-catalogue">
+      <div className="dw-grid">
+        {ours.map((item) => {
+          const mine = byWorkflow.get(item.workflow_key) ?? [];
+          return (
+            <article key={item.id} className="dw-card" data-testid={`dw-mine-${item.workflow_key}`}>
+              <header className="dw-card-head">
+                <h4>{item.name}</h4>
+                <span className="dw-class" data-class="yours">yours</span>
+              </header>
+              <p className="detail dw-card-desc">{item.description || "No description."}</p>
+              <dl className="dw-stats">
+                <div><dt>Steps</dt><dd>{item.step_count ?? 0}</dd></div>
+                <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
+                <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
+              </dl>
+              {item.steps?.length ? (
+                <ol className="dw-card-steps" data-testid={`dw-mine-steps-${item.workflow_key}`}>
+                  {item.steps.map((step, i) => (
+                    <li key={step.id || i}>
+                      <span className="dw-card-step-n">{i + 1}</span>
+                      <span className="dw-card-step-label">{step.label}</span>
+                      {step.approval === "manual" ? (
+                        <span className="dw-card-step-gate" title="stops for a person">
+                          needs you
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+
+              {/* WHEN IT RUNS WITHOUT ANYBODY ASKING. Rendered as the sentence the API
+                  produced, so the console cannot describe a schedule differently from the
+                  thing that fires it. */}
+              {mine.length ? (
+                <ul className="dw-card-schedules" data-testid={`dw-sched-${item.workflow_key}`}>
+                  {mine.map((s) => (
+                    <li key={s.id} data-enabled={s.enabled}>
+                      <span className="dw-sched-when">{s.describes}</span>
+                      <span className="detail">
+                        {s.enabled
+                          // formatDateTime, not toLocaleString: the server renders in one zone
+                          // and the browser in another, and the mismatch is a hydration error
+                          // rather than a cosmetic difference. There is a guard for this.
+                          ? (s.next_run_at ? `next ${formatDateTime(s.next_run_at)}` : "")
+                          : "paused"}
+                        {s.last_error ? ` · last run failed: ${s.last_error}` : ""}
+                      </span>
+                      <span className="dw-sched-actions">
+                        <button type="button" className="linklike" disabled={!!busy}
+                                data-testid={`dw-sched-toggle-${s.id}`}
+                                onClick={() => onToggleSchedule(s.id, !s.enabled)}>
+                          {s.enabled ? "pause" : "resume"}
+                        </button>
+                        <button type="button" className="linklike" disabled={!!busy}
+                                onClick={() => onDeleteSchedule(s.id)}>remove</button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <div className="dw-card-actions">
+                <button type="button" className="cap-btn primary"
+                        disabled={!!busy || !item.active_version}
+                        onClick={() => onStart(item.workflow_key, "")}
+                        data-testid={`dw-start-mine-${item.workflow_key}`}>
+                  {item.active_version ? "Start one" : "No version yet"}
+                </button>
+                <button type="button" className="cap-btn" disabled={!!busy}
+                        onClick={() => onEditMine(item.id)}
+                        data-testid={`dw-edit-mine-${item.workflow_key}`}>
+                  Edit
+                </button>
+                {/* Offered only once there is something to run. A schedule pointing at a
+                    workflow with no published version is refused by the API anyway, and
+                    offering it is how somebody meets that refusal for no reason. */}
+                {item.active_version ? (
+                  <button type="button" className="cap-btn" disabled={!!busy}
+                          data-testid={`dw-schedule-${item.workflow_key}`}
+                          onClick={() => onSchedule(item.workflow_key, item.name)}>
+                    Schedule
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork,
                         onEditMine }: {
   catalogue: CatalogueEntry[];
@@ -3934,71 +4143,8 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
   // does not exist in Catalogue and how is it coming to Edit mode, it is completely wrong".
   //
   // It is not the Edit list that was wrong. It was this one, for leaving them out.
-  const ours = useMemo(() => ownWorkflows(installed), [installed]);
   return (
     <div className="dw-catalogue">
-      {ours.length > 0 ? (
-        <section className="dw-mine" data-testid="dw-mine">
-          <div className="dw-runs-head">
-            <span className="detail">
-              Your workflows · {ours.length}
-            </span>
-          </div>
-          <div className="dw-grid">
-            {ours.map((item) => (
-              <article key={item.id} className="dw-card" data-testid={`dw-mine-${item.workflow_key}`}>
-                <header className="dw-card-head">
-                  <h4>{item.name}</h4>
-                  <span className="dw-class" data-class="yours">yours</span>
-                </header>
-                <p className="detail dw-card-desc">
-                  {item.description || "No description."}
-                </p>
-                <dl className="dw-stats">
-                  <div><dt>Steps</dt><dd>{item.step_count ?? 0}</dd></div>
-                  <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
-                  <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
-                </dl>
-                {/* THE STEPS THEMSELVES, in order. A count answers "how big" and the question
-                    an operator has before starting a run is "what will this do" — which used to
-                    need a trip into the editor. The one that stops for a person is marked,
-                    because that is the other thing worth knowing in advance. */}
-                {item.steps?.length ? (
-                  <ol className="dw-card-steps" data-testid={`dw-mine-steps-${item.workflow_key}`}>
-                    {item.steps.map((step, i) => (
-                      <li key={step.id || i}>
-                        <span className="dw-card-step-n">{i + 1}</span>
-                        <span className="dw-card-step-label">{step.label}</span>
-                        {step.approval === "manual" ? (
-                          <span className="dw-card-step-gate" title="stops for a person">
-                            needs you
-                          </span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ol>
-                ) : null}
-                <div className="dw-card-actions">
-                  {/* Startable only once a version exists — a definition with no published
-                      version has nothing to run, and offering the button anyway is how an
-                      operator gets an error instead of a run. */}
-                  <button type="button" className="cap-btn primary"
-                          disabled={!!busy || !item.active_version}
-                          onClick={() => onStart(item.workflow_key, "")}
-                          data-testid={`dw-start-mine-${item.workflow_key}`}>
-                    {item.active_version ? "Start one" : "No version yet"}
-                  </button>
-                  <button type="button" className="cap-btn" disabled={!!busy}
-                          onClick={() => onEditMine(item.id)}
-                          data-testid={`dw-edit-mine-${item.workflow_key}`}>
-                    Edit
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
       <div className="dw-runs-head">
         <span className="detail">
           {have.size} of {catalogue.length} standard workflows installed
