@@ -125,11 +125,17 @@ def test_the_default_is_the_catalogue_standard():
 
 def test_the_default_only_picks_a_published_active_version():
     """A draft or retired workflow governing a run would be a link to something that cannot be
-    executed or is no longer meant to be."""
+    executed or is no longer meant to be.
+
+    And it has to be the version that is LIVE. version DESC is the abandoned spec after a
+    revert, which reactivates an earlier version without minting a higher number.
+    """
     src = inspect.getsource(workflows._default_workflow)
-    assert "d.status = 'active'" in src
-    assert "v.status = 'published'" in src
-    assert "ORDER BY v.version DESC" in src
+    assert "running_version(" in src
+    assert "definition_status=\"active\"" in src
+    helper = inspect.getsource(workflows.running_version)
+    assert "v.status = 'published'" in helper
+    assert "d.active_version_id" in helper
 
 
 def test_a_default_is_distinguishable_from_a_choice():

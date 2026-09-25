@@ -127,3 +127,31 @@ def test_the_builder_is_shown_the_version_that_runs(definition):
     assert row["version_id"] == first["id"], (
         "the builder would open the version the operator replaced, "
         f"not the one running (got version {row['version']})")
+
+
+def test_starting_a_run_uses_the_version_that_is_live(definition):
+    """Start, fork, and the agent tool all asked for version DESC.
+
+    After a revert the builder shows the restored spec and Start ran the one the operator
+    had just replaced. The schedule path already read active_version_id; these did not.
+    """
+    engine, definition_id = definition
+    with engine.begin() as connection:
+        key = connection.execute(
+            text("SELECT workflow_key FROM workflow_definitions WHERE id=:i"),
+            {"i": definition_id},
+        ).scalar_one()
+        first = workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition_id,
+            spec=_spec(60), actor="test")
+        workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition_id,
+            spec=_spec(120), actor="test")
+        workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition_id,
+            spec=_spec(60), actor="test")
+        running = workflows.running_version(connection, PROJECT, key)
+
+    assert running is not None
+    assert running["version_id"] == first["id"]
+    assert running["spec"]["steps"][0]["wait_seconds"] == 60

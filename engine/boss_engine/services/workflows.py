@@ -4186,6 +4186,54 @@ def workflow_for_code_task(
 DEFAULT_WORKFLOW_KEY = "standard_product_delivery"
 
 
+def running_version(
+    connection: Connection,
+    project_id: str,
+    workflow_key: str,
+    *,
+    namespace: Optional[str] = PRODUCT_NAMESPACE,
+    definition_status: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """The version that actually runs, not the highest-numbered one.
+
+    Re-saving an earlier spec reactivates that version without minting a newer number, so
+    `ORDER BY version DESC` returns the spec the operator just replaced. Starting, forking,
+    or falling back to the standard workflow from that ordering runs the abandoned one while
+    the builder — which reads the active version — shows the one they restored.
+
+    The active version wins. A definition that has never been activated falls back to the
+    newest published version, which is the only one it has.
+    """
+    filters = [
+        "d.project_id = :project_id",
+        "d.workflow_key = :workflow_key",
+        "v.status = 'published'",
+    ]
+    params: dict[str, Any] = {"project_id": project_id, "workflow_key": workflow_key}
+    if namespace is not None:
+        filters.append("COALESCE(d.namespace, 'system') = :namespace")
+        params["namespace"] = namespace
+    if definition_status is not None:
+        filters.append("d.status = :definition_status")
+        params["definition_status"] = definition_status
+    row = connection.execute(
+        text(
+            f"""
+            SELECT d.id AS definition_id, d.workflow_key, d.name, d.description,
+                   v.id AS version_id, v.version, v.spec
+            FROM workflow_definitions d
+            JOIN workflow_versions v ON v.workflow_definition_id = d.id
+            WHERE {' AND '.join(filters)}
+            ORDER BY (v.id = d.active_version_id) DESC NULLS LAST,
+                     v.version DESC
+            LIMIT 1
+            """
+        ),
+        params,
+    ).mappings().first()
+    return dict(row) if row else None
+
+
 def _default_workflow(
     connection: Connection, project_id: str
 ) -> Optional[dict[str, Any]]:
@@ -4200,22 +4248,10 @@ def _default_workflow(
     customer's behalf would make an inferred fallback indistinguishable from a choice they
     made, and the next person to read the mappings table could not tell which was which.
     """
-    row = connection.execute(
-        text(
-            """
-            SELECT d.id AS definition_id, d.workflow_key, d.name, v.id AS version_id, v.version
-            FROM workflow_definitions d
-            JOIN workflow_versions v ON v.workflow_definition_id = d.id
-            WHERE d.project_id = :project_id
-              AND d.workflow_key = :key
-              AND d.status = 'active'
-              AND v.status = 'published'
-            ORDER BY v.version DESC
-            LIMIT 1
-            """
-        ),
-        {"project_id": project_id, "key": DEFAULT_WORKFLOW_KEY},
-    ).mappings().first()
+    row = running_version(
+        connection, project_id, DEFAULT_WORKFLOW_KEY,
+        namespace=None, definition_status="active",
+    )
     if not row:
         return None
     return {

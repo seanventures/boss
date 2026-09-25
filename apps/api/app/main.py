@@ -11588,14 +11588,10 @@ def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
         spec = None
         if workflow_key.strip():
             with begin(engine) as connection:
-                row = connection.execute(
-                    text("SELECT v.spec FROM workflow_definitions d "
-                         "JOIN workflow_versions v ON v.workflow_definition_id = d.id "
-                         "WHERE d.project_id = :p AND d.workflow_key = :k "
-                         "AND v.status = 'published' ORDER BY v.version DESC LIMIT 1"),
-                    {"p": project_id, "k": workflow_key.strip()},
-                ).scalar()
-                spec = row if isinstance(row, dict) else None
+                running = workflow_runtime.running_version(
+                    connection, project_id, workflow_key.strip(),
+                )
+                spec = running["spec"] if running and isinstance(running.get("spec"), dict) else None
         return {"project_id": project_id, "workflow_key": workflow_key,
                 "default_roles": agent_assignment.default_roles(spec)}
 
@@ -21173,17 +21169,12 @@ def fork_delivery_workflow(payload: dict) -> dict:
         )
 
     with begin(engine) as connection:
-        source = connection.execute(
-            text(
-                "SELECT d.id, d.name, d.description, v.id AS version_id, v.spec "
-                "FROM workflow_definitions d "
-                "JOIN workflow_versions v ON v.workflow_definition_id = d.id "
-                "WHERE d.project_id=:p AND d.workflow_key=:k "
-                "AND COALESCE(d.namespace,'system')='product' "
-                "ORDER BY v.version DESC LIMIT 1"
-            ),
-            {"p": project_id, "k": source_key},
-        ).mappings().first()
+        # THE VERSION THAT RUNS, not the highest number. After a revert those differ, and
+        # forking the abandoned spec makes "reset to the standard" restore the one the
+        # operator just replaced.
+        source = workflow_runtime.running_version(
+            connection, project_id, source_key,
+        )
         if source is None:
             raise HTTPException(
                 status_code=404, detail=f"no delivery workflow '{source_key}' to fork"
@@ -21716,16 +21707,13 @@ def start_delivery_workflow(payload: dict) -> dict:
     with begin(engine) as connection:
         version_id = None
         if workflow_key:
-            version_id = connection.execute(
-                text(
-                    "SELECT v.id FROM workflow_versions v "
-                    "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
-                    "WHERE d.project_id=:p AND d.workflow_key=:k "
-                    "AND COALESCE(d.namespace,'system')='product' "
-                    "ORDER BY v.version DESC LIMIT 1"
-                ),
-                {"p": project_id, "k": workflow_key},
-            ).scalar()
+            # THE VERSION THAT RUNS. version DESC is the abandoned spec after a revert:
+            # re-saving an earlier configuration reactivates it without a new number, and
+            # Start would otherwise run the one the operator just replaced.
+            running = workflow_runtime.running_version(
+                connection, project_id, workflow_key,
+            )
+            version_id = running["version_id"] if running else None
             if not version_id:
                 raise HTTPException(
                     status_code=404, detail=f"no delivery workflow '{workflow_key}'"

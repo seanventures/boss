@@ -1122,16 +1122,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         title = (args.get("title") or directive[:120] or "New work").strip()
         wf = services_module("workflows")
         with ctx.begin() as c:
-            version_id = c.execute(
-                _text(
-                    "SELECT v.id FROM workflow_versions v "
-                    "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
-                    "WHERE d.project_id=:p AND d.workflow_key=:k "
-                    "AND COALESCE(d.namespace,'system')='product' "
-                    "ORDER BY v.version DESC LIMIT 1"
-                ),
-                {"p": pid, "k": key},
-            ).scalar()
+            # Active version, not the highest number. A revert reactivates an earlier
+            # spec without minting a newer one; version DESC would start the one replaced.
+            running = wf.running_version(c, pid, key)
+            version_id = running["version_id"] if running else None
             if not version_id:
                 # NAMING WHAT EXISTS beats "not found": the model picked a key and the only
                 # useful correction is the list it should have picked from.
