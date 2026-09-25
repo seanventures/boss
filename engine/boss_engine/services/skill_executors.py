@@ -874,6 +874,86 @@ def execute_video_caption(
     )
 
 
+@register_executor("model.generate_text")
+def execute_model_generate_text(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Write something, using the model this project chose.
+
+    DECLARED SINCE THE SPECPACK WAS WRITTEN AND NEVER BOUND. Every workflow that wanted a step
+    to draft, summarise or write anything had to bring its own skill; the one general-purpose
+    writing step in the catalogue could not run.
+    """
+    from .claude_cli_adapter import make_agent_chat_adapter
+    from .setup_service import chat_engine_for
+
+    prompt = str(inputs.get("prompt") or inputs.get("message") or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required — say what should be written")
+
+    settings = context.settings
+    try:
+        engine = chat_engine_for(context.connection, settings, context.project_id)
+        if engine:
+            settings = settings.model_copy(update={"chat_llm_engine": engine})
+    except Exception:  # noqa: BLE001 — a settings read must not fail the step
+        pass
+
+    # MATERIAL FROM AN EARLIER STEP, appended rather than interpolated.
+    #
+    # A workflow step wires whole VALUES — it cannot build "write a newsletter from: {dossier}"
+    # out of two of them, and a template language in the binding would be a second, worse
+    # programming language inside a JSON field. So the standing instruction is `prompt` and
+    # whatever an earlier step produced is `context`, and the step concatenates them once.
+    material = inputs.get("context") or inputs.get("material") or ""
+    if not isinstance(material, str):
+        import json as _json
+
+        material = _json.dumps(material, indent=2, default=str)
+    material = material.strip()
+    if material:
+        prompt = f"{prompt}\n\n--- material ---\n{material}"
+
+    system = str(inputs.get("system") or inputs.get("instructions") or "").strip()
+    _ref, text_out, usage = make_agent_chat_adapter(settings).create_text_response(
+        prompt, system_prompt=system)
+    body = str(text_out or "").strip()
+    if not body:
+        raise ValueError("the model returned nothing to write")
+    return {"text": body, "characters": len(body),
+            "model": (usage or {}).get("model")}
+
+
+@register_executor("email.send_real_guarded")
+@register_executor("email.send_real")
+def execute_email_send(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Send an email through the configured SMTP server.
+
+    The adapter has existed all along; nothing bound it to the skill, so a workflow could
+    declare a sending step and never send. Both skill ids share this executor because they are
+    the same act — the difference between them is POLICY (the guarded one requires an approval
+    in its own spec), and policy is enforced before an executor is reached, not inside it.
+
+    REFUSES RATHER THAN PRETENDS. An install without SMTP configured gets a message naming the
+    setting that is missing, not a success with nothing sent.
+    """
+    from .email_adapter import EmailAdapter
+
+    to = str(inputs.get("to") or inputs.get("channel") or "").strip()
+    if not to:
+        raise ValueError("to is required — the address this goes to")
+    body = str(inputs.get("body") or inputs.get("text") or "").strip()
+    if not body:
+        raise ValueError("body is required — an empty email is not a message")
+    subject = str(inputs.get("subject") or "").strip() or None
+
+    message_id = EmailAdapter(context.settings).send_message(to, subject, body)
+    return {"to": to, "subject": subject, "message_id": message_id,
+            "characters": len(body)}
+
+
 @register_executor("meeting.extract_actions")
 def execute_meeting_extract_actions(
     context: "SkillExecutorContext", inputs: dict[str, Any]
