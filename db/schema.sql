@@ -3908,6 +3908,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_mappings_active_selector
   ON workflow_mappings(project_id, selector_kind, selector_value, scope_type, scope_id, priority)
   WHERE enabled = true;
 
+-- A workflow that starts because it is Monday, rather than because somebody asked.
+--
+-- NOT CRON. A cadence, a minute, an hour and a weekday — see
+-- engine/boss_engine/services/workflow_schedules.py for why five positional fields were the
+-- wrong trade here. The TIME ZONE is stored with it because "Monday 8am" means 8am where the
+-- person reading the report lives; next_run_at is UTC because an instant is an instant.
+CREATE TABLE IF NOT EXISTS workflow_schedules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- The workflow by KEY, not by version: a schedule is "run this workflow", and pinning a
+  -- version would quietly keep running the one that was current when it was created.
+  workflow_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  cadence TEXT NOT NULL CHECK (cadence IN ('hourly', 'daily', 'weekly')),
+  minute INTEGER NOT NULL CHECK (minute BETWEEN 0 AND 59),
+  hour INTEGER NOT NULL DEFAULT 0 CHECK (hour BETWEEN 0 AND 23),
+  weekday INTEGER CHECK (weekday BETWEEN 0 AND 6),
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  -- What each run is started with. The same every time: a schedule that needed different
+  -- input per run would be a queue, not a schedule.
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  actor TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  next_run_at TIMESTAMPTZ NOT NULL,
+  last_run_at TIMESTAMPTZ,
+  last_run_id TEXT,
+  last_error TEXT,
+  -- The fuse. A schedule that fires and fails forever spends money forever, so it is disabled
+  -- after a run of failures rather than left to keep trying.
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+-- The only query the tick makes, on every tick.
+CREATE INDEX IF NOT EXISTS idx_workflow_schedules_due
+  ON workflow_schedules(next_run_at) WHERE enabled;
+
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

@@ -21362,6 +21362,91 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 # convention.
 
 
+# ── Workflow schedules ────────────────────────────────────────────────────────
+#
+# Workflows started on demand only, which is fine for "edit this video" and useless for
+# anything whose value IS the recurrence. See workflow_schedules.py for why this is a cadence
+# and not a cron expression.
+
+@app.get("/v1/delivery-workflows/schedules")
+def list_workflow_schedules(project_id: str) -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    with begin(engine) as connection:
+        return {"schedules": schedules.list_schedules(connection, project_id)}
+
+
+@app.post("/v1/delivery-workflows/schedules", status_code=201)
+def create_workflow_schedule(payload: dict) -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return schedules.create(
+                connection,
+                project_id=project_id,
+                workflow_key=str(payload.get("workflow_key") or ""),
+                name=str(payload.get("name") or ""),
+                cadence=str(payload.get("cadence") or ""),
+                minute=payload.get("minute", 0),
+                hour=payload.get("hour", 0),
+                weekday=payload.get("weekday"),
+                tz_name=str(payload.get("timezone") or "UTC"),
+                input_data=payload.get("input") or {},
+                enabled=bool(payload.get("enabled", True)),
+                actor=str(payload.get("actor") or "operator"),
+            )
+    except schedules.ScheduleError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/v1/delivery-workflows/schedules/{schedule_id}/enabled")
+def set_workflow_schedule_enabled(schedule_id: str, payload: dict) -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return schedules.set_enabled(
+                connection, project_id, schedule_id, bool(payload.get("enabled", True)),
+                str(payload.get("actor") or "operator"))
+    except schedules.ScheduleError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.delete("/v1/delivery-workflows/schedules/{schedule_id}")
+def delete_workflow_schedule(schedule_id: str, project_id: str,
+                             actor: str = "operator") -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    with begin(engine) as connection:
+        if not schedules.delete(connection, project_id, schedule_id, actor):
+            raise HTTPException(status_code=404, detail=f"no schedule '{schedule_id}'")
+    return {"deleted": schedule_id}
+
+
+@app.post("/v1/delivery-workflows/schedules/tick")
+def tick_workflow_schedules(payload: dict) -> dict:
+    """Start whatever is due. Called by the worker on its ordinary poll.
+
+    Idempotent by construction: the dedupe key is the SCHEDULED moment, so a tick that runs
+    twice — two workers, or one retried after a crash — produces one run.
+    """
+    from boss_engine.services import workflow_schedules as schedules
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        started = schedules.run_due(connection, project_id=project_id)
+    return {"started": started, "count": len(started)}
+
+
 @app.get("/v1/delivery-workflows/capabilities")
 def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
