@@ -43,6 +43,8 @@ installs:
   # `youtube` and `video` are the media pipeline. In COMMUNITY deliberately: enterprise
   # and cloud both require this pack, so listing them here is what makes publishing
   # available in every edition rather than only the paid ones.
+  # `meeting_ops` turns a transcript into tickets through whichever tracker `work_tracker`
+  # adapts — same reasoning as the media pair: in COMMUNITY so every edition has it.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
-           mattermost, youtube, video]
+           mattermost, youtube, video, meeting_ops]
 status: active  # Independent product; Cloud is opt-in via Easy Connect
