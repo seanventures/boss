@@ -472,14 +472,40 @@ def validate_step(
     # never have run. Both facts are known when the workflow is saved.
     captain = str(step.get("captain") or "").strip().lower()
     if captain and definition["binding_kind"] == "skill" and definition["skill_id"]:
-        callers = _allowed_callers(connection, project_id, str(definition["skill_id"]))
-        if callers and captain not in callers:
+        skill_id = str(definition["skill_id"])
+        callers = _allowed_callers(connection, project_id, skill_id)
+        # TWO WAYS TO BE ALLOWED, and this must know both or it refuses workflows that would
+        # run. A skill lists the callers that existed when it was written; GIVING THE SKILL TO
+        # THE AGENT is the other grant, and the one the product is built on — see
+        # skill_runtime, which checks role_skills when allowed_callers does not match.
+        #
+        # Checking only the first is how "assign an agent to a step" became a thing you could
+        # be refused for doing correctly.
+        if callers and captain not in callers and not _agent_holds(
+                connection, project_id, captain, skill_id):
             problems.append(
                 f"step '{step_id}' gives '{definition['label']}' to {captain}, which is not "
-                f"allowed to run {definition['skill_id']}. That skill accepts: "
-                f"{', '.join(sorted(callers))}."
+                f"allowed to run {skill_id}. Either give {captain} that skill on the Agents "
+                f"page, or use one of: {', '.join(sorted(callers))}."
             )
     return problems
+
+
+def _agent_holds(connection: Connection, project_id: str, role_key: str, skill_id: str) -> bool:
+    """Whether this agent has been given this skill.
+
+    Fails CLOSED on its own error, unlike the allowed_callers lookup above: an empty
+    allowed_callers means "cannot judge", but a failed role_skills read must not invent a grant
+    that does not exist.
+    """
+    try:
+        return connection.execute(
+            text("SELECT 1 FROM role_skills WHERE project_id=:p AND role_key=:r "
+                 "AND skill_id=:s LIMIT 1"),
+            {"p": project_id, "r": role_key, "s": skill_id},
+        ).first() is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _allowed_callers(connection: Connection, project_id: str, skill_id: str) -> set[str]:
@@ -504,6 +530,26 @@ def _allowed_callers(connection: Connection, project_id: str, skill_id: str) -> 
         return {str(c).strip().lower() for c in (permissions.get("allowed_callers") or [])}
     except Exception:  # noqa: BLE001
         return set()
+
+
+def optional_inputs(connection: Connection, project_id: str, step_key: str) -> frozenset[str]:
+    """The input names this step does NOT require.
+
+    A step declares `inputs: [{name, required}]`. The runner resolves bindings with everything
+    mandatory unless told otherwise, so an input marked optional still failed the run when it
+    was left blank — the form said "if you have one" and the runtime disagreed.
+    """
+    try:
+        row = connection.execute(
+            text("SELECT inputs FROM workflow_custom_steps WHERE project_id=:p AND step_key=:k"),
+            {"p": project_id, "k": step_key},
+        ).scalar()
+    except Exception:  # noqa: BLE001 — a lookup problem must not make everything mandatory
+        return frozenset()
+    declared = row if isinstance(row, list) else []
+    return frozenset(
+        str(i.get("name")) for i in declared
+        if isinstance(i, dict) and i.get("name") and not i.get("required"))
 
 
 # ── Execution ──────────────────────────────────────────────────────────────────

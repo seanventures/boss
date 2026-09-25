@@ -422,6 +422,58 @@ def assign_skill_to_role(
     return {"role_key": role, "skill_id": skill, "source": source, "assigned": True}
 
 
+def sync_role_skills(
+    connection: Connection, *, project_id: str, actor: str = "system",
+) -> dict[str, Any]:
+    """Give every installed agent the skills its role spec says it may use.
+
+    WHY THIS HAD TO EXIST. A role spec declares `permissions.allowed_skills`, and until now
+    that list went exactly one place: into the agent's PROMPT, as a line reading "Role allowed
+    skills: …". The runtime does not read prompts. It reads `role_skills` — see
+    skill_runtime._assigned_to_agent, whose own comment says "GIVING A SKILL TO AN AGENT IS THE
+    GRANT, and this is where it is cashed in."
+
+    Nothing connected the two. So every install had agents that were TOLD what they could use
+    and HELD nothing, and every permission that worked did so because a skill happened to list
+    the role in `allowed_callers` — never because an agent had been given anything. An operator
+    looking at the Agents page saw exactly what was there: agents with no skills.
+
+    Idempotent, and additive only. It never removes an assignment: an operator who has granted
+    something by hand has made a decision, and a sync that reverts it on the next run is a sync
+    nobody can trust. Taking a skill away stays deliberate — that is `unassign_skill_from_role`.
+
+    A skill a role names but the project does not have is REPORTED, not silently skipped. It is
+    usually the real problem: the bundle it lives in was never enabled here.
+    """
+    roles = connection.execute(
+        text("""SELECT DISTINCT ON (role_key) role_key, spec FROM roles
+                WHERE project_id = :p ORDER BY role_key, created_at DESC, id DESC"""),
+        {"p": project_id},
+    ).mappings().all()
+
+    assigned: list[dict[str, str]] = []
+    missing: list[dict[str, str]] = []
+    for row in roles:
+        spec = row["spec"] if isinstance(row["spec"], dict) else {}
+        wanted = ((spec.get("permissions") or {}).get("allowed_skills")) or []
+        for skill_id in wanted:
+            skill_id = str(skill_id).strip()
+            # A wildcard is a description, not a grant. "infra.*" cannot be cashed in, and
+            # expanding it here would hand an agent whatever happens to match it next week.
+            if not skill_id or "*" in skill_id:
+                continue
+            try:
+                assign_skill_to_role(
+                    connection, project_id=project_id, actor=actor,
+                    role_key=str(row["role_key"]), skill_id=skill_id)
+                assigned.append({"role_key": row["role_key"], "skill_id": skill_id})
+            except SkillDefinitionError as error:
+                missing.append({"role_key": row["role_key"], "skill_id": skill_id,
+                                "reason": str(error)})
+    return {"assigned": assigned, "assigned_count": len(assigned),
+            "unavailable": missing, "unavailable_count": len(missing)}
+
+
 def unassign_skill_from_role(
     connection: Connection,
     *,

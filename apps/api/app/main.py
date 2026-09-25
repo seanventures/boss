@@ -15058,6 +15058,27 @@ def disconnect_channel(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@app.post("/v1/role-skills/sync")
+def sync_project_role_skills(payload: dict) -> dict:
+    """Give every installed agent the skills its role spec says it may use.
+
+    Needed because role specs and role_skills were never joined: an agent was TOLD what it
+    could use, in its prompt, and HELD nothing. Exposed as an endpoint and not only a bootstrap
+    step because every install that already exists is in that state.
+
+    Additive. It never removes an assignment an operator made by hand.
+    """
+    from boss_engine.services.skill_definitions import sync_role_skills
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        return sync_role_skills(
+            connection, project_id=project_id,
+            actor=str(payload.get("actor") or "operator"))
+
+
 @app.get("/v1/role-skills")
 def list_role_skill_assignments(project_id: str) -> dict:
     """Every agent-holds-skill assignment in the project.

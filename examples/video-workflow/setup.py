@@ -45,7 +45,11 @@ STEPS = [
     {"label": "Plan the edit", "skill_id": "video.plan_edit",
      "summary": "Read the instructions and write the edit plan. Renders nothing.",
      "inputs": [{"name": "media_artifact_id", "required": True},
-                {"name": "instructions", "required": True}],
+                {"name": "instructions", "required": True},
+                # Images the plan may put on screen, as {name: artifact_id}. OPTIONAL: most
+                # edits are cuts and captions, and a required field for a logo nobody is using
+                # is a field everybody has to think about.
+                {"name": "assets", "required": False}],
      "agent": "video_editor"},
     {"label": "Apply the edit", "skill_id": "video.apply_plan",
      "summary": "Run the plan and record what each operation changed.",
@@ -54,7 +58,11 @@ STEPS = [
      "agent": "video_editor"},
     {"label": "Publish to YouTube", "skill_id": "publish_youtube",
      "summary": "Upload the approved video as private.",
-     "inputs": [{"name": "media_artifact_id", "required": True}],
+     # TITLE IS REQUIRED BY THE SKILL. Leaving it off the step meant the run reached the last
+     # gate, a person approved it, and only then did it fail for a field nobody was asked for.
+     "inputs": [{"name": "media_artifact_id", "required": True},
+                {"name": "title", "required": True},
+                {"name": "description", "required": False}],
      "agent": "media_publisher"},
 ]
 
@@ -76,7 +84,8 @@ def main() -> None:
                  ["plan-edit"], agent="video_editor", args=args),
             step("plan-edit", keys["Plan the edit"],
                  {"media_artifact_id": from_step("fetch-link", "media_artifact_id"),
-                  "instructions": from_input("instructions")},
+                  "instructions": from_input("instructions"),
+                  "assets": from_input("assets")},
                  ["apply-plan"], agent="video_editor", args=args),
             # The video comes from FETCH, not from PLAN: the planner produces a plan, not a
             # video. Wiring it the obvious wrong way is the mistake worth naming.
@@ -87,9 +96,49 @@ def main() -> None:
             # No separate review step: publish_youtube is risk tier 3, and BOSS forces a manual
             # approval at or above the floor whatever a workflow asks.
             step("publish", keys["Publish to YouTube"],
-                 {"media_artifact_id": from_step("apply-plan", "media_artifact_id")},
+                 {"media_artifact_id": from_step("apply-plan", "media_artifact_id"),
+                  "title": from_input("title"),
+                  "description": from_input("description")},
                  [], agent="media_publisher", approval="manual", args=args),
         ],
+        # WHAT THE START FORM ASKS FOR. Without this the console has nothing to draw and the
+        # workflow cannot be started from the UI at all — the run begins with no link and no
+        # instructions and fails on the first step.
+        "input_schema": {
+            "required": ["video_url", "instructions", "title"],
+            "properties": {
+                "video_url": {
+                    "title": "Video link",
+                    "description": "Google Drive share link, or any direct HTTPS link to the "
+                                   "file. A Drive link is not copied — it is already where the "
+                                   "editing steps read from.",
+                    "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
+                },
+                "instructions": {
+                    "title": "What to do with it",
+                    "description": "Plain English. Timecodes may be seconds, M:SS or "
+                                   "HH:MM:SS. Put timed things (captions, overlays) BEFORE "
+                                   "cuts if you read the times off the original.",
+                    "examples": ["Make a short from 2:10 to 2:40, vertical for phones, "
+                                 "caption the first three seconds with 'The one thing nobody "
+                                 "tells you', and cut 2:20 to 2:25 where I fumble."],
+                },
+                "title": {
+                    "title": "YouTube title",
+                    "description": "Required by YouTube. The upload is PRIVATE either way.",
+                },
+                "description": {
+                    "title": "YouTube description",
+                    "description": "Optional.",
+                },
+                "assets": {
+                    "title": "Images to put on screen",
+                    "description": "Optional. {\"logo\": \"art_…\"} — artifact ids, so the "
+                                   "plan can only name images BOSS already holds. Leave blank "
+                                   "for cuts and captions.",
+                },
+            },
+        },
     })
 
     print("""  Done.

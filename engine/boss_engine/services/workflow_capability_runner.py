@@ -1198,10 +1198,17 @@ def execute_step(
     # unknown capability, which is true and useless.
     if binding.get("custom_step"):
         try:
+            # THE STEP'S OWN OPTIONAL INPUTS ARE OPTIONAL HERE TOO. Without this every
+            # `from_input` was mandatory, so a workflow offering "an image to overlay, if you
+            # have one" failed the moment somebody left it blank — and the message named a
+            # missing input the form had presented as optional.
             return custom_steps.execute(
                 connection, getattr(ctx, "settings", None),
                 project_id=project_id, actor=actor, step=step,
-                inputs=_resolve_inputs(binding.get("inputs") or {}, context),
+                inputs=_resolve_inputs(
+                    binding.get("inputs") or {}, context,
+                    custom_steps.optional_inputs(
+                        connection, project_id, str(binding["custom_step"]))),
                 run_id=str(context.get("run_id") or ""),
                 step_index=int(context.get("step_index") or 0),
             )

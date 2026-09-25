@@ -19,10 +19,7 @@ skills:
       max_attempts: 2
       backoff: exponential
     permissions:
-      # program_manager, for the same reason as model.generate_text. Widening WHO MAY CALL is
-      # not widening what happens: this variant still requires a ceo approval in the policy
-      # below, so a role being permitted to ask is not a role permitted to send.
-      allowed_callers: [comms_worker, executive_console, program_manager]
+      allowed_callers: [comms_worker, executive_console]
       required_permissions: [comms_send]
     policy:
       use_outbox_only: true
