@@ -874,6 +874,156 @@ def execute_video_caption(
     )
 
 
+@register_executor("meeting.extract_actions")
+def execute_meeting_extract_actions(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Read a transcript; write down what was decided and what somebody has to do.
+
+    Creates nothing. Its whole output is a list a person approves before the next step turns it
+    into tickets other people will see — the same split as planning an edit before rendering it.
+    """
+    from .meeting_actions import extract
+    from .claude_cli_adapter import make_agent_chat_adapter
+    from .setup_service import chat_engine_for
+
+    transcript = str(inputs.get("transcript") or inputs.get("notes") or "").strip()
+    if not transcript:
+        raise ValueError(
+            "transcript is required — paste the meeting notes or transcript")
+
+    # The engine THIS PROJECT chose. Without it the adapter falls through to OpenAI and an
+    # install running on a Claude subscription fails with "OPENAI_API_KEY is not configured".
+    settings = context.settings
+    try:
+        engine = chat_engine_for(context.connection, settings, context.project_id)
+        if engine:
+            settings = settings.model_copy(update={"chat_llm_engine": engine})
+    except Exception:  # noqa: BLE001 — a settings read must not fail the step
+        pass
+
+    result = extract(
+        make_agent_chat_adapter(settings),
+        transcript=transcript,
+        context=str(inputs.get("context") or ""),
+    )
+    return {
+        "decisions": result["decisions"],
+        "actions": result["actions"],
+        "unclear": result["unclear"],
+        "summary": result["summary"],
+        "action_count": len(result["actions"]),
+    }
+
+
+@register_executor("tracker.issues.create")
+def execute_tracker_issues_create(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Create issues in the project's work tracker — Plane by default.
+
+    TAKES A LIST, not one issue. A meeting produces several actions and a workflow's step list
+    is fixed, so one step per ticket is not expressible; the same reason video.apply_plan takes
+    a plan rather than one operation.
+
+    PARTIAL SUCCESS IS REPORTED, NOT HIDDEN. Six tickets where the fourth fails leaves five
+    real ones behind, and a step that raises would say nothing about which. Each result carries
+    its own outcome and the step fails only if EVERY one did.
+    """
+    from sqlalchemy import text as _sql
+
+    from .work_tracker_adapters import get_adapter
+
+    actions = inputs.get("actions") or inputs.get("issues")
+    if isinstance(actions, dict):
+        actions = [actions]
+    if not isinstance(actions, list):
+        raise ValueError("actions must be a list of {title, detail} items")
+    if not actions:
+        # NOT AN ERROR. A meeting that produced no actions is a real outcome, and failing here
+        # would make "nothing to do" look like a broken workflow.
+        return {"created": [], "failed": [], "created_count": 0,
+                "note": "no actions were given, so no tickets were created"}
+
+    wanted = str(inputs.get("provider_key") or "").strip().lower()
+    row = context.connection.execute(
+        _sql(
+            """
+            SELECT provider_key, display_name, configuration
+            FROM work_tracker_providers
+            WHERE project_id = :p AND status = 'active'
+              AND (:k = '' OR provider_key = :k)
+            ORDER BY is_default DESC, updated_at DESC
+            LIMIT 1
+            """
+        ),
+        {"p": context.project_id, "k": wanted},
+    ).mappings().first()
+    if row is None:
+        raise ValueError(
+            f"this project has no {'active work tracker' if not wanted else wanted} "
+            f"configured. Connect one first — Plane, Jira, Linear, GitHub Issues or Azure "
+            f"DevOps.")
+
+    adapter = get_adapter(row["provider_key"])
+    config = dict(row["configuration"] or {})
+
+    created: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict):
+            failed.append({"index": index, "error": "not an object"})
+            continue
+        title = str(action.get("title") or "").strip()
+        if not title:
+            failed.append({"index": index, "error": "no title"})
+            continue
+        body = _issue_body(action)
+        try:
+            result = adapter.create_issue(
+                config, title=title[:200],
+                description_html=body.replace("\n", "<br>"), description_text=body)
+            if result is None:
+                # An adapter that declines rather than raises. Reported as a failure, because
+                # "no ticket exists" is the same outcome either way.
+                failed.append({"index": index, "title": title,
+                               "error": "the tracker did not create it and gave no reason"})
+                continue
+            created.append({
+                "title": title,
+                # IssueCreateResult's own field names — not guessed. A URL is what makes the
+                # step's output useful to the person who approved it.
+                "url": result.external_url,
+                "key": result.external_key,
+                "external_id": result.external_issue_id,
+                "owner": action.get("owner"),
+            })
+        except Exception as error:  # noqa: BLE001 — one bad ticket is not six
+            failed.append({"index": index, "title": title, "error": str(error)[:300]})
+
+    if failed and not created:
+        raise ValueError(
+            f"none of the {len(failed)} tickets could be created in "
+            f"{row['display_name']}: {failed[0]['error']}")
+    return {
+        "created": created,
+        "failed": failed,
+        "created_count": len(created),
+        "tracker": row["display_name"],
+    }
+
+
+def _issue_body(action: dict[str, Any]) -> str:
+    """What the ticket says, for somebody who was not in the meeting."""
+    parts = [str(action.get("detail") or "").strip()]
+    if action.get("owner"):
+        parts.append(f"Owner as named in the meeting: {action['owner']}")
+    if action.get("due"):
+        parts.append(f"Timing as discussed: {action['due']}")
+    parts.append("Created by BOSS from a meeting transcript.")
+    return "\n\n".join(p for p in parts if p)
+
+
 @register_executor("media.fetch_link")
 def execute_media_fetch_link(
     context: "SkillExecutorContext", inputs: dict[str, Any]
