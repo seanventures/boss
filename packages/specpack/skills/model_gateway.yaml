@@ -51,7 +51,10 @@ skills:
       estimator: token_estimate
       category: model
     permissions:
-      allowed_callers: [worker, software_factory, metatron]
+      # program_manager added when workflow steps could be given to an agent. This list was
+      # written when only BOSS's own internals called skills; a customer's role writing a
+      # report or a newsletter is the use the step assignment exists for.
+      allowed_callers: [worker, software_factory, metatron, program_manager]
       required_permissions: [model_invoke]
     policy:
       requires_budget_reservation: true
