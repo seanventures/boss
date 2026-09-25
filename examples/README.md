@@ -56,6 +56,29 @@ newsletter, and emails it after you have read it. `--schedule` makes it arrive o
 Shows: a built-in capability and your own steps in one workflow; a step taking an earlier
 step's output as material; and the scheduler, with the time zone stored where it belongs.
 
+### [sales-signal](sales-signal/) — a company name becomes a researched approach
+
+Give it a company. BOSS researches them, scores the opportunity, drafts an opening email, and
+puts both in your salesperson's inbox. Nothing goes near the prospect.
+
+**Steps:** research → assess → draft → notify (stops for you)
+**Needs:** a connected model, and email configured
+
+Shows: two model steps reading the same dossier for different jobs; a workflow that deliberately
+ends at a human rather than at an effect.
+
+### [trend-to-content](trend-to-content/) — a trend becomes a script, or an honest no
+
+Give it a trend. BOSS researches it, says plainly whether it is yours to talk about, and writes
+a script only if it is.
+
+**Steps:** research → assess → script → review (stops for you)
+**Needs:** a connected model, and email configured
+
+Shows: a step reading an earlier step's JUDGEMENT rather than its raw material, so a trend
+judged "not ours" produces one line instead of a polished script for a video nobody should
+make. Chains into video-workflow.
+
 ---
 
 ## Candidates

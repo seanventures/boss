@@ -848,6 +848,26 @@ CREATE INDEX IF NOT EXISTS idx_resource_allocations_work
 CREATE INDEX IF NOT EXISTS idx_resource_allocations_quota
   ON resource_allocations(quota_id, status, expires_at);
 
+-- Per-project configuration that is neither a setting nor a credential.
+--
+-- A SETTING is a knob with a default and a type, and project_settings holds those. A CREDENTIAL
+-- goes through secret_backends and is referenced, never stored here. What was left over is a
+-- small structured body — an SMTP server's host, port, sender and TLS flags — that belongs to
+-- one project, is worth showing on a screen, and is harmless in a log. Those had nowhere to go
+-- but the environment, which meant changing a mail server was a redeploy.
+--
+-- The SECRET part of such a body is a `secret_ref_id` inside it, never the value.
+CREATE TABLE IF NOT EXISTS project_configurations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  config_key TEXT NOT NULL,
+  body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, config_key)
+);
+
 CREATE TABLE IF NOT EXISTS work_tracker_providers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

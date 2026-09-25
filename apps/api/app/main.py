@@ -21368,6 +21368,71 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 # anything whose value IS the recurrence. See workflow_schedules.py for why this is a cadence
 # and not a cron expression.
 
+# ── Email setup ───────────────────────────────────────────────────────────────
+
+@app.get("/v1/email/config")
+def get_email_config(project_id: str) -> dict:
+    """How this project sends email. Never returns the password — only whether one is set."""
+    from boss_engine.services import email_config
+
+    with begin(engine) as connection:
+        return email_config.describe(connection, project_id)
+
+
+@app.post("/v1/email/config")
+def set_email_config(payload: dict) -> dict:
+    """Configure SMTP. The password goes to the secret backend, not into the row."""
+    from boss_engine.services import email_config
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return email_config.save(
+                connection, get_settings(), project_id=project_id,
+                host=str(payload.get("host") or ""),
+                from_address=str(payload.get("from_address") or ""),
+                port=payload.get("port", 587),
+                username=str(payload.get("username") or ""),
+                # Absent means "keep what is stored", so changing a port does not require
+                # retyping a password — which is how passwords end up in a text file.
+                password=payload.get("password"),
+                use_tls=bool(payload.get("use_tls", True)),
+                use_ssl=bool(payload.get("use_ssl", False)),
+                from_name=str(payload.get("from_name") or ""),
+                actor=str(payload.get("actor") or "operator"))
+    except email_config.EmailConfigError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/v1/email/test")
+def test_email_config(payload: dict) -> dict:
+    """Send one real message, so "configured" and "working" are not the same claim.
+
+    A mail server accepts a TCP connection long before it accepts a login, and a wrong password
+    or a blocked port is something an operator should learn now rather than when a newsletter
+    silently fails at 8am on a Monday.
+    """
+    from boss_engine.services.email_adapter import EmailAdapter
+    from boss_engine.services import email_config
+
+    project_id = str(payload.get("project_id") or "").strip()
+    to = str(payload.get("to") or "").strip()
+    if not project_id or not to:
+        raise HTTPException(status_code=400, detail="project_id and to are required")
+    with begin(engine) as connection:
+        settings = email_config.settings_for(connection, get_settings(), project_id)
+    try:
+        message_id = EmailAdapter(settings).send_message(
+            to, "BOSS test message",
+            "This is BOSS checking that it can send email from this project.\n\n"
+            "If you are reading it, sending works.")
+    except Exception as error:  # noqa: BLE001 — the server's own words are the useful part
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"sent": True, "to": to, "message_id": message_id}
+
+
 @app.get("/v1/delivery-workflows/schedules")
 def list_workflow_schedules(project_id: str) -> dict:
     from boss_engine.services import workflow_schedules as schedules

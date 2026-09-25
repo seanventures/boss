@@ -940,6 +940,7 @@ def execute_email_send(
     setting that is missing, not a success with nothing sent.
     """
     from .email_adapter import EmailAdapter
+    from .email_config import settings_for
 
     to = str(inputs.get("to") or inputs.get("channel") or "").strip()
     if not to:
@@ -949,7 +950,10 @@ def execute_email_send(
         raise ValueError("body is required — an empty email is not a message")
     subject = str(inputs.get("subject") or "").strip() or None
 
-    message_id = EmailAdapter(context.settings).send_message(to, subject, body)
+    # THIS PROJECT'S MAIL SERVER, falling back to the environment. An install that configured
+    # SMTP with env vars keeps working; one that set it up in the console no longer needs to.
+    settings = settings_for(context.connection, context.settings, context.project_id)
+    message_id = EmailAdapter(settings).send_message(to, subject, body)
     return {"to": to, "subject": subject, "message_id": message_id,
             "characters": len(body)}
 
