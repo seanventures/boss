@@ -53,9 +53,12 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.key:
-        print("\n  ERROR  no API key. Pass --key, or export BOSS_API_KEY.\n"
-              "         On the server it is the BOSS_API_KEY line in /opt/boss/.env\n",
-              file=sys.stderr)
+        # The same explanation the individual scripts give — imported rather than repeated, so
+        # the two cannot drift into telling somebody different things.
+        sys.path.insert(0, str(HERE))
+        from _common import HOW_TO_FIND_THE_KEY
+
+        print(f"\n  ERROR  {HOW_TO_FIND_THE_KEY}\n", file=sys.stderr)
         raise SystemExit(1)
 
     wanted = [w.strip() for w in (args.only or "").split(",") if w.strip()]

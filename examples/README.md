@@ -16,6 +16,49 @@ examples/<name>/
     setup.py     the same thing as a script — --dry-run first, safe to re-run
 ```
 
+## First: your API key
+
+Every command below needs `BOSS_API_KEY`. It is generated when BOSS is installed and written to
+the install's `.env` — it is not shown again, so this is how to get it back.
+
+**BOSS on a server, and you are on your laptop** — this prints all three variables:
+
+```bash
+scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
+```
+
+```
+export BOSS_API=http://YOUR_HOST:8000
+export BOSS_API_KEY=…
+export BOSS_PROJECT=boss-dogfood
+```
+
+Paste those into your shell, or apply them in one step:
+
+```bash
+eval "$(scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env)"
+```
+
+**On the server itself:**
+
+```bash
+grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2-
+```
+
+**BOSS on this machine:**
+
+```bash
+grep '^BOSS_API_KEY=' .env | cut -d= -f2-
+```
+
+> The key is a secret and grants full API access. These commands print it to your terminal —
+> don't paste the output into a chat or a ticket. If it leaks, change `BOSS_API_KEY` in the
+> install's `.env` and restart the API.
+
+Every script also prints this if you run it without a key.
+
+---
+
 ## Install all of them at once
 
 ```bash

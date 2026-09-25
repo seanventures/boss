@@ -68,10 +68,39 @@ def parser(description: str) -> argparse.ArgumentParser:
     return p
 
 
+#: WHERE THE KEY IS, printed when it is missing rather than left as an exercise.
+#:
+#: "no API key" told somebody what was wrong and nothing about what to do, on a variable that
+#: appears in every command in every README. The three cases below are the three places BOSS
+#: is ever run from, and each one is a line to paste.
+HOW_TO_FIND_THE_KEY = """no API key.
+
+  Where to find it, depending on where BOSS is running:
+
+  ON THE SERVER — run this there:
+      grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2-
+
+  FROM YOUR LAPTOP, with BOSS on a server — this prints all three variables, ready to paste:
+      scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
+
+      Or apply them directly:
+      eval "$(scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env)"
+
+  BOSS ON THIS MACHINE:
+      grep '^BOSS_API_KEY=' .env | cut -d= -f2-
+
+  Then either export it:
+      export BOSS_API_KEY=<the value>
+  or pass it:
+      --key "<the value>"
+
+  The key is a secret. `env` prints it to your terminal, so do not paste that output
+  into a chat or a ticket."""
+
+
 def connect(args, description: str) -> Api:
     if not args.key:
-        die("no API key. Pass --key, or export BOSS_API_KEY.\n"
-            "       On the server it is the BOSS_API_KEY line in /opt/boss/.env")
+        die(HOW_TO_FIND_THE_KEY)
     api = Api(args.api, args.key, args.project, args.actor)
     print(f"\n  {description}")
     print(f"  BOSS      {api.base}")
