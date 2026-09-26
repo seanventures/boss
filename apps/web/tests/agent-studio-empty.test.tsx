@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentStudioFeed } from "../lib/agent-studio";
+import { codeOnly } from "./_helpers/source";
 
 /**
  * BOSS-347 — Agent Studio empty/error honesty.
@@ -63,17 +64,29 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
   it("names the missing starter catalog and offers the no-spend install CTA", () => {
     const markup = html(emptyLibrary());
 
-    expect(markup).toContain("Starter catalog not installed");
+    expect(markup).toContain("Add your first agents");
     expect(markup).toContain("Install BOSS starter catalog");
-    expect(markup).toContain("POST /v1/agent-studio/catalog/seed");
     expect(markup).toContain("as-first-run");
-    expect(markup).toContain("never dispatches work or spends budget");
-    expect(markup).not.toContain("Agent Studio / live system");
-    expect(markup).not.toContain("Compose intelligence. Watch the work.");
+    expect(markup).toContain("does not start a run or spend budget");
+    expect(markup).not.toContain("Build and run agents");
     expect(markup).not.toContain("as-workbench");
     expect(markup).not.toContain("as-metrics");
     expect(markup).not.toContain("Live coordination");
-    expect(markup).not.toContain("Smoke test all");
+    expect(markup).not.toContain("Test all");
+    expect(markup).not.toContain("has no Studio definition");
+  });
+
+  it("names a linked role that has no Studio definition without dropping the catalog install", () => {
+    // The empty library returns before the workbench, so the canvas sentence
+    // "No agent definition for …" never mounts. A studio_role on that branch
+    // still has to name the role and keep the install action.
+    const src = codeOnly("app/agent-studio-ui.tsx");
+    const firstRun = src.slice(src.indexOf("if (libraryEmpty)"), src.indexOf("as-workbench"));
+    expect(firstRun).toContain("requestedRole");
+    expect(firstRun).toContain("No agent definition for {compact(requestedRole)}");
+    expect(firstRun).toContain("This role has no Studio definition.");
+    expect(firstRun).toContain("Install BOSS starter catalog");
+    expect(firstRun).toContain('data-testid="as-missing-definition"');
   });
 
   it("keeps the workbench only after specialists exist", () => {
@@ -101,11 +114,14 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
       }),
     );
 
-    expect(markup).toContain("Agent Studio / live system");
+    expect(markup).toContain("Build and run agents");
     expect(markup).toContain("as-workbench");
     expect(markup).toContain("UX Engineer");
-    expect(markup).toContain("Smoke test all 1 agents");
-    expect(markup).not.toContain("Starter catalog not installed");
+    expect(markup).toContain("Requested skills");
+    expect(markup).toContain("Data boundary");
+    expect(markup).not.toContain("as-agent-graph");
+    expect(markup).toContain("Test all 1 agent");
+    expect(markup).not.toContain("Add your first agents");
   });
 
   it("treats unconfigured A2A as quiet honesty, not a red outage", () => {
@@ -131,7 +147,8 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
         },
       }),
     );
-    expect(markup).toContain("not_configured");
+    expect(markup).toContain("No active version. This agent cannot run yet.");
+    expect(markup).toContain("Not configured");
     expect(markup).toContain("as-beacon quiet");
     expect(markup).not.toContain("as-beacon bad");
   });

@@ -1085,7 +1085,7 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: 0 10px 28px rgba(0, 0, 0, .34);
 }
 
-.dw-card-head { display: flex; align-items: start; gap: 10px; justify-content: space-between; }
+.dw-card-head { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .dw-card h4 { margin: 0; font-size: 1rem; line-height: 1.25; letter-spacing: -0.01em; }
 .dw-class {
   flex: 0 0 auto;
@@ -1465,7 +1465,7 @@ h1, h2, h3, h4, h5, h6 {
    The same flat row with different contents left an operator unsure whether they were editing
    the workflow in the dropdown or making a new one — which is the confusion that started
    this. */
-.dw-new { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; width: 100%; }
+.dw-new { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; width: 100%; }
 .dw-new .field { display: grid; gap: 3px; min-width: 186px; flex: 1 1 186px; }
 .dw-new .field > span {
   font-size: 0.62rem; letter-spacing: .1em; text-transform: uppercase;
@@ -5043,90 +5043,21 @@ select.input:focus {
 }
 .as-topology {
   position: relative;
-  min-height: 385px;
   overflow: hidden;
   border-bottom: 1px solid var(--as-line);
 }
-.as-grid-lines {
-  position: absolute;
-  inset: 0;
-  opacity: 0.28;
-  background-size: 28px 28px;
-  background-image:
-    linear-gradient(rgba(151, 177, 205, 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(151, 177, 205, 0.1) 1px, transparent 1px);
-  mask-image: linear-gradient(to bottom, transparent, black 18%, black 82%, transparent);
-}
 
-.as-agent-graph {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: 1fr 1.35fr 1fr;
-  align-items: center;
-  gap: 30px;
-  min-height: 385px;
-  padding: 48px 28px 64px;
+.as-agent-summary { display: grid; margin: 0; padding: 14px 26px; }
+.as-agent-summary-empty { margin: 0; padding: 26px; color: var(--muted); font-size: 13px; }
+.as-agent-summary > div {
+  display: grid; grid-template-columns: minmax(120px, .4fr) minmax(0, 1fr);
+  gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--as-line);
 }
-.as-agent-core {
-  position: relative;
-  display: grid;
-  place-items: center;
-  justify-self: center;
-  width: 180px;
-  height: 180px;
-}
-.as-core-ring {
-  position: absolute;
-  border: 1px solid rgba(99, 230, 216, 0.2);
-  border-radius: 50%;
-}
-.as-core-ring.ring-one { inset: 8px; animation: as-spin 20s linear infinite; border-top-color: var(--as-cyan); }
-.as-core-ring.ring-two { inset: 25px; animation: as-spin 13s linear infinite reverse; border-right-color: var(--as-blue); }
-.as-core-orb {
-  display: grid;
-  place-items: center;
-  width: 82px;
-  height: 82px;
-  border: 1px solid var(--as-cyan);
-  border-radius: 50%;
-  background: #102438;
-  box-shadow: 0 0 40px rgba(99, 230, 216, 0.16);
-  color: var(--as-cyan);
-  font-family: var(--display);
-  font-size: 1.35rem;
-  font-weight: 800;
-}
-.as-agent-core b { position: absolute; top: calc(50% + 52px); white-space: nowrap; font-size: 0.77rem; }
-.as-agent-core small { position: absolute; top: calc(50% + 72px); white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 0.55rem; }
-.as-authority-node {
-  display: grid;
-  align-content: center;
-  min-height: 104px;
-  padding: 14px;
-  border: 1px solid var(--as-line);
-  background: rgba(9, 20, 33, 0.9);
-}
-.as-authority-node small { font-family: var(--mono); color: var(--muted); font-size: 0.52rem; letter-spacing: 0.1em; }
-.as-authority-node b { margin: 5px 0; color: var(--ink); font-size: 0.76rem; text-transform: capitalize; }
-.as-authority-node span { color: var(--muted); font-size: 0.61rem; line-height: 1.45; }
-.as-agent-floor {
-  position: absolute;
-  right: 22px;
-  bottom: 18px;
-  left: 22px;
-  display: flex;
-  justify-content: center;
-  gap: 20px;
-}
-.as-agent-floor span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.55rem;
-  text-transform: uppercase;
+.as-agent-summary > div:last-child { border-bottom: 0; }
+.as-agent-summary dt { color: var(--muted); font-size: 12px; }
+.as-agent-summary dd { margin: 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .as-agent-summary > div { grid-template-columns: 1fr; gap: 3px; }
 }
 
 .as-panel-graph { position: relative; z-index: 1; min-height: 385px; padding: 38px 20px 22px; }
@@ -5928,9 +5859,6 @@ select.input:focus {
   .as-workbench { display: block; }
   .as-library { border-right: 0; border-bottom: 1px solid var(--as-line); }
   .as-object-list { max-height: 300px; }
-  .as-agent-graph { grid-template-columns: 1fr; gap: 14px; padding: 24px 32px 74px; }
-  .as-agent-core { order: -1; }
-  .as-authority-node { min-height: 76px; }
   .as-panel-graph { min-height: 520px; overflow-x: auto; }
   .as-member-row { min-width: 700px; }
   .as-panel-links { min-width: 700px; }
@@ -7495,148 +7423,94 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-phase-name { min-width: 0; }
 }
 
-/* ── Workforce ────────────────────────────────────────────────────────────── */
-/*
- * A scoreboard, not a roster. The page exists to answer "who is doing the work and how well",
- * so the figures are the loudest thing on each card and the ordering is by volume.
- */
-/* The wrapper owns the gap from the section heading above it. Without it the filter row sat
-   under the heading and was clipped by it. */
-.roster { display: block; margin-top: 14px; }
+/* ── Agents: a concise observed-work list; detail metrics live in AgentDetail. ── */
+.roster { margin-top: 14px; }
 .roster-filterbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  flex-wrap: wrap; padding-bottom: 10px; margin-bottom: 2px;
+  flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.roster-filters { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.roster-filters .cap-btn {
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  background: transparent; padding: 5px 3px;
+}
+.roster-filters .cap-btn[data-active="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+.roster-ungoverned { color: var(--amber); margin: 10px 0; }
+.roster-guide { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 0; font-size: 12px; color: var(--muted); }
+.roster-guide button { border: 0; padding: 0; background: transparent;
+  color: var(--accent-text, #2ec5c5); cursor: pointer; font: inherit; }
+.roster-guide button:hover { text-decoration: underline; }
+.org-model-help { position: relative; display: inline-flex; align-items: center; }
+.org-model-help > button {
+  width: 17px; height: 17px; padding: 0; border: 1px solid var(--border-strong);
+  border-radius: 2px; background: transparent; color: var(--muted);
+  font: inherit; font-size: 11px; line-height: 1; cursor: help;
+}
+.org-model-help > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.org-model-help [role="tooltip"] {
+  display: none; position: absolute; z-index: 20; left: 0; top: calc(100% + 7px);
+  width: min(280px, 75vw); padding: 10px 12px; border: 1px solid var(--border-strong);
+  background: var(--panel); color: var(--ink); box-shadow: 0 8px 20px rgba(0,0,0,.25);
+  font-size: 12px; line-height: 1.45;
+}
+.org-model-help:hover [role="tooltip"], .org-model-help:focus-within [role="tooltip"] { display: block; }
+.roster-search { width: min(320px, 100%); padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--panel, #0d1117); color: var(--ink); }
+.roster-grid { display: grid; margin-top: 12px; border-top: 1px solid var(--border); }
+.roster-card {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 2fr) auto;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+  padding: 12px 2px;
   border-bottom: 1px solid var(--border);
 }
-.roster-filters { display: inline-flex; gap: 6px; }
-.roster-filters .cap-btn[data-active="true"] { border-color: var(--accent); color: var(--accent); }
-.roster-ungoverned { color: var(--amber); margin: 10px 0 0; }
-
-.roster-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px; margin-top: 12px;
+.roster-card-head { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.roster-name { font-size: 13px; font-weight: 650; color: var(--ink); }
+.roster-state { font-size: 11px; color: var(--muted); }
+.roster-card[data-status="WORKING"] .roster-state { color: var(--accent); }
+.roster-card[data-status="STUCK"] .roster-state { color: var(--amber); }
+.roster-task { margin: 0; font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roster-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.roster-actions button, .roster-show-all { border: 0; padding: 0; border-radius: 0;
+  background: transparent; color: var(--accent-text, #2ec5c5);
+  font: inherit; font-size: 12px; cursor: pointer; }
+.roster-actions button:hover, .roster-show-all:hover { text-decoration: underline; }
+.roster-show-all { margin-top: 14px; }
+.roster-actions button:focus-visible, .roster-guide button:focus-visible,
+.roster-show-all:focus-visible, .roster-search:focus-visible {
+  outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px;
 }
-.roster-card {
-  border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
-  background: var(--bg-tint, transparent);
-  display: flex; flex-direction: column; gap: 8px;
-  transition: border-color .15s ease;
+@media (max-width: 740px) {
+  .roster-card { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }
+  .roster-task { grid-row: 2; grid-column: 1 / -1; }
+  .roster-actions { grid-row: 1; grid-column: 2; }
 }
-.roster-card:hover { border-color: var(--border-strong); }
-/* An agent working right now earns the accent border — the one state worth interrupting for. */
-.roster-card[data-status="WORKING"] { border-color: var(--accent); }
-.roster-card[data-status="STUCK"] { border-color: var(--amber); }
-
-.roster-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.roster-rank {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 19px; padding: 0 6px; border-radius: 5px;
-  background: var(--border); color: var(--muted);
-  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
-}
-.roster-card:nth-child(-n+3) .roster-rank { background: var(--accent); color: var(--accent-ink, #06231D); }
-.roster-name { font-size: 14px; font-weight: 700; color: var(--ink); }
-.roster-task { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
-
-.roster-figs {
-  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-  padding: 9px 11px; border-radius: 8px; background: rgba(255,255,255,.03);
-}
-.roster-fig { display: inline-flex; align-items: baseline; gap: 5px; }
-.roster-fig b { font-size: 15px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
-.roster-unit { font-size: 10px; color: var(--faint, var(--muted)); letter-spacing: .03em; }
-.roster-fig[data-tone="good"] b { color: var(--accent); }
-.roster-fig[data-tone="warn"] b { color: var(--amber); }
-.roster-fig[data-tone="bad"]  b { color: var(--red, #F26D6D); }
-
-/* Length is VOLUME; colour is quality. Success rate barely varies — nearly everyone sits at
-   100% — so length carrying it would draw a column of identical full bars saying nothing. */
-.roster-card > .roster-scorebar {
-  display: block; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden;
-}
-.roster-card > .roster-scorebar > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
-.roster-card > .roster-scorebar > span[data-tone="warn"] { background: var(--amber); }
-.roster-card > .roster-scorebar > span[data-tone="bad"]  { background: var(--red, #F26D6D); }
-
-.roster-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.roster-chip {
-  display: inline-flex; align-items: baseline; gap: 5px;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
-  font-size: 10.5px; color: var(--muted); font-family: var(--mono, monospace);
-}
-.roster-chip i { font-style: normal; color: var(--faint, var(--muted)); }
-
-.roster-card-foot {
-  display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline;
-  padding-top: 8px; border-top: 1px solid var(--border);
-  font-size: 11px; color: var(--muted); font-family: var(--mono, monospace);
-}
-.roster-card-foot b { color: var(--ink); }
-.roster-ungov { color: var(--amber); }
 
 /* ── Org chart ────────────────────────────────────────────────────────────── */
-/*
- * Drawn from OBSERVED handoffs — BOSS has no declared reporting line — so the page says so
- * rather than presenting a derived shape as a declared structure.
- *
- * The first pass was a row of flat dark boxes: same fill as the page, one hairline border, no
- * hierarchy. It read as a wireframe. What a chart of this kind needs is depth (the card must
- * sit ON the canvas), a visible spine (so it reads as a tree rather than a row), and one
- * accent that says which node is the root.
- */
+/* Planned reporting lines and observed handoffs share a compact row layout. */
 .org { padding-top: 6px; }
-.org-tree { display: flex; flex-direction: column; align-items: center; gap: 34px; margin-top: 22px; }
-.org-level { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; position: relative; }
-
-/* The spine: a horizontal rail above the level, and a stub up from each card to meet it. */
-.org-level:not(:first-child)::before {
-  content: ""; position: absolute; top: -18px; left: 12%; right: 12%;
-  border-top: 1px solid var(--accent-line, var(--border-strong));
-  opacity: .5;
+.org-tree { display: grid; margin-top: 18px; border-top: 1px solid var(--border); }
+.org-list-head, .org-node {
+  display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(110px, .65fr) minmax(225px, 1fr);
+  align-items: center; gap: 20px;
 }
-.org-node:not([data-root="true"])::before {
-  content: ""; position: absolute; top: -18px; left: 50%; height: 18px;
-  border-left: 1px solid var(--accent-line, var(--border-strong)); opacity: .5;
+.org-list-head {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
 }
-/* And a stub DOWN from the root, so the trunk is continuous rather than floating. */
-.org-level:first-child::after {
-  content: ""; position: absolute; bottom: -18px; left: 50%; height: 18px;
-  border-left: 1px solid var(--accent-line, var(--border-strong)); opacity: .5;
-}
-
 .org-node {
-  position: relative; min-width: 190px; max-width: 250px;
-  padding: 13px 15px; border-radius: 12px;
-  /* Lifted off the canvas: a subtle gradient plus a shadow, so it is a card rather than an
-     outline drawn on the background. */
-  background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 6px 18px rgba(0,0,0,.28);
-  display: flex; flex-direction: column; gap: 5px;
-  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+  min-width: 0; padding: 11px 12px; border-bottom: 1px solid var(--border);
+  background: transparent;
 }
-.org-node:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent);
-  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 10px 26px rgba(0,0,0,.36);
-}
-/* The root earns the accent — it is the one node whose position is a claim. */
-.org-node[data-root="true"] {
-  border-color: var(--accent);
-  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 0 0 1px rgba(79,227,193,.18),
-              0 8px 24px rgba(0,0,0,.34);
-}
-/* NOT "ROOT". This chart is drawn from who handed work to whom, so the top node is simply the
-   busiest — and labelling it ROOT read as "this agent is the boss", which produced a chart
-   showing the CTO reporting to a Product Manager. The label now says what the position means.
-   A declared chart (org_assignments) overrides this and is labelled differently. */
-.org-node[data-root="true"]::after {
-  content: "MOST HANDOFFS"; position: absolute; top: -9px; left: 15px;
-  padding: 1px 7px; border-radius: 999px;
-  background: var(--accent); color: var(--accent-ink, #06231D);
-  font-size: 8.5px; font-weight: 800; letter-spacing: .1em;
-}
-.org[data-declared="true"] .org-node[data-root="true"]::after { content: "TOP OF CHART"; }
+.org-node:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.org-node-identity { display: grid; gap: 2px; min-width: 0; padding-left: calc(var(--org-depth, 0) * 15px); }
+.org-node:not([data-root="true"]) .org-node-identity { border-left: 1px solid var(--border-strong); }
+.org-node-parent { font-size: 12px; color: var(--muted); }
 
 /* An action, not a badge. `text-transform: uppercase` on a one-word button turned "top" into
    "TOP" on every card, which reads as a status stamp — and a status stamp that says TOP on
@@ -7645,32 +7519,18 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .org-node-name { font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.25; }
 .org-node-role {
-  font-size: 10.5px; color: var(--muted); font-family: var(--mono, monospace);
-  letter-spacing: .02em;
+  font-size: 11px; color: var(--muted);
 }
 .org-node-task {
   font-size: 11.5px; color: var(--faint, var(--muted));
-  padding-top: 5px; margin-top: 2px; border-top: 1px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* Working alone: real chips, not a wall of text. */
-.roster-alone { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.roster-alonechip {
-  display: inline-flex; align-items: baseline; gap: 6px;
-  padding: 6px 12px; border-radius: 999px;
-  border: 1px solid var(--border); background: rgba(255,255,255,.025);
-  font-size: 12px; color: var(--muted);
-  transition: border-color .14s ease, color .14s ease;
-}
-.roster-alonechip:hover { border-color: var(--border-strong); color: var(--ink); }
-.roster-alonechip i { font-style: normal; font-size: 10px; color: var(--faint, var(--muted)); }
 
 @media (max-width: 700px) {
-  .org-level { flex-direction: column; align-items: stretch; }
-  .org-level:not(:first-child)::before,
-  .org-level:first-child::after,
-  .org-node:not([data-root="true"])::before { display: none; }
-  .org-node { max-width: none; }
+  .org-list-head { display: none; }
+  .org-node { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .org-node-tools { padding-left: calc(var(--org-depth, 0) * 15px); }
 }
 
 /* ── The detail's action bar ──────────────────────────────────────────────── */
@@ -7746,75 +7606,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-live-dot { box-shadow: 0 0 0 3px rgba(63, 185, 80, .22); }
 }
 
-/* ── Workforce: motion that is still there when you look ──────────────────── */
-/*
- * The v2 version of this page shipped three times looking static, and each time the reason was
- * the same: the only persistent rule needed an agent to be WORKING at that instant, and on a
- * quiet afternoon that is nobody. Everything else was a sub-second entrance that had finished
- * before anyone looked.
- *
- * So the motion here is keyed to RECENCY, which is true of a real number of agents at any
- * moment, and it never stops. The amount of movement is the amount of recency.
- */
-@keyframes roster-in   { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes roster-ring { 0%,100% { box-shadow: 0 0 0 0 rgba(79,227,193,.05); }
-                          50%     { box-shadow: 0 0 0 5px rgba(79,227,193,.28); } }
-@keyframes roster-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(79,227,193,.04); }
-                          50%     { box-shadow: 0 0 18px 2px rgba(79,227,193,.20); } }
-@keyframes roster-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@keyframes roster-sweep { from { background-position: -150% 0; } to { background-position: 250% 0; } }
-
-/* Cards arrive in sequence, so a 26-card grid assembles rather than blinking into place. The
-   stagger stops after a dozen — past that it is a slow page pretending to be a lively one. */
-.roster-grid > .roster-card {
-  animation: roster-in .36s cubic-bezier(.22,.61,.36,1) both;
-  animation-delay: calc(var(--i, 0) * 35ms);
-}
-/* Worked in the last quarter hour: the strongest signal on the page, and rare. */
-.roster-card[data-recency="live"] {
-  border-color: var(--accent);
-  animation: roster-in .36s cubic-bezier(.22,.61,.36,1) both,
-             roster-ring 2.4s ease-in-out .5s infinite;
-}
-/* Worked today: slower and fainter, present without competing with `live`. */
-.roster-card[data-recency="today"] {
-  animation: roster-in .36s cubic-bezier(.22,.61,.36,1) both,
-             roster-glow 4.6s ease-in-out .7s infinite;
-}
-
-/* The score bar sweeps out to its width on load — the one piece of motion visible on EVERY
-   card that has done work, and its length is the number it is carrying. */
-.roster-card > .roster-scorebar > span {
-  transform-origin: left center;
-  animation: roster-fill .8s cubic-bezier(.22,.61,.36,1) both;
-  animation-delay: calc(var(--i, 0) * 35ms + 160ms);
-  position: relative; overflow: hidden;
-}
-/* And on the agents that worked today, a light keeps travelling along it. */
-.roster-card[data-recency="live"]  > .roster-scorebar > span::after,
-.roster-card[data-recency="today"] > .roster-scorebar > span::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%);
-  background-size: 40% 100%; background-repeat: no-repeat;
-  animation: roster-sweep 2.6s linear infinite;
-}
-
-/* Hover: the card lifts, so the grid answers the pointer. */
-.roster-card { transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
-.roster-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
-
-/* NON-NEGOTIABLE. Motion is a signal here, not decoration, and for a reader who has asked the
-   OS to stop animating things it becomes noise they cannot turn off. Status stays legible
-   because colour and text carry it too. */
-@media (prefers-reduced-motion: reduce) {
-  .roster-grid > .roster-card,
-  .roster-card[data-recency="live"],
-  .roster-card[data-recency="today"],
-  .roster-card > .roster-scorebar > span { animation: none !important; }
-  .roster-card[data-recency="live"]  > .roster-scorebar > span::after,
-  .roster-card[data-recency="today"] > .roster-scorebar > span::after { content: none; }
-  .roster-card:hover { transform: none; }
-}
+/* Recent work reads as a list; the actions, not the whole row, are interactive. */
+.roster-card:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 
 /* ── Ask BOSS ─────────────────────────────────────────────────────────────── */
 /*
@@ -8577,60 +8370,20 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; margin: 8px 0 12px;
 }
-.org-note { margin: 0 0 10px; font-size: 12px; color: var(--bad, #f85149); }
+.org-note { margin: 10px 0; font-size: 12px; color: var(--bad, #f85149); }
+.org-note[data-tone="ok"] { color: var(--accent-text, #2ec5c5); }
 .org-node { position: relative; cursor: grab; }
 .org-node:active { cursor: grabbing; }
-/* A seat somebody DECIDED, as opposed to one BOSS inferred. */
-.org-node[data-placed="true"] { border-color: var(--live, #58a6ff); }
 .org-node[data-over] {
-  border-color: var(--ok, #3fb950);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok, #3fb950) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.org-node-tools { display: flex; gap: 6px; margin-top: 6px; }
+.org-node-tools { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; }
 .org-node-act {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; cursor: pointer;
-  padding: 2px 7px; border-radius: 999px; background: transparent; color: var(--muted, #8b949e);
-  border: 1px solid var(--border, #30363d);
+  font-size: 11px; text-transform: none; letter-spacing: 0; cursor: pointer;
+  padding: 2px 0; border-radius: 0; background: transparent; color: var(--muted, #8b949e);
+  border: 0; border-bottom: 1px solid transparent;
 }
-.org-node-act:hover { color: inherit; border-color: var(--live, #58a6ff); }
-.org-bench { display: flex; gap: 8px; flex-wrap: wrap; }
-.org-benchchip {
-  display: inline-flex; align-items: center; gap: 8px; cursor: grab;
-  padding: 5px 10px; border-radius: 999px; font-size: 12px;
-  border: 1px dashed var(--border, #30363d); color: var(--muted, #8b949e);
-}
-.org-benchchip:hover { color: inherit; border-color: var(--live, #58a6ff); }
-
-/* Asking one of them something, from the card that named them. */
-/* A BUTTON WITH NO BACKGROUND IS A WHITE BUTTON.
-   This declared a border and a colour and nothing else, so it fell through to the browser's
-   default control chrome — a pale grey pill with grey text, sitting on a near-black card. It
-   read as a disabled control from another application, which is the opposite of the one thing
-   it is there to do: invite you to say something to this agent.
-
-   Tinted with the accent rather than filled with it. Every card carries one, so a solid button
-   twelve times over would compete with the agent names and the status badges for a screen whose
-   subject is the workforce, not its buttons. Filling in on hover is what says "pressable". */
-.roster-ask {
-  margin-left: auto; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-  font-weight: 600; padding: 4px 12px; border-radius: 999px; text-decoration: none;
-  cursor: pointer;
-  background: color-mix(in srgb, var(--accent-text, #2EC5C5) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-text, #2EC5C5) 38%, transparent);
-  color: var(--accent-text, #2EC5C5);
-  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
-}
-.roster-ask:hover {
-  background: color-mix(in srgb, var(--accent-text, #2EC5C5) 22%, transparent);
-  border-color: var(--accent-text, #2EC5C5);
-  color: var(--ink, #E6EDF3);
-}
-.roster-ask:active { background: color-mix(in srgb, var(--accent-text, #2EC5C5) 30%, transparent); }
-/* Keyboard users get the same affordance as the mouse, and a ring that is visible on a dark
-   card — the default outline is a thin black line here, which is no outline at all. */
-.roster-ask:focus-visible {
-  outline: 2px solid var(--accent-text, #2EC5C5); outline-offset: 2px;
-}
+.org-node-act:hover { color: var(--ink); border-bottom-color: var(--accent); }
 
 /* Failed, and the work went on. Not "not run" — that hides something worth fixing — and not a
    stopped run either, because the project carried on without it. */
@@ -8649,6 +8402,103 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
 }
 .org-provenance-banner strong { color: var(--warn, #d29922); }
+
+/* The catalog stays collapsed until requested; rows are scan-friendly, not a grid of pills. */
+.org-templates {
+  margin: 12px 0 18px; border: 1px solid var(--border, #30363d);
+  background: var(--panel, #0d1117); max-height: 560px; overflow: auto;
+}
+.org-template-head {
+  position: sticky; top: 0; z-index: 1; display: flex; gap: 16px;
+  justify-content: space-between; align-items: center;
+  padding: 13px 16px; background: var(--panel, #0d1117);
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.org-template-head strong { color: var(--ink, #e6edf3); }
+.org-template-head p { margin: 3px 0 0; color: var(--muted, #8b949e); font-size: 12px; }
+.org-template-head input {
+  min-width: 170px; max-width: 260px; padding: 7px 9px;
+  border: 1px solid var(--border, #30363d); border-radius: 3px;
+  background: var(--bg, #0d1117); color: var(--ink, #e6edf3);
+}
+.org-template-list { display: grid; }
+.org-template {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border, #30363d);
+}
+.org-template:last-child { border-bottom: 0; }
+.org-template strong { display: block; color: var(--ink, #e6edf3); font-size: 13px; }
+.org-template span, .org-template p, .org-template small {
+  display: block; margin: 2px 0 0; color: var(--muted, #8b949e); font-size: 11px;
+}
+.org-template small { color: var(--warn, #d29922); }
+.org-template .cap-btn { flex: 0 0 auto; border-radius: 3px; }
+.org-template-error { margin: 10px 16px; color: var(--bad, #f85149); }
+.org-next-action {
+  border: 0; padding: 0; background: transparent;
+  color: var(--accent-text, #2ec5c5); cursor: pointer;
+  font: inherit; font-size: 12px;
+}
+.org-next-action:hover { text-decoration: underline; }
+.org-next-action:focus-visible { outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px; }
+.org-empty { margin-top: 18px; }
+.org-viewbar { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border, #30363d); }
+.org-views { display: flex; gap: 16px; }
+.org-views button {
+  padding: 9px 2px; border: 0; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--muted, #8b949e); cursor: pointer;
+  font: inherit; font-size: 13px;
+}
+.org-views button[aria-selected="true"] {
+  color: var(--ink, #e6edf3); border-bottom-color: var(--accent-text, #2ec5c5);
+}
+.org-views button:focus-visible, .org-unassigned button:focus-visible,
+.org-unassigned select:focus-visible, .org-unassigned input:focus-visible {
+  outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px;
+}
+.org-viewbar + .detail { margin: 10px 0 0; }
+.org-unassigned {
+  margin-top: 20px; border-top: 1px solid var(--border, #30363d);
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.org-unassigned summary { padding: 12px 2px; cursor: pointer; font-size: 13px; }
+.org-unassigned summary span { color: var(--muted, #8b949e); margin-left: 7px; }
+.org-unassigned-search { display: grid; gap: 5px; padding: 8px 0 12px; font-size: 12px; }
+.org-unassigned-search input, .org-unassigned-row select {
+  padding: 7px 9px; border: 1px solid var(--border, #30363d);
+  border-radius: 3px; background: var(--panel, #0d1117);
+  color: var(--ink, #e6edf3);
+}
+.org-place-btn {
+  padding: 7px 12px; border: 1px solid var(--accent-text, #2ec5c5);
+  border-radius: 3px; background: var(--accent-text, #2ec5c5);
+  color: #061b1c; font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer;
+}
+.org-place-btn:hover { filter: brightness(1.12); }
+.org-place-btn:disabled { opacity: .45; cursor: not-allowed; }
+.org-unassigned-search input { max-width: 320px; }
+.org-unassigned-list { max-height: 360px; overflow: auto; }
+.org-unassigned-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+  border-top: 1px solid var(--border, #30363d); font-size: 12px;
+}
+.org-unassigned-row > span { flex: 1 1 auto; min-width: 120px; }
+.org-unassigned-row .org-node-act { border-radius: 0; }
+.org[data-view="observed"] .org-node { cursor: default; }
+@media (max-width: 700px) {
+  .org-node-parent { padding-left: calc(var(--org-depth, 0) * 15px); }
+  .org-node-tools { justify-content: flex-start; }
+}
+.studio-duty-details { border-top: 1px solid var(--border); padding-top: 14px; }
+.studio-duty-details > summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+.studio-duty-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 620px) {
+  .org-template-head { align-items: stretch; flex-direction: column; }
+  .org-template-head input { max-width: none; }
+  .org-unassigned-row { flex-wrap: wrap; }
+  .org-unassigned-row select { flex: 1 1 170px; }
+}
 
 /* Deployment Manager — the hosts it can see, then the conversation. */
 .dm-panel { display: grid; gap: 12px; }

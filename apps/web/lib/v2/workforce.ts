@@ -102,6 +102,9 @@ export type OrgChart = {
   /** The same agents, laid out as a tree: a root is an agent nobody hands to, children are who
    *  it hands to. Derived from the handoff graph — BOSS has no declared reporting line. */
   tree: OrgNode[];
+  /** Preserved handoff tree when `tree` is the team's declared structure. */
+  observed_tree?: OrgNode[];
+  declared?: Record<string, { reports_to: string | null; display_name?: string | null }>;
   roots: string[];
   /** True when every agent is handed work by someone (a cycle), so the busiest was taken as
    *  the top. A different fact from a root nobody hands to, and the screen says so. */

@@ -47,7 +47,7 @@ checks apply to terminal requests as they do to other API clients.
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |
-| Agent Studio starter catalog | ◐ First-run seed installs 13 agents, 3 panels, and specpack workflows. A2A reports `not_configured` when Redis is unset (not a false-red degraded). **Not GA.** |
+| Agent Studio starter catalog | ◐ First-run seed installs 34 agents (including the mobile template), 3 panels, and specpack workflows. Templates default to side-effect-free briefs; mobile device execution requires a separate governed runner. A2A reports `not_configured` when Redis is unset (not a false-red degraded). **Not GA.** |
 | Pack YAML import / export in Mission Control | ✅ |
 | Managed multi-tenant model gateway | ✦ Cloud |
 | Hosted skill marketplace | ✦ Cloud |

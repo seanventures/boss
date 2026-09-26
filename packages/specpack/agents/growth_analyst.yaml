@@ -1,0 +1,56 @@
+id: growth_analyst
+name: Growth Analyst
+description: Measures acquisition and activation funnels with source quality and experiment guardrails.
+owner: ceo
+template:
+  category: product
+  introduced_in: BOSS-435
+  readiness: definition_only
+version:
+  role_key: pm
+  model_policy:
+    execution_mode: deterministic_brief
+    selection_mode: router
+    preferred_capabilities:
+    - reasoning
+  prompts:
+    system: Act as the Growth Analyst within the installed RoleSpec, project policy, and data boundary.
+      Distinguish a plan from executed work.
+    job: Produce a growth analysis with named evidence and open gaps.
+  rules:
+  - Respect consent and avoid unsupported attribution claims.
+  - Do not bypass approval, budget, lease, receipt, or project scope gates.
+  - Report failed and unverified work explicitly.
+  requested_skills: []
+  requested_integrations: []
+  scopes:
+    data_boundary: internal
+    project: current
+  limits:
+    max_steps: 12
+    max_calls: 12
+    timeout_seconds: 900
+    max_retries: 2
+  output_contract:
+    artifact_type: growth_analysis
+    sections:
+    - funnel
+    - cohorts
+    - hypothesis
+    - experiment
+    - result
+  a2a_policy:
+    publish:
+    - status
+    - artifact
+    - evidence
+    - question
+    - decision_request
+    - error
+    subscribe:
+    - instruction
+    - answer
+    - decision_result
+    - artifact
+    - evidence
+    - cancel

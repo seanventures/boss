@@ -167,6 +167,7 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // That last one is a governance fact an operator should not have to go looking for.
   "workforce",
   "org_chart",
+  "studio",
 
   // The path from an idea to shipped software. Without these the console lists the places
   // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an
