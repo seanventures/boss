@@ -1346,6 +1346,20 @@ h1, h2, h3, h4, h5, h6 {
 /* Amber, like the badge on the step list: this is the one line on the row that explains a
    control the operator cannot change. */
 .dw-draft-forced { flex-basis: 100%; color: var(--amber, #d8a657); font-size: 0.68rem; }
+/* WHO RUNS A STEP, on the workflow card. Quiet — it is context, not a warning — and in the
+   mono face because it is a role key, not prose. `data-auto` is the agent step's "BOSS picks",
+   which is a decision rather than an omission and should not read like a blank. */
+.dw-card-step-agent {
+  font-family: var(--mono, monospace); font-size: 0.62rem; color: var(--faint, var(--muted));
+  border: 1px solid var(--line, #2a3344); border-radius: 3px; padding: 0 5px; white-space: nowrap;
+}
+.dw-card-step-agent[data-auto="true"] { font-style: italic; opacity: .8; }
+/* A step with no fixed skill. Marked, because it is the one kind whose behaviour its name
+   does not predict. */
+.dw-card-step-kind {
+  font-size: 0.62rem; color: var(--accent); white-space: nowrap;
+}
+
 /* A STEP WHOSE SPECIFICATION IS A SENTENCE. The whole row, because the instruction is the step
    and cramming it beside a dropdown would make the most important field the smallest one. */
 .dw-draft-agentwork {
@@ -5163,6 +5177,13 @@ select.input:focus {
 .as-flow-node b { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 0.72rem; }
 .as-flow-node > span { color: var(--as-purple); font-family: var(--mono); font-size: 0.54rem; text-transform: uppercase; }
 .as-flow-node em { margin-top: 8px; color: var(--muted); font-size: 0.52rem; font-style: normal; line-height: 1.35; }
+/* WHO ANSWERS FOR THIS STEP. It takes the slot the step KIND used to occupy — every node in a
+   delivery workflow says CAPABILITY, which is the same word three times and tells a reader
+   nothing, where the agent differs per step and is what the governance is about. */
+.as-flow-agent { color: var(--as-purple); font-family: var(--mono); font-size: 0.54rem; }
+/* How much wiring the step has. A count, because the wiring itself belongs in the editor —
+   printing the object is what produced `inputs: [object Object]` on every node. */
+.as-flow-inputs { margin-top: 4px; color: var(--ink-soft); font-family: var(--mono); font-size: 0.46rem; }
 .as-flow-node footer { align-self: end; margin-top: 10px; color: var(--ink-soft); font-family: var(--mono); font-size: 0.48rem; }
 .as-flow-arrow {
   display: grid;

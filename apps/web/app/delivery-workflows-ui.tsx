@@ -109,7 +109,9 @@ type Installed = {
   step_count?: number;
   /** WHICH steps, not just how many. "Steps 4" says how big a workflow is and nothing about
    *  what it does, so the only way to find out was to open the editor. */
-  steps?: { id: string; label: string; kind: string; mine: boolean; approval: string }[];
+  steps?: { id: string; label: string; kind: string; mine: boolean; approval: string;
+            /** WHO RUNS IT. Empty means different things by kind — see the card. */
+            captain?: string; agent_work?: boolean }[];
   active_version?: number | null;
   /** What starting it will ask for. Absent on a workflow that declares nothing, which is
    *  every catalogue workflow today. */
@@ -4075,6 +4077,26 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule
                     <li key={step.id || i}>
                       <span className="dw-card-step-n">{i + 1}</span>
                       <span className="dw-card-step-label">{step.label}</span>
+                      {/* WHO RUNS IT, on the card. The product's claim is that agents do the
+                          work and steps track it, and a card listing three step names with no
+                          agent anywhere invites the question "did you assign them or not?" —
+                          asked about a workflow where all three were assigned correctly.
+                          Empty is not blank: on an agent step it means BOSS chooses per run. */}
+                      {step.captain ? (
+                        <span className="dw-card-step-agent" title={`Runs as ${step.captain}`}>
+                          {step.captain}
+                        </span>
+                      ) : step.agent_work ? (
+                        <span className="dw-card-step-agent" data-auto="true"
+                              title="BOSS picks the agent whose skills fit the instruction">
+                          agent chosen per run
+                        </span>
+                      ) : null}
+                      {step.agent_work ? (
+                        <span className="dw-card-step-kind" title="This step has no fixed skill — it works from your instructions">
+                          your instructions
+                        </span>
+                      ) : null}
                       {step.approval === "manual" ? (
                         <span className="dw-card-step-gate" title="stops for a person">
                           needs you

@@ -800,10 +800,15 @@ def list_definitions(
 def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any]]:
     """Just enough of each step to DRAW a workflow rather than count it.
 
-    Name, whether it is the customer's own, and whether it stops for a person — which is the
-    set of facts somebody deciding whether to start a run actually needs. Not the bindings or
-    the input wiring: those belong on the step itself, and a card that carried them would be a
-    worse version of the editor.
+    Name, WHO RUNS IT, whether it is the customer's own, and whether it stops for a person —
+    which is the set of facts somebody deciding whether to start a run actually needs. Not the
+    bindings or the input wiring: those belong on the step itself, and a card that carried them
+    would be a worse version of the editor.
+
+    THE AGENT WAS MISSING AND IT IS THE FIRST THING PEOPLE LOOK FOR. The product's claim is that
+    agents do the work and steps track it; a card that lists three step names and no agent
+    invites exactly the question it was asked — "did you assign the agents or not?" — about a
+    workflow where all three were assigned correctly.
     """
     if not isinstance(specs, list):
         return []
@@ -821,6 +826,13 @@ def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any
             "label": step_labels.get(custom) or custom or capability or str(step.get("id") or ""),
             "kind": str(step.get("kind") or ""),
             "mine": bool(custom),
+            # WHO ANSWERS FOR IT. Empty is meaningful and differs by kind: on an ordinary step it
+            # is the anonymous workflow runner; on an agent step it is "whichever agent fits",
+            # which BOSS resolves per run. The console says which.
+            "captain": str(step.get("captain") or "").strip(),
+            # A step that binds nothing and works from an instruction. Worth flagging on the card
+            # because it is the one kind whose behaviour is not fixed by its name.
+            "agent_work": bool(binding.get("agent_work")),
             "approval": str((step.get("approval") or {}).get("mode") or "auto"),
         })
     return outline

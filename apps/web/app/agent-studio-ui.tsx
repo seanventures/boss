@@ -944,10 +944,18 @@ function WorkflowTopology({
               ? [step.next]
               : [];
           const binding = step.binding ?? {};
-          const bindingLabel = Object.entries(binding)
-            .slice(0, 2)
-            .map(([key, value]) => `${compact(key)}: ${String(value)}`)
-            .join(" · ");
+          // WHAT THIS STEP ACTUALLY RUNS, said rather than stringified.
+          //
+          // `String(value)` on a binding printed `inputs: [object Object]` on every node — the
+          // most prominent line on the card, carrying no information at all. Bindings are not a
+          // flat map to be dumped: `custom_step` and `capability` NAME the work, `inputs` is
+          // wiring that belongs in the editor, and `agent_work` means there is no fixed skill
+          // at all. So each is read for what it is.
+          const runs = binding.agent_work
+            ? "works from your instructions"
+            : String(binding.custom_step || binding.capability || "") || "runtime-scoped binding";
+          const inputCount = Object.keys(
+            (binding.inputs ?? {}) as Record<string, unknown>).length;
           return (
             <div className="as-flow-segment" key={`${step.id}-${index}`}>
               <article
@@ -959,8 +967,23 @@ function WorkflowTopology({
               >
                 <small>{step.id === spec.entry_step ? "ENTRY" : `STEP ${index + 1}`}</small>
                 <b>{step.id}</b>
-                <span>{compact(step.kind)}</span>
-                <em>{bindingLabel || "runtime-scoped binding"}</em>
+                {/* WHO RUNS IT, above what it runs. A graph of a governed workflow that does not
+                    name the agent answering for each step is missing the thing the governance is
+                    about. Empty on an agent step is a decision — BOSS picks per run — and says
+                    so rather than rendering blank. */}
+                <span className="as-flow-agent">
+                  {step.captain
+                    ? String(step.captain)
+                    : binding.agent_work
+                      ? "agent chosen per run"
+                      : compact(step.kind)}
+                </span>
+                <em>{runs}</em>
+                {inputCount ? (
+                  <span className="as-flow-inputs">
+                    {inputCount} input{inputCount === 1 ? "" : "s"} wired
+                  </span>
+                ) : null}
                 <footer>
                   {targets.length
                     ? `next → ${targets.join(", ")}`
