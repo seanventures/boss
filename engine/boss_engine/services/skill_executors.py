@@ -919,6 +919,22 @@ def execute_agent_program(
             "written_by": config.get("written_by") or "", **result}
 
 
+def _remembered_risk_tier(inputs: dict[str, Any]) -> int:
+    """The tier a remembered program is stored at. Never below the approval floor.
+
+    `MANUAL_APPROVAL_RISK_FLOOR` is 2. Anything the model passes below that would
+    save a program that runs with no person in the loop.
+    """
+    raw = inputs.get("risk_tier")
+    try:
+        tier = int(raw) if raw not in (None, "") else 2
+    except (TypeError, ValueError):
+        tier = 2
+    if isinstance(raw, bool):
+        tier = 2
+    return max(2, min(tier, 3))
+
+
 @register_executor("code.remember")
 def execute_code_remember(
     context: SkillExecutorContext,
@@ -960,9 +976,12 @@ def execute_code_remember(
                 "written_for": str(inputs.get("written_for") or ""),
                 "written_in_run": str(inputs.get("written_in_run") or ""),
             },
-            # THE TIER IT INHERITS. A program an agent wrote is approved by a person the first
-            # time it is used from a step, the same as the skill that produced it.
-            risk_tier=int(inputs.get("risk_tier") or 2),
+            # AT LEAST TIER 2. A program an agent wrote is approved by a person the first
+            # time it is used. The model can pass `risk_tier` even though the schema does
+            # not list it, and `code.remember` itself is tier 1, so it runs without that
+            # person. Storing the passed tier is how the click disappears: 1 saves a
+            # program that later runs unattended. A higher tier is kept.
+            risk_tier=_remembered_risk_tier(inputs),
             trusted=False,
         )
     except SkillDefinitionError as error:

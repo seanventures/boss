@@ -13858,12 +13858,16 @@ def sync_project_role_skills(payload: dict) -> dict:
     from boss_engine.services.skill_definitions import sync_role_skills
 
     project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip() or "executive_console"
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
+        # THE SAME GATE AS ASSIGNING ONE SKILL. This call grants every skill a role
+        # spec names. Leaving it open let any caller materialise those grants, including
+        # a member without workflow_manage.
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         return sync_role_skills(
-            connection, project_id=project_id,
-            actor=str(payload.get("actor") or "operator"))
+            connection, project_id=project_id, actor=actor)
 
 
 @app.get("/v1/role-skills")

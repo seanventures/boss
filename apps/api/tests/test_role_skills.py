@@ -99,6 +99,19 @@ def test_assignment_needs_the_same_permission_as_authoring(client):
     assert r.status_code == 403
 
 
+def test_syncing_every_grant_needs_the_same_permission(client):
+    """One call grants every skill a role spec names. It is not a public endpoint.
+
+    Assigning a single skill checks `workflow_manage`. Sync did not, so any caller —
+    including a member without that permission — could materialise the whole grant.
+    """
+    r = client.post(
+        "/v1/role-skills/sync",
+        json={"project_id": PROJECT, "actor": "not-a-member"},
+    )
+    assert r.status_code == 403
+
+
 def test_the_two_ends_are_independent(client):
     """An agent holding a skill says nothing about any workflow step, and vice versa."""
     skill = _a_builtin_skill(client)

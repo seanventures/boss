@@ -135,6 +135,47 @@ def test_an_agent_program_needs_a_language_and_a_source():
     assert kept["written_for"] == "video_edit_and_publish"
 
 
+def test_an_agent_cannot_save_a_program_below_the_approval_floor(monkeypatch):
+    """`code.remember` is tier 1, so it runs with no person. The tier it STORES must not be.
+
+    The schema does not list `risk_tier`, but the executor read it off the call. A model
+    that passed 1 saved a program the next run executed with no approval — the click the
+    tier-2 floor exists to require.
+    """
+    from boss_engine.config import Settings
+    from boss_engine.services.skill_executors import (
+        SkillExecutorContext, execute_code_remember)
+
+    captured: dict = {}
+
+    def fake_save(_connection, **kwargs):
+        captured.update(kwargs)
+        return {"updated_at": "t"}
+
+    monkeypatch.setattr(
+        "boss_engine.services.skill_definitions.save_skill", fake_save)
+    ctx = SkillExecutorContext(
+        settings=Settings(), connection=None, project_id="p", actor="video_editor")
+    execute_code_remember(ctx, {
+        "skill_key": "hold_the_slide",
+        "summary": "holds a still for four seconds",
+        "language": "python",
+        "source": "print(1)",
+        "risk_tier": 1,
+    })
+    assert captured["risk_tier"] == 2
+    assert captured["trusted"] is False
+
+    execute_code_remember(ctx, {
+        "skill_key": "hold_the_slide",
+        "summary": "holds a still for four seconds",
+        "language": "python",
+        "source": "print(1)",
+        "risk_tier": 3,
+    })
+    assert captured["risk_tier"] == 3
+
+
 def test_an_agent_program_the_size_of_a_repository_is_refused():
     with pytest.raises(sd.SkillDefinitionError, match="repository, not"):
         sd.validate_config("agent_program",

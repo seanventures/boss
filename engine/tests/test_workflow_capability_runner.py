@@ -536,6 +536,124 @@ def test_a_capability_with_no_correlation_id_is_not_parked(eng, project, monkeyp
     assert "no id to wait on" in (steps["b"].get("last_error") or "").lower() or True
 
 
+def test_an_agent_that_stops_for_approval_does_not_release_the_next_step(
+        eng, project, monkeypatch):
+    """A skill above the risk floor suspends the agent. That is not the step finishing.
+
+    The loop returns status `suspended`. The runner used to record anything that was
+    not `failed`, `needs_decision` or `awaiting` as succeeded, so the workflow went
+    green, the next step ran on the artifact from *before* the approval, and approving
+    the decision later still executed the skill — after the workflow had moved on.
+    """
+    import json as _json
+
+    from boss_engine.services import agent_steps
+
+    agent_run_id = f"arun_{uuid.uuid4().hex[:10]}"
+    publish = RecordingTool("get_costs", {"spend_usd": 0})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([publish]))
+
+    def stopped(*_args, **_kwargs):
+        return {
+            "status": "suspended",
+            "agent_run_id": agent_run_id,
+            "decision_id": "dec_wait",
+            "agent": "video_editor",
+            "media_artifact_id": "art_partial",
+            "summary": "",
+            "skills_used": ["media.fetch_link"],
+        }
+
+    monkeypatch.setattr(agent_steps, "run", stopped)
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "agent_waits", [
+            {"id": "edit", "kind": "capability",
+             "binding": {"agent_work": True, "inputs": {"instructions": "trim it"}},
+             "next": ["ship"]},
+            {"id": "ship", "kind": "capability",
+             "binding": {"capability": "cost_check", "inputs": {}},
+             "next": []},
+        ], "edit")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        assert steps["edit"]["status"] == "waiting", steps["edit"]
+        assert not publish.calls, "the next step ran while the agent was waiting on a person"
+
+        # Still waiting while the decision is unanswered. `awaiting_approval` must not
+        # count as the agent having finished.
+        c.execute(
+            text("INSERT INTO agent_runs (id, project_id, status, messages, output_text) "
+                 "VALUES (:id, :p, 'awaiting_approval', '[]'::jsonb, '')"),
+            {"id": agent_run_id, "p": project},
+        )
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        assert steps["edit"]["status"] == "waiting"
+        assert not publish.calls
+
+        # The approved skill's result is on the tool message. The partial artifact the
+        # step parked with must not be what the next step binds.
+        messages = [{
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": _json.dumps({
+                "status": "succeeded",
+                "skill_id": "video.trim",
+                "result": {"media_artifact_id": "art_final"},
+            }),
+        }]
+        c.execute(
+            text("UPDATE agent_runs SET status='completed', output_text='trimmed', "
+                 "messages=CAST(:m AS JSONB) WHERE id=:id"),
+            {"id": agent_run_id, "m": _json.dumps(messages)},
+        )
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["edit"]["status"] == "succeeded"
+    assert steps["edit"]["output"]["media_artifact_id"] == "art_final"
+    assert steps["edit"]["output"]["skills_used"] == ["video.trim"]
+    assert publish.calls, "the next step did not run once the agent had actually finished"
+
+
+def test_an_agent_that_finishes_still_completes_its_step(eng, project, monkeypatch):
+    """Waiting is only for a run that stopped. A finished agent must not sit parked."""
+    from boss_engine.services import agent_steps
+
+    publish = RecordingTool("get_costs", {"spend_usd": 0})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([publish]))
+    monkeypatch.setattr(agent_steps, "run", lambda *_a, **_k: {
+        "status": "completed",
+        "agent_run_id": "arun_done",
+        "agent": "video_editor",
+        "media_artifact_id": "art_done",
+        "summary": "trimmed",
+    })
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "agent_done", [
+            {"id": "edit", "kind": "capability",
+             "binding": {"agent_work": True, "inputs": {"instructions": "trim it"}},
+             "next": ["ship"]},
+            {"id": "ship", "kind": "capability",
+             "binding": {"capability": "cost_check", "inputs": {}},
+             "next": []},
+        ], "edit")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        # The tick that finishes the agent claims that one step. The next step is
+        # released by it and runs on the following tick — the same pass a parked
+        # step uses once the agent run completes.
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["edit"]["status"] == "succeeded"
+    assert steps["edit"]["output"]["media_artifact_id"] == "art_done"
+    assert publish.calls
+
+
 def test_a_synchronous_capability_still_completes_immediately(eng, project, monkeypatch):
     """Only capabilities that START something and finish later park. A step whose work is done
     the moment its tool returns must not sit waiting for an event that will never arrive."""

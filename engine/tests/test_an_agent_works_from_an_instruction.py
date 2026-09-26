@@ -222,6 +222,36 @@ def test_a_bounded_run_resolves_its_skills_from_the_grant():
     assert '"on_demand": []' in source, "a granted skill is not something to discover"
 
 
+def test_an_approved_skill_replaces_the_deferral_the_loop_recorded():
+    """The tool message is what a later step reads. Leaving it as the deferral drops the result.
+
+    Resume tells the model the outcome in a user message. The workflow does not read that
+    message. It reads tool payloads. The skill a person just approved has to be one of them.
+    """
+    from boss_engine.services.agent_loop import _replace_deferred_tool_result
+
+    messages = [
+        {"role": "assistant", "content": ""},
+        {"role": "tool", "tool_call_id": "call_old",
+         "content": '{"status": "succeeded", "skill_id": "media.fetch_link", '
+                    '"result": {"media_artifact_id": "art_src"}}'},
+        {"role": "tool", "tool_call_id": "call_new",
+         "content": '{"status": "deferred_for_approval", "decision_id": "dec_1"}'},
+    ]
+    _replace_deferred_tool_result(messages, {
+        "status": "succeeded",
+        "skill_id": "video.trim",
+        "result": {"media_artifact_id": "art_final"},
+    })
+    import json
+
+    kept = json.loads(messages[1]["content"])
+    replaced = json.loads(messages[2]["content"])
+    assert kept["result"]["media_artifact_id"] == "art_src"
+    assert replaced["result"]["media_artifact_id"] == "art_final"
+    assert replaced["status"] == "succeeded"
+
+
 def test_the_step_cap_is_bounded():
     """An unbounded loop on a paid model is an invoice, not a feature."""
     assert 5 <= agent_steps.DEFAULT_MAX_STEPS <= 100

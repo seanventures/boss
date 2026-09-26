@@ -1210,31 +1210,49 @@ def execute_step(
             frozenset(k for k in (binding.get("inputs") or {}) if k != "instructions"))
         said = str(resolved.pop("instructions", "") or "").strip()
         try:
-            return {
-                "kind": "agent_work",
-                **agent_steps.run(
-                    connection, getattr(ctx, "settings", None), project_id,
-                    instructions=said,
-                    # Named, or left to BOSS. Both are things an operator says, and which
-                    # happened is reported in the output rather than inferred.
-                    # THE SAME `captain` EVERY OTHER STEP USES. A second field meaning "which
-                    # agent" would be a second thing to validate, a second control to build and a
-                    # second place for the two to disagree. `binding.agent` is read as a fallback
-                    # for a spec written by hand.
-                    role_key=(str(step.get("captain")
-                                  or binding.get("agent") or "").strip() or None),
-                    context=resolved,
-                    actor=actor,
-                    max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
-                    only=list(binding.get("agents") or []) or None,
-                    # What the NEXT step wires to. Without it an agent step can only hand on
-                    # what its skills returned, and a title is a judgement rather than a
-                    # skill's output.
-                    produces=list(binding.get("produces") or []) or None,
-                ),
-            }
+            outcome = agent_steps.run(
+                connection, getattr(ctx, "settings", None), project_id,
+                instructions=said,
+                # Named, or left to BOSS. Both are things an operator says, and which
+                # happened is reported in the output rather than inferred.
+                # THE SAME `captain` EVERY OTHER STEP USES. A second field meaning "which
+                # agent" would be a second thing to validate, a second control to build and a
+                # second place for the two to disagree. `binding.agent` is read as a fallback
+                # for a spec written by hand.
+                role_key=(str(step.get("captain")
+                              or binding.get("agent") or "").strip() or None),
+                context=resolved,
+                actor=actor,
+                max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
+                only=list(binding.get("agents") or []) or None,
+                # Preserve explicit outputs that the next step wires to.
+                produces=list(binding.get("produces") or []) or None,
+            )
         except agent_steps.AgentStepError as error:
             raise CapabilityExecutionError(str(error)) from error
+        # SUSPENDED IS NOT DONE.
+        #
+        # The agent loop stops on a skill above the autonomous risk floor and returns
+        # status `suspended` with a decision id. The runner only parks `awaiting` and
+        # `needs_decision`. Everything else, including `suspended`, was recorded as
+        # succeeded — so a step that reached `code.write_and_run` or a tier-3 publish
+        # went green, the next step ran on whatever the agent had produced *before*
+        # the approval, and approving the decision later executed the skill anyway,
+        # after the workflow had moved on.
+        if str(outcome.get("status") or "") == "suspended":
+            waited = str(outcome.get("agent_run_id") or "").strip()
+            if not waited:
+                raise CapabilityExecutionError(
+                    "the agent stopped for a person's approval but did not record which "
+                    "run to resume, so this step cannot wait for it."
+                )
+            return {
+                "kind": "agent_work",
+                **outcome,
+                "status": "awaiting",
+                "await": {"kind": "agent_run", "id": waited},
+            }
+        return {"kind": "agent_work", **outcome}
 
     # A question with its answers named up front — see services/typed_decisions.py. It binds no
     # capability either, so it is checked before the capability lookup for the same reason.
@@ -1637,6 +1655,12 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "preview": ("app_previews",
                 frozenset({"running", "verified"}),
                 frozenset({"failed", "stopped", "expired"})),
+    # `awaiting_approval` and `running` are deliberately absent. Those are the states
+    # where a person has not answered yet, or the approved run is still working. Treating
+    # either as finished is the bug: the step went green and the next step ran.
+    "agent_run": ("agent_runs",
+                  frozenset({"completed"}),
+                  frozenset({"failed", "cancelled", "denied", "error"})),
 }
 
 
@@ -1710,6 +1734,26 @@ def _terminal_evidence(
                 # dropped by truncation is a requirement the build silently will not meet.
                 evidence["prd_markdown"] = prd[:_PRD_CHARS]
             return evidence
+        if kind == "agent_run":
+            # WHAT THE AGENT ACTUALLY PRODUCED, read after the approval, not the snapshot
+            # taken when it stopped. The snapshot is missing the skill that needed a person
+            # — that call had not run yet — and a later step wiring `media_artifact_id`
+            # would bind the artifact from before the render.
+            from .agent_steps import _used_skills, _what_the_skills_returned
+
+            produced = _what_the_skills_returned(connection, awaited_id)
+            produced.pop("await", None)
+            produced.pop("status", None)
+            row = connection.execute(
+                text("SELECT output_text FROM agent_runs WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            return {
+                **produced,
+                "summary": str((row or {}).get("output_text") or ""),
+                "skills_used": _used_skills(connection, awaited_id),
+                "agent_run_id": awaited_id,
+            }
     except Exception as error:  # noqa: BLE001 — never fail a step over its own evidence
         log.warning("cannot read the result of %s: %s", awaited_id, error)
     return {}

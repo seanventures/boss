@@ -1587,6 +1587,28 @@ def run_agent_loop(
     return _drive_run(connection, settings, run_id, max_steps)
 
 
+def _replace_deferred_tool_result(messages: list, result: dict) -> None:
+    """Write the approved result over the deferral the loop recorded.
+
+    The newest tool message whose payload is still `deferred_for_approval` is the
+    call that was just approved. Older turns have already been replaced.
+    """
+    try:
+        encoded = json.dumps(result)[:16000]
+    except TypeError:
+        encoded = json.dumps({"status": "succeeded", "note": "result was not JSON-safe"})
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        try:
+            payload = json.loads(str(message.get("content") or ""))
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and payload.get("status") == "deferred_for_approval":
+            message["content"] = encoded
+            return
+
+
 def resume_agent_run(connection: Connection, settings: Settings, run_id: str) -> dict:
     """Resume a suspended run: execute the approved deferred tool, feed its real
     result back into the conversation, and continue the loop."""
@@ -1738,6 +1760,15 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             "decision_approval", task_id=run.get("task_id"),
         )
     messages = run["messages"]
+    # THE DEFERRED TOOL PAYLOAD IS NOT THE RESULT.
+    #
+    # The loop writes `deferred_for_approval` into the tool message and stops. Resume
+    # used to tell the model what happened in a user message and leave that payload as
+    # the deferral. A workflow step reads tool payloads to learn what the agent
+    # produced, so the skill a person just approved — the publish, the render, the
+    # program — never reached the next step.
+    if isinstance(messages, list):
+        _replace_deferred_tool_result(messages, result)
     messages.append(
         {
             "role": "user",
