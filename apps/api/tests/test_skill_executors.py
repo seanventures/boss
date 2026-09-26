@@ -74,6 +74,20 @@ def _context(**overrides) -> SkillExecutorContext:
     return SkillExecutorContext(**values)
 
 
+#: Executors registered under a BEHAVIOUR rather than under a skill id.
+#:
+#: These are not skills and never will be. An operator-authored skill has a key the operator
+#: invented, so nothing can be registered under it in advance; what runs it is the executor for
+#: its `behaviour_kind`, reached through `resolve_executor` looking the definition up and
+#: dispatching to `skill.<behaviour>`. Listing them here is the rule the assertion below is
+#: actually trying to express.
+#:
+#: `skill.sandboxed_command` has been registered since authored skills shipped and this test has
+#: been failing on it ever since — it read as "somebody registered an executor for a skill that
+#: does not exist", which is exactly the defect worth catching and exactly not what this is.
+BEHAVIOUR_DISPATCHERS = {"skill.sandboxed_command", "skill.agent_program"}
+
+
 def test_registry_only_exposes_skill_specs_with_real_bindings():
     skill_ids: set[str] = set()
     root = Path(__file__).resolve().parents[3] / "packages" / "specpack" / "skills"
@@ -81,7 +95,19 @@ def test_registry_only_exposes_skill_specs_with_real_bindings():
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         skill_ids.update(str(item["id"]) for item in payload.get("skills", []))
 
-    assert set(registered_executor_ids()) <= skill_ids
+    # EVERY REGISTERED EXECUTOR IS EITHER A DECLARED SKILL OR A BEHAVIOUR DISPATCHER.
+    #
+    # The point of the check is that nothing is bound to a skill the specpack does not declare —
+    # a typo in a decorator, or a skill deleted from the pack and left bound. Both still fail.
+    unexplained = set(registered_executor_ids()) - skill_ids - BEHAVIOUR_DISPATCHERS
+    assert not unexplained, (
+        f"these executors are bound to nothing the specpack declares: {sorted(unexplained)}")
+
+    # And a dispatcher really is a dispatcher: registered, and not a declared skill.
+    for dispatcher in BEHAVIOUR_DISPATCHERS:
+        assert dispatcher in registered_executor_ids()
+        assert dispatcher not in skill_ids
+
     assert resolve_executor("github.create_pr_sandbox") is not None
     assert resolve_executor("deployment.target.register") is not None
     assert resolve_executor("unknown.skill") is None
