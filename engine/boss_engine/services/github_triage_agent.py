@@ -120,11 +120,9 @@ class GitHubTriageAgent(GitHubCommunityAgentBase):
             default_action="hold",
         )
         comment_body = self._comment_body(
-            verdict=verdict,
             rationale=classification["rationale"],
             missing_info=classification["missing_info"],
             plan_id=plan_id,
-            decision_id=decision_id,
         )
         adapter = self._adapter(repository)
         comment_result, created = self._effect(
@@ -158,24 +156,30 @@ class GitHubTriageAgent(GitHubCommunityAgentBase):
             return self._classification(
                 "spam/off-topic", "decline", message, "This appears off-topic or automated."
             )
-        if re.search(
-            r"\b(bug|crash|exception|regression|broken|fails?|error|incorrect)\b",
+        explicit_feature = (
+            message.lstrip().lower().startswith("[feature]")
+            or "community:feature" in normalized_labels
+        )
+        if not explicit_feature and re.search(
+            r"\b(bug|crash|exception|regression|broken|fails?|error|incorrect|installation|install|setup)\b",
             lowered,
         ):
             return self._classification(
-                "bug",
-                "decline",
+                "bug_report",
+                "maintainer-review",
                 message,
-                "This reads as a bug report, so it was left for maintainer bug triage rather than decomposed as a feature.",
+                "A maintainer will review the report and request reproduction details if needed.",
             )
         intent_name, _ = self.router.classify_message(message)
-        feature_signal = intent_name in {"create_code_task", "propose_command", "create_prd"}
+        feature_signal = explicit_feature or intent_name in {
+            "create_code_task", "propose_command", "create_prd"
+        }
         if not feature_signal:
             return self._classification(
-                "question",
-                "decline",
+                "question_or_feedback",
+                "maintainer-review",
                 message,
-                "This reads as a question or discussion rather than an actionable feature request.",
+                "A maintainer will review this feedback and respond here.",
             )
 
         missing: list[str] = []
@@ -223,13 +227,11 @@ class GitHubTriageAgent(GitHubCommunityAgentBase):
     @staticmethod
     def _comment_body(
         *,
-        verdict: str,
         rationale: str,
         missing_info: list[str],
         plan_id: Optional[str],
-        decision_id: str,
     ) -> str:
-        lines = [f"BOSS triage verdict: **{verdict}**", "", rationale]
+        lines = ["Thanks for the feedback.", "", rationale]
         if missing_info:
             lines.extend(["", "Please clarify:"])
             lines.extend(f"- {item}" for item in missing_info)
@@ -237,9 +239,7 @@ class GitHubTriageAgent(GitHubCommunityAgentBase):
             lines.extend(
                 [
                     "",
-                    f"Proposed plan: `{plan_id}` (not dispatched)",
-                    "A maintainer must approve the decision before any phase tasks are created.",
+                    "A draft plan is ready for maintainer review. Work has not started.",
                 ]
             )
-        lines.extend(["", f"Maintainer decision: `{decision_id}`"])
         return "\n".join(lines)

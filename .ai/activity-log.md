@@ -1,5 +1,14 @@
 # BOSS Autonomous Activity Log
 
+## 2026-09-24 — Codex — Community feedback and release hygiene
+
+- Reserved `seanventures/boss` as an empty private repository. No code was pushed.
+- BOSS-431 tracks issue forms, contributor feedback flow, and receipted bot triage.
+  Security reporting destination supplied by product owner: `boss@sean.net`.
+- BOSS-293 records eight redacted gitleaks history findings. Focused PR #220
+  removes the tracked environment backup from HEAD; history review and any
+  credential rotation remain release blockers. BOSS-300 remains In Progress.
+
 ## 2026-08-19 — Grok — Official trio 3/3 honest reports
 
 - HookWatch was the last miss. Official follow-ups kept failing with

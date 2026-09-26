@@ -2,7 +2,6 @@
 
 **Describe an outcome. BOSS researches it, writes the spec, builds it, tests it, and opens a pull request — and shows you its evidence at every step.**
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v0.14.0-blue.svg)](CHANGELOG.md)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-Docker-2496ED.svg)](#quick-start)
 
@@ -418,6 +417,8 @@ and the one that answers the chat and the panel.
 | [Architecture](docs/ARCHITECTURE.md) | The invariants BOSS holds itself to, and the API that enforces them |
 | [API](docs/api/README.md) | Auth, conventions, route index — `GET /openapi.json` when running |
 | [Contributing](CONTRIBUTING.md) | Running from source, repo layout, `make` targets |
+| [Community feedback](docs/community/FEEDBACK_LOOP.md) | Report an issue and see how it becomes a verified change |
+| [Security](SECURITY.md) | Private vulnerability reporting |
 | [Community spec](docs/product/BOSS_COMMUNITY_EDITION_SPEC.md) | The product contract |
 | [Changelog](CHANGELOG.md) | Release notes |
 
