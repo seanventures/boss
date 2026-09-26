@@ -599,6 +599,17 @@ def assert_complete_rolespec(spec: dict) -> None:
     assert isinstance(spec["autonomy"]["level"], int)
 
 
+#: Skills NOBODY may call by default. The only route to one is somebody giving it to an agent,
+#: which `skill_runtime` honours through `role_skills` whatever `allowed_callers` says.
+#:
+#: NAMED HERE RATHER THAN THE CHECK RELAXED FOR EVERYONE. An empty `allowed_callers` is almost
+#: always an author who did not think about reach, and that is the mistake this helper exists to
+#: catch. For a skill that lets an agent write and run its own code, "no default caller" is the
+#: correct and deliberate answer — so adding one to this list is a decision that shows up in a
+#: diff and gets read, instead of a guard quietly weakened for every skill in the catalogue.
+GRANT_ONLY_SKILLS = {"code.write_and_run", "code.remember"}
+
+
 def assert_complete_skill_spec(skill: dict) -> None:
     for key in (
         "id",
@@ -622,7 +633,14 @@ def assert_complete_skill_spec(skill: dict) -> None:
     assert skill["cost"]["category"]
     assert skill["retry"]["max_attempts"] >= 1
     assert skill["retry"]["backoff"]
-    assert skill["permissions"]["allowed_callers"]
+    # The key must always be PRESENT; it may only be empty for a skill that is reachable solely
+    # by being granted to an agent on purpose.
+    assert "allowed_callers" in skill["permissions"]
+    if skill["id"] not in GRANT_ONLY_SKILLS:
+        assert skill["permissions"]["allowed_callers"], (
+            f"{skill['id']} has no allowed_callers. If that is deliberate — nobody reaches it "
+            "except by being given it — add it to GRANT_ONLY_SKILLS and say why.")
+    # A skill answerable to no permission at all is not a governed skill, grant-only or not.
     assert skill["permissions"]["required_permissions"]
 
 
