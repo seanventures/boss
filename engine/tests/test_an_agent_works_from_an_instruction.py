@@ -246,3 +246,110 @@ def test_the_results_of_the_skills_become_the_steps_output():
     # is something somebody will wire.
     assert "invocation_id" in source
     assert '"denied"' in source, "a refused call must not contribute a result"
+
+
+# --------------------------------------------------------------------------- #
+# The bound, EXERCISED. The two tests above read the source; these run the loop.
+# --------------------------------------------------------------------------- #
+class _Recorder:
+    """A model that records the tools it was offered and then stops.
+
+    Returning a plain message with no tool calls ends the loop after one turn, which is all this
+    needs: the question is what was in `tools`, not what the model would have done with them.
+    """
+
+    def __init__(self) -> None:
+        self.offered: list[list[str]] = []
+
+    def create_chat_completion(self, messages, tools=None, **kwargs):
+        self.offered.append(sorted(
+            str((t.get("function") or {}).get("name") or "") for t in (tools or [])))
+        self.seen_system = next(
+            (m.get("content") for m in messages if m.get("role") == "system"), "")
+        self.seen_user = next(
+            (m.get("content") for m in messages if m.get("role") == "user"), "")
+        # `raw` is what the loop appends back into the conversation — the adapter's own shape,
+        # which every real adapter returns and which a stub has to honour too.
+        return ({"role": "assistant", "content": "Nothing to do.",
+                 "raw": {"role": "assistant", "content": "Nothing to do."},
+                 "tool_calls": []},
+                {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+
+
+@needs_db
+def test_a_bounded_run_is_offered_the_granted_skills_AND_NOTHING_ELSE(db, monkeypatch):
+    """THE TEST THAT MATTERS, and it runs the loop rather than reading it.
+
+    The claim the whole design rests on is that an agent's reach IS the skills somebody gave it.
+    An ordinary BOSS run is handed `run_shell`, the project's Postgres, the repository and the
+    deploy tools, because that is the job in the software factory. If any of those reached a
+    bounded run, "the skills you gave it" would stop being a true description — and on 2026-09-02
+    an agent's shell reached a production DATABASE_URL and cleared 204 tables.
+
+    So: give one agent exactly two skills, run a step, and look at what the model was offered.
+    """
+    from boss_engine.services import agent_loop
+    from boss_engine.services.skill_definitions import assign_skill_to_role, assignable_catalogue
+
+    db.execute(text("DELETE FROM role_skills WHERE project_id=:p AND role_key='qa'"),
+               {"p": PROJECT})
+    catalogue = [s["skill_id"] for s in assignable_catalogue(db, PROJECT)]
+    two = catalogue[:2]
+    assert len(two) == 2, "this project has fewer than two skills; the fixture changed"
+    for skill in two:
+        assign_skill_to_role(db, project_id=PROJECT, actor="test", role_key="qa",
+                             skill_id=skill)
+
+    recorder = _Recorder()
+    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: recorder)
+
+    result = agent_steps.run(db, Settings(), PROJECT,
+                             instructions="Do whatever you can with what you hold.",
+                             role_key="qa", actor="test")
+
+    assert recorder.offered, "the loop never called the model"
+    offered = recorder.offered[0]
+
+    # EXACTLY the granted skills, named as the loop names them, and nothing besides.
+    assert offered == sorted("skill_" + s.replace(".", "_").replace("-", "_") for s in two), (
+        f"offered {offered}, expected only the two granted skills")
+
+    # Spelled out, because these are the specific tools whose absence is the point.
+    for forbidden in ("run_shell", "query_db", "describe_schema", "read_repo_file",
+                      "list_repo_files", "project_status", "load_on_demand_skill"):
+        assert forbidden not in offered, f"a bounded run was handed {forbidden}"
+
+    # And the agent was told who it is and what it was asked for.
+    assert "an agent in BOSS" in recorder.seen_system
+    assert "Do whatever you can" in recorder.seen_user
+    assert result["agent"] == "qa"
+    assert sorted(result["skills_offered"]) == sorted(two)
+
+
+@needs_db
+def test_the_facts_from_earlier_steps_reach_the_agent_verbatim(db, monkeypatch):
+    """An artifact id is a value to use exactly, not a thing to paraphrase.
+
+    An agent that invents `art_1234` produces a run that fails three steps later with something
+    that looks like a missing artifact rather than a hallucinated one.
+    """
+    from boss_engine.services import agent_loop
+    from boss_engine.services.skill_definitions import assign_skill_to_role, assignable_catalogue
+
+    one = assignable_catalogue(db, PROJECT)[0]["skill_id"]
+    assign_skill_to_role(db, project_id=PROJECT, actor="test", role_key="qa", skill_id=one)
+
+    recorder = _Recorder()
+    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: recorder)
+
+    agent_steps.run(db, Settings(), PROJECT, instructions="Trim it.", role_key="qa",
+                    actor="test",
+                    context={"media_artifact_id": "art_9f3c", "slide_url": "",
+                             "nothing": None})
+
+    assert "media_artifact_id: art_9f3c" in recorder.seen_user
+    assert "use these values exactly as written" in recorder.seen_user
+    # Empty and absent values are left out rather than passed as blanks — an agent told
+    # `slide_url: ` has been handed a fact that is not one.
+    assert "slide_url" not in recorder.seen_user
+    assert "nothing" not in recorder.seen_user
