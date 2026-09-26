@@ -15058,6 +15058,27 @@ def disconnect_channel(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@app.post("/v1/role-skills/sync")
+def sync_project_role_skills(payload: dict) -> dict:
+    """Give every installed agent the skills its role spec says it may use.
+
+    Needed because role specs and role_skills were never joined: an agent was TOLD what it
+    could use, in its prompt, and HELD nothing. Exposed as an endpoint and not only a bootstrap
+    step because every install that already exists is in that state.
+
+    Additive. It never removes an assignment an operator made by hand.
+    """
+    from boss_engine.services.skill_definitions import sync_role_skills
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        return sync_role_skills(
+            connection, project_id=project_id,
+            actor=str(payload.get("actor") or "operator"))
+
+
 @app.get("/v1/role-skills")
 def list_role_skill_assignments(project_id: str) -> dict:
     """Every agent-holds-skill assignment in the project.
@@ -21362,11 +21383,162 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 # convention.
 
 
+# ── Workflow schedules ────────────────────────────────────────────────────────
+#
+# Workflows started on demand only, which is fine for "edit this video" and useless for
+# anything whose value IS the recurrence. See workflow_schedules.py for why this is a cadence
+# and not a cron expression.
+
+# ── Email setup ───────────────────────────────────────────────────────────────
+
+@app.get("/v1/email/config")
+def get_email_config(project_id: str) -> dict:
+    """How this project sends email. Never returns the password — only whether one is set."""
+    from boss_engine.services import email_config
+
+    with begin(engine) as connection:
+        return email_config.describe(connection, project_id)
+
+
+@app.post("/v1/email/config")
+def set_email_config(payload: dict) -> dict:
+    """Configure SMTP. The password goes to the secret backend, not into the row."""
+    from boss_engine.services import email_config
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return email_config.save(
+                connection, get_settings(), project_id=project_id,
+                host=str(payload.get("host") or ""),
+                from_address=str(payload.get("from_address") or ""),
+                port=payload.get("port", 587),
+                username=str(payload.get("username") or ""),
+                # Absent means "keep what is stored", so changing a port does not require
+                # retyping a password — which is how passwords end up in a text file.
+                password=payload.get("password"),
+                use_tls=bool(payload.get("use_tls", True)),
+                use_ssl=bool(payload.get("use_ssl", False)),
+                from_name=str(payload.get("from_name") or ""),
+                actor=str(payload.get("actor") or "operator"))
+    except email_config.EmailConfigError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/v1/email/test")
+def test_email_config(payload: dict) -> dict:
+    """Send one real message, so "configured" and "working" are not the same claim.
+
+    A mail server accepts a TCP connection long before it accepts a login, and a wrong password
+    or a blocked port is something an operator should learn now rather than when a newsletter
+    silently fails at 8am on a Monday.
+    """
+    from boss_engine.services.email_adapter import EmailAdapter
+    from boss_engine.services import email_config
+
+    project_id = str(payload.get("project_id") or "").strip()
+    to = str(payload.get("to") or "").strip()
+    if not project_id or not to:
+        raise HTTPException(status_code=400, detail="project_id and to are required")
+    with begin(engine) as connection:
+        settings = email_config.settings_for(connection, get_settings(), project_id)
+    try:
+        message_id = EmailAdapter(settings).send_message(
+            to if to.startswith("email:") else f"email:{to}", "BOSS test message",
+            "This is BOSS checking that it can send email from this project.\n\n"
+            "If you are reading it, sending works.")
+    except Exception as error:  # noqa: BLE001 — the server's own words are the useful part
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"sent": True, "to": to, "message_id": message_id}
+
+
+@app.get("/v1/delivery-workflows/schedules")
+def list_workflow_schedules(project_id: str) -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    with begin(engine) as connection:
+        return {"schedules": schedules.list_schedules(connection, project_id)}
+
+
+@app.post("/v1/delivery-workflows/schedules", status_code=201)
+def create_workflow_schedule(payload: dict) -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return schedules.create(
+                connection,
+                project_id=project_id,
+                workflow_key=str(payload.get("workflow_key") or ""),
+                name=str(payload.get("name") or ""),
+                cadence=str(payload.get("cadence") or ""),
+                minute=payload.get("minute", 0),
+                hour=payload.get("hour", 0),
+                weekday=payload.get("weekday"),
+                tz_name=str(payload.get("timezone") or "UTC"),
+                input_data=payload.get("input") or {},
+                enabled=bool(payload.get("enabled", True)),
+                actor=str(payload.get("actor") or "operator"),
+            )
+    except schedules.ScheduleError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/v1/delivery-workflows/schedules/{schedule_id}/enabled")
+def set_workflow_schedule_enabled(schedule_id: str, payload: dict) -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return schedules.set_enabled(
+                connection, project_id, schedule_id, bool(payload.get("enabled", True)),
+                str(payload.get("actor") or "operator"))
+    except schedules.ScheduleError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.delete("/v1/delivery-workflows/schedules/{schedule_id}")
+def delete_workflow_schedule(schedule_id: str, project_id: str,
+                             actor: str = "operator") -> dict:
+    from boss_engine.services import workflow_schedules as schedules
+
+    with begin(engine) as connection:
+        if not schedules.delete(connection, project_id, schedule_id, actor):
+            raise HTTPException(status_code=404, detail=f"no schedule '{schedule_id}'")
+    return {"deleted": schedule_id}
+
+
+@app.post("/v1/delivery-workflows/schedules/tick")
+def tick_workflow_schedules(payload: dict) -> dict:
+    """Start whatever is due. Called by the worker on its ordinary poll.
+
+    Idempotent by construction: the dedupe key is the SCHEDULED moment, so a tick that runs
+    twice — two workers, or one retried after a crash — produces one run.
+    """
+    from boss_engine.services import workflow_schedules as schedules
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        started = schedules.run_due(connection, project_id=project_id)
+    return {"started": started, "count": len(started)}
+
+
 @app.get("/v1/delivery-workflows/capabilities")
 def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
+        REGISTERED_ROLES,
         blocks,
         palette,
     )
@@ -21387,6 +21559,13 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # Control blocks the runtime has always supported and the builder never offered, so a
         # customer could only ever author a straight line.
         "blocks": blocks(),
+        # THE AGENTS A STEP CAN BE GIVEN TO.
+        #
+        # A capability step's `captain` has always become the actor that runs it, which is why
+        # BOSS's own pipelines read as agents doing the work. Custom steps ignored it and the
+        # builder offered no way to set one — so a customer's workflow had no agent in it
+        # anywhere, and nothing on screen suggested there could be.
+        "roles": sorted(REGISTERED_ROLES),
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "
@@ -22056,7 +22235,18 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
                 "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
                 "WHERE d.project_id=:p AND d.workflow_key=:k "
                 "AND COALESCE(d.namespace,'system')='product' "
-                "ORDER BY v.version DESC NULLS LAST LIMIT 1"
+                # THE VERSION THAT RUNS, not the highest-numbered one.
+                #
+                # Those are the same thing until a workflow is reverted, and then they are not:
+                # re-publishing an earlier spec makes THAT version active without creating a
+                # newer one, so `version DESC` returns the spec the operator just replaced. The
+                # builder loads from here — it would show the abandoned version, and saving
+                # would republish it over the one actually in use.
+                #
+                # Falls back to the newest when nothing is active, which is a definition with no
+                # published version yet: the same case the LEFT JOIN above exists for.
+                "ORDER BY (v.id = d.active_version_id) DESC NULLS LAST, "
+                "         v.version DESC NULLS LAST LIMIT 1"
             ),
             {"p": project_id, "k": workflow_key},
         ).mappings().first()

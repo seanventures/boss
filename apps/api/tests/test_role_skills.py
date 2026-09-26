@@ -177,3 +177,63 @@ def test_an_agent_that_was_never_assigned_anything_is_still_denied(client, engin
     _assign(client, "security_reviewer", "github.merge_pr_real")
     result = _invoke(engine, "github.merge_pr_real", "design_critic")
     assert result["status"] == "denied"
+
+
+def test_the_agent_page_shows_what_the_agent_holds_not_what_its_spec_allows(client):
+    """The read the agent's own page needs, and the distinction it exists to make.
+
+    `spec.permissions.allowed_skills` is prose in a spec pack: what an agent MAY be given.
+    `role_skills` is the grant, and it is the one `skill_runtime` checks before the agent is
+    allowed to call anything. The console rendered only the first, so an agent with eleven
+    allowed skills and no grants looked fully capable and was refused by every step that named
+    it — the state five installed example workflows were found in.
+    """
+    skill = _a_builtin_skill(client)
+    assert _assign(client, "deployment_manager", skill).status_code == 201
+
+    detail = client.get("/v1/console/v2/agents/deployment_manager",
+                        params={"project_id": PROJECT}).json()
+    panel = detail["skills"]
+    held = [s["skill_id"] for s in panel["holds"]]
+    assert skill in held
+
+    # AND THE TWO LISTS ARE DISJOINT, so the picker never offers what the agent already has.
+    assert skill not in [s["skill_id"] for s in panel["available"]]
+    assert panel["available"], "nothing left to give; the built-in catalogue is empty"
+
+    # Each held row carries enough to decide whether to keep it: an operator looking at a
+    # tier-3 grant is looking at a step that will stop and wait for a person.
+    row = next(s for s in panel["holds"] if s["skill_id"] == skill)
+    assert set(row) >= {"skill_id", "summary", "source", "risk_tier", "enabled", "missing"}
+    assert row["missing"] is False
+
+
+def test_a_grant_whose_skill_no_longer_exists_is_reported_not_dropped(client, engine):
+    """A skill removed from a spec pack leaves the grant behind.
+
+    Silently omitting it makes an agent look correctly configured while one of its grants
+    executes nothing. Shown, marked, and removable.
+    """
+    from sqlalchemy import text
+
+    from boss_engine.services.core import make_id
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO role_skills "
+                 "(id, project_id, role_key, skill_id, source, assigned_by) "
+                 "VALUES (:i, :p, 'deployment_manager', 'skill_that_left', 'builtin', 'test')"),
+            {"i": make_id("rsk"), "p": PROJECT},
+        )
+
+    detail = client.get("/v1/console/v2/agents/deployment_manager",
+                        params={"project_id": PROJECT}).json()
+    row = next(s for s in detail["skills"]["holds"] if s["skill_id"] == "skill_that_left")
+    assert row["missing"] is True
+
+
+def test_an_agent_holding_nothing_says_so_rather_than_erroring(client):
+    detail = client.get("/v1/console/v2/agents/security_reviewer",
+                        params={"project_id": PROJECT}).json()
+    assert detail["skills"]["role_key"] == "security_reviewer"
+    assert isinstance(detail["skills"]["holds"], list)

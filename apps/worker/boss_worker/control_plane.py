@@ -263,6 +263,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_workflow_schedules(self, project_id: str) -> dict[str, Any]:
+        """Start any workflow whose schedule has come round."""
+        response = self._client.post(
+            "/v1/delivery-workflows/schedules/tick",
+            json={"project_id": project_id},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def tick_agent_processes(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
         """Advance waiting/running agent-process handoffs."""
         response = self._client.post(

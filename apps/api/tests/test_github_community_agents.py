@@ -303,7 +303,8 @@ def test_triage_accept_posts_once_and_approval_dispatches_plan(
     assert result.status_code == 200
     assert result.json()["verdict"] == "accept"
     assert len(fake.comments) == 1
-    assert "not dispatched" in fake.comments[0][1]
+    assert "Work has not started" in fake.comments[0][1]
+    assert "Maintainer decision:" not in fake.comments[0][1]
     replay = client.post(
         f"/v1/github/community/jobs/{lease['id']}/execute", json=execute_payload
     )
@@ -385,10 +386,34 @@ def test_triage_needs_info_and_bug_paths_post_one_comment_each(engine):
             job_id=None,
         )
     assert needs["verdict"] == "needs-info"
-    assert bug["verdict"] == "decline"
+    assert bug["verdict"] == "maintainer-review"
     assert len(fake.comments) == 2
     assert "Please clarify" in fake.comments[0][1]
-    assert "bug report" in fake.comments[1][1]
+    assert "maintainer will review" in fake.comments[1][1]
+
+
+def test_community_issue_forms_route_reports_without_auto_work():
+    agent = GitHubTriageAgent(get_settings())
+    installation = agent._classify(
+        "[Installation] Ubuntu setup fails when the worker starts.", []
+    )
+    assert installation["verdict"] == "maintainer-review"
+    assert installation["intent"] == "bug_report"
+
+    feature = agent._classify(
+        "[Feature] As a maintainer, when reviewing a run, I should be able to "
+        "see linked receipts so that I can verify every external effect before "
+        "approving the change. Success means the receipt list opens from the run.",
+        [],
+    )
+    assert feature["verdict"] == "accept"
+    assert feature["intent"] == "feature_request"
+
+    bug_related_feature = agent._classify(
+        "[Feature] Show linked bug reports on each project task. "
+        "Success means the task detail opens the related bug report.", []
+    )
+    assert bug_related_feature["intent"] == "feature_request"
 
 
 def test_pr_review_is_inline_idempotent_receipted_and_never_merges(

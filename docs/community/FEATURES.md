@@ -33,6 +33,10 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Self-hosted Mission Control console | ✅ |
 | API-first clients (`packages/api-client`) | ✅ |
 
+The [terminal API guide](TERMINAL_API.md) covers Metatron commands, direct
+`/v1/` calls, and one-shot JSON for scripts. Server-side policy and audit
+checks apply to terminal requests as they do to other API clients.
+
 ## Models & skills
 
 | Feature | Status |

@@ -12,7 +12,6 @@ credentials or sensitive customer data.
 
 ## Reporting
 
-The public reporting destination has not yet been approved. Until it is added
-to [SECURITY.md](./SECURITY.md) and the repository settings, report
-conduct concerns through the private design-partner contact supplied with
-repository access. This placeholder is a BOSS-293 public-release blocker.
+Report conduct concerns privately to **boss@sean.net**. Design partners may
+also use the private contact supplied with repository access. For suspected
+security vulnerabilities, follow [SECURITY.md](./SECURITY.md).

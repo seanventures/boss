@@ -194,7 +194,9 @@ def test_every_skill_file_is_reachable_from_some_edition():
     #: assertion found them and that is what it is for — and because each is a decision
     #: somebody should make deliberately (ship it, or remove the file) rather than a bug to
     #: paper over. Fixing one means deleting it from here.
-    KNOWN_ORPHANS = {"agent_toolchain", "email", "infra_do", "slack"}
+    # `email` was adopted into community_edition once its executor existed — the exemption
+    # list is not meant to outlive the reason for it.
+    KNOWN_ORPHANS = {"agent_toolchain", "infra_do", "slack"}
 
     on_disk = {p.stem for p in (root / "skills").glob("*.yaml")}
     orphans = sorted(on_disk - reachable - KNOWN_ORPHANS)

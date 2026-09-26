@@ -2,7 +2,7 @@
 # =============================================================================
 # BOSS Community — one-line installer (OpenClaw-style)
 #
-#   curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
 #
 # Idiot-proof Community edition: checks the machine, installs deps, prompts for
 # keys, starts Postgres + API + worker (+ optional Mission Control), seeds the
@@ -10,10 +10,10 @@
 # =============================================================================
 set -euo pipefail
 
-BOSS_INSTALL_VERSION="1.0.0"
-BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanheiney/boss.git}"
+BOSS_INSTALL_VERSION="1.1.0"
+BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanventures/boss.git}"
 BOSS_REPO_REF="${BOSS_REPO_REF:-main}"
-BOSS_RAW_BASE="${BOSS_RAW_BASE:-https://raw.githubusercontent.com/seanheiney/boss/${BOSS_REPO_REF}}"
+BOSS_RAW_BASE="${BOSS_RAW_BASE:-https://raw.githubusercontent.com/seanventures/boss/${BOSS_REPO_REF}}"
 
 # ---- UI --------------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -58,6 +58,8 @@ OPENAI_KEY_PRESET="${OPENAI_API_KEY:-}"
 ANTHROPIC_KEY_PRESET="${ANTHROPIC_API_KEY:-}"
 GITHUB_TOKEN_PRESET="${BOSS_GITHUB_TOKEN:-}"
 API_PORT="${BOSS_API_PORT:-8000}"
+API_PORT_EXPLICIT=0
+[[ -n "${BOSS_API_PORT:-}" ]] && API_PORT_EXPLICIT=1
 # THE ADDRESS THE BROWSER WILL USE — not the one the server calls itself.
 #
 # NEXT_PUBLIC_BOSS_API_URL is compiled INTO the web bundle at image build time. Defaulting it
@@ -65,12 +67,34 @@ API_PORT="${BOSS_API_PORT:-8000}"
 # the API on the machine it is running on, which is the operator's, and every preview link
 # points at nothing while the previews themselves are fine. Empty means "this is a laptop".
 PUBLIC_URL="${BOSS_PUBLIC_URL:-}"
+# Set when this run was told an address. Unset means "keep the URL a previous .env already
+# has" — writing 127.0.0.1 over it rebuilds the console against the operator's laptop.
+PUBLIC_URL_EXPLICIT=0
+if [ -n "${BOSS_PUBLIC_URL:-}" ]; then
+  PUBLIC_URL_EXPLICIT=1
+fi
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
+WEB_PORT_EXPLICIT=0
+[[ -n "${BOSS_WEB_PORT:-}" ]] && WEB_PORT_EXPLICIT=1
 PG_PORT="${BOSS_POSTGRES_PORT:-5432}"
+PG_PORT_EXPLICIT=0
+[[ -n "${BOSS_POSTGRES_PORT:-}" ]] && PG_PORT_EXPLICIT=1
+BIND_ADDRESS="127.0.0.1"
 COMPOSE_PROFILES=""
 # WHERE THIS INSTALL KEEPS ITS SECRETS. Both options stay inside your own infrastructure; the
 # difference is two containers and about 400MB, not who holds the data. See --help.
 SECRET_STORE="${BOSS_SECRET_STORE:-database}"
+DOCKER=(docker)
+INSTALL_DEPS=1
+DISCOVER_SUBSCRIPTIONS=0
+CONNECT_CODEX=0
+CONNECT_CLAUDE=0
+INSTALL_CODING_CLIS=0
+ACCEPT_DATABASE_FALLBACK=0
+SECRET_STORE_EXPLICIT=0
+if [ -n "${BOSS_SECRET_STORE:-}" ]; then
+  SECRET_STORE_EXPLICIT=1
+fi
 
 usage() {
   cat <<EOF
@@ -82,16 +106,23 @@ Usage:
 
 Options:
   --dir PATH              Install directory (default: ~/boss)
-  --yes, -y               Non-interactive defaults (still needs a model key via env or --openai-key)
+  --yes, -y               Non-interactive defaults (use --skip-model-key to start without one)
   --openai-key KEY        OpenAI (or compatible) API key
   --anthropic-key KEY     Anthropic API key (optional)
   --github-token TOKEN    GitHub token for Software Factory (optional)
   --no-web                Skip Mission Control web console
+  --public-url URL        Browser-reachable API URL when using a reverse proxy
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
   --postgres-port N       Host port for Postgres (default 5432)
   --ref REF               Git ref to clone (default main)
   --skip-model-key        Allow empty model key (API starts; model calls fail closed)
+  --no-install-deps       Do not install missing VM packages
+  --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
+  --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
+  --connect-codex        Explicitly import this VM user's Codex ChatGPT login into BOSS
+  --connect-claude       Explicitly import a provider-minted Claude Code setup token
+  --accept-database-fallback  Allow a subscription credential in Postgres if no secret store
   --secret-store WHICH    database (default) or infisical. Both stay on your own machine:
                             database   4 containers. Credentials are held by BOSS's own
                                        Postgres. Lean; storing a SUBSCRIPTION token asks you
@@ -101,13 +132,16 @@ Options:
                                        are referenced rather than held, and rotate cleanly.
   -h, --help              Show this help
 
+API and web bind to loopback only; use an SSH tunnel or HTTPS reverse proxy remotely.
+
 Environment overrides:
   BOSS_INSTALL_DIR, OPENAI_API_KEY, ANTHROPIC_API_KEY, BOSS_GITHUB_TOKEN,
-  BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT, BOSS_WEB_PORT, BOSS_POSTGRES_PORT
+  BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT, BOSS_WEB_PORT, BOSS_POSTGRES_PORT,
+  BOSS_PUBLIC_URL, BOSS_SECRET_STORE
 
 Examples:
   curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash
-  curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash -s -- --dir ~/boss --openai-key "\$OPENAI_API_KEY"
+  curl -fsSL ${BOSS_RAW_BASE}/install.sh | OPENAI_API_KEY="\$OPENAI_API_KEY" bash -s -- --yes
   curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash -s -- -y --skip-model-key --no-web
 EOF
 }
@@ -116,18 +150,26 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) INSTALL_DIR="$2"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; NONINTERACTIVE=1; shift ;;
+    --no-install-deps) INSTALL_DEPS=0; shift ;;
+    --discover-subscriptions) DISCOVER_SUBSCRIPTIONS=1; shift ;;
+    --install-coding-clis) INSTALL_CODING_CLIS=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
+    --connect-codex) CONNECT_CODEX=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
+    --connect-claude) CONNECT_CLAUDE=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
+    --accept-database-fallback) ACCEPT_DATABASE_FALLBACK=1; shift ;;
     --openai-key) OPENAI_KEY_PRESET="$2"; shift 2 ;;
     --anthropic-key) ANTHROPIC_KEY_PRESET="$2"; shift 2 ;;
     --github-token) GITHUB_TOKEN_PRESET="$2"; shift 2 ;;
     --no-web) WITH_WEB=0; shift ;;
-    --public-url) PUBLIC_URL="$2"; shift 2 ;;
-    --api-port) API_PORT="$2"; shift 2 ;;
-    --web-port) WEB_PORT="$2"; shift 2 ;;
-    --postgres-port) PG_PORT="$2"; shift 2 ;;
+    --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
+    --bind-address) die "--bind-address is no longer supported; Community binds API/web to loopback. Use an SSH tunnel or HTTPS reverse proxy." ;;
+    --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
+    --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
+    --postgres-port) PG_PORT="$2"; PG_PORT_EXPLICIT=1; shift 2 ;;
     --ref) BOSS_REPO_REF="$2"; shift 2 ;;
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
     --secret-store)
       SECRET_STORE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"; shift 2
+      SECRET_STORE_EXPLICIT=1
       case "$SECRET_STORE" in database|infisical) ;; *) die "--secret-store must be database or infisical" ;; esac ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -136,6 +178,16 @@ done
 
 # Expand ~
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
+if [[ -n "${BOSS_BIND_ADDRESS:-}" && "$BOSS_BIND_ADDRESS" != 127.0.0.1 ]]; then
+  die "BOSS_BIND_ADDRESS is no longer supported; Community binds API/web to loopback. Use an SSH tunnel or HTTPS reverse proxy."
+fi
+
+# A pipe occupies stdin. Read questions from the terminal so the one-liner is interactive.
+# In unattended shells, choose safe defaults rather than reading the rest of install.sh.
+if [[ "$NONINTERACTIVE" -eq 0 ]] && ! (: </dev/tty) 2>/dev/null; then
+  NONINTERACTIVE=1
+  ASSUME_YES=1
+fi
 
 prompt() {
   # prompt "Question" "default" -> sets REPLY
@@ -145,10 +197,10 @@ prompt() {
     return
   fi
   if [[ -n "$def" ]]; then
-    read -r -p "$(echo -e "${BOLD}$q${NC} ${MUTED}[$def]${NC}: ")" REPLY || true
+    read -r -p "$(echo -e "${BOLD}$q${NC} ${MUTED}[$def]${NC}: ")" REPLY </dev/tty || true
     REPLY="${REPLY:-$def}"
   else
-    read -r -p "$(echo -e "${BOLD}$q${NC}: ")" REPLY || true
+    read -r -p "$(echo -e "${BOLD}$q${NC}: ")" REPLY </dev/tty || true
   fi
 }
 
@@ -158,12 +210,45 @@ prompt_secret() {
     REPLY=""
     return
   fi
-  read -r -s -p "$(echo -e "${BOLD}$q${NC}: ")" REPLY || true
+  read -r -s -p "$(echo -e "${BOLD}$q${NC}: ")" REPLY </dev/tty || true
   echo ""
 }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+install_coding_clis() {
+  [[ "$INSTALL_CODING_CLIS" -eq 1 ]] || return 0
+  # The official native installers install per user, so never run them through sudo.
+  # Download first: a failed HTTP fetch must never execute a partial shell script.
+  export PATH="$HOME/.local/bin:$HOME/.grok/bin:$HOME/.codex/bin:$PATH"
+  local spec name binary url shell script
+  for spec in \
+      'Claude|claude|https://claude.ai/install.sh|bash' \
+      'Codex|codex|https://chatgpt.com/codex/install.sh|sh' \
+      'Grok|grok|https://x.ai/cli/install.sh|bash'; do
+    IFS='|' read -r name binary url shell <<< "$spec"
+    if need_cmd "$binary" && "$binary" --version >/dev/null 2>&1; then
+      ui_ok "$name CLI already installed"
+      continue
+    fi
+    ui_step "Installing $name CLI from its official installer"
+    script="$(mktemp)"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$url" -o "$script"; then
+      rm -f "$script"
+      die "$name installer could not be downloaded from $url"
+    fi
+    if ! "$shell" "$script" </dev/null; then
+      rm -f "$script"
+      die "$name installer failed. BOSS core install has not started."
+    fi
+    rm -f "$script"
+    hash -r
+    need_cmd "$binary" && "$binary" --version >/dev/null 2>&1 ||
+      die "$name installer completed but $binary --version failed; check the installer's PATH instructions."
+    ui_ok "$name CLI ready"
+  done
 }
 
 # ---- preflight -------------------------------------------------------------
@@ -174,53 +259,84 @@ OS="$(uname -s 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 ui_info "OS: $OS  arch: $ARCH"
 
-MISSING=()
-need_cmd curl || need_cmd wget || MISSING+=("curl or wget")
-need_cmd git || MISSING+=("git")
-need_cmd docker || MISSING+=("docker")
-
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-  ui_err "Missing required tools: ${MISSING[*]}"
-  echo ""
-  echo "Install tips:"
-  case "$OS" in
-    Darwin)
-      echo "  brew install git curl"
-      echo "  Install Docker Desktop: https://docs.docker.com/desktop/"
-      ;;
-    Linux)
-      echo "  sudo apt-get update && sudo apt-get install -y git curl"
-      echo "  Docker: https://docs.docker.com/engine/install/"
-      ;;
-    *)
-      echo "  Install git, curl, and Docker for your OS, then re-run this installer."
-      ;;
+install_vm_deps() {
+  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
+  [[ "$OS" == Linux && -f /etc/os-release ]] || die "Automatic dependencies require Ubuntu or Debian Linux. Install git, curl, Docker Engine and Compose manually."
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case "$ID:$VERSION_ID" in
+    ubuntu:22.04|ubuntu:24.04|debian:12|debian:13) ;;
+    *) die "Automatic dependencies support Ubuntu 22.04/24.04 and Debian 12/13; found ${PRETTY_NAME:-$ID}." ;;
   esac
-  exit 1
-fi
-ui_ok "git, docker, and a downloader are available"
+  need_cmd apt-get && need_cmd dpkg || die "apt-get and dpkg are required for VM bootstrap."
+  local admin=()
+  if [[ "$(id -u)" -ne 0 ]]; then
+    need_cmd sudo || die "Install sudo or run as root to install missing VM packages."
+    admin=(sudo)
+    "${admin[@]}" -v || die "Administrator access is needed to install VM packages."
+  fi
+  ui_step "Installing missing VM dependencies"
+  "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git openssl python3
+  if ! need_cmd docker || ! docker compose version >/dev/null 2>&1; then
+    # Replacing an existing container runtime can interrupt unrelated workloads.
+    for pkg in docker.io docker-compose docker-compose-v2 podman-docker containerd runc; do
+      if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+        die "Existing $pkg needs a manual Docker/Compose upgrade; leaving it untouched."
+      fi
+    done
+    "${admin[@]}" install -m 0755 -d /etc/apt/keyrings
+    local docker_key
+    docker_key="$(mktemp)"
+    if ! curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o "$docker_key"; then
+      rm -f "$docker_key"
+      die "Could not fetch Docker's package signing key."
+    fi
+    "${admin[@]}" install -m 0644 "$docker_key" /etc/apt/keyrings/docker.asc
+    rm -f "$docker_key"
+    local codename="${VERSION_CODENAME}"
+    if [[ "$ID" == ubuntu ]]; then codename="${UBUNTU_CODENAME:-$VERSION_CODENAME}"; fi
+    printf 'Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$ID" "$codename" "$(dpkg --print-architecture)" |
+      "${admin[@]}" tee /etc/apt/sources.list.d/docker.sources >/dev/null
+    "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  fi
+  if need_cmd systemctl; then
+    "${admin[@]}" systemctl enable --now docker || die "Docker installed, but its service did not start."
+  fi
+}
 
-# Docker daemon
+if ! need_cmd git || ! need_cmd curl || ! need_cmd openssl || ! need_cmd python3 || ! need_cmd docker || ! docker compose version >/dev/null 2>&1; then
+  install_vm_deps
+fi
+need_cmd git && need_cmd curl && need_cmd openssl && need_cmd python3 && need_cmd docker ||
+  die "git, curl, OpenSSL, Python 3 and Docker are required."
+
+# Adding the current user to the docker group would grant root-equivalent access and does
+# not take effect in this shell. Use sudo for this install when the socket requires it.
 if ! docker info >/dev/null 2>&1; then
-  die "Docker is installed but not running. Start Docker Desktop (or the docker daemon) and re-run."
+  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -v && sudo docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+  else
+    die "Docker daemon is unavailable. Start Docker and rerun; on Linux ensure sudo access."
+  fi
 fi
 ui_ok "Docker daemon is running"
-
-# Compose v2
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE=(docker compose)
+if "${DOCKER[@]}" compose version >/dev/null 2>&1; then
+  COMPOSE=("${DOCKER[@]}" compose)
 elif need_cmd docker-compose; then
   COMPOSE=(docker-compose)
 else
-  die "Docker Compose is required (docker compose plugin or docker-compose)."
+  die "Docker Compose v2 is required."
 fi
-ui_ok "Docker Compose: $(${COMPOSE[@]} version 2>/dev/null | head -1)"
+ui_ok "Docker Compose: $("${COMPOSE[@]}" version 2>/dev/null | head -1)"
+install_coding_clis
 
-# Disk space (~5GB free recommended for images)
+# Image builds need much more room than the old 3 GB check implied.
 if need_cmd df; then
   FREE_KB="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
-  if [[ -n "${FREE_KB:-}" && "$FREE_KB" -lt 3000000 ]]; then
-    ui_warn "Low disk space under \$HOME (${FREE_KB}KB free). Builds may fail."
+  if [[ -n "${FREE_KB:-}" && "$FREE_KB" -lt 80000000 ]]; then
+    ui_warn "Less than 80 GB free under $HOME. Allow about 100 GB for images, build cache and agent work."
   else
     ui_ok "Disk space looks OK"
   fi
@@ -285,15 +401,28 @@ fi
 # install had those keys written and unused and no secret store at all — which only surfaced
 # later, when storing a subscription token returned "no secret store". Now it is asked and
 # answered, and whichever way it goes the install matches what was chosen.
+#
+# A SECOND RUN MUST NOT FORGET THE ANSWER. `remote.sh install --yes` does not repeat
+# --secret-store, and the interactive prompt used to default to "1" even when this run passed
+# --secret-store infisical and even when .env already held a machine-identity token. Enter, or
+# -y, then started the stack without the secrets profile. The token detection is outside the
+# interactive block so a non-interactive update keeps the store it already provisioned. An
+# explicit --secret-store still wins, including an explicit database.
+if [[ "$SECRET_STORE_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]] && grep -qs '^BOSS_INFISICAL_TOKEN=.' "$INSTALL_DIR/.env"; then
+  SECRET_STORE="infisical"
+fi
 if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
   echo ""
   ui_info "Where should this install keep credentials? Both stay on this machine."
   ui_info "  1) database   — 4 containers, leaner. BOSS's own Postgres holds them."
   ui_info "  2) infisical  — 6 containers (~400MB more). A real secret store, bootstrapped."
-  prompt "Secret store: 1 (database) or 2 (infisical)?" "1"
-  case "$(printf '%s' "$REPLY" | tr -d ' ')" in
+  _store_default=1
+  [[ "$SECRET_STORE" == "infisical" ]] && _store_default=2
+  prompt "Secret store: 1 (database) or 2 (infisical)?" "$_store_default"
+  case "$(printf '%s' "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')" in
     2|infisical) SECRET_STORE="infisical" ;;
-    *) SECRET_STORE="database" ;;
+    1|database) SECRET_STORE="database" ;;
+    *) die "Secret store must be 1 (database) or 2 (infisical)" ;;
   esac
 fi
 
@@ -321,24 +450,40 @@ BOSS_DB_PASSWORD="boss"
 if need_cmd openssl; then
   BOSS_DB_PASSWORD="$(openssl rand -hex 12)"
 fi
+# The console gate has its own credentials. The API bearer key must never be used
+# as a browser login secret; each value is random on first install and preserved
+# by restore_preserved_env.sh on reruns.
+BOSS_CONSOLE_PASSWORD="$(openssl rand -hex 24)"
+BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
 
 # ---- fetch source ----------------------------------------------------------
 ui_step "Fetching BOSS Community source"
 
 mkdir -p "$(dirname "$INSTALL_DIR")"
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-  ui_info "Existing git repo at $INSTALL_DIR — pulling $BOSS_REPO_REF"
-  git -C "$INSTALL_DIR" fetch --depth 1 origin "$BOSS_REPO_REF" 2>/dev/null || true
-  git -C "$INSTALL_DIR" checkout "$BOSS_REPO_REF" 2>/dev/null || true
-  git -C "$INSTALL_DIR" pull --ff-only origin "$BOSS_REPO_REF" 2>/dev/null || \
-    ui_warn "Could not fast-forward; using existing tree"
-elif [[ -f "$INSTALL_DIR/install.sh" && -f "$INSTALL_DIR/Dockerfile" ]]; then
-  ui_ok "Using existing checkout at $INSTALL_DIR"
+if [[ -e "$INSTALL_DIR" && ! -d "$INSTALL_DIR" ]]; then
+  die "$INSTALL_DIR exists and is not a directory."
+fi
+if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
+  [[ -f "$INSTALL_DIR/scripts/install/community-compose.yml" ]] ||
+    die "$INSTALL_DIR is a Git repository but not a BOSS checkout."
+  if [[ -n "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no)" ]]; then
+    die "$INSTALL_DIR has tracked local changes. Commit or move them before updating BOSS."
+  fi
+  ui_info "Updating existing checkout at $INSTALL_DIR to $BOSS_REPO_REF"
+  git -C "$INSTALL_DIR" fetch origin "$BOSS_REPO_REF" </dev/null ||
+    die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
+  git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD </dev/null ||
+    die "Could not fast-forward; existing checkout left unchanged."
+elif [[ -d "$INSTALL_DIR" ]]; then
+  [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
+    die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."
+  ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
+  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
+    die "Clone failed; existing directory was not removed."
 else
   ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  rm -rf "$INSTALL_DIR"
-  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" \
-    || git clone --depth 1 "$BOSS_REPO_URL" "$INSTALL_DIR"
+  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
+    die "Clone failed; check repo visibility, URL, and ref."
 fi
 
 cd "$INSTALL_DIR"
@@ -365,7 +510,21 @@ ENV_FILE="$INSTALL_DIR/.env"
 #
 # The API key is preserved for a smaller reason: anything an operator saved, scripted or put in
 # a tunnel command keeps working across a re-run instead of silently 401-ing.
+#
+# THE REWRITE STILL DELETES EVERYTHING ELSE. The database password was the first thing a
+# second run destroyed, because Postgres keeps it in the volume. The secret store is the same
+# shape and was not covered: INFISICAL_ENCRYPTION_KEY and BOSS_INFISICAL_TOKEN live only in
+# this file. Deleting them and generating a new encryption key (the block below this write
+# does that whenever the line is absent) makes the Infisical database in that same volume
+# unreadable, and the token cannot be issued again. Model keys go the same way: a remote
+# update runs `-y --skip-model-key`, so the heredoc writes OPENAI_API_KEY= blank.
+# restore_preserved_env.sh puts those lines back. It runs on a temp file, and the live .env
+# is replaced only after that succeeds, so a failure leaves the previous credentials in place.
+_ENV_SNAPSHOT=""
 if [ -f "$ENV_FILE" ]; then
+  if grep -qs '^BOSS_BIND_ADDRESS=0.0.0.0$' "$ENV_FILE"; then
+    ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
+  fi
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
   _keep_api="$(_existing BOSS_API_KEY)"
@@ -377,6 +536,9 @@ if [ -f "$ENV_FILE" ]; then
     BOSS_API_KEY="$_keep_api"
     ui_info "Reusing the existing API key — saved keys keep working"
   fi
+  _ENV_SNAPSHOT="$INSTALL_DIR/.env.previous.$$"
+  cp -p "$ENV_FILE" "$_ENV_SNAPSHOT"
+  chmod 600 "$_ENV_SNAPSHOT"
 fi
 
 # A bare host or host:port is accepted and completed, because "boss.example.internal" is what
@@ -391,7 +553,8 @@ else
   PUBLIC_API_URL="http://127.0.0.1:${API_PORT}"
 fi
 
-cat > "$ENV_FILE" <<EOF
+_new_env="$INSTALL_DIR/.env.writing.$$"
+cat > "$_new_env" <<EOF
 # BOSS Community — generated by install.sh $(date -u +%Y-%m-%dT%H:%MZ)
 # Keep this file private. Do not commit.
 
@@ -401,12 +564,15 @@ BOSS_API_KEY=${BOSS_API_KEY}
 BOSS_API_KEYS=${BOSS_API_KEY}
 BOSS_API_KEY_PRINCIPALS=${BOSS_API_KEY}:ceo
 BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
+BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
+BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood
 BOSS_API_PORT=${API_PORT}
 BOSS_WEB_PORT=${WEB_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
+BOSS_BIND_ADDRESS=${BIND_ADDRESS}
 NEXT_PUBLIC_BOSS_API_URL=${PUBLIC_API_URL}
 NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 
@@ -416,12 +582,43 @@ OPENAI_BASE_URL=
 OPENAI_MODEL=gpt-4o-mini
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 BOSS_GITHUB_TOKEN=${GITHUB_TOKEN}
+# This installer source is not the operator's webhook repository. Leave the
+# legacy default-project GitHub route unbound until explicitly configured.
+BOSS_GITHUB_OWNER=
+BOSS_GITHUB_REPO=
 
 # Leave unset for pure Community independence
 BOSS_ACCOUNT_CONNECT_URL=
 EOF
+chmod 600 "$_new_env"
+if [ -n "${_ENV_SNAPSHOT:-}" ]; then
+  if [ ! -f "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" ]; then
+    rm -f "$_new_env"
+    die "scripts/install/restore_preserved_env.sh is missing — left the existing $ENV_FILE unchanged"
+  fi
+  if ! BOSS_PUBLIC_URL_EXPLICIT="$PUBLIC_URL_EXPLICIT" \
+      BOSS_API_PORT_EXPLICIT="$API_PORT_EXPLICIT" \
+      BOSS_WEB_PORT_EXPLICIT="$WEB_PORT_EXPLICIT" \
+      BOSS_POSTGRES_PORT_EXPLICIT="$PG_PORT_EXPLICIT" \
+      sh "$INSTALL_DIR/scripts/install/restore_preserved_env.sh" "$_ENV_SNAPSHOT" "$_new_env" </dev/null; then
+    rm -f "$_new_env"
+    die "could not carry credentials forward — left the existing $ENV_FILE unchanged (copy at $_ENV_SNAPSHOT)"
+  fi
+  rm -f "$_ENV_SNAPSHOT"
+  _ENV_SNAPSHOT=""
+  ui_info "Carried existing credentials forward — a re-run must not strand them"
+fi
+mv "$_new_env" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ui_ok "Wrote $ENV_FILE (mode 600)"
+
+# The preserved .env may hold ports from a previous run. Keep probes and printed URLs on
+# the same ports Compose will use; never source a credential file as shell code.
+env_value() { grep -m 1 "^$1=" "$ENV_FILE" | cut -d= -f2-; }
+API_PORT="$(env_value BOSS_API_PORT)"
+WEB_PORT="$(env_value BOSS_WEB_PORT)"
+PG_PORT="$(env_value BOSS_POSTGRES_PORT)"
+PUBLIC_API_URL="$(env_value NEXT_PUBLIC_BOSS_API_URL)"
 
 # Local helper for humans
 cat > "$INSTALL_DIR/boss-community.env.sh" <<EOF
@@ -448,7 +645,7 @@ chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 # generator refuses when the value is already there.
 if ! grep -qs '^INFISICAL_ENCRYPTION_KEY=' "$ENV_FILE"; then
   if [ -x "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" ]; then
-    sh "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" "$ENV_FILE" >/dev/null 2>&1 \
+    sh "$INSTALL_DIR/scripts/install/gen_infisical_keys.sh" "$ENV_FILE" </dev/null >/dev/null 2>&1 \
       && ui_ok "Generated the secret-store keys (back up $ENV_FILE — they are unrecoverable)"
   else
     { echo "INFISICAL_ENCRYPTION_KEY=$(openssl rand -hex 16)"
@@ -466,7 +663,7 @@ ${COMPOSE[@]} \
   -f scripts/install/community-compose.yml \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  up -d --build
+  up -d --build </dev/null
 
 ui_ok "Containers started"
 
@@ -477,7 +674,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
   ui_step "Provisioning the secret store"
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
-       sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" >/dev/null 2>&1; then
+       sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" </dev/null >/dev/null 2>&1; then
       # THE VALUES ARRIVE AFTER THE CONTAINERS DID.
       #
       # bootstrap writes BOSS_INFISICAL_URL / _PROJECT_ID / _TOKEN into .env, and compose reads
@@ -487,7 +684,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
       # what was just written.
       # shellcheck disable=SC2086
       ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
-        $COMPOSE_PROFILES up -d --no-deps --force-recreate api worker >/dev/null 2>&1 \
+        $COMPOSE_PROFILES up -d --no-deps --force-recreate api worker </dev/null >/dev/null 2>&1 \
         || ui_warn "could not restart api/worker — they may not see the secret store yet"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
     else
@@ -527,35 +724,52 @@ ui_ok "API healthy at ${API_URL}/health"
 
 # ---- seed ------------------------------------------------------------------
 ui_step "Seeding Community project (roles, packs, demo project)"
+SEED_ERR="$(mktemp)"
 set +e
 ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
-  python -c "from boss_engine.bootstrap import seed; seed()" 2>/tmp/boss-seed.err
+  python -c "from boss_engine.bootstrap import seed; seed()" </dev/null 2>"$SEED_ERR"
 SEED_RC=$?
 set -e
 if [[ "$SEED_RC" -ne 0 ]]; then
   ui_warn "Seed returned $SEED_RC — trying alternate entrypoint"
   ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
-    python -m boss_engine.bootstrap 2>>/tmp/boss-seed.err || \
-    ui_warn "Seed failed; API is up — run seed manually (see docs). Log: /tmp/boss-seed.err"
+    python -m boss_engine.bootstrap </dev/null 2>>"$SEED_ERR" ||
+    die "Seed failed. API may be up but the project is not ready; see $SEED_ERR."
 else
   ui_ok "Database seeded (project boss-dogfood)"
 fi
+rm -f "$SEED_ERR"
 
 # ---- post checks -----------------------------------------------------------
 ui_step "Verifying Community independence"
 
 set +e
-EDITION_CODE="$(curl -sS -o /tmp/boss-edition.json -w '%{http_code}' \
+EDITION_BODY="$(mktemp)"
+EDITION_CODE="$(curl -sS -o "$EDITION_BODY" -w '%{http_code}' \
   -H "Authorization: Bearer ${BOSS_API_KEY}" \
   "${API_URL}/v1/edition?project_id=boss-dogfood" 2>/dev/null || echo 000)"
 set -e
 if [[ "$EDITION_CODE" == "200" ]]; then
   ui_ok "GET /v1/edition → 200"
-  if grep -q 'community' /tmp/boss-edition.json 2>/dev/null; then
-    ui_ok "Edition reports community"
-  fi
+  grep -q '"community"' "$EDITION_BODY" ||
+    die "Edition response did not report Community; see $EDITION_BODY."
+  ui_ok "Edition reports community"
 else
-  ui_warn "Edition probe HTTP $EDITION_CODE (auth/seed may still be settling)"
+  die "Edition probe returned HTTP $EDITION_CODE. BOSS was started but is not ready; see $EDITION_BODY."
+fi
+rm -f "$EDITION_BODY"
+
+if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
+  ui_step "Discovering coding subscriptions on this VM"
+  if [[ "$CONNECT_CLAUDE" -eq 1 ]] && [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
+    die "Claude subscription connection would use ANTHROPIC_API_KEY for headless work. Remove that key from .env, then rerun --connect-claude."
+  fi
+  _subscription_args=(--api-url "$API_URL")
+  [[ "$CONNECT_CODEX" -eq 1 ]] && _subscription_args+=(--connect-codex)
+  [[ "$CONNECT_CLAUDE" -eq 1 ]] && _subscription_args+=(--connect-claude)
+  [[ "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]] && _subscription_args+=(--accept-database-fallback)
+  BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_subscription_args[@]}" </dev/null ||
+    die "Coding subscription discovery/connection failed; BOSS core remains available."
 fi
 
 set +e
@@ -579,6 +793,7 @@ echo -e "  ${BOLD}API${NC}              ${API_URL}"
 echo -e "  ${BOLD}Health${NC}           ${API_URL}/health"
 if [[ "$WITH_WEB" -eq 1 ]]; then
   echo -e "  ${BOLD}Mission Control${NC}  http://127.0.0.1:${WEB_PORT}"
+  echo -e "  ${BOLD}Console password${NC} python3 \"$INSTALL_DIR/scripts/install/console_password.py\" show --env-file \"$ENV_FILE\""
 fi
 echo -e "  ${BOLD}Project${NC}          boss-dogfood"
 echo -e "  ${BOLD}API key${NC}          (in $ENV_FILE — not printed)"
@@ -598,7 +813,7 @@ echo ""
 echo "  # Stop"
 echo "  cd $INSTALL_DIR && docker compose -f scripts/install/community-compose.yml --env-file .env down"
 echo ""
-echo -e "${MUTED}Docs: https://boss.sean.network/community/${NC}"
-echo -e "${MUTED}Spec: docs/product/BOSS_COMMUNITY_EDITION_SPEC.md${NC}"
+echo -e "${MUTED}Docs: https://github.com/seanventures/boss#readme${NC}"
+echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
 echo ""

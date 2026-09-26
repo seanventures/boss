@@ -22,7 +22,10 @@
  * send anybody, and the template page taught that lesson already.
  */
 
-import { useCallback, useEffect, useState } from "react";
+// React by name as well as its hooks: the suite renders these components with
+// renderToStaticMarkup, which compiles JSX to React.createElement and needs React in
+// scope. Same import shape as delivery-workflows-ui for the same reason.
+import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { formatDate } from "../lib/datetime";
@@ -38,12 +41,20 @@ type Spec = {
   decision_rights?: string[]; allowed_skills?: string[]; forbidden_skills?: string[];
   output_contracts?: string[]; eval_rubric?: Record<string, unknown>; knowledge?: string;
 };
+/** One row of "what this agent can do" — held, or available to be given. */
+type Skill = {
+  skill_id: string; label: string; summary: string; source: string;
+  behaviour_kind: string; risk_tier: number; enabled: boolean;
+  missing?: boolean; assigned_by?: string; assigned_at?: string | null;
+};
+type SkillPanel = { role_key: string; holds: Skill[]; available: Skill[] };
 type Detail = {
   role_key: string; name: string; registered: boolean;
   autonomy_level: number | null; trust_score: number | null; successful_runs: number | null;
   violations: number | null; hidden_failures: number | null; reports_to: string | null;
   spec: Spec; owns_stages: string[]; apps: App[]; panels: Panel[];
   assigned_to: Array<{ app_name: string; source: string }>;
+  skills?: SkillPanel;
   window_hours: number;
 };
 
@@ -225,6 +236,13 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
               )}
             </section>
 
+            {/* WHAT IT CAN DO — the section this page was missing, and the reason an
+                operator could look at a fully specced agent and conclude BOSS had given it
+                nothing. Above the history deliberately: the first question about an agent is
+                what it is able to do, not what it has already done. */}
+            <AgentSkills projectId={projectId} roleKey={detail.role_key}
+                         panel={detail.skills} spec={spec} onChanged={load} />
+
             {/* THE CAPABILITY MODEL, on screen for the first time. */}
             <section className="ct-block">
               <div className="ct-block-title">What it is for</div>
@@ -281,4 +299,155 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
     </div>
   );
   return typeof document !== "undefined" ? createPortal(page, document.body) : null;
+}
+
+
+/**
+ * The skills one agent holds, and the ones it could be given.
+ *
+ * THE DIRECTION THIS FIXES. `role_skills` has always been many-to-many — an agent holds many
+ * skills, a skill is held by many agents — but the only place to write it was the Skills page,
+ * one skill at a time, choosing an agent from a dropdown. That is backwards from how anyone
+ * builds a team: you open the editor and say what it can do. Same table, same endpoint, read
+ * and written from the agent's side.
+ *
+ * AND IT IS NOT `spec.allowed_skills`. That list is prose in a spec pack — what an agent MAY be
+ * given. This is the grant, and it is the one `skill_runtime` checks before the agent is allowed
+ * to call anything. A page that showed only the first is why an agent with eleven allowed skills
+ * and an empty `role_skills` row looked capable and could do nothing.
+ */
+export function AgentSkills({ projectId, roleKey, panel, spec, onChanged }: {
+  projectId: string; roleKey: string; panel?: SkillPanel; spec: Spec; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState("");
+  const [failed, setFailed] = useState("");
+  const [pick, setPick] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const holds = panel?.holds ?? [];
+  const available = panel?.available ?? [];
+
+  const write = useCallback(async (action: "assign" | "unassign", skillId: string) => {
+    setBusy(skillId);
+    setFailed("");
+    try {
+      const r = await fetch("/api/skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, project_id: projectId, role_key: roleKey,
+                               skill_id: skillId, actor: "executive_console" }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) { setFailed(String(body?.error ?? `HTTP ${r.status}`)); return; }
+      onChanged();
+    } catch (e) {
+      setFailed(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy("");
+    }
+  }, [projectId, roleKey, onChanged]);
+
+  // GROUPED THE WAY THE DECISION IS MADE. A skill the agent's own spec already names is the
+  // uncontroversial one; anything else works too — the grant itself is the permission — but
+  // it is a wider decision and worth seeing as one.
+  const named = new Set(spec.allowed_skills ?? []);
+  const forbidden = new Set(spec.forbidden_skills ?? []);
+  const suggested = available.filter((s) => named.has(s.skill_id));
+  const rest = available.filter((s) => !named.has(s.skill_id) && !forbidden.has(s.skill_id));
+
+  return (
+    <section className="ct-block" data-testid="agent-skills">
+      <div className="ct-block-title">
+        What it can do
+        <span className="detail"> · {holds.length
+          ? `${holds.length} skill${holds.length === 1 ? "" : "s"} held`
+          : "nothing yet"}</span>
+      </div>
+
+      {holds.length ? (
+        <ul className="ad-list" data-testid="agent-skills-held">
+          {holds.map((s) => (
+            <li key={s.skill_id} data-skill={s.skill_id}>
+              <code>{s.skill_id}</code>
+              {s.summary ? <span className="detail"> — {s.summary}</span> : null}
+              {/* A tier at or above the approval floor means a run will stop and wait for a
+                  person. Said here, because it is a property of giving the skill out. */}
+              {s.risk_tier >= 2 ? (
+                <span className="detail"> · needs approval each time (tier {s.risk_tier})</span>
+              ) : null}
+              {!s.enabled && !s.missing ? (
+                <span className="detail"> · not enabled in this project</span>
+              ) : null}
+              {s.missing ? (
+                <span className="ad-bad"> · no such skill here any more — this grant does
+                  nothing</span>
+              ) : null}
+              <button type="button" className="linklike" disabled={busy === s.skill_id}
+                      data-testid={`agent-skill-drop-${s.skill_id}`}
+                      title={`Take ${s.skill_id} off this agent`}
+                      onClick={() => void write("unassign", s.skill_id)}>
+                {busy === s.skill_id ? "…" : "remove"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="detail" data-testid="agent-skills-empty">
+          This agent holds no skills, so every step that names it will be refused at the gate.
+          {named.size
+            ? " Its spec says it may use " + [...named].slice(0, 6).join(", ")
+              + " — give it those below."
+            : ""}
+        </p>
+      )}
+
+      {failed ? <p className="ad-bad" data-testid="agent-skills-failed">{failed}</p> : null}
+
+      {open ? (
+        <div className="skill-assign-pick">
+          <select value={pick} data-testid="agent-skill-select"
+                  onChange={(e) => setPick(e.target.value)}>
+            <option value="">Choose a skill…</option>
+            {suggested.length ? (
+              <optgroup label="Its spec already allows these">
+                {suggested.map((s) => (
+                  <option key={s.skill_id} value={s.skill_id}>{s.skill_id}</option>
+                ))}
+              </optgroup>
+            ) : null}
+            {rest.length ? (
+              <optgroup label={suggested.length ? "Anything else in this project" : "Skills"}>
+                {rest.map((s) => (
+                  <option key={s.skill_id} value={s.skill_id}>{s.skill_id}</option>
+                ))}
+              </optgroup>
+            ) : null}
+          </select>
+          <button type="button" className="cap-btn" disabled={!pick || busy !== ""}
+                  data-testid="agent-skill-confirm"
+                  onClick={() => { void write("assign", pick); setPick(""); setOpen(false); }}>
+            Give it this skill
+          </button>
+          <button type="button" className="linklike"
+                  onClick={() => { setOpen(false); setPick(""); }}>Cancel</button>
+        </div>
+      ) : (
+        <div className="skill-assign-actions">
+          {available.length ? (
+            <button type="button" className="linklike" data-testid="agent-skill-open"
+                    onClick={() => setOpen(true)}>
+              Give this agent a skill
+            </button>
+          ) : (
+            <span className="detail">It already holds every skill in this project.</span>
+          )}
+        </div>
+      )}
+      {forbidden.size ? (
+        <p className="detail">
+          Its spec forbids {[...forbidden].join(", ")}. Those are left out of the list above.
+        </p>
+      ) : null}
+    </section>
+  );
 }

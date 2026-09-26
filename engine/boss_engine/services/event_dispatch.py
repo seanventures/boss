@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Any, Optional
 
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import normalize_data_boundary
@@ -156,6 +157,55 @@ def dispatch_event(
                 actor="event-dispatcher",
             )
             enqueued.append(delivery)
+            continue
+        if subscription["sink_kind"] == "workflow":
+            # START THE OPERATOR'S OWN WORKFLOW. sink_ref is the workflow KEY, so the event
+            # runs whatever version is current — the same rule a schedule follows.
+            #
+            # Deduped on the SUBSCRIPTION AND THE EVENT, like every other sink here: one
+            # delivery of one event starts one run, however many times the dispatcher is
+            # retried. The event's own data becomes the run's input, which is what makes
+            # "a demo request arrived" carry the company with it.
+            from .workflows import start_run
+
+            active = connection.execute(
+                text(
+                    """
+                    SELECT active_version_id FROM workflow_definitions
+                    WHERE project_id = :p AND workflow_key = :k
+                    """
+                ),
+                {"p": project_id, "k": subscription["sink_ref"]},
+            ).scalar()
+            if not active:
+                # Said once, with the subscription, rather than raised: one misconfigured
+                # subscription must not stop the other sinks for this event.
+                logger.warning(
+                    "event_dispatch.workflow_missing",
+                    extra={"project_id": project_id, "event_id": event_id,
+                           "subscription_id": subscription["id"],
+                           "workflow_key": subscription["sink_ref"]},
+                )
+                continue
+            try:
+                run = start_run(
+                    connection,
+                    project_id=project_id,
+                    actor=str(config.get("actor") or "event-dispatcher"),
+                    input_data={"event_type": event_type, "entity_type": entity_type,
+                                "entity_id": entity_id, **(data or {})},
+                    dedupe_key=f"event:{dedupe_hash}",
+                    workflow_version_id=str(active),
+                )
+                enqueued.append({"kind": "workflow", "run_id": run.get("id"),
+                                 "workflow_key": subscription["sink_ref"]})
+            except Exception:  # noqa: BLE001 — one sink must not take the others down
+                logger.warning(
+                    "event_dispatch.workflow_start_failed",
+                    extra={"project_id": project_id, "event_id": event_id,
+                           "subscription_id": subscription["id"]},
+                    exc_info=True,
+                )
             continue
         if subscription["sink_kind"] != "job":
             logger.warning(

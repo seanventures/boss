@@ -232,6 +232,41 @@ def _tick_focused_agents(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("focused_agents_failed", exc_info=True)
 
 
+#: How often to look for a due schedule. Not every poll: the poll is 15s and the finest
+#: schedule BOSS offers is hourly, so checking four times a minute is three hundred queries an
+#: hour to answer a question that changes once. A minute is well inside the resolution.
+WORKFLOW_SCHEDULE_INTERVAL_SECONDS = 60
+_last_workflow_schedule_monotonic = 0.0
+
+
+def _tick_workflow_schedules(client: ControlPlaneClient, settings) -> None:
+    """Start workflows whose schedule has come round. Never kill the worker."""
+    global _last_workflow_schedule_monotonic
+    now = time.monotonic()
+    if now - _last_workflow_schedule_monotonic < WORKFLOW_SCHEDULE_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.tick_workflow_schedules(str(project_id))
+        _last_workflow_schedule_monotonic = now
+        started = (result or {}).get("started") or []
+        # Logged only when something happened. A line every minute saying "nothing was due"
+        # is how a log stops being read.
+        for entry in started:
+            if entry.get("error"):
+                LOGGER.warning("workflow_schedule_failed name=%s error=%s disabled=%s",
+                               entry.get("name"), entry.get("error"), entry.get("disabled"))
+            else:
+                LOGGER.info("workflow_schedule_started name=%s workflow=%s run=%s",
+                            entry.get("name"), entry.get("workflow_key"), entry.get("run_id"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("workflow_schedules_failed", exc_info=True)
+
+
 def _tick_agent_processes(client: ControlPlaneClient, settings) -> None:
     global _last_agent_process_monotonic
     now = time.monotonic()
@@ -511,6 +546,7 @@ def main() -> None:
                 continue
             _tick_metatron_watch(client, settings)
             _tick_focused_agents(client, settings)
+            _tick_workflow_schedules(client, settings)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)

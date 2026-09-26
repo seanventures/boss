@@ -120,3 +120,103 @@ describe("opening a workflow does not destroy how its steps feed each other", ()
     expect(ui).toContain("inputs?: Record<string, unknown>;");
   });
 });
+
+describe("a step can be given to an agent", () => {
+  it("offers the agents on every work step", () => {
+    // BOSS's own pipelines read as agents doing the work because a capability's captain becomes
+    // the actor. A customer's step ignored it and the builder never offered it, so their
+    // workflows had no agent in them anywhere.
+    expect(ui).toContain("dw-draft-captain-");
+    expect(ui).toContain("Agent for ${step.id}");
+  });
+
+  it("offers the list the publish-time check will actually accept", () => {
+    // Taken from the capabilities payload rather than the agent directory: offering a role that
+    // would then be refused at save is worse than offering none.
+    expect(ui).toContain("stepRoles: string[];");
+    expect(ui).toContain('setStepRoles((caps as { roles?: string[] }).roles ?? [])');
+  });
+
+  it("says what empty means rather than leaving it blank", () => {
+    expect(ui).toContain("no agent — runs as the workflow");
+    expect(ui).toContain("(default)");
+  });
+
+  it("writes a captain into the spec only when one was chosen", () => {
+    // An empty string would make every step look deliberately assigned to nobody.
+    //
+    // ONE PER SAVE BRANCH, and there are three: a built-in capability, a step the customer
+    // defined, and an agent step that carries an instruction instead of binding a skill. A
+    // branch that forgot this line would silently drop the agent off that kind of step, which is
+    // the bug this counts rather than describes.
+    const occurrences = ui.split("...(step.captain ? { captain: step.captain } : {})").length - 1;
+    expect(occurrences).toBe(3);
+  });
+
+  it("an agent step means something different by 'no agent'", () => {
+    // On every other kind, empty means the anonymous workflow runner. On an agent step it means
+    // "whichever agent fits this instruction", which BOSS works out from what each one holds —
+    // so the same blank option cannot read the same way.
+    expect(ui).toContain("whichever agent fits — BOSS picks");
+  });
+
+  it("an agent step's instruction can be asked for or pinned", () => {
+    // Both are things operators say: the same workflow doing a different job each run, or a
+    // workflow that always does the one thing.
+    expect(ui).toContain("ask me when the run starts");
+    expect(ui).toContain("always do this");
+    // And the instruction is what gets saved as the step's specification.
+    expect(ui).toContain("agent_work: true");
+    expect(ui).toContain('instructions: step.instructions ?? { from_input: "instructions" }');
+  });
+
+  it("says so when the agent on an agent step holds nothing", () => {
+    // There is no one skill to check — the whole of what the agent holds is what it may use —
+    // so the thing worth saying is when it holds NOTHING, because then the step cannot work.
+    expect(ui).toContain("holds no skills, so it cannot do anything");
+  });
+
+  it("keeps the captain a workflow was saved with", () => {
+    expect(ui).toContain('captain: step.captain ? String(step.captain) : undefined');
+  });
+});
+
+describe("a step's inputs can be wired", () => {
+  it("offers all three sources for every input", () => {
+    // Every input was written as "ask the operator by name", so a workflow built here could not
+    // feed one step into the next — the one thing a workflow is for.
+    expect(ui).toContain("asked when the run starts");
+    expect(ui).toContain("from an earlier step");
+    expect(ui).toContain("a fixed value");
+  });
+
+  it("only offers steps that run BEFORE this one", () => {
+    // A workflow reading from a step that has not run cannot resolve, and the runtime would
+    // fail it mid-run rather than at save. So the choice is not offered.
+    expect(ui).toContain("draft.slice(0, index)");
+  });
+
+  it("says so rather than going quiet when there is no earlier step", () => {
+    expect(ui).toContain("from an earlier step (none yet)");
+  });
+
+  it("lets a fixed value pin a channel", () => {
+    // The engine passes literals straight through, which is how a publish step chooses between
+    // two connected YouTube channels.
+    expect(ui).toContain('placeholder="e.g. youtube_2"');
+    expect(ui).toContain("dw-wire-fixed-");
+  });
+
+  it("suggests the fields a step declares without limiting to them", () => {
+    // `produces` is what a step DECLARES; a skill can return more, and a closed picker would
+    // make the rest unreachable.
+    expect(ui).toContain("dw-fields-${step.id}");
+    expect(ui).toContain('placeholder="which field"');
+  });
+
+  it("opens one step's wiring at a time", () => {
+    // A canvas with every step expanded is a form, and the thing being edited is the ORDER as
+    // much as the wiring.
+    expect(ui).toContain("wiringStep === step.id ? null : step.id");
+  });
+});

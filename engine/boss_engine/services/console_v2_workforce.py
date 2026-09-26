@@ -832,7 +832,7 @@ def agent_detail(connection, project_id: str, role_key: str, *,
         gap between the two is worth looking at.
     """
     from .llm_telemetry import STAGE_ROLES, canonical_role
-    from . import agent_assignment
+    from . import agent_assignment, skill_definitions
 
     role_key = canonical_role(role_key) or role_key
     role = connection.execute(
@@ -936,5 +936,13 @@ def agent_detail(connection, project_id: str, role_key: str, *,
                    for p in panels],
         # What it is SUPPOSED to be on, which is not the same as what it has touched.
         "assigned_to": agent_assignment.apps_for_role(connection, project_id, role_key),
+        # WHAT IT CAN ACTUALLY DO, which is not `spec.allowed_skills`.
+        #
+        # THE DIFFERENCE MATTERS AND THE PAGE USED TO SHOW ONLY THE WRONG ONE. `allowed_skills`
+        # is prose in a spec pack: it says what an agent MAY be given. `role_skills` is the
+        # grant: it is what the agent HOLDS, and it is what skill_runtime checks before letting
+        # the agent call anything. An operator reading a page full of allowed skills over an
+        # empty `role_skills` table sees a capable agent that can do nothing.
+        "skills": skill_definitions.role_skill_detail(connection, project_id, role_key),
         "window_hours": hours,
     }
