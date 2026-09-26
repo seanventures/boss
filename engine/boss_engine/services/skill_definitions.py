@@ -526,3 +526,103 @@ def skills_for_role(connection: Connection, project_id: str, role_key: str) -> l
             {"p": project_id, "r": str(role_key or "").strip().lower()},
         ).scalars().all()
     )
+
+
+def assignable_catalogue(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every skill this project could give an agent, authored and built-in, in one list.
+
+    WHY IT IS ONE LIST. An operator opening an agent asks "what can this one do, and what else
+    could it do" — not "which of two catalogues is this skill in". The Skills page grew the
+    split because authoring and enabling are different acts; on an agent they are the same act,
+    so the divide is noise. `source` is kept so the page can say where a skill came from.
+
+    Deliberately includes skills that are not enabled, marked so. A skill an operator has
+    authored but not enabled is exactly the one they are about to enable, and omitting it from
+    the picker reads as "BOSS lost it".
+    """
+    items: dict[str, dict[str, Any]] = {}
+
+    # BUILT-IN FIRST, so an authored skill of the same key overwrites it below — which matches
+    # `_skill_exists`, where authored wins. The two must agree, or the picker offers a skill and
+    # the assignment records it under the other source.
+    try:
+        from ..config import get_settings
+        from .entitlements import EntitlementBrokerService
+
+        for skill in EntitlementBrokerService(get_settings()).list_skills(
+                project_id, connection=connection):
+            skill_id = str(skill.get("id") or "").strip()
+            if not skill_id:
+                continue
+            items[skill_id] = {
+                "skill_id": skill_id,
+                "label": skill_id.replace("_", " ").replace(".", " · "),
+                "summary": str(skill.get("description") or ""),
+                "source": "builtin",
+                "behaviour_kind": str(skill.get("kind") or ""),
+                "risk_tier": int(skill.get("risk_tier") or 0),
+                "enabled": bool(skill.get("enabled", True)),
+            }
+    except Exception:  # noqa: BLE001
+        # A broken entitlements catalogue must not empty the agent page. The authored half below
+        # still renders, and a missing built-in shows up as "cannot be assigned" at the point of
+        # assignment, with a sentence, rather than as a page that will not load.
+        pass
+
+    for authored in list_skills(connection, project_id):
+        key = str(authored["skill_key"])
+        items[key] = {
+            "skill_id": key,
+            "label": authored["label"] or key,
+            "summary": authored["summary"] or "",
+            "source": "authored",
+            "behaviour_kind": authored["behaviour_kind"],
+            "risk_tier": authored["risk_tier"],
+            "enabled": authored["enabled"],
+        }
+
+    return sorted(items.values(), key=lambda s: s["skill_id"])
+
+
+def role_skill_detail(connection: Connection, project_id: str, role_key: str) -> dict[str, Any]:
+    """What one agent holds, and what else it could be given.
+
+    THE AGENT'S OWN VIEW, and the one that was missing. `role_skills` has always been
+    many-to-many — an agent holds many skills, a skill is held by many agents — but the only way
+    to write it was from the skill's side, one skill at a time. Someone building a team thinks
+    the other way round: here is my editor, here is what it can do.
+
+    `holds` and `available` are disjoint, so the page never offers a skill the agent already has.
+    """
+    role = str(role_key or "").strip().lower()
+    held = {
+        str(r["skill_id"]): r
+        for r in connection.execute(
+            text("SELECT skill_id, source, assigned_by, created_at FROM role_skills "
+                 "WHERE project_id = :p AND role_key = :r"),
+            {"p": project_id, "r": role},
+        ).mappings().all()
+    }
+    catalogue = assignable_catalogue(connection, project_id)
+    known = {s["skill_id"]: s for s in catalogue}
+
+    holds: list[dict[str, Any]] = []
+    for skill_id, row in sorted(held.items()):
+        entry = dict(known.get(skill_id) or {
+            # HELD BUT NOT IN THE CATALOGUE. A skill removed from a spec pack, or authored and
+            # then deleted, leaves the grant behind. Shown as the problem it is rather than
+            # dropped, because a grant nothing can execute is worth seeing.
+            "skill_id": skill_id, "label": skill_id, "summary": "",
+            "source": str(row["source"] or ""), "behaviour_kind": "", "risk_tier": 0,
+            "enabled": False,
+        })
+        entry["missing"] = skill_id not in known
+        entry["assigned_by"] = row["assigned_by"]
+        entry["assigned_at"] = row["created_at"].isoformat() if row["created_at"] else None
+        holds.append(entry)
+
+    return {
+        "role_key": role,
+        "holds": holds,
+        "available": [s for s in catalogue if s["skill_id"] not in held],
+    }

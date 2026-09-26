@@ -504,6 +504,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // EVERY AGENT THIS PROJECT HAS, so "assign" can offer them by name rather than by role_key.
   // One fetch for the whole screen: a picker per run would be one request per run.
   const [roles, setRoles] = useState<Array<{ role_key: string; display_name?: string | null }>>([]);
+  /** WHICH AGENT HOLDS WHICH SKILL, `role_key` → skill ids.
+   *
+   *  Needed because naming an agent on a step is only half the decision. The other half is
+   *  whether that agent is allowed to do the thing — `skill_runtime` checks `role_skills` at run
+   *  time and refuses if the grant is missing. Without this the builder happily let someone put
+   *  an agent on a tier-3 publish step, save it, start it, wait for the approval, and only then
+   *  be told the agent could not call it. One fetch; the whole project's assignments. */
+  const [holdings, setHoldings] = useState<Record<string, string[]>>({});
+  const loadHoldings = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/skills?view=assignments&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (!r.ok) return;
+      const body = await r.json();
+      const next: Record<string, string[]> = {};
+      for (const a of (body?.assignments ?? []) as Array<{ role_key: string; skill_id: string }>) {
+        (next[a.role_key] ??= []).push(a.skill_id);
+      }
+      setHoldings(next);
+    } catch { /* the builder still works; it just cannot warn about a missing grant */ }
+  }, [projectId]);
+  useEffect(() => { void loadHoldings(); }, [loadHoldings]);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -1125,7 +1148,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           justMade={justMade} onDismissJustMade={() => setJustMade(null)}
           onManageSteps={() => setTab("steps")}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
-          stepRoles={stepRoles}
+          stepRoles={stepRoles} holdings={holdings} onGranted={loadHoldings}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
           onCreate={async (name, spec, fromKey) => {
             // TWO CALLS, AND THE ORDER MATTERS.
@@ -4553,7 +4576,7 @@ function StepsView({
 }
 
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
-                      customSteps, bindable, onManageSteps, stepRoles,
+                      customSteps, bindable, onManageSteps, stepRoles, holdings, onGranted,
                       justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate }: {
   capabilities: Capability[];
@@ -4568,6 +4591,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   onManageSteps: () => void;
   /** Agents a step can be assigned to, exactly as the publish-time check will accept them. */
   stepRoles: string[];
+  /** `role_key` → the skills that agent HOLDS, so the row can say whether the agent named on a
+   *  step is actually permitted to run it — and offer the grant instead of failing mid-run. */
+  holdings: Record<string, string[]>;
+  onGranted: () => void;
   /** The workflow created a moment ago, so the builder can confirm it rather than looking
    *  identical to the state before the click. */
   justMade: { id: string; name: string; from?: string } | null;
@@ -5393,6 +5420,13 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       ))}
                     </select>
                   ) : null}
+                  {/* CAN THAT AGENT ACTUALLY DO IT?
+                      Naming an agent is half the decision; holding the skill is the other half,
+                      and it is the half the run enforces. Checked here, in the row, with the
+                      grant one click away — because the alternative is finding out after the
+                      run has waited on a human approval. */}
+                  <CaptainCanRunIt projectId={projectId} step={step} mine={mine}
+                                   holdings={holdings} onGranted={onGranted} />
                   <select className="input dw-draft-approval" value={step.approval}
                           disabled={step.kind !== "capability"
                                     || capability?.approval_forced_manual
@@ -5527,5 +5561,73 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         )}
       </section>
     </div>
+  );
+}
+
+
+/**
+ * Whether the agent named on a step is permitted to run it, said in the row.
+ *
+ * WHY IT IS ITS OWN COMPONENT. It owns a request — granting the skill — and putting that state
+ * in the builder would mean one `busy` flag shared by every row.
+ *
+ * WHAT IT IS CHECKING. `skill_runtime` lets a step's captain call a skill on one of two
+ * grounds: the skill's own `allowed_callers` names it, or the agent HOLDS the skill in
+ * `role_skills`. The second is the one an operator controls, so it is the one offered here.
+ * Silent when there is nothing to say — a row cluttered with green ticks teaches people to stop
+ * reading it.
+ */
+export function CaptainCanRunIt({ projectId, step, mine, holdings, onGranted }: {
+  projectId: string;
+  step: Draft;
+  mine?: CustomStep;
+  holdings: Record<string, string[]>;
+  onGranted: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState("");
+
+  const captain = String(step.captain ?? "").trim();
+  const skillId = String(mine?.skill_id ?? "").trim();
+  // Nothing to check: no agent named, or the step runs an MCP tool rather than a skill — a
+  // connector's authority comes from the connection, not from a grant on the agent.
+  if (!captain || !skillId) return null;
+  if ((holdings[captain] ?? []).includes(skillId)) {
+    return (
+      <span className="dw-draft-holds" data-testid={`dw-holds-${step.id}`}>
+        {captain} holds {skillId}
+      </span>
+    );
+  }
+
+  const grant = async () => {
+    setBusy(true);
+    setFailed("");
+    try {
+      const r = await fetch("/api/skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "assign", project_id: projectId, role_key: captain,
+                               skill_id: skillId, actor: "executive_console" }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) { setFailed(String(body?.error ?? `HTTP ${r.status}`)); return; }
+      onGranted();
+    } catch (e) {
+      setFailed(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span className="dw-draft-grant" data-testid={`dw-grant-${step.id}`}>
+      {captain} does not hold {skillId} — this step will be refused when it runs.
+      <button type="button" className="linklike" disabled={busy}
+              data-testid={`dw-grant-do-${step.id}`} onClick={() => void grant()}>
+        {busy ? "giving…" : `Give ${skillId} to ${captain}`}
+      </button>
+      {failed ? <span className="dw-draft-forced"> {failed}</span> : null}
+    </span>
   );
 }

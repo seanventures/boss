@@ -1346,6 +1346,19 @@ h1, h2, h3, h4, h5, h6 {
 /* Amber, like the badge on the step list: this is the one line on the row that explains a
    control the operator cannot change. */
 .dw-draft-forced { flex-basis: 100%; color: var(--amber, #d8a657); font-size: 0.68rem; }
+/* WHETHER THE AGENT ON THIS STEP MAY RUN IT. Both take the whole row, because they answer a
+   question about the control immediately above them and a wrapped half-line would not read as
+   belonging to it. The confirmation is quiet on purpose — a row of green ticks is a row nobody
+   reads — and the warning is amber like every other "this will stop at run time" line. */
+.dw-draft-holds {
+  flex-basis: 100%; font-size: 0.68rem; color: var(--faint, var(--muted));
+  font-family: var(--mono, monospace);
+}
+.dw-draft-holds::before { content: "✓ "; color: var(--green, #89b482); }
+.dw-draft-grant {
+  flex-basis: 100%; font-size: 0.68rem; color: var(--amber, #d8a657);
+  display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline;
+}
 /* Edit and Remove sit together rather than Remove alone — a step that could be defined and
    deleted but never corrected is why this row needed two. */
 .dw-step-actions { display: inline-flex; gap: 12px; align-items: center; }
