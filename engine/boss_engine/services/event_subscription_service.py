@@ -12,7 +12,11 @@ from .core import emit_event, make_id, normalize_data_boundary
 
 
 EVENT_TYPE_PATTERN = re.compile(r"^[a-z0-9_]+(?:\.[a-z0-9_]+)*(?:\.\*)?$")
-SINK_KINDS = {"job", "webhook_out"}
+#: `workflow` starts one of the project's own workflows. Added because every event-driven
+#: example — a meeting ending, a demo request arriving, a trend detected — wanted the same
+#: thing and there was no sink that did it: an event could reach a job or an outbound webhook,
+#: and not the thing an operator had actually built.
+SINK_KINDS = {"job", "webhook_out", "workflow"}
 
 DEFAULT_EVENT_SUBSCRIPTIONS = (
     {

@@ -7,12 +7,9 @@ the release owner will define the security-fix maintenance window.
 
 ## Reporting a vulnerability
 
-**Do not open a public issue for a suspected vulnerability.**
-
-The public security reporting address or private reporting URL is not yet
-configured. Until an approved destination is recorded here, the repository
-must remain private. Design partners should use the private escalation contact
-provided with their access and include only redacted reproduction evidence.
+**Do not open a public issue for a suspected vulnerability.** Email
+**boss@sean.net** with redacted reproduction evidence. Design partners may also
+use the private escalation contact supplied with their access.
 
 When reporting, include:
 
@@ -30,5 +27,4 @@ details in an issue or unencrypted message.
 
 The release owner will acknowledge a valid report, assess severity and scope,
 coordinate remediation, and publish an appropriate advisory after affected
-users can act. Exact response targets and a public contact are release gates,
-not assumptions made by this document.
+users can act. Exact response targets remain a release decision.

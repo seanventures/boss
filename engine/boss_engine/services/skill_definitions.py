@@ -49,7 +49,21 @@ from .core import emit_event, make_id
 #: obeys — imported rather than restated so the two cannot drift.
 from .workflow_capabilities import MANUAL_APPROVAL_RISK_FLOOR
 
-BEHAVIOURS = ("builtin", "mcp_tool", "sandboxed_command")
+BEHAVIOURS = ("builtin", "mcp_tool", "sandboxed_command", "agent_program")
+
+#: The fourth behaviour, and the only one no person authored.
+#:
+#: An agent writes a program mid-run to do something no skill it holds covers, and if it worked,
+#: the workflow KEEPS it. The next run of that workflow is offered the program as a tool, so the
+#: customer's second project reuses what the first one produced instead of paying a model to
+#: rediscover it. That is the difference between an agent that improvises every time and one that
+#: accumulates.
+#:
+#: It is not a `sandboxed_command` wearing a different name. That kind demands a digest-pinned
+#: image because a person chose it; this one runs in the deployment's own container boundary,
+#: which is the only place BOSS will run code it did not ship. It carries the risk tier of the
+#: thing that wrote it, which is to say it needs a person until somebody says otherwise.
+AGENT_PROGRAM_LANGUAGES = ("python", "bash", "sh")
 
 #: A digest-pinned image. A floating tag means the thing that ran last week is not the thing
 #: that runs today, which is not a sandbox, it is a moving target with a sandbox around it.
@@ -105,6 +119,34 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
         return {
             "mcp_server_id": _clean(given.get("mcp_server_id"), "mcp_server_id", limit=64),
             "tool_name": _clean(given.get("tool_name"), "tool_name", limit=120),
+        }
+
+    if behaviour == "agent_program":
+        language = str(given.get("language") or "python").strip().lower()
+        if language not in AGENT_PROGRAM_LANGUAGES:
+            raise SkillDefinitionError(
+                f"language must be one of {', '.join(AGENT_PROGRAM_LANGUAGES)} — got "
+                f"{language!r}.")
+        source = str(given.get("source") or "")
+        if not source.strip():
+            raise SkillDefinitionError("source is required — the program to run.")
+        if len(source) > 60_000:
+            raise SkillDefinitionError(
+                "the program is over 60,000 characters. Something that big is a repository, not "
+                "a step.")
+        timeout = int(given.get("timeout_seconds") or 60)
+        if not 5 <= timeout <= 300:
+            raise SkillDefinitionError("timeout_seconds must be between 5 and 300.")
+        return {
+            "language": language,
+            "source": source,
+            "timeout_seconds": timeout,
+            # PROVENANCE, because this is the one kind where "who wrote this" is not obvious from
+            # the fact that it exists. An operator looking at a skill an agent invented needs to
+            # know which agent, on which workflow, and on which run.
+            "written_by": str(given.get("written_by") or "").strip()[:120],
+            "written_for": str(given.get("written_for") or "").strip()[:120],
+            "written_in_run": str(given.get("written_in_run") or "").strip()[:120],
         }
 
     # sandboxed_command
@@ -422,6 +464,58 @@ def assign_skill_to_role(
     return {"role_key": role, "skill_id": skill, "source": source, "assigned": True}
 
 
+def sync_role_skills(
+    connection: Connection, *, project_id: str, actor: str = "system",
+) -> dict[str, Any]:
+    """Give every installed agent the skills its role spec says it may use.
+
+    WHY THIS HAD TO EXIST. A role spec declares `permissions.allowed_skills`, and until now
+    that list went exactly one place: into the agent's PROMPT, as a line reading "Role allowed
+    skills: …". The runtime does not read prompts. It reads `role_skills` — see
+    skill_runtime._assigned_to_agent, whose own comment says "GIVING A SKILL TO AN AGENT IS THE
+    GRANT, and this is where it is cashed in."
+
+    Nothing connected the two. So every install had agents that were TOLD what they could use
+    and HELD nothing, and every permission that worked did so because a skill happened to list
+    the role in `allowed_callers` — never because an agent had been given anything. An operator
+    looking at the Agents page saw exactly what was there: agents with no skills.
+
+    Idempotent, and additive only. It never removes an assignment: an operator who has granted
+    something by hand has made a decision, and a sync that reverts it on the next run is a sync
+    nobody can trust. Taking a skill away stays deliberate — that is `unassign_skill_from_role`.
+
+    A skill a role names but the project does not have is REPORTED, not silently skipped. It is
+    usually the real problem: the bundle it lives in was never enabled here.
+    """
+    roles = connection.execute(
+        text("""SELECT DISTINCT ON (role_key) role_key, spec FROM roles
+                WHERE project_id = :p ORDER BY role_key, created_at DESC, id DESC"""),
+        {"p": project_id},
+    ).mappings().all()
+
+    assigned: list[dict[str, str]] = []
+    missing: list[dict[str, str]] = []
+    for row in roles:
+        spec = row["spec"] if isinstance(row["spec"], dict) else {}
+        wanted = ((spec.get("permissions") or {}).get("allowed_skills")) or []
+        for skill_id in wanted:
+            skill_id = str(skill_id).strip()
+            # A wildcard is a description, not a grant. "infra.*" cannot be cashed in, and
+            # expanding it here would hand an agent whatever happens to match it next week.
+            if not skill_id or "*" in skill_id:
+                continue
+            try:
+                assign_skill_to_role(
+                    connection, project_id=project_id, actor=actor,
+                    role_key=str(row["role_key"]), skill_id=skill_id)
+                assigned.append({"role_key": row["role_key"], "skill_id": skill_id})
+            except SkillDefinitionError as error:
+                missing.append({"role_key": row["role_key"], "skill_id": skill_id,
+                                "reason": str(error)})
+    return {"assigned": assigned, "assigned_count": len(assigned),
+            "unavailable": missing, "unavailable_count": len(missing)}
+
+
 def unassign_skill_from_role(
     connection: Connection,
     *,
@@ -474,3 +568,103 @@ def skills_for_role(connection: Connection, project_id: str, role_key: str) -> l
             {"p": project_id, "r": str(role_key or "").strip().lower()},
         ).scalars().all()
     )
+
+
+def assignable_catalogue(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every skill this project could give an agent, authored and built-in, in one list.
+
+    WHY IT IS ONE LIST. An operator opening an agent asks "what can this one do, and what else
+    could it do" — not "which of two catalogues is this skill in". The Skills page grew the
+    split because authoring and enabling are different acts; on an agent they are the same act,
+    so the divide is noise. `source` is kept so the page can say where a skill came from.
+
+    Deliberately includes skills that are not enabled, marked so. A skill an operator has
+    authored but not enabled is exactly the one they are about to enable, and omitting it from
+    the picker reads as "BOSS lost it".
+    """
+    items: dict[str, dict[str, Any]] = {}
+
+    # BUILT-IN FIRST, so an authored skill of the same key overwrites it below — which matches
+    # `_skill_exists`, where authored wins. The two must agree, or the picker offers a skill and
+    # the assignment records it under the other source.
+    try:
+        from ..config import get_settings
+        from .entitlements import EntitlementBrokerService
+
+        for skill in EntitlementBrokerService(get_settings()).list_skills(
+                project_id, connection=connection):
+            skill_id = str(skill.get("id") or "").strip()
+            if not skill_id:
+                continue
+            items[skill_id] = {
+                "skill_id": skill_id,
+                "label": skill_id.replace("_", " ").replace(".", " · "),
+                "summary": str(skill.get("description") or ""),
+                "source": "builtin",
+                "behaviour_kind": str(skill.get("kind") or ""),
+                "risk_tier": int(skill.get("risk_tier") or 0),
+                "enabled": bool(skill.get("enabled", True)),
+            }
+    except Exception:  # noqa: BLE001
+        # A broken entitlements catalogue must not empty the agent page. The authored half below
+        # still renders, and a missing built-in shows up as "cannot be assigned" at the point of
+        # assignment, with a sentence, rather than as a page that will not load.
+        pass
+
+    for authored in list_skills(connection, project_id):
+        key = str(authored["skill_key"])
+        items[key] = {
+            "skill_id": key,
+            "label": authored["label"] or key,
+            "summary": authored["summary"] or "",
+            "source": "authored",
+            "behaviour_kind": authored["behaviour_kind"],
+            "risk_tier": authored["risk_tier"],
+            "enabled": authored["enabled"],
+        }
+
+    return sorted(items.values(), key=lambda s: s["skill_id"])
+
+
+def role_skill_detail(connection: Connection, project_id: str, role_key: str) -> dict[str, Any]:
+    """What one agent holds, and what else it could be given.
+
+    THE AGENT'S OWN VIEW, and the one that was missing. `role_skills` has always been
+    many-to-many — an agent holds many skills, a skill is held by many agents — but the only way
+    to write it was from the skill's side, one skill at a time. Someone building a team thinks
+    the other way round: here is my editor, here is what it can do.
+
+    `holds` and `available` are disjoint, so the page never offers a skill the agent already has.
+    """
+    role = str(role_key or "").strip().lower()
+    held = {
+        str(r["skill_id"]): r
+        for r in connection.execute(
+            text("SELECT skill_id, source, assigned_by, created_at FROM role_skills "
+                 "WHERE project_id = :p AND role_key = :r"),
+            {"p": project_id, "r": role},
+        ).mappings().all()
+    }
+    catalogue = assignable_catalogue(connection, project_id)
+    known = {s["skill_id"]: s for s in catalogue}
+
+    holds: list[dict[str, Any]] = []
+    for skill_id, row in sorted(held.items()):
+        entry = dict(known.get(skill_id) or {
+            # HELD BUT NOT IN THE CATALOGUE. A skill removed from a spec pack, or authored and
+            # then deleted, leaves the grant behind. Shown as the problem it is rather than
+            # dropped, because a grant nothing can execute is worth seeing.
+            "skill_id": skill_id, "label": skill_id, "summary": "",
+            "source": str(row["source"] or ""), "behaviour_kind": "", "risk_tier": 0,
+            "enabled": False,
+        })
+        entry["missing"] = skill_id not in known
+        entry["assigned_by"] = row["assigned_by"]
+        entry["assigned_at"] = row["created_at"].isoformat() if row["created_at"] else None
+        holds.append(entry)
+
+    return {
+        "role_key": role,
+        "holds": holds,
+        "available": [s for s in catalogue if s["skill_id"] not in held],
+    }

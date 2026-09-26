@@ -59,9 +59,10 @@ def test_committed_secret_paths_allows_examples_only():
 
 
 def test_committed_secret_paths_flags_real_env():
-    tracked = [".env", "apps/api/.env.local", "secrets/id_rsa"]
+    tracked = [".env", ".env.bak-edition", "apps/api/.env.local", "secrets/id_rsa"]
     hits = flip.committed_secret_paths(tracked)
     assert ".env" in hits
+    assert ".env.bak-edition" in hits
     assert "apps/api/.env.local" in hits
     assert "secrets/id_rsa" in hits
 

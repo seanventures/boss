@@ -35,6 +35,16 @@ def test_unknown_method():
     assert resp["error"]["code"] == -32601
 
 
+def test_malformed_tool_requests_return_json_rpc_errors():
+    srv = MCPServer(ctx=None, project_id="p", registry=_stub_registry())
+    assert srv.handle([])["error"]["code"] == -32600
+    for params in (["write_x"], {"name": "write_x", "arguments": ["bad"]},
+                   {"name": ["write_x"], "arguments": {}}):
+        response = srv.handle({"jsonrpc": "2.0", "id": 1,
+                               "method": "tools/call", "params": params})
+        assert response["error"]["code"] == -32602
+
+
 def test_tools_call_executes():
     srv = MCPServer(ctx=None, project_id="p", registry=_stub_registry())
     resp = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -86,6 +96,60 @@ def test_tools_call_strips_project_id_override():
     assert seen["project_id"] == "session-project"
     assert "project_id" not in seen["args"]
     assert seen["args"]["title"] == "x"
+
+
+def test_mcp_never_accepts_internal_operator_authority():
+    """A model cannot turn a destructive tool into an approved operator click."""
+    called = []
+
+    def _dangerous(ctx, *, project_id, actor, args):
+        called.append(args)
+        return {"ok": True}
+
+    reg = ToolRegistry()
+    reg.register(ToolSpec(
+        "dangerous", "requires operator click",
+        {"type": "object", "properties": {
+            "project_id": {"type": "string"},
+            "_operator_confirmed": {"type": "boolean"},
+            "_writes_allowed": {"type": "boolean"},
+        }},
+        _dangerous, kind="write", reversibility="destroys_work",
+    ))
+    srv = MCPServer(ctx=None, project_id="session-project", registry=reg)
+    schema = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[
+        "result"
+    ]["tools"][0]["inputSchema"]
+    assert schema["properties"] == {}
+
+    resp = srv.handle({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "dangerous", "arguments": {
+            "project_id": "other-project",
+            "_operator_confirmed": True,
+            "_writes_allowed": True,
+        }},
+    })
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["error"] == "operator_confirmation_required"
+    assert resp["result"]["isError"] is True
+    assert called == []
+
+
+def test_mcp_strips_internal_write_license_from_safe_tool():
+    seen = []
+    reg = ToolRegistry()
+    reg.register(ToolSpec(
+        "write_x", "write", {"type": "object"},
+        lambda ctx, *, args, **kwargs: seen.append(args) or {"ok": True},
+        kind="write",
+    ))
+    srv = MCPServer(ctx=None, project_id="p", registry=reg)
+    srv.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "write_x", "arguments": {
+                    "_writes_allowed": True, "_operator_confirmed": True, "title": "x",
+                }}})
+    assert seen == [{"title": "x"}]
 
 
 def test_stdio_roundtrip():

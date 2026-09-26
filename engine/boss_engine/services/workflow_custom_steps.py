@@ -462,7 +462,94 @@ def validate_step(
             f"{definition['binding_kind'].replace('_', ' ')} at risk tier "
             f"{definition['risk_tier']}. Only a reviewed one can be given that much reach."
         )
+
+    # CAN THE AGENT NAMED ACTUALLY RUN THIS? Asked HERE rather than discovered mid-run.
+    #
+    # The captain is the permission identity, so assigning `video_editor` to a publish step is
+    # refused — correctly — by the runtime. Refused twenty minutes into a workflow, as "caller
+    # 'video_editor' not in allowed_callers", which is the right rule delivered at the worst
+    # possible moment: the operator has waited for a render before learning the step could
+    # never have run. Both facts are known when the workflow is saved.
+    captain = str(step.get("captain") or "").strip().lower()
+    if captain and definition["binding_kind"] == "skill" and definition["skill_id"]:
+        skill_id = str(definition["skill_id"])
+        callers = _allowed_callers(connection, project_id, skill_id)
+        # TWO WAYS TO BE ALLOWED, and this must know both or it refuses workflows that would
+        # run. A skill lists the callers that existed when it was written; GIVING THE SKILL TO
+        # THE AGENT is the other grant, and the one the product is built on — see
+        # skill_runtime, which checks role_skills when allowed_callers does not match.
+        #
+        # Checking only the first is how "assign an agent to a step" became a thing you could
+        # be refused for doing correctly.
+        if callers and captain not in callers and not _agent_holds(
+                connection, project_id, captain, skill_id):
+            problems.append(
+                f"step '{step_id}' gives '{definition['label']}' to {captain}, which is not "
+                f"allowed to run {skill_id}. Either give {captain} that skill on the Agents "
+                f"page, or use one of: {', '.join(sorted(callers))}."
+            )
     return problems
+
+
+def _agent_holds(connection: Connection, project_id: str, role_key: str, skill_id: str) -> bool:
+    """Whether this agent has been given this skill.
+
+    Fails CLOSED on its own error, unlike the allowed_callers lookup above: an empty
+    allowed_callers means "cannot judge", but a failed role_skills read must not invent a grant
+    that does not exist.
+    """
+    try:
+        return connection.execute(
+            text("SELECT 1 FROM role_skills WHERE project_id=:p AND role_key=:r "
+                 "AND skill_id=:s LIMIT 1"),
+            {"p": project_id, "r": role_key, "s": skill_id},
+        ).first() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _allowed_callers(connection: Connection, project_id: str, skill_id: str) -> set[str]:
+    """Who the skill itself says may invoke it, or an empty set if that cannot be read.
+
+    EMPTY MEANS "DO NOT JUDGE". A skill whose spec cannot be loaded here must not make every
+    workflow using it unpublishable — the runtime performs the real check either way, and a
+    validator that fails closed on its own lookup error blocks correct work.
+    """
+    try:
+        from ..config import Settings
+        from .entitlements import EntitlementBrokerService
+
+        # A REAL Settings, not None. Passing None constructed a BudgetGovernor(None), which
+        # threw in the constructor — and because this fails open, the exception was swallowed
+        # and the check silently never ran. A guard that cannot fail loudly has to be exercised
+        # against the thing it guards, which is how this was found: by saving the very spec it
+        # was written to refuse and watching it succeed.
+        spec = EntitlementBrokerService(Settings()).get_skill(
+            skill_id, project_id, connection=connection) or {}
+        permissions = spec.get("permissions") or {}
+        return {str(c).strip().lower() for c in (permissions.get("allowed_callers") or [])}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def optional_inputs(connection: Connection, project_id: str, step_key: str) -> frozenset[str]:
+    """The input names this step does NOT require.
+
+    A step declares `inputs: [{name, required}]`. The runner resolves bindings with everything
+    mandatory unless told otherwise, so an input marked optional still failed the run when it
+    was left blank — the form said "if you have one" and the runtime disagreed.
+    """
+    try:
+        row = connection.execute(
+            text("SELECT inputs FROM workflow_custom_steps WHERE project_id=:p AND step_key=:k"),
+            {"p": project_id, "k": step_key},
+        ).scalar()
+    except Exception:  # noqa: BLE001 — a lookup problem must not make everything mandatory
+        return frozenset()
+    declared = row if isinstance(row, list) else []
+    return frozenset(
+        str(i.get("name")) for i in declared
+        if isinstance(i, dict) and i.get("name") and not i.get("required"))
 
 
 # ── Execution ──────────────────────────────────────────────────────────────────
@@ -484,6 +571,18 @@ def execute(
     SkillRuntimeService, which is where permission, budget and effect receipts live — the same
     path the chat agent uses. A second, ungoverned way to call a customer's tools is exactly
     what a workflow product must not grow.
+
+    WHO RUNS IT. A step may name a captain, and for a BUILT-IN capability that captain has
+    always become the actor — which is why BOSS's own pipelines read as agents doing the work.
+    A custom step ignored it and ran as `workflow_runner` every time, so a customer's workflow
+    had no agent in it anywhere. Same mechanism, same validation, now the same behaviour.
+
+    AND NAMING ONE IS NOT A GRANT. Without a captain the runner is added to the skill's allowed
+    callers, because choosing the skill for a step IS the grant (see
+    `_spec_granting_the_runner`). With one, the ROLE has to be allowed on its own merits — no
+    widening. That asymmetry is the whole value of naming an agent: putting `video_editor` on a
+    publish step is refused, because that role is forbidden to publish. Auto-granting whatever
+    captain was typed would make the assignment decorative, which is worse than not having it.
     """
     binding = step.get("binding") or {}
     key = str(binding.get("custom_step") or "")
@@ -526,13 +625,20 @@ def execute(
     if knowledge.strip():
         inputs = {**inputs, "knowledge": knowledge.strip()}
 
+    # The agent this step names, if it names one. Validated at publish time by
+    # workflow_capabilities.validate_captain, which refuses a role the workforce does not have.
+    captain = str(step.get("captain") or "").strip().lower()
+
     if row["binding_kind"] == "skill":
         from .agent_loop import _invoke_agent_skill
 
         result = _invoke_agent_skill(
             connection, settings, project_id, str(row["skill_id"]),
-            RUNNER_CALLER, inputs, actor=actor,
-            skill_spec=_spec_granting_the_runner(
+            captain or RUNNER_CALLER, inputs, actor=captain or actor,
+            # No widening when an agent was named — see the docstring. The grant exists for the
+            # anonymous runner, which no skill could have listed because it did not exist when
+            # they were written; a role is something a skill can and does decide about.
+            skill_spec=None if captain else _spec_granting_the_runner(
                 connection, settings, project_id, str(row["skill_id"])
             ),
         )
@@ -569,7 +675,8 @@ def execute(
     result = _invoke_mcp_skill(
         connection, settings, project_id,
         dict(server), {"name": row["mcp_tool_name"]}, inputs,
-        run_id=run_id, step=step_index, actor=actor, caller=RUNNER_CALLER,
+        run_id=run_id, step=step_index, actor=captain or actor,
+        caller=captain or RUNNER_CALLER,
     )
     if str(result.get("status")) in ("denied", "failed"):
         raise CustomStepError(

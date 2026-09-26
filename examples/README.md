@@ -1,0 +1,189 @@
+# Examples
+
+Workflows built from skills BOSS already ships, using only the public API — the same calls the
+console makes when you click through the builder.
+
+**None of this is part of BOSS.** Nothing here installs, and nothing runs on a fresh install.
+Each example creates data in *your* project, which you can change, rename or delete. What BOSS
+ships is the **capability** each one assembles: the skills, the roles, and the tools in the
+images. The example is one way to wire them together; yours will differ, which is the point.
+
+Every example has the same shape:
+
+```
+examples/<name>/
+    README.md    what it does and why, what to set up first, and how to build it BY HAND
+    setup.py     the same thing as a script — --dry-run first, safe to re-run
+```
+
+## First: your API key
+
+Every command below needs `BOSS_API_KEY`. It is generated when BOSS is installed and written to
+the install's `.env` — it is not shown again, so this is how to get it back.
+
+**BOSS on a server, and you are on your laptop** — this prints all three variables:
+
+```bash
+scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
+```
+
+```
+export BOSS_API=http://YOUR_HOST:8000
+export BOSS_API_KEY=…
+export BOSS_PROJECT=boss-dogfood
+```
+
+Paste those into your shell, or apply them in one step:
+
+```bash
+eval "$(scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env)"
+```
+
+**On the server itself:**
+
+```bash
+grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2-
+```
+
+**BOSS on this machine:**
+
+```bash
+grep '^BOSS_API_KEY=' .env | cut -d= -f2-
+```
+
+> The key is a secret and grants full API access. These commands print it to your terminal —
+> don't paste the output into a chat or a ticket. If it leaks, change `BOSS_API_KEY` in the
+> install's `.env` and restart the API.
+
+Every script also prints this if you run it without a key.
+
+---
+
+## Install all of them at once
+
+```bash
+python3 examples/setup_all.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY"
+```
+
+| Option | What it does |
+|---|---|
+| `--dry-run` | Say what would happen and change nothing. Worth doing first |
+| `--only a,b` | A subset — `--only video-workflow,sales-signal` |
+| `--schedule TZ` | Also schedule the newsletter for Monday 08:00, e.g. `--schedule Europe/London` |
+| `--no-agents` | Leave steps unassigned, so each runs as the workflow itself |
+| `--project` / `--actor` | Which project, and who is doing it |
+
+It runs the individual scripts rather than reimplementing them, so there is no second copy to
+drift from the first.
+
+**One failing example does not stop the others.** They have different prerequisites — one needs
+a work tracker, three need email — so you end up with the ones you can actually run, plus a
+list of what was skipped and why. Everything is safe to re-run: already-installed examples are
+reused, not duplicated.
+
+---
+
+## Available
+
+### [video-workflow](video-workflow/) — edit a video and publish it
+
+Paste a link, say what you want done in plain English, get an edited video waiting for your
+approval before it reaches your channel.
+
+**Steps:** fetch → plan → edit → publish (stops for you)
+**Skills:** `media.fetch_link`, `video.plan_edit`, `video.apply_plan`, `publish_youtube`
+**Needs:** a connected model, and a Google account for the first and last step
+
+Shows: a model writing a validated plan rather than touching the work; two agents with
+different authority; an approval that cannot be switched off.
+
+### [meeting-to-tickets](meeting-to-tickets/) — a transcript becomes tracked work
+
+Paste a meeting transcript. BOSS writes down what was decided and what somebody has to do, you
+read that as sentences, and the tickets are created in your tracker.
+
+**Steps:** read → create (stops for you)
+**Skills:** `meeting.extract_actions`, `tracker.issues.create`
+**Needs:** a connected model, and a work tracker — Plane, Jira, Linear, GitHub Issues or Azure DevOps
+
+Shows: a tier-0 reading step separated from a tier-2 writing one, so the approval is over a
+list you can read rather than a step you have to trust.
+
+### [weekly-newsletter](weekly-newsletter/) — research, written up, in your inbox
+
+Name the sectors you care about. BOSS researches them into a cited dossier, writes a
+newsletter, and emails it after you have read it. `--schedule` makes it arrive on Monday.
+
+**Steps:** gather → write → send (stops for you)
+**Skills:** the `research` capability, `model.generate_text`, `email.send_real_guarded`
+**Needs:** a connected model, and SMTP configured for the last step
+
+Shows: a built-in capability and your own steps in one workflow; a step taking an earlier
+step's output as material; and the scheduler, with the time zone stored where it belongs.
+
+### [sales-signal](sales-signal/) — a company name becomes a researched approach
+
+Give it a company. BOSS researches them, scores the opportunity, drafts an opening email, and
+puts both in your salesperson's inbox. Nothing goes near the prospect.
+
+**Steps:** research → assess → draft → notify (stops for you)
+**Needs:** a connected model, and email configured
+
+Shows: two model steps reading the same dossier for different jobs; a workflow that deliberately
+ends at a human rather than at an effect.
+
+### [trend-to-content](trend-to-content/) — a trend becomes a script, or an honest no
+
+Give it a trend. BOSS researches it, says plainly whether it is yours to talk about, and writes
+a script only if it is.
+
+**Steps:** research → assess → script → review (stops for you)
+**Needs:** a connected model, and email configured
+
+Shows: a step reading an earlier step's JUDGEMENT rather than its raw material, so a trend
+judged "not ours" produces one line instead of a polished script for a video nobody should
+make. Chains into video-workflow.
+
+---
+
+## What these examples cannot do yet
+
+Worth knowing before you plan around them.
+
+### Publishing to social platforms
+
+BOSS can publish to **YouTube**. It has **no** Facebook, Instagram, LinkedIn, X or TikTok
+skills, and adding one is mostly not a coding problem:
+
+| Platform | What it takes |
+|---|---|
+| **Instagram / Facebook** | Meta Graph API, a Business account, and an app through App Review. Posting is a two-step publish — create a container, then publish it — and video has its own limits |
+| **LinkedIn** | Community Management API, and partner access to post as an organisation |
+| **X / Twitter** | Paid, tiered API access; media upload is a separate endpoint |
+| **TikTok** | Content Posting API, app review, and an audited scope for direct posting |
+
+The BOSS side of any of them is small: a provider entry, an OAuth flow, one `*.post` skill and
+a role permitted to call it. The platform side — an app, a review, a business account — is what
+decides how long it takes. The editing lane in
+[video-workflow](video-workflow/) already feeds all of them; only the last step differs.
+
+### Starting on something that happened
+
+Every example here starts **on demand**, and `weekly-newsletter` can also start **on a
+schedule**. None starts because something happened elsewhere — a form was submitted, a meeting
+ended, a deploy finished.
+
+BOSS can do that: an event subscription can start a workflow, and the event's data becomes the
+run's input. What it cannot do is *notice* the thing happening — that needs whatever watches
+your site, your calendar or your CI to call BOSS. The examples are written to start by hand for
+that reason, and wiring a real trigger later changes the first step and nothing else.
+
+### Repeating a step per item
+
+A workflow's step list is fixed when you publish it. A step cannot be repeated once per item in
+a list, so "make six clips from this recording" is six runs rather than one run making six.
+
+That is usually the better shape anyway — six runs means six approvals, so you can accept four
+and reject two. Where it genuinely hurts, a skill can take a list instead: `video.apply_plan`
+takes a whole edit plan and `tracker.issues.create` takes all the actions from a meeting, both
+for this reason.

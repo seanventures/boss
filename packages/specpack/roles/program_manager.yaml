@@ -6,7 +6,7 @@ primary_outcomes:
   - Dependency map.
   - Meeting minutes and action items.
 permissions:
-  allowed_skills: [meeting.run, task.create, artifact.create, status.query]
+  allowed_skills: [meeting.run, task.create, artifact.create, status.query, meeting.extract_actions, tracker.issues.create, model.generate_text, email.send_real_guarded]
   forbidden_skills: [github.merge_pr, infra.*]
 output_contracts: [MilestonePlan, DependencyMap, MeetingMinutes]
 autonomy:

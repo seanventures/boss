@@ -144,6 +144,16 @@ def seed_project_defaults(
         entitlements.list_skills(),
         actor,
     )
+    # AND GIVE THE AGENTS THEIR SKILLS. Roles declare `allowed_skills`; the runtime grants on
+    # `role_skills`; nothing joined them, so every install had agents holding nothing. Runs
+    # after seed_system_skills because it can only assign skills the project actually has.
+    from .services.skill_definitions import sync_role_skills
+
+    try:
+        sync_role_skills(connection, project_id=project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — a fresh project must still come up
+        _log.warning("role_skill_sync_failed", exc_info=True)
+
     ToolchainRegistryService(settings).seed_sources(connection, project_id, actor)
     # seed the meeting role-agent template so a new org's panel isn't empty
     from .services.meeting_service import seed_roles

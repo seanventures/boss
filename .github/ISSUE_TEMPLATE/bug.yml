@@ -1,0 +1,34 @@
+name: Bug report
+description: Report something in BOSS Community that does not work as expected.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Please remove tokens, private URLs, and customer data before posting. Report suspected security issues privately to boss@sean.net."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the screen or command and the exact error if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it?
+      description: List the shortest steps, without secrets.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BOSS version or commit
+      placeholder: v0.14.0 or full commit SHA
+    validations:
+      required: true
