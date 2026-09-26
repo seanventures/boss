@@ -49,7 +49,21 @@ from .core import emit_event, make_id
 #: obeys — imported rather than restated so the two cannot drift.
 from .workflow_capabilities import MANUAL_APPROVAL_RISK_FLOOR
 
-BEHAVIOURS = ("builtin", "mcp_tool", "sandboxed_command")
+BEHAVIOURS = ("builtin", "mcp_tool", "sandboxed_command", "agent_program")
+
+#: The fourth behaviour, and the only one no person authored.
+#:
+#: An agent writes a program mid-run to do something no skill it holds covers, and if it worked,
+#: the workflow KEEPS it. The next run of that workflow is offered the program as a tool, so the
+#: customer's second project reuses what the first one produced instead of paying a model to
+#: rediscover it. That is the difference between an agent that improvises every time and one that
+#: accumulates.
+#:
+#: It is not a `sandboxed_command` wearing a different name. That kind demands a digest-pinned
+#: image because a person chose it; this one runs in the deployment's own container boundary,
+#: which is the only place BOSS will run code it did not ship. It carries the risk tier of the
+#: thing that wrote it, which is to say it needs a person until somebody says otherwise.
+AGENT_PROGRAM_LANGUAGES = ("python", "bash", "sh")
 
 #: A digest-pinned image. A floating tag means the thing that ran last week is not the thing
 #: that runs today, which is not a sandbox, it is a moving target with a sandbox around it.
@@ -105,6 +119,34 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
         return {
             "mcp_server_id": _clean(given.get("mcp_server_id"), "mcp_server_id", limit=64),
             "tool_name": _clean(given.get("tool_name"), "tool_name", limit=120),
+        }
+
+    if behaviour == "agent_program":
+        language = str(given.get("language") or "python").strip().lower()
+        if language not in AGENT_PROGRAM_LANGUAGES:
+            raise SkillDefinitionError(
+                f"language must be one of {', '.join(AGENT_PROGRAM_LANGUAGES)} — got "
+                f"{language!r}.")
+        source = str(given.get("source") or "")
+        if not source.strip():
+            raise SkillDefinitionError("source is required — the program to run.")
+        if len(source) > 60_000:
+            raise SkillDefinitionError(
+                "the program is over 60,000 characters. Something that big is a repository, not "
+                "a step.")
+        timeout = int(given.get("timeout_seconds") or 60)
+        if not 5 <= timeout <= 300:
+            raise SkillDefinitionError("timeout_seconds must be between 5 and 300.")
+        return {
+            "language": language,
+            "source": source,
+            "timeout_seconds": timeout,
+            # PROVENANCE, because this is the one kind where "who wrote this" is not obvious from
+            # the fact that it exists. An operator looking at a skill an agent invented needs to
+            # know which agent, on which workflow, and on which run.
+            "written_by": str(given.get("written_by") or "").strip()[:120],
+            "written_for": str(given.get("written_for") or "").strip()[:120],
+            "written_in_run": str(given.get("written_in_run") or "").strip()[:120],
         }
 
     # sandboxed_command

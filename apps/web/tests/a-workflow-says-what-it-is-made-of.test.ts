@@ -144,8 +144,36 @@ describe("a step can be given to an agent", () => {
 
   it("writes a captain into the spec only when one was chosen", () => {
     // An empty string would make every step look deliberately assigned to nobody.
+    //
+    // ONE PER SAVE BRANCH, and there are three: a built-in capability, a step the customer
+    // defined, and an agent step that carries an instruction instead of binding a skill. A
+    // branch that forgot this line would silently drop the agent off that kind of step, which is
+    // the bug this counts rather than describes.
     const occurrences = ui.split("...(step.captain ? { captain: step.captain } : {})").length - 1;
-    expect(occurrences).toBe(2);
+    expect(occurrences).toBe(3);
+  });
+
+  it("an agent step means something different by 'no agent'", () => {
+    // On every other kind, empty means the anonymous workflow runner. On an agent step it means
+    // "whichever agent fits this instruction", which BOSS works out from what each one holds —
+    // so the same blank option cannot read the same way.
+    expect(ui).toContain("whichever agent fits — BOSS picks");
+  });
+
+  it("an agent step's instruction can be asked for or pinned", () => {
+    // Both are things operators say: the same workflow doing a different job each run, or a
+    // workflow that always does the one thing.
+    expect(ui).toContain("ask me when the run starts");
+    expect(ui).toContain("always do this");
+    // And the instruction is what gets saved as the step's specification.
+    expect(ui).toContain("agent_work: true");
+    expect(ui).toContain('instructions: step.instructions ?? { from_input: "instructions" }');
+  });
+
+  it("says so when the agent on an agent step holds nothing", () => {
+    // There is no one skill to check — the whole of what the agent holds is what it may use —
+    // so the thing worth saying is when it holds NOTHING, because then the step cannot work.
+    expect(ui).toContain("holds no skills, so it cannot do anything");
   });
 
   it("keeps the captain a workflow was saved with", () => {

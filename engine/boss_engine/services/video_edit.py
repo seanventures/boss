@@ -271,14 +271,72 @@ def watermark(
     return out
 
 
+#: How long a still image stands on screen when it is used as a title card or an ending slide.
+#: Long enough to read a line of text and see a logo; short enough that nobody skips it.
+STILL_SECONDS_DEFAULT = 4.0
+
+#: Codecs ffprobe reports for a single frame rather than a video. A still has no duration, so it
+#: cannot be concatenated as-is — it has to be held on screen for a stated length first.
+_STILL_CODECS = frozenset({"png", "mjpeg", "bmp", "gif", "webp", "tiff", "jpeg2000"})
+
+
+def is_a_still(path: str) -> bool:
+    """A single image rather than a clip.
+
+    ASKED BY DURATION, NOT BY FILE EXTENSION. A `.png` is the obvious case, but the thing that
+    matters downstream is whether ffmpeg can place it on a timeline, and what settles that is
+    whether it has a duration. `.mp4` holding one frame behaves the same way.
+    """
+    info = probe(path)
+    if info.get("duration_seconds"):
+        return False
+    return str(info.get("video_codec") or "").lower() in _STILL_CODECS
+
+
+def still_to_clip(image: str, *, work_dir: str, seconds: float = STILL_SECONDS_DEFAULT) -> str:
+    """Hold a still image on screen for `seconds`, as a silent clip.
+
+    WHY THIS EXISTS. An "ending slide" is a picture far more often than it is a video, and
+    `bookend` could only take clips: a PNG has no duration, so it hit "neither audio nor a
+    readable duration, so silence cannot be matched to it" — a sentence that describes the
+    internals rather than the situation. The picture was always the normal case; refusing it was
+    the bug.
+
+    Silent on purpose. `bookend` synthesises the silence it needs at the right length, so adding
+    an audio track here would be a second answer to a question already settled.
+    """
+    _require_ffmpeg()
+    if not os.path.exists(image):
+        raise VideoEditError(f"No image at {image}.")
+    length = max(0.5, min(float(seconds or STILL_SECONDS_DEFAULT), 60.0))
+    # `.mp4` SPELT OUT, not `_output`. That helper keeps the input's extension, which is right
+    # for every other operation here — video in, video out — and wrong for exactly this one: it
+    # produced `end.slide.png` and ffmpeg then refused to write h264 into a PNG container, with
+    # "Conversion failed!" after a successful encode.
+    stem = os.path.splitext(os.path.basename(image))[0]
+    out = os.path.join(work_dir, f"{stem}.slide.mp4")
+    # `-loop 1` with `-t` is what turns one frame into a clip. yuv420p and an even frame size
+    # because libx264 refuses odd dimensions, and an image straight off a phone often has them.
+    _run([
+        "ffmpeg", "-nostdin", "-y", "-loop", "1", "-i", image,
+        "-t", f"{length:.3f}", "-r", "30",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-movflags", "+faststart",
+        out,
+    ])
+    return out
+
+
 def bookend(
     source: str,
     *,
     work_dir: str,
     intro: Optional[str] = None,
     outro: Optional[str] = None,
+    still_seconds: float = STILL_SECONDS_DEFAULT,
 ) -> str:
-    """Put a title clip before and a thank-you clip after.
+    """Put a title card before and an ending slide after. Either may be a clip or an image.
 
     Normalises every part to one format first. Concatenating clips that differ in resolution,
     frame rate or audio layout is the single most common way this produces a file that plays
@@ -296,6 +354,15 @@ def bookend(
     width, height = target.get("width"), target.get("height")
     if not width or not height:
         raise VideoEditError("Could not read the source video's dimensions.")
+
+    # A STILL BECOMES A CLIP BEFORE ANYTHING ELSE HAPPENS, so the rest of this function has one
+    # kind of input to reason about. The source itself is never a still — it is the video being
+    # edited — so only the cards are converted.
+    parts = [
+        still_to_clip(part, work_dir=work_dir, seconds=still_seconds)
+        if part is not source and is_a_still(part) else part
+        for part in parts
+    ]
 
     inputs: list[str] = []
     for part in parts:
@@ -633,8 +700,7 @@ def caption(
 #: The operations a plan may name, and nothing else. An unknown op is refused rather than
 #: skipped: an instruction asking for something BOSS cannot do must come back as "it cannot do
 #: that", not as a video that quietly lacks it.
-PLAN_OPERATIONS = ("cut", "reframe", "overlay_image", "caption", "trim", "watermark",
-                   "bookend")
+PLAN_OPERATIONS = ("cut", "reframe", "overlay_image", "caption", "trim", "watermark")
 
 
 def validate_plan(plan: Any) -> list[dict]:
@@ -721,15 +787,6 @@ def validate_plan(plan: Any) -> list[dict]:
                 if not str(args.get("text") or "").strip():
                     raise VideoEditError(f"{where}: caption needs text.")
 
-        elif op == "bookend":
-            intro = str(args.get("intro_artifact_id") or "").strip()
-            outro = str(args.get("outro_artifact_id") or "").strip()
-            if not intro and not outro:
-                raise VideoEditError(
-                    f"{where}: bookend needs intro_artifact_id, outro_artifact_id, or both.")
-            args = {k: v for k, v in (("intro_artifact_id", intro),
-                                      ("outro_artifact_id", outro)) if v}
-
         elif op == "watermark":
             if not str(args.get("logo_artifact_id") or "").strip():
                 raise VideoEditError(f"{where}: watermark needs logo_artifact_id.")
@@ -814,19 +871,6 @@ def apply_plan(
             current = caption(current, text=entry["text"], start=entry["start"],
                               end=entry["end"], work_dir=work_dir,
                               style=entry["style"], size=int(entry.get("size") or 48))
-        elif op == "bookend":
-            # LAST IN THE PLAN, USUALLY. A bookend changes the video's LENGTH, so any timed
-            # operation after it refers to a timeline that now has a title card in front of it.
-            # plan_timeline_warning covers cut and trim; this is the same hazard.
-            missing = [f for f in ("intro_artifact_id", "outro_artifact_id")
-                       if entry.get(f) and not assets.get(entry[f])]
-            if missing:
-                raise VideoEditError(
-                    f"plan[{index}]: no file was fetched for {', '.join(missing)}. The step "
-                    "must download every artifact the plan names before running it.")
-            current = bookend(current, work_dir=work_dir,
-                              intro=assets.get(entry.get("intro_artifact_id") or ""),
-                              outro=assets.get(entry.get("outro_artifact_id") or ""))
         elif op in ("overlay_image", "watermark"):
             field = "image_artifact_id" if op == "overlay_image" else "logo_artifact_id"
             path = assets.get(entry[field])

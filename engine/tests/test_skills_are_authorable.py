@@ -102,10 +102,43 @@ def test_the_executor_is_registered():
 # --------------------------------------------------------------------------- #
 # The object itself
 # --------------------------------------------------------------------------- #
-def test_three_behaviours_and_no_integration_kind():
-    """An integration is deliberately not a fourth: in BOSS a connection grants authority to a
-    skill, it is not something you can invoke on its own."""
-    assert sd.BEHAVIOURS == ("builtin", "mcp_tool", "sandboxed_command")
+def test_the_behaviours_and_no_integration_kind():
+    """Four behaviours, and an integration is still not one of them.
+
+    In BOSS a connection grants authority to a skill; it is not something you can invoke on its
+    own, so binding "the Slack integration" as a step has never been a thing to offer.
+
+    `agent_program` was the fourth, and it earned it: a program an AGENT wrote mid-run and the
+    workflow kept. It is not a `sandboxed_command` under another name — that kind demands an image
+    pinned by digest because a PERSON chose it, and an agent's program runs in the deployment's own
+    container boundary instead. Different author, different guarantee, different shape.
+    """
+    assert sd.BEHAVIOURS == ("builtin", "mcp_tool", "sandboxed_command", "agent_program")
+
+
+def test_an_agent_program_needs_a_language_and_a_source():
+    with pytest.raises(sd.SkillDefinitionError, match="source is required"):
+        sd.validate_config("agent_program", {"language": "python"}, [])
+    with pytest.raises(sd.SkillDefinitionError, match="language must be one of"):
+        sd.validate_config("agent_program", {"language": "haskell", "source": "x"}, [])
+
+    kept = sd.validate_config(
+        "agent_program",
+        {"language": "python", "source": "print(1)", "timeout_seconds": 30,
+         "written_by": "video_editor", "written_for": "video_edit_and_publish"},
+        [])
+    assert kept["source"] == "print(1)"
+    assert kept["timeout_seconds"] == 30
+    # WHO WROTE IT, on the record. This is the one kind where that is not obvious from the fact
+    # that it exists, and an operator reading a skill an agent invented needs to know.
+    assert kept["written_by"] == "video_editor"
+    assert kept["written_for"] == "video_edit_and_publish"
+
+
+def test_an_agent_program_the_size_of_a_repository_is_refused():
+    with pytest.raises(sd.SkillDefinitionError, match="repository, not"):
+        sd.validate_config("agent_program",
+                           {"language": "python", "source": "#" * 60_001}, [])
 
 
 def test_an_mcp_skill_must_name_a_server_and_a_tool():

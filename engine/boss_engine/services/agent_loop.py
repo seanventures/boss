@@ -1450,6 +1450,30 @@ def _skill_resolution_for_run(
     run: dict[str, Any],
 ) -> dict[str, Any]:
     finalize_ctx = run.get("finalize_ctx") or {}
+
+    # AN AGENT STEP RESOLVES FROM THE GRANT.
+    #
+    # `resolve_for_task` filters by the role spec's `allowed_skills` — prose in a spec pack
+    # meaning "may be given these" — and unions in system skills and module defaults besides. For
+    # a workflow step that hands an instruction to a named agent, the answer has to be exactly
+    # what somebody GAVE that agent: `role_skills`. Anything wider means the bound the operator
+    # set by choosing skills is not the bound that runs.
+    step = finalize_ctx.get("agent_step")
+    if isinstance(step, dict) and step.get("role_key"):
+        from .agent_steps import held_skills
+
+        specs = held_skills(connection, settings, str(run["project_id"]),
+                            str(step["role_key"]))
+        wanted = {str(i) for i in (step.get("skill_ids") or [])}
+        if wanted:
+            # Pinned at the moment the step started. A skill revoked mid-run stops being
+            # offered on resume, which is the correct direction for a revocation to travel.
+            specs = [spec for spec in specs if str(spec["id"]) in wanted]
+        # EVERY ONE EAGER, NONE ON DEMAND. The agent was given these deliberately; making it
+        # discover its own skills through a loader tool spends a turn to learn what the grant
+        # already settled.
+        return {"eager": specs, "on_demand": [], "role_key": str(step["role_key"])}
+
     module_descriptor = finalize_ctx.get("module_descriptor") or {}
     return resolve_for_task(
         connection,
@@ -1711,13 +1735,27 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
 
     adapter = make_chat_adapter(settings)
     mcp = MCPClient(settings)
-    schemas = list(_TOOL_SCHEMAS) + list(_WRITE_SCHEMAS)
+
+    # A BOUNDED RUN GETS NO NATIVE TOOLS AT ALL.
+    #
+    # The ordinary loop hands every run a shell, the project's Postgres, the repository and the
+    # deploy tools, because it was written for the software factory, where that is the job. An
+    # agent step is the opposite case: an operator gave an agent a set of skills and that set is
+    # the claim about what it can do. Handing it `run_shell` besides makes the grant decorative —
+    # a video editor could read the control plane's database, and "the skills you gave it" would
+    # stop being a true description of its reach.
+    #
+    # MCP servers go the same way: a connector is authority over somebody's account, and it is
+    # granted by giving the agent a skill that runs through it, not by being registered.
+    bounded = isinstance(finalize_ctx.get("agent_step"), dict)
+    schemas = [] if bounded else list(_TOOL_SCHEMAS) + list(_WRITE_SCHEMAS)
     occupied = {
         str(schema["function"]["name"])
         for schema in schemas
     }
     mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
-    for server in list_mcp_servers(connection, project_id, enabled_only=True):
+    for server in ([] if bounded
+                   else list_mcp_servers(connection, project_id, enabled_only=True)):
         try:
             server_tools = mcp.list_tools(server["url"])
         except Exception as exc:

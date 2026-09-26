@@ -158,6 +158,31 @@ def enable_skills(api: Api, skills: list[str], args) -> None:
     print()
 
 
+def grant(api: Api, agent: str, skills: list[str], args) -> None:
+    """Give an agent the skills it needs, which is the only thing that lets it use them.
+
+    ENABLING IS NOT GRANTING, and the difference cost a real debugging pass. `enable_skills`
+    registers a skill in the project's catalogue; `role_skills` is what the runtime checks before
+    letting an agent call one. A role spec's `allowed_skills` list reaches the agent's PROMPT and
+    nothing else — so every example installed here once had agents that had been TOLD what they
+    could use and held nothing, and every step naming one was refused at the first call.
+
+    Idempotent, so re-running an example is safe.
+    """
+    print(f"  SKILLS FOR {agent}")
+    for skill in skills:
+        if args.dry_run:
+            print(f"    would give {agent} {skill}")
+            continue
+        code, body = api("POST", "/v1/role-skills", {
+            "project_id": api.project, "actor": api.actor,
+            "role_key": agent, "skill_id": skill})
+        if code >= 400:
+            die(f"could not give {agent} the skill {skill}: {body.get('detail') or body}")
+        print(f"    {skill:26} held by {agent}")
+    print()
+
+
 def define_steps(api: Api, steps: list[dict], args) -> dict[str, str]:
     """One step per skill, matched by name and reused so re-running is safe."""
     code, body = api("GET", f"/v1/delivery-workflows/custom-steps?project_id={api.project}")
@@ -239,6 +264,31 @@ def step(step_id: str, key: str, inputs: dict, nxt: list, *,
          agent: str = "", approval: str = "auto", args=None) -> dict:
     spec = {"id": step_id, "kind": "capability",
             "binding": {"custom_step": key, "inputs": inputs},
+            "approval": {"mode": approval}, "next": nxt}
+    if agent and not (args and args.no_agents):
+        spec["captain"] = agent
+    return spec
+
+
+def agent_step(step_id: str, instructions, nxt: list, *,
+               agent: str = "", context: dict | None = None,
+               approval: str = "auto", args=None) -> dict:
+    """A step that says WHAT IS WANTED and lets an agent work out HOW.
+
+    THE DIFFERENCE FROM `step`. That one binds a skill: the step is "run this thing". This one
+    binds nothing — the instruction is the specification, and the agent's own granted skills are
+    the vocabulary. That is what stops an example needing a new step every time somebody wants
+    something slightly different done to their video.
+
+    `instructions` is usually `from_input("instructions")`: the operator types what they want when
+    they start the run. A literal string pins it, for a workflow that always does the same thing.
+
+    `agent` names who does it. Left empty, BOSS picks the agent whose purpose and skills fit the
+    instruction — which is the honest default for "just get this done".
+    """
+    spec = {"id": step_id, "kind": "capability",
+            "binding": {"agent_work": True,
+                        "inputs": {**(context or {}), "instructions": instructions}},
             "approval": {"mode": approval}, "next": nxt}
     if agent and not (args and args.no_agents):
         spec["captain"] = agent

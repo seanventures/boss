@@ -289,6 +289,17 @@ type Draft = {
   /** WHICH AGENT RUNS THIS STEP. A capability step's captain has always become the actor; a
    *  custom step ignored it, so a customer's workflow had no agent in it anywhere. */
   captain?: string;
+  /** THIS STEP'S WHOLE SPECIFICATION, when it is an agent step.
+   *
+   *  Every other kind of step binds a skill and BOSS decides what happens. This one says what is
+   *  WANTED and the agent works out how, using the skills it holds. That is what stops the
+   *  product needing a release per use case: a new kind of request needs the agent to hold a
+   *  skill, not BOSS to ship a step.
+   *
+   *  Either a run input the operator fills in at the start ({from_input}), or a literal pinned
+   *  here for a workflow that always does the same thing. */
+  agentWork?: boolean;
+  instructions?: unknown;
   approval?: string;
   config?: Record<string, unknown>;
 };
@@ -4701,6 +4712,13 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         // which is a gap; silently discarding one somebody else authored is a bug.
         inputs: (binding.inputs ?? undefined) as Record<string, unknown> | undefined,
         captain: step.captain ? String(step.captain) : undefined,
+        // AN AGENT STEP, which binds no capability and no custom step. Read back off the same
+        // binding it was saved into, so opening a workflow and saving it cannot turn one into a
+        // step that runs nothing — the bug that destroyed step wiring once already.
+        agentWork: Boolean(binding.agent_work) || undefined,
+        instructions: binding.agent_work
+          ? ((binding.inputs ?? {}) as Record<string, unknown>).instructions
+          : undefined,
         // Everything that is not id/kind/binding/approval/next is the block's own
         // configuration — wait_seconds, workflow_version_id — and must survive a round trip
         // or editing one step would quietly reset another.
@@ -4858,6 +4876,25 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       config: {},
     }]);
 
+  /** A step that says what is wanted and lets an agent work out how.
+   *
+   *  IT BINDS NOTHING, and that is the whole point. Every other step on this canvas names a
+   *  skill, so a request the skill cannot express needs BOSS to ship a new one — which is how a
+   *  framework turns into a thousand special cases. This one carries an instruction, and the
+   *  agent's own skills are the vocabulary.
+   *
+   *  `auto` is honest here: the agent's loop still stops for a person on any skill at or above
+   *  the risk floor, so a step that reaches a publish waits whatever this says.
+   */
+  const addAgentWork = () =>
+    setDraft((current) => [...current, {
+      id: nextId(current, "agent_work"),
+      kind: "capability",
+      agentWork: true,
+      approval: "auto",
+      config: {},
+    }]);
+
   /** A step the customer defined. Its approval mode follows the resolved risk tier, so a
    *  tier-3 tool arrives on the canvas already marked manual rather than being switched
    *  silently at save time. */
@@ -4939,6 +4976,30 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         // runtime looks for `wait_seconds` and `workflow_version_id`.
         return { id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}), next };
       }
+      if (step.agentWork) {
+        return {
+          id: step.id,
+          kind: "capability",
+          binding: {
+            agent_work: true,
+            inputs: {
+              // Everything else the step passes along is context the agent is given as facts —
+              // an artifact id an earlier step produced, which it must use verbatim.
+              ...(step.inputs ?? {}),
+              // The instruction is the step. Defaulted to the run's own `instructions` field,
+              // because "say what you want when you start it" is the shape almost every one of
+              // these has.
+              instructions: step.instructions ?? { from_input: "instructions" },
+            },
+          },
+          approval: { mode: step.approval },
+          // NO CAPTAIN IS A REAL CHOICE HERE, and a different one from the other kinds: it means
+          // "whichever agent fits this instruction", which BOSS works out from what each agent
+          // is for and what it holds.
+          ...(step.captain ? { captain: step.captain } : {}),
+          next,
+        };
+      }
       if (step.customStep) {
         const defined = customSteps.find((c) => c.step_key === step.customStep);
         return {
@@ -5004,6 +5065,20 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         <p className="detail dw-palette-summary">
           Click a step to add it, or make one of your own that runs your skill or an MCP tool.
         </p>
+        {/* FIRST IN THE PALETTE, because it is the general answer and the fourteen below it are
+            the specific ones. An operator whose request does not match a listed capability used
+            to have nothing to reach for; this is the step for "just do what I asked". */}
+        <button type="button" className="dw-palette-item dw-palette-agent"
+                onClick={addAgentWork} disabled={!!busy}
+                data-testid="dw-palette-agent-work"
+                title="The step carries your instructions; the agent uses the skills it holds">
+          <span className="dw-palette-label">Let an agent work it out</span>
+          <span className="detail dw-palette-summary">
+            You write what you want in plain English. An agent does it with the skills it holds —
+            no fixed list of operations, so a new kind of request needs a new skill on the agent,
+            not a new step here.
+          </span>
+        </button>
         {capabilities.map((c) => (
           <button key={c.key} type="button" className="dw-palette-item"
                   onClick={() => add(c)} disabled={!!busy}
@@ -5348,11 +5423,14 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   <span className="dw-draft-label">
                     {step.kind !== "capability"
                       ? blocks.find((b) => b.kind === step.kind)?.label ?? step.kind
-                      : step.customStep
-                        ? mine?.label ?? step.customStep
-                        : capability?.label ?? step.capability}
+                      : step.agentWork
+                        ? "Let an agent work it out"
+                        : step.customStep
+                          ? mine?.label ?? step.customStep
+                          : capability?.label ?? step.capability}
                   </span>
                   {step.customStep ? <span className="dw-draft-kind">yours</span> : null}
+                  {step.agentWork ? <span className="dw-draft-kind">agent</span> : null}
                   {/* A control block is visibly a different sort of thing from a work step. */}
                   {step.kind !== "capability" ? (
                     <span className="dw-draft-kind">flow</span>
@@ -5364,13 +5442,19 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       manual. Every field here was already on the client; none of it was drawn. */}
                   <span className="dw-draft-what">
                     <span className="dw-draft-runs">
-                      {mine
-                        ? (mine.usable ? `runs ${mine.risk_source}` : mine.unusable_reason)
-                        : capability
-                          ? `${capability.skills.length} skill${
-                              capability.skills.length === 1 ? "" : "s"}${
-                              capability.captain ? ` · ${capability.captain}` : ""}`
-                          : null}
+                      {step.agentWork
+                        ? (step.captain
+                            ? `${(holdings[step.captain] ?? []).length} skill${
+                                (holdings[step.captain] ?? []).length === 1 ? "" : "s"
+                              } to choose from`
+                            : "whichever agent fits the instruction")
+                        : mine
+                          ? (mine.usable ? `runs ${mine.risk_source}` : mine.unusable_reason)
+                          : capability
+                            ? `${capability.skills.length} skill${
+                                capability.skills.length === 1 ? "" : "s"}${
+                                capability.captain ? ` · ${capability.captain}` : ""}`
+                            : null}
                     </span>
                     {(mine?.summary || capability?.summary) ? (
                       <span className="dw-draft-summary">
@@ -5398,11 +5482,49 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       </span>
                     ) : null}
                   </span>
+                  {/* THE STEP'S WHOLE SPECIFICATION, editable in the row.
+                      Two shapes, because both are things operators say: ask me when the run
+                      starts (the usual one — the same workflow does a different job each time),
+                      or pin it here for a workflow that always does the same thing. */}
+                  {step.agentWork ? (
+                    <span className="dw-draft-agentwork">
+                      <label className="dw-agentwork-mode">
+                        <select className="input"
+                                value={isFromInput(step.instructions) ? "ask" : "fixed"}
+                                data-testid={`dw-agentwork-mode-${step.id}`}
+                                onChange={(e) => setDraft((c) => c.map((st, i) => (i === index
+                                  ? { ...st, instructions: e.target.value === "ask"
+                                      ? { from_input: "instructions" } : "" }
+                                  : st)))}>
+                          <option value="ask">ask me when the run starts</option>
+                          <option value="fixed">always do this</option>
+                        </select>
+                      </label>
+                      {isFromInput(step.instructions) ? (
+                        <span className="detail dw-agentwork-hint">
+                          The agent is given whatever you type in the{" "}
+                          <code>{String((step.instructions as {from_input: string}).from_input)}</code>{" "}
+                          box when you start a run.
+                        </span>
+                      ) : (
+                        <textarea className="input dw-agentwork-text" rows={3}
+                                  value={typeof step.instructions === "string"
+                                         ? step.instructions : ""}
+                                  data-testid={`dw-agentwork-text-${step.id}`}
+                                  placeholder={"What you want done, in plain English. The agent\n"
+                                    + "works out which of its skills to use, and in what order."}
+                                  onChange={(e) => setDraft((c) => c.map((st, i) => (i === index
+                                    ? { ...st, instructions: e.target.value } : st)))} />
+                      )}
+                    </span>
+                  ) : null}
                   {/* WHO RUNS IT. The premise of the product is that agents do the work and
                       the steps track it — which is already true of BOSS's own pipelines, where
                       a capability's captain becomes the actor. A customer's step ignored it and
                       the builder never offered it, so their workflows had no agent anywhere.
-                      Empty is the existing behaviour: the anonymous workflow runner. */}
+                      Empty is the existing behaviour: the anonymous workflow runner — EXCEPT on
+                      an agent step, where it means "whichever agent fits", which BOSS works out
+                      from what each one is for and what it holds. */}
                   {step.kind === "capability" && stepRoles.length ? (
                     <select className="input dw-draft-captain" value={step.captain ?? ""}
                             onChange={(e) => setDraft((c) =>
@@ -5411,9 +5533,11 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                             aria-label={`Agent for ${step.id}`}
                             data-testid={`dw-draft-captain-${step.id}`}>
                       <option value="">
-                        {capability?.captain
-                          ? `${capability.captain} (default)`
-                          : "no agent — runs as the workflow"}
+                        {step.agentWork
+                          ? "whichever agent fits — BOSS picks"
+                          : capability?.captain
+                            ? `${capability.captain} (default)`
+                            : "no agent — runs as the workflow"}
                       </option>
                       {stepRoles.map((role) => (
                         <option key={role} value={role}>{role}</option>
@@ -5425,8 +5549,20 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       and it is the half the run enforces. Checked here, in the row, with the
                       grant one click away — because the alternative is finding out after the
                       run has waited on a human approval. */}
-                  <CaptainCanRunIt projectId={projectId} step={step} mine={mine}
-                                   holdings={holdings} onGranted={onGranted} />
+                  {step.agentWork ? (
+                    // AN AGENT STEP HAS NO ONE SKILL TO CHECK — the whole of what the agent
+                    // holds is what it may use. What is worth saying is when it holds NOTHING,
+                    // because then the step is guaranteed to fail.
+                    step.captain && (holdings[step.captain] ?? []).length === 0 ? (
+                      <span className="dw-draft-grant" data-testid={`dw-empty-${step.id}`}>
+                        {step.captain} holds no skills, so it cannot do anything. Open it on the
+                        Agents page and give it the skills this work needs.
+                      </span>
+                    ) : null
+                  ) : (
+                    <CaptainCanRunIt projectId={projectId} step={step} mine={mine}
+                                     holdings={holdings} onGranted={onGranted} />
+                  )}
                   <select className="input dw-draft-approval" value={step.approval}
                           disabled={step.kind !== "capability"
                                     || capability?.approval_forced_manual
@@ -5630,4 +5766,10 @@ export function CaptainCanRunIt({ projectId, step, mine, holdings, onGranted }: 
       {failed ? <span className="dw-draft-forced"> {failed}</span> : null}
     </span>
   );
+}
+
+
+/** Whether a step's instruction is read from the run's input rather than pinned on the step. */
+function isFromInput(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && "from_input" in (value as object));
 }

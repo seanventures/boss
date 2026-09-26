@@ -1193,6 +1193,45 @@ def execute_step(
     """
     binding = step.get("binding") or {}
 
+    # A STEP THAT SAYS WHAT IT WANTS AND LETS AN AGENT WORK OUT HOW.
+    #
+    # Checked before everything else because it binds nothing: no capability key, no custom step,
+    # no skill. Its whole specification is a sentence, and the agent's granted skills are the
+    # vocabulary. This is what stops the product growing a special case per customer — an
+    # instruction asking for something new needs the agent to HOLD a skill, not BOSS to ship a
+    # step. See services/agent_steps.py.
+    if binding.get("agent_work"):
+        from . import agent_steps
+
+        resolved = _resolve_inputs(
+            binding.get("inputs") or {}, context,
+            # ONLY `instructions` IS REQUIRED. Everything else a step passes an agent is context
+            # that may or may not exist on a given run, and a framework step cannot know which.
+            frozenset(k for k in (binding.get("inputs") or {}) if k != "instructions"))
+        said = str(resolved.pop("instructions", "") or "").strip()
+        try:
+            return {
+                "kind": "agent_work",
+                **agent_steps.run(
+                    connection, getattr(ctx, "settings", None), project_id,
+                    instructions=said,
+                    # Named, or left to BOSS. Both are things an operator says, and which
+                    # happened is reported in the output rather than inferred.
+                    # THE SAME `captain` EVERY OTHER STEP USES. A second field meaning "which
+                    # agent" would be a second thing to validate, a second control to build and a
+                    # second place for the two to disagree. `binding.agent` is read as a fallback
+                    # for a spec written by hand.
+                    role_key=(str(step.get("captain")
+                                  or binding.get("agent") or "").strip() or None),
+                    context=resolved,
+                    actor=actor,
+                    max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
+                    only=list(binding.get("agents") or []) or None,
+                ),
+            }
+        except agent_steps.AgentStepError as error:
+            raise CapabilityExecutionError(str(error)) from error
+
     # A step the customer defined. Checked first because it is the only kind that has no
     # capability key at all — falling through to the capability lookup would report it as an
     # unknown capability, which is true and useless.

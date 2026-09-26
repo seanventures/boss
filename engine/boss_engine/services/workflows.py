@@ -289,7 +289,34 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(binding, dict):
             raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
         step["binding"] = binding
-        if kind == "capability" and binding.get("custom_step"):
+        if kind == "capability" and binding.get("agent_work"):
+            # A STEP WHOSE SPECIFICATION IS A SENTENCE. It binds no capability and no custom
+            # step, so neither of the checks below applies — what it needs is an instruction and,
+            # optionally, an agent. See services/agent_steps.py for why this shape exists.
+            wiring = binding.get("inputs") or {}
+            if not isinstance(wiring, dict) or "instructions" not in wiring:
+                raise WorkflowValidationError(
+                    f"step '{step_id}' must wire 'instructions' — that is the whole of what it "
+                    "tells the agent to do. Read it from the run's input, or pin a literal.")
+            # WHETHER THE NAMED AGENT EXISTS is checked here; whether it HOLDS anything is
+            # checked in `_validate_bindings`, which has the project in hand. Both fail closed,
+            # because a step given to an agent that can do nothing is a run that wastes a gate.
+            captain_problems = validate_captain(step)
+            if captain_problems:
+                raise WorkflowValidationError(" ".join(captain_problems))
+            approval = dict(step.get("approval") or {})
+            mode = str(approval.get("mode", "auto")).lower()
+            if mode not in ("auto", "manual"):
+                raise WorkflowValidationError(
+                    f"step '{step_id}' approval mode must be 'auto' or 'manual'.")
+            # AUTO DOES NOT MEAN UNATTENDED. The agent's own loop suspends on any skill at or
+            # above the risk floor, so a step that reaches a tier-3 publish stops for a person
+            # whatever this says. Recorded as asked rather than rewritten, because the gate that
+            # fires is the skill's, not the step's.
+            approval["mode"] = mode
+            approval.setdefault("on_timeout", "block")
+            step["approval"] = approval
+        elif kind == "capability" and binding.get("custom_step"):
             # A step the customer defined. It cannot be checked here — whether the skill it
             # binds still exists, and what risk tier it really carries, are facts about the
             # project, not about the spec. `_validate_bindings` does it with a connection in

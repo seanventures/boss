@@ -5,19 +5,31 @@ An EXAMPLE. Nothing here ships with BOSS and nothing runs it on install. It uses
 public API — the same calls the console makes when you click through the builder — so every
 line corresponds to something you could do by hand. README.md does exactly that.
 
-What BOSS *does* ship is the capability this assembles: the video skills, the `video_editor`
-and `media_publisher` roles, and ffmpeg in the images. This only wires them into one workflow.
+WHAT IT BUILDS, AND WHY IT IS THIS SHORT NOW
+--------------------------------------------
+    fetch-link  →  edit  →  publish
+    video_editor   video_editor   media_publisher     ← the agent for each step
+    auto           auto           NEEDS A PERSON
 
-WHAT IT BUILDS
---------------
-    fetch-link  →  plan-edit  →  apply-plan  →  publish
-    video_editor   video_editor   video_editor   media_publisher   ← the agent for each step
-    auto           auto           auto           NEEDS A PERSON
+The middle step used to be two — "plan the edit" and "apply the plan" — bound to a pair of
+skills with a fixed list of operations between them. That shape does not survive contact with
+customers: the moment somebody asks for an ending slide, the operation list needs a new word for
+it, and the next person asks for a fade. A framework whose answer to every request is a release
+is not a framework.
 
-You supply two things per run: the video link, and what you want done to it in plain English.
-Everything else is passed from one step to the next.
+So `edit` binds NOTHING. It carries your instructions, and `video_editor` does the work with the
+skills it holds — trim, cut, reframe, caption, overlay, watermark, bookend, and whatever else you
+give it later. Add a skill to the agent and the same workflow can do a new thing, with no step
+changed and no release. THAT is the point of this example.
 
-IT IS SAFE TO RE-RUN. Steps and the workflow are matched by name and reused.
+VIBE EDITING, LITERALLY
+-----------------------
+    "Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."
+
+goes in the instructions box. The agent reads it, picks its own operations and their order, and
+records what it did. If it needs something it was not given, it says so rather than guessing.
+
+IT IS SAFE TO RE-RUN. Steps, agents and the workflow are matched by name and reused.
 """
 import sys
 from pathlib import Path
@@ -25,36 +37,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _common import (  # noqa: E402
-    connect, define_steps, enable_skills, from_input, from_step, parser, publish, step,
+    agent_step, connect, define_steps, enable_skills, from_input, from_step, grant, parser,
+    publish, step,
 )
 
 NAME = "Video edit and publish"
 DESCRIPTION = (
-    "Post a video link with editing instructions. BOSS fetches it, plans the edit, renders it, "
-    "and waits for you before publishing."
+    "Post a video link and say what you want done to it in plain English. A video agent does the "
+    "editing with the skills it holds; a publishing agent waits for you before it uploads."
 )
 
-#: Each binds one skill BOSS ships. `agent` is the role that RUNS the step — and it is not
-#: decoration: publish_youtube permits media_publisher and refuses video_editor, so the split
-#: below is enforced rather than conventional.
+#: EVERY SKILL THE EDITING AGENT MAY REACH FOR. Not steps — the agent composes these itself, in
+#: whatever order the instruction needs. Adding one here (or on the Agents page later) widens what
+#: the same workflow can do.
+EDITING_SKILLS = [
+    "media.fetch_link",     # a link becomes a video BOSS holds
+    "media.fetch_image",    # a link becomes a picture: an ending slide, a title card, a logo
+    "video.trim",           # keep one range
+    "video.cut",            # take ranges out of the middle
+    "video.reframe",        # portrait, square, landscape
+    "video.caption",        # burn text on
+    "video.overlay_image",  # put a picture on screen for a while
+    "video.watermark",      # a logo in a corner
+    "video.bookend",        # a title card before, an ending slide after
+]
+
+#: The two steps that still bind a skill, because both are single, exact acts with nothing to
+#: decide: turn this link into a video, and upload this file to that channel.
 STEPS = [
     {"label": "Fetch the video", "skill_id": "media.fetch_link",
      "summary": "Turn the pasted link into a video BOSS holds.",
      "inputs": [{"name": "url", "required": True}],
-     "agent": "video_editor"},
-    {"label": "Plan the edit", "skill_id": "video.plan_edit",
-     "summary": "Read the instructions and write the edit plan. Renders nothing.",
-     "inputs": [{"name": "media_artifact_id", "required": True},
-                {"name": "instructions", "required": True},
-                # Images the plan may put on screen, as {name: artifact_id}. OPTIONAL: most
-                # edits are cuts and captions, and a required field for a logo nobody is using
-                # is a field everybody has to think about.
-                {"name": "assets", "required": False}],
-     "agent": "video_editor"},
-    {"label": "Apply the edit", "skill_id": "video.apply_plan",
-     "summary": "Run the plan and record what each operation changed.",
-     "inputs": [{"name": "media_artifact_id", "required": True},
-                {"name": "plan", "required": True}],
      "agent": "video_editor"},
     {"label": "Publish to YouTube", "skill_id": "publish_youtube",
      "summary": "Upload the approved video as private.",
@@ -70,7 +83,14 @@ STEPS = [
 def main() -> None:
     args = parser("Build the video editing workflow.").parse_args()
     api = connect(args, NAME)
-    enable_skills(api, [s["skill_id"] for s in STEPS], args)
+
+    # The editing agent needs every skill it might reach for, and it needs to HOLD them —
+    # `role_skills` is the grant the runtime checks, and a skill an agent was merely told about
+    # in its spec is one it will be refused at the first call.
+    enable_skills(api, EDITING_SKILLS + [s["skill_id"] for s in STEPS], args)
+    grant(api, "video_editor", EDITING_SKILLS, args)
+    grant(api, "media_publisher", ["publish_youtube"], args)
+
     keys = define_steps(api, STEPS, args)
     if args.dry_run:
         print(f"  WORKFLOW\n    would create {NAME!r}\n")
@@ -81,29 +101,33 @@ def main() -> None:
         "steps": [
             step("fetch-link", keys["Fetch the video"],
                  {"url": from_input("video_url")},
-                 ["plan-edit"], agent="video_editor", args=args),
-            step("plan-edit", keys["Plan the edit"],
-                 {"media_artifact_id": from_step("fetch-link", "media_artifact_id"),
-                  "instructions": from_input("instructions"),
-                  "assets": from_input("assets")},
-                 ["apply-plan"], agent="video_editor", args=args),
-            # The video comes from FETCH, not from PLAN: the planner produces a plan, not a
-            # video. Wiring it the obvious wrong way is the mistake worth naming.
-            step("apply-plan", keys["Apply the edit"],
-                 {"media_artifact_id": from_step("fetch-link", "media_artifact_id"),
-                  "plan": from_step("plan-edit", "plan")},
-                 ["publish"], agent="video_editor", args=args),
+                 ["edit"], agent="video_editor", args=args),
+
+            # THE STEP THAT BINDS NOTHING.
+            #
+            # It gets your sentence and the video the step before it produced. What it does with
+            # them is the agent's decision, made from the skills it holds — so "trim it" and
+            # "trim it, make it portrait and put a slide on the end" are the same step.
+            agent_step("edit", from_input("instructions"), ["publish"],
+                       agent="video_editor", args=args,
+                       context={
+                           "media_artifact_id": from_step("fetch-link", "media_artifact_id"),
+                           # PASSED THROUGH AS A FACT, not interpreted here. If the operator gave
+                           # a link to an ending slide, the agent has `media.fetch_image` and
+                           # will use it; if they did not, this is simply absent.
+                           "slide_url": from_input("slide_url"),
+                       }),
+
             # No separate review step: publish_youtube is risk tier 3, and BOSS forces a manual
             # approval at or above the floor whatever a workflow asks.
             step("publish", keys["Publish to YouTube"],
-                 {"media_artifact_id": from_step("apply-plan", "media_artifact_id"),
+                 {"media_artifact_id": from_step("edit", "media_artifact_id"),
                   "title": from_input("title"),
                   "description": from_input("description")},
                  [], agent="media_publisher", approval="manual", args=args),
         ],
         # WHAT THE START FORM ASKS FOR. Without this the console has nothing to draw and the
-        # workflow cannot be started from the UI at all — the run begins with no link and no
-        # instructions and fails on the first step.
+        # workflow cannot be started from the UI at all.
         "input_schema": {
             "required": ["video_url", "instructions", "title"],
             "properties": {
@@ -115,13 +139,19 @@ def main() -> None:
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "instructions": {
-                    "title": "What to do with it",
-                    "description": "Plain English. Timecodes may be seconds, M:SS or "
-                                   "HH:MM:SS. Put timed things (captions, overlays) BEFORE "
-                                   "cuts if you read the times off the original.",
-                    "examples": ["Make a short from 2:10 to 2:40, vertical for phones, "
-                                 "caption the first three seconds with 'The one thing nobody "
-                                 "tells you', and cut 2:20 to 2:25 where I fumble."],
+                    "title": "What you want done",
+                    "description": "Plain English. The agent picks its own operations and their "
+                                   "order from the skills it holds. Timecodes may be seconds, "
+                                   "M:SS or HH:MM:SS.",
+                    "examples": ["Keep 0:28 to 1:48, make it portrait for phones, and put the "
+                                 "ending slide on the end."],
+                },
+                "slide_url": {
+                    "title": "Ending slide, title card or logo",
+                    "description": "Optional. A link to a PICTURE, or to a short clip. Mention it "
+                                   "in the instructions — \"put the ending slide on the end\" — "
+                                   "and the agent will fetch it and use it.",
+                    "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "title": {
                     "title": "YouTube title",
@@ -130,12 +160,6 @@ def main() -> None:
                 "description": {
                     "title": "YouTube description",
                     "description": "Optional.",
-                },
-                "assets": {
-                    "title": "Images to put on screen",
-                    "description": "Optional. {\"logo\": \"art_…\"} — artifact ids, so the "
-                                   "plan can only name images BOSS already holds. Leave blank "
-                                   "for cuts and captions.",
                 },
             },
         },
@@ -146,9 +170,14 @@ def main() -> None:
   Start a run: Delivery → Workflows → "Video edit and publish" → Start one.
 
     video_url      a link to the video — Google Drive, or any direct HTTPS link
-    instructions   what to do, in plain English. For example:
-                   "Cut 2:20 to 2:25 where I fumble, make it vertical for phones,
-                    and caption the opening three seconds."
+    instructions   what you want, in plain English. For example:
+                   "Keep 0:28 to 1:48, make it portrait for phones, and put the
+                    ending slide on the end."
+    slide_url      optional — a link to the ending slide, if your instructions mention one
+    title          the YouTube title
+
+  The editing step has no fixed list of operations. To let it do something new, give
+  video_editor another skill on the Agents page — the workflow does not change.
 
   The last step stops and waits. That is not a setting — publish_youtube is
   risk tier 3, and BOSS requires a person at or above the floor.

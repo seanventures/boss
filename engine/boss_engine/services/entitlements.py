@@ -297,7 +297,19 @@ class EntitlementBrokerService:
         )
         for key in ("allowed_callers", "required_permissions"):
             value = permissions.get(key)
-            if not isinstance(value, list) or not value:
+            # AN EMPTY `allowed_callers` IS A STATEMENT, NOT AN OMISSION.
+            #
+            # It means "nobody reaches this by default": the only route is somebody giving the
+            # skill to an agent, which `skill_runtime` honours through `role_skills` whatever this
+            # list says. That is the right default for a skill powerful enough that holding it
+            # should be a deliberate act — `code.write_and_run` is the case that needed it — and
+            # the validator could not express it, so the alternative was naming a role that should
+            # not have had it. The key must still be PRESENT: a missing one is an author who did
+            # not think about reach, and that is the mistake this check is for.
+            #
+            # `required_permissions` stays non-empty. A skill answerable to no permission at all is
+            # not a governed skill.
+            if not isinstance(value, list) or (not value and key != "allowed_callers"):
                 errors.append(f"permissions.{key} must be a non-empty list")
             elif any(not isinstance(item, str) or not item.strip() for item in value):
                 errors.append(

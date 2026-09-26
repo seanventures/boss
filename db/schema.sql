@@ -3119,6 +3119,26 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
 
+-- A FOURTH BEHAVIOUR: a program an AGENT wrote and a workflow kept.
+--
+-- The other three are authored by a person. This one is written by an agent mid-run, saved when
+-- it worked, and offered back to the agent on the next run of the same workflow — so a customer's
+-- second video project reuses the program the first one produced instead of paying a model to
+-- rediscover it. The source lives in `config`, which is why this needed a constraint widened and
+-- not a table added.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'skill_definitions_behaviour_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%agent_program%'
+  ) THEN
+    ALTER TABLE skill_definitions DROP CONSTRAINT skill_definitions_behaviour_kind_check;
+    ALTER TABLE skill_definitions
+      ADD CONSTRAINT skill_definitions_behaviour_kind_check
+      CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program'));
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS workflow_custom_steps (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -3176,7 +3196,7 @@ CREATE TABLE IF NOT EXISTS skill_definitions (
   label TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '',
   behaviour_kind TEXT NOT NULL
-    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command')),
+    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program')),
   -- WHAT THIS SKILL KNOWS. The markdown body an operator writes: the house style, the format
   -- their team uses, the clauses that matter. Carried into every execution as context, so the
   -- skill behaves the same on its hundredth run as on the one somebody watched.

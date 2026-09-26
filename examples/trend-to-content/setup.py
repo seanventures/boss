@@ -26,7 +26,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _common import (  # noqa: E402
-    connect, define_steps, enable_skills, from_input, from_step, parser, publish, step,
+    connect, define_steps, enable_skills, from_input, from_step, grant, parser, publish,
+    step,
 )
 
 NAME = "Trend to content"
@@ -74,6 +75,14 @@ def main() -> None:
     args = parser("Build the trend-to-content workflow.").parse_args()
     api = connect(args, NAME)
     enable_skills(api, sorted({s["skill_id"] for s in STEPS}), args)
+    # AND THE AGENTS MUST HOLD THEM. Enabling puts a skill in the project's catalogue; the
+    # runtime checks `role_skills` before letting an agent call one, and a role spec's
+    # `allowed_skills` reaches the agent's prompt and nowhere else. Every example installed here
+    # once had agents that had been TOLD what they could use and held nothing — so every step
+    # naming one was refused at its first call, twenty minutes into a run.
+    for agent in sorted({s["agent"] for s in STEPS if s.get("agent")}):
+        grant(api, agent,
+              sorted({s["skill_id"] for s in STEPS if s.get("agent") == agent}), args)
     keys = define_steps(api, STEPS, args)
     if args.dry_run:
         print(f"  WORKFLOW\n    would create {NAME!r}\n")

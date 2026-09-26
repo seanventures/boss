@@ -13,52 +13,64 @@ corner. The editing itself is mechanical. The judgement is in deciding *what* to
 
 So this workflow splits those apart. You supply a link and an instruction like:
 
-> Cut 2:20 to 2:25 where I fumble, make a short from 2:10 to 2:40, make it vertical for
-> phones, and caption the first three seconds with "The one thing nobody tells you".
+> Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end.
 
-BOSS turns that sentence into a precise edit plan, runs it, and shows you the result. Nothing
-reaches YouTube until you say so.
+The editing agent reads that sentence, decides which of its skills to use and in what order,
+does the work, and shows you the result. Nothing reaches YouTube until you say so.
 
 ### What happens, step by step
 
 | # | Step | Agent | What it does |
 |---|------|-------|--------------|
 | 1 | **Fetch the video** | `video_editor` | Places the link — Google Drive, an S3 bucket, or a plain HTTPS file — and brings it into the project |
-| 2 | **Plan the edit** | `video_editor` | Reads your instruction and writes an edit plan. Renders nothing |
-| 3 | **Apply the edit** | `video_editor` | Runs the plan and records what each operation changed |
-| 4 | **Publish to YouTube** | `media_publisher` | Uploads as **private**. **Stops and waits for you** |
+| 2 | **Let an agent work it out** | `video_editor` | **Binds no skill.** Gets your instruction and works out how, using the skills it holds |
+| 3 | **Publish to YouTube** | `media_publisher` | Uploads as **private**. **Stops and waits for you** |
 
-Two things you supply per run — the link and the instruction. Everything else is passed from one
-step to the next.
+### The one thing worth understanding about step 2
 
-### Three things worth understanding
+**It binds nothing, and that is the point.**
 
-**The model writes a plan; it never touches the video.** Step 2 produces a list of operations,
-and every one is checked against a fixed vocabulary before anything renders. An instruction
-asking for something BOSS cannot do — "speed up the boring middle" — comes back as *refused*,
-named, rather than approximated with a different operation. A plan with one bad timecode is
-rejected **whole**, because a half-edited file is indistinguishable from a finished one without
-watching it.
+The middle used to be two steps — "plan the edit" and "apply the plan" — with a fixed list of
+operations between them. That shape does not survive contact with real use. The first person to
+ask for an ending slide needed the operation list to grow a word for it; the next asks for a
+fade, the one after that for a lower third. A framework whose answer to every new request is a
+release is not a framework.
 
-**It tells you what it guessed.** Every operation carries the instruction it came from, and
-anything ambiguous lands in `assumptions`. Ambiguity is guessed at rather than asked about —
-you review before publishing anyway, and stopping to ask would cost a round trip on every
-video. What it must not do is guess *silently*.
+So step 2 carries your **instruction**, and `video_editor`'s **skills** are the vocabulary:
 
-**Publishing cannot be made automatic.** `publish_youtube` is risk tier 3, and BOSS requires a
-person at or above that floor whatever a workflow asks for. The step is not assigned to the
-editor either: `video_editor` is *forbidden* to publish, and assigning it is refused when you
-save. That separation is enforced, not conventional.
+```
+media.fetch_link  media.fetch_image  video.trim  video.cut  video.reframe
+video.caption     video.overlay_image  video.watermark  video.bookend
+```
+
+The agent picks from those and orders them itself. Which means:
+
+**To make this workflow do something new, give the agent another skill.** Agents → `video_editor`
+→ *Give this agent a skill*. The workflow does not change. No step is edited. Nothing is
+released.
+
+**It cannot use a skill nobody gave it.** The tools it is offered are exactly the ones it holds
+in `role_skills`, and the runtime re-checks that on every call — so an instruction asking for
+something it was not granted comes back as "I cannot do that", named, rather than approximated
+with a tool meant for something else.
+
+**It has no shell, no database and no file system.** An ordinary BOSS agent run gets all three,
+because that is the job in the software factory. This kind gets none of them: the skills you gave
+it are the whole of its reach, and that claim has to be true to be worth making.
+
+**Publishing still cannot be made automatic.** `publish_youtube` is risk tier 3, and BOSS
+requires a person at or above that floor whatever a workflow asks for. `video_editor` is
+*forbidden* to publish, and assigning it to that step is refused when you save. That separation
+is enforced, not conventional.
 
 ### The timecode trap
 
 Each operation applies to the result of the one before it. Cut 1:00–2:00 and then caption at
-5:00, and that caption lands at 6:00 of your original recording. BOSS raises a note when a plan
-does this rather than silently reordering — guessing at intent on somebody's video is worse
-than saying plainly what the timecodes will refer to.
+5:00, and that caption lands at 6:00 of your original recording.
 
-If your timecodes were read off the original (they usually were), put the timed operations
-*before* the cuts.
+Say which recording your timecodes are from if there is any doubt — "0:28 to 1:48 **of the
+original**". The agent orders its own operations and is told about this trap, but your sentence
+is the only thing that says what you meant.
 
 ---
 
@@ -66,16 +78,18 @@ If your timecodes were read off the original (they usually were), put the timed 
 
 ### 1. A model must be connected
 
-Step 2 asks a model to write the plan. Settings → connect one, if `connected_engines` is empty.
+Step 2 is an agent working from your sentence, so it needs a model. Settings → connect one, if
+`connected_engines` is empty.
 
 ### 2. Connect Google — required for the first and last step
 
-Step 1 stores the fetched video in Drive; step 4 publishes to your channel. One OAuth consent
+Step 1 stores the fetched video in Drive; step 3 publishes to your channel. One OAuth consent
 covers both.
 
 > **Channels → Connect** in the console.
 
-Without it, steps 1 and 4 fail. Steps 2 and 3 work regardless.
+Without it, steps 1 and 3 fail, and so does most of what step 2 would do — the editing skills
+read from and write back to the same store.
 
 **Several channels?** Connect each one; they get their own keys (`youtube_default`,
 `youtube_2`, …), each with its own token. To pin a step to a particular channel, open that
@@ -126,16 +140,32 @@ doing it once is the fastest way to understand what you have.
 
 **Skills → find each → Enable:**
 
-- `media.fetch_link`
-- `video.plan_edit`
-- `video.apply_plan`
+- `media.fetch_link` — a link becomes a video
+- `media.fetch_image` — a link becomes a picture: an ending slide, a title card, a logo
+- `video.trim`, `video.cut`, `video.reframe`, `video.caption`, `video.overlay_image`,
+  `video.watermark`, `video.bookend` — what the agent will compose from
 - `publish_youtube`
 
 A skill BOSS ships is *available*, not *installed*. Until it is enabled it lives in the
-catalogue and not in your project, and binding a step to it fails with *"not registered in this
-project"*. This is the step people miss.
+catalogue and not in your project. This is the step people miss.
 
-### 2. Define four steps
+### 2. Give the agents their skills
+
+**This is the step that actually matters, and it is the one that was missing for a long time.**
+
+Enabling a skill puts it in your project. It does **not** give it to anybody. The runtime checks
+`role_skills` before letting an agent call anything, and a role spec's "allowed skills" list
+reaches the agent's *prompt* and nowhere else — so an agent can be told what it may use and hold
+nothing, and every step naming it is refused at the first call.
+
+**Agents → `video_editor` → Give this agent a skill**, once per editing skill above.
+
+**Agents → `media_publisher` → Give this agent a skill** → `publish_youtube`.
+
+The agent page shows what it holds. If that list is empty, the workflow cannot work, and the page
+says so rather than looking fine.
+
+### 3. Define the two steps that bind a skill
 
 **Delivery → Build your own → Your steps → Define a step.** For each: a name, choose **Skill**,
 pick the skill, and list its inputs.
@@ -143,43 +173,56 @@ pick the skill, and list its inputs.
 | Name | Skill | Inputs |
 |---|---|---|
 | Fetch the video | `media.fetch_link` | `url` |
-| Plan the edit | `video.plan_edit` | `media_artifact_id`, `instructions` |
-| Apply the edit | `video.apply_plan` | `media_artifact_id`, `plan` |
-| Publish to YouTube | `publish_youtube` | `media_artifact_id` |
+| Publish to YouTube | `publish_youtube` | `media_artifact_id`, `title`, `description` |
 
 Publish will show **always needs a person**. That comes from its risk tier; you cannot turn it
 off.
 
-### 3. Create the workflow
+There is no step to define for the editing. That is the next section.
 
-**Create a new workflow** → name it → drag your four steps onto the canvas in order.
+### 4. Create the workflow and put the agent step in the middle
 
-### 4. Wire the inputs
+**Create a new workflow** → name it → then, from the palette:
 
-This is the part that makes it a workflow rather than four separate steps. Open each step's
+1. **Fetch the video** (your step)
+2. **Let an agent work it out** — the first entry in the palette. It binds nothing.
+3. **Publish to YouTube** (your step)
+
+On the agent step's row, set the instruction source to **ask me when the run starts**. The other
+option, *always do this*, pins a sentence onto the step for a workflow that does the same job
+every time.
+
+### 5. Wire the inputs
+
+This is the part that makes it a workflow rather than three separate steps. Open each step's
 **inputs**:
 
 | Step | Input | Source |
 |---|---|---|
 | Fetch the video | `url` | **asked when the run starts** → `video_url` |
-| Plan the edit | `instructions` | **asked when the run starts** → `instructions` |
-| Plan the edit | `media_artifact_id` | **from an earlier step** → Fetch the video → `media_artifact_id` |
-| Apply the edit | `media_artifact_id` | **from an earlier step** → Fetch the video → `media_artifact_id` |
-| Apply the edit | `plan` | **from an earlier step** → Plan the edit → `plan` |
-| Publish to YouTube | `media_artifact_id` | **from an earlier step** → Apply the edit → `media_artifact_id` |
+| Let an agent work it out | `instructions` | **asked when the run starts** → `instructions` |
+| Let an agent work it out | `media_artifact_id` | **from an earlier step** → Fetch the video → `media_artifact_id` |
+| Let an agent work it out | `slide_url` | **asked when the run starts** → `slide_url` |
+| Publish to YouTube | `media_artifact_id` | **from an earlier step** → Let an agent work it out → `media_artifact_id` |
+| Publish to YouTube | `title` | **asked when the run starts** → `title` |
 
-Note that **Apply the edit** takes the video from *Fetch*, not from *Plan* — the planner
-produces a plan, not a video.
+Everything the agent step is given other than `instructions` is passed to the agent as **facts it
+must use exactly** — an artifact id it must not invent. The agent step's own output carries
+whatever its skills returned, last one winning, which is why **Publish** can read
+`media_artifact_id` from it.
 
-### 5. Assign the agents
+### 6. Assign the agents
 
-Each step row has an agent dropdown. Set the first three to `video_editor` and **Publish** to
+Each step row has an agent dropdown. Set the first two to `video_editor` and **Publish** to
 `media_publisher`.
+
+On the agent step, leaving it blank is a real choice with a different meaning: **whichever agent
+fits** — BOSS picks, from what each agent is for and what it holds, and records why in the run.
 
 Try assigning `video_editor` to Publish — it is refused when you save, naming what that skill
 does accept. That is the separation being enforced rather than described.
 
-### 6. Save
+### 7. Save
 
 **Save as a new version.** If anything is wrong the error names the step and why.
 
@@ -187,12 +230,18 @@ does accept. That is the separation being enforced rather than described.
 
 ## Running it
 
-**Delivery → Workflows → "Video edit and publish" → Start one.** It asks for `video_url` and
-`instructions`.
+**Delivery → Workflows → "Video edit and publish" → Start one.**
 
-Watch the run: steps 1–3 proceed on their own, then **Publish** stops and waits. Open it to see
-the plan that was written, what the model assumed, anything it refused, and the rendered video —
-then approve or reject.
+| Field | What to put in it |
+|---|---|
+| `video_url` | the Drive share link to your recording |
+| `instructions` | *"Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."* |
+| `slide_url` | the Drive link to your ending slide — a PNG is fine — if your instructions mention one |
+| `title` | the YouTube title |
+
+Watch the run. Steps 1 and 2 proceed on their own, then **Publish** stops and waits. Open the
+agent step to see **which skills it chose, in what order, and why** — that record is the answer
+to "what did it actually do", and it is the thing to read before approving.
 
 ---
 
@@ -201,6 +250,8 @@ then approve or reject.
 | What you see | What it means |
 |---|---|
 | *"skill 'x' is not registered in this project"* | Step 1 above. Enable it in Skills |
+| *"video_editor holds no skills, so it cannot do anything"* | Step 2 above. Enabling is not granting — give the agent its skills on the Agents page |
+| The agent says it cannot do part of what you asked | It was not given a skill for that. Give it one; the workflow does not change |
 | *"gives '…' to video_editor, which is not allowed to run publish_youtube"* | The separation working. Assign `media_publisher` |
 | *"that link returns a web page, not a video"* | A share link needing sign-in. Use one the connected account can read |
 | *"this ffmpeg has no drawtext filter"* | Captions need `libavfilter-extra` and a font. The BOSS images have both |
@@ -215,6 +266,6 @@ then approve or reject.
 `video_editor` and `media_publisher` roles, and ffmpeg in the images. All opt-in — nothing is
 forced on a project.
 
-**BOSS does not ship this workflow.** It is an example. The four steps and the workflow are
+**BOSS does not ship this workflow.** It is an example. The steps and the workflow are
 data in *your* project, created through the public API. Change it, rename it, delete it — none
 of it is part of the product, and a fresh install has the capability and none of this.

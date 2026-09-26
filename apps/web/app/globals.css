@@ -1346,6 +1346,19 @@ h1, h2, h3, h4, h5, h6 {
 /* Amber, like the badge on the step list: this is the one line on the row that explains a
    control the operator cannot change. */
 .dw-draft-forced { flex-basis: 100%; color: var(--amber, #d8a657); font-size: 0.68rem; }
+/* A STEP WHOSE SPECIFICATION IS A SENTENCE. The whole row, because the instruction is the step
+   and cramming it beside a dropdown would make the most important field the smallest one. */
+.dw-draft-agentwork {
+  flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; padding-left: 34px;
+}
+.dw-agentwork-mode select { max-width: 260px; font-size: 0.72rem; }
+.dw-agentwork-hint { font-size: 0.68rem; }
+.dw-agentwork-text {
+  width: 100%; font-family: inherit; font-size: 0.78rem; line-height: 1.5; resize: vertical;
+}
+/* The general step reads as the different sort of thing it is. */
+.dw-palette-agent { border-left: 2px solid var(--accent); }
+
 /* WHETHER THE AGENT ON THIS STEP MAY RUN IT. Both take the whole row, because they answer a
    question about the control immediately above them and a wrapped half-line would not read as
    belonging to it. The confirmation is quiet on purpose — a row of green ticks is a row nobody
