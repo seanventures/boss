@@ -1326,7 +1326,10 @@ def execute_video_apply_plan(
     # mentions. Deduplicated, because the same logo in four operations is one download.
     wanted: list[str] = []
     for entry in plan:
-        for field in ("image_artifact_id", "logo_artifact_id"):
+        # Every field in the vocabulary that names an artifact. A missing name here means the
+        # file is never downloaded and the render fails at the operation that wanted it.
+        for field in ("image_artifact_id", "logo_artifact_id",
+                      "intro_artifact_id", "outro_artifact_id"):
             value = str(entry.get(field) or "").strip()
             if value and value not in wanted:
                 wanted.append(value)

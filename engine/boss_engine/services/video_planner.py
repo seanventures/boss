@@ -115,6 +115,10 @@ OPERATIONS YOU MAY USE — there are no others:
   overlay_image  {{"op":"overlay_image","image_artifact_id":"...","start":"M:SS","end":"M:SS",
                   "position":"center"}}   position one of: {", ".join(sorted(POSITIONS))}
   watermark      {{"op":"watermark","logo_artifact_id":"...","corner":"top_right"}}
+  bookend        {{"op":"bookend","outro_artifact_id":"...","intro_artifact_id":"..."}}
+                 joins a title clip before and/or an ending slide after. At least one.
+                 Put it LAST: it changes the length, so any timed operation after it refers
+                 to a timeline with a card in front of it.
 
 IMAGES YOU MAY REFER TO, by artifact id:
 {asset_lines}

@@ -633,7 +633,8 @@ def caption(
 #: The operations a plan may name, and nothing else. An unknown op is refused rather than
 #: skipped: an instruction asking for something BOSS cannot do must come back as "it cannot do
 #: that", not as a video that quietly lacks it.
-PLAN_OPERATIONS = ("cut", "reframe", "overlay_image", "caption", "trim", "watermark")
+PLAN_OPERATIONS = ("cut", "reframe", "overlay_image", "caption", "trim", "watermark",
+                   "bookend")
 
 
 def validate_plan(plan: Any) -> list[dict]:
@@ -720,6 +721,15 @@ def validate_plan(plan: Any) -> list[dict]:
                 if not str(args.get("text") or "").strip():
                     raise VideoEditError(f"{where}: caption needs text.")
 
+        elif op == "bookend":
+            intro = str(args.get("intro_artifact_id") or "").strip()
+            outro = str(args.get("outro_artifact_id") or "").strip()
+            if not intro and not outro:
+                raise VideoEditError(
+                    f"{where}: bookend needs intro_artifact_id, outro_artifact_id, or both.")
+            args = {k: v for k, v in (("intro_artifact_id", intro),
+                                      ("outro_artifact_id", outro)) if v}
+
         elif op == "watermark":
             if not str(args.get("logo_artifact_id") or "").strip():
                 raise VideoEditError(f"{where}: watermark needs logo_artifact_id.")
@@ -804,6 +814,19 @@ def apply_plan(
             current = caption(current, text=entry["text"], start=entry["start"],
                               end=entry["end"], work_dir=work_dir,
                               style=entry["style"], size=int(entry.get("size") or 48))
+        elif op == "bookend":
+            # LAST IN THE PLAN, USUALLY. A bookend changes the video's LENGTH, so any timed
+            # operation after it refers to a timeline that now has a title card in front of it.
+            # plan_timeline_warning covers cut and trim; this is the same hazard.
+            missing = [f for f in ("intro_artifact_id", "outro_artifact_id")
+                       if entry.get(f) and not assets.get(entry[f])]
+            if missing:
+                raise VideoEditError(
+                    f"plan[{index}]: no file was fetched for {', '.join(missing)}. The step "
+                    "must download every artifact the plan names before running it.")
+            current = bookend(current, work_dir=work_dir,
+                              intro=assets.get(entry.get("intro_artifact_id") or ""),
+                              outro=assets.get(entry.get("outro_artifact_id") or ""))
         elif op in ("overlay_image", "watermark"):
             field = "image_artifact_id" if op == "overlay_image" else "logo_artifact_id"
             path = assets.get(entry[field])
