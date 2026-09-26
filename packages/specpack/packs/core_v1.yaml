@@ -27,6 +27,7 @@ installs:
     - design_critic
     - security_reviewer
     - integration_validator
+    - docs_writer
   workflows:
     - ceo_command_to_pr
     - decision_inbox

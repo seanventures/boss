@@ -107,6 +107,27 @@ def test_parse_slash_commands():
     assert drive.auto is False
 
 
+def test_api_command_parses_method_path_and_json():
+    command = tui.parse_line('/api POST /v1/metatron/watch {"project_id":"boss-dogfood","actor":"ceo"}')
+    assert command.kind == "api"
+    assert command.method == "POST"
+    assert command.path == "/v1/metatron/watch"
+    assert command.body == {"project_id": "boss-dogfood", "actor": "ceo"}
+
+
+def test_api_command_rejects_external_paths_and_bad_json_before_http():
+    for line in (
+        "/api GET https://evil.example/v1/tasks",
+        "/api GET //evil.example/v1/tasks",
+        "/api GET /v1/../secrets",
+        "/api GET /v1/%2e%2e/secrets",
+        "/api GET /v1/tasks#fragment",
+        "/api POST /v1/tasks {bad-json}",
+        '/api GET /v1/tasks {"unexpected":"body"}',
+    ):
+        assert tui.parse_line(line).kind == "error", line
+
+
 def test_drive_auto_and_go_set_auto_true():
     assert tui.parse_line("/drive auto").auto is True
     assert tui.parse_line("/drive go").auto is True
@@ -191,6 +212,33 @@ def test_watch_goals_and_drive_hit_their_endpoints():
     assert auto  # non-empty formatted payload
 
 
+def test_api_command_reaches_existing_v1_routes_with_server_auth():
+    opener = FakeOpener(
+        [
+            (200, {"items": [{"id": "task-1"}]}),
+            (200, {"id": "watch-1", "status": "done", "receipt_id": "receipt-1"}),
+            (200, {"id": "watch-1", "status": "done", "receipt_id": "receipt-1"}),
+        ]
+    )
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    read = client.dispatch(tui.parse_line("/api GET /v1/tasks?project_id=boss-dogfood"))
+    write = client.dispatch(
+        tui.parse_line('/api POST /v1/metatron/watch {"project_id":"boss-dogfood","actor":"ceo"}')
+    )
+    assert read == {"items": [{"id": "task-1"}]}
+    assert write["status"] == "done"
+    assert [call["method"] for call in opener.calls] == ["GET", "POST"]
+    assert opener.calls[0]["url"].endswith("/v1/tasks?project_id=boss-dogfood")
+    assert opener.calls[1]["url"].endswith("/v1/metatron/watch")
+    assert opener.calls[1]["body"] == {"project_id": "boss-dogfood", "actor": "ceo"}
+    assert all(call["headers"]["x-boss-api-key"] == SECRET for call in opener.calls)
+
+    rendered = client.handle(
+        tui.parse_line('/api POST /v1/metatron/watch {"project_id":"boss-dogfood","actor":"ceo"}')
+    )
+    assert '"receipt_id": "receipt-1"' in rendered
+
+
 def test_overwatch_hits_overwatch_endpoint():
     opener = FakeOpener(
         [(200, {"status": "verified", "applied": [], "note": "Overwatch validated then held"})]
@@ -219,6 +267,34 @@ def test_http_errors_are_visible_and_redact_the_key():
     assert "401" in rendered
     assert SECRET not in rendered
     assert "***" in rendered or "redacted" in rendered.lower()
+
+
+def test_one_shot_json_has_machine_readable_result_and_failure_exit(monkeypatch, capsys):
+    opener = FakeOpener(
+        [(200, {"items": [{"id": "task-1"}]}), (403, {"detail": f"denied key={SECRET}"})]
+    )
+    monkeypatch.setenv("BOSS_API_URL", "https://boss-api.test")
+    monkeypatch.setenv("BOSS_API_KEY", SECRET)
+    monkeypatch.setenv("BOSS_PROJECT_ID", "boss-dogfood")
+    monkeypatch.setattr(tui, "urlopen", opener)
+
+    assert tui.main(["--exec", "/api GET /v1/tasks?project_id=boss-dogfood", "--json"]) == 0
+    success = capsys.readouterr()
+    assert json.loads(success.out) == {"items": [{"id": "task-1"}]}
+    assert success.err == ""
+
+    assert tui.main(["--exec", "/api GET /v1/decisions?project_id=boss-dogfood", "--json"]) == 1
+    failure = capsys.readouterr()
+    payload = json.loads(failure.out)
+    assert payload["status"] == 403
+    assert payload["__http_error__"] is True
+    assert SECRET not in failure.out + failure.err
+    assert "***" in payload["body"]
+
+    assert tui.main(["--exec", "/api GET https://evil.example/v1/tasks", "--json"]) == 2
+    invalid = capsys.readouterr()
+    assert json.loads(invalid.out)["__command_error__"] is True
+    assert len(opener.calls) == 2
 
 
 def test_repl_session_slash_quit_never_prints_key():

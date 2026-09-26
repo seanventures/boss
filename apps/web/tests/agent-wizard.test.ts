@@ -18,11 +18,10 @@ describe("Agent Studio creation wizard", () => {
     const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
 
     expect(studio).toContain("Install BOSS starter catalog");
-    expect(studio).toContain("The reviewed starter catalog is project-scoped and idempotent.");
+    expect(studio).toContain("The reviewed starter catalog adds agent definitions, panels, and workflows to this project.");
     expect(studio).toContain("as-first-run");
-    expect(studio).toContain("This project has no governed agents yet");
-    expect(studio).toContain("POST /v1/agent-studio/catalog/seed");
-    expect(studio).toContain("shipped workflows");
+    expect(studio).toContain("Add your first agents");
+    expect(studio).toContain("It does not start a run or spend budget.");
     expect(actions).toContain('post("/v1/agent-studio/catalog/seed"');
     expect(actions).toContain("role_review authority");
   });

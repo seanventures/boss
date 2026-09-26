@@ -16,7 +16,53 @@ RUN addgroup --system boss \
     && mkdir -p /home/boss && chown -R boss:boss /home/boss
 ENV HOME=/home/boss
 
+# Some ARM64 VM kernels crash with SIGILL while importing the upstream
+# cryptography wheel. Build the pinned release against this image's patched
+# system OpenSSL instead. Keep the Rust/build toolchain out of runtime images.
+FROM python-base AS arm64-cryptography-wheel
+ARG TARGETARCH
+COPY apps/api/requirements.txt /tmp/api-requirements.txt
+RUN mkdir -p /opt/crypto-wheels \
+    && if [ "$TARGETARCH" = arm64 ]; then \
+         apt-get update \
+         && apt-get install -y --no-install-recommends \
+              cargo rustc build-essential pkg-config libssl-dev libffi-dev python3-dev \
+         && crypto_spec="$(grep -E '^cryptography==' /tmp/api-requirements.txt)" \
+         && test -n "$crypto_spec" \
+         && pip wheel --no-cache-dir --no-deps --no-binary cryptography \
+              --wheel-dir /opt/crypto-wheels "$crypto_spec"; \
+       fi
+
+# Grok Build's official installer places a versioned binary under its home and
+# symlinks `grok` to it. Resolve that symlink while building so the runtime
+# binary lives outside the persistent login volume and survives an empty mount.
+FROM python-base AS grok-cli
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && mkdir -p /opt/grok/bin /tmp/grok-home \
+    && curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+       https://x.ai/cli/install.sh -o /tmp/grok-install.sh \
+    && HOME=/tmp/grok-home GROK_BIN_DIR=/opt/grok/bin bash /tmp/grok-install.sh \
+    && cp -L /opt/grok/bin/grok /opt/grok/grok \
+    && /opt/grok/grok --version
+
+# The current Claude Code npm package requires Node 22+, while Debian's nodejs
+# package in this base image is Node 20. Use Anthropic's native, checksummed
+# installer and copy its standalone launcher into the runtime image.
+FROM python-base AS claude-cli
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && mkdir -p /tmp/claude-home /opt/claude \
+    && curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+       https://claude.ai/install.sh -o /tmp/claude-install.sh \
+    && HOME=/tmp/claude-home bash /tmp/claude-install.sh \
+    && cp -L /tmp/claude-home/.local/bin/claude /opt/claude/claude \
+    && /opt/claude/claude --version
+
 FROM python-base AS api
+
+COPY --from=grok-cli /opt/grok/grok /usr/local/bin/grok
+COPY --from=claude-cli /opt/claude/claude /usr/local/bin/claude
 
 # The coding toolchain. NOT optional, and its absence is invisible until a task runs.
 #
@@ -41,12 +87,9 @@ RUN apt-get update \
     `# filter set: without it video.caption fails with "No such filter: 'drawtext'" only when` \
     `# it runs, which is after the render has already spent its time.` \
     ffmpeg libavfilter-extra fonts-dejavu-core \
-    # Both coding CLIs, for the same reason git is here: a harness the control plane cannot
-    # start is a harness that accepts work and never performs it. claude-code authorises from
-    # CLAUDE_CODE_OAUTH_TOKEN; codex from CODEX_ACCESS_TOKEN via `codex login
-    # --with-access-token`. Neither ships a credential — the image has the binary, the
-    # deployment supplies the token.
-    && npm install -g @anthropic-ai/claude-code @openai/codex \
+    # Codex CLI ships as npm; Claude Code is copied from its native install stage above.
+    # Neither image carries a subscription login or token.
+    && npm install -g @openai/codex \
     && npm cache clean --force \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -67,13 +110,19 @@ RUN rm -rf /home/boss/.npm /home/boss/.cache && chown -R boss:boss /home/boss
 # volume from the image path and INHERITS ITS OWNERSHIP — with no such path in the image the
 # volume arrives owned by root, and a container running as `boss` then cannot write the
 # credential it was just given. Creating it here, owned correctly, is what makes the mount work.
-RUN mkdir -p /home/boss/.codex /home/boss/.claude \
-    && chown -R boss:boss /home/boss/.codex /home/boss/.claude \
-    && chmod 700 /home/boss/.codex /home/boss/.claude
+RUN mkdir -p /home/boss/.codex /home/boss/.claude /home/boss/.grok \
+    && chown -R boss:boss /home/boss/.codex /home/boss/.claude /home/boss/.grok \
+    && chmod 700 /home/boss/.codex /home/boss/.claude /home/boss/.grok
 
+ARG TARGETARCH
+COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt
+    && if [ "$TARGETARCH" = arm64 ]; then \
+         pip install --no-cache-dir --no-index --no-deps /opt/crypto-wheels/cryptography-*.whl; \
+       fi \
+    && pip install --no-cache-dir -r /tmp/api-requirements.txt \
+    && python -c 'import cryptography.exceptions'
 
 COPY apps ./apps
 COPY api ./api
@@ -111,6 +160,8 @@ CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM python-base AS worker
 
+COPY --from=grok-cli /opt/grok/grok /usr/local/bin/grok
+
 # Worker must carry the same coding toolchain as the api stage for any path where
 # jobs shell out on the worker host (and to stay aligned with
 # infra/containers/worker.Dockerfile). Goldeneye live QA (BOSS-342) found the
@@ -136,10 +187,16 @@ RUN apt-get update \
     ffmpeg libavfilter-extra fonts-dejavu-core \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+ARG TARGETARCH
+COPY --from=arm64-cryptography-wheel /opt/crypto-wheels/ /opt/crypto-wheels/
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
+    && if [ "$TARGETARCH" = arm64 ]; then \
+         pip install --no-cache-dir --no-index --no-deps /opt/crypto-wheels/cryptography-*.whl; \
+       fi \
+    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt \
+    && python -c 'import cryptography.exceptions'
 
 COPY apps ./apps
 COPY api ./api
@@ -164,7 +221,9 @@ ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
 
 RUN mkdir -p /var/lib/boss/artifacts \
-    && chown -R boss:boss /app /var/lib/boss
+    && mkdir -p /home/boss/.grok \
+    && chown -R boss:boss /app /var/lib/boss /home/boss/.grok \
+    && chmod 700 /home/boss/.grok
 
 USER boss
 
