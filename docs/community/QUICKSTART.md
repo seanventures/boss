@@ -1,6 +1,6 @@
 # BOSS Community — quickstart
 
-Goal: a working self-hosted control plane with BYO keys in minutes on a developer machine.
+Goal: a working self-hosted control plane with BYO keys on a VM or developer machine.
 
 > Invited onto the **private** repo as a design partner? Start at
 > [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](../operations/DESIGN_PARTNER_ONBOARDING.md)
@@ -11,20 +11,50 @@ Goal: a working self-hosted control plane with BYO keys in minutes on a develope
 
 ## One-line install (recommended)
 
-OpenClaw-style: paste into a terminal. Checks Docker, installs Community stack, prompts for keys, seeds the project, verifies health.
+The planned public one-liner will install missing VM dependencies, start the Community
+stack, prompt for keys, seed a project, and verify the API:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
 ```
 
-With a key already exported:
+**Public launch pending:** `seanventures/boss` is not published yet, so the raw URL
+above is a preview of the command, not a working public download. Invited contributors
+can install from the private checkout:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash -s -- \
-  --openai-key "$OPENAI_API_KEY"
+git clone https://github.com/seanheiney/boss.git ~/boss
+cd ~/boss
+BOSS_REPO_URL=https://github.com/seanheiney/boss.git ./install.sh --dir "$PWD"
 ```
 
-Details & flags: [`scripts/install/README.md`](../../scripts/install/README.md) · root [`install.sh`](../../install.sh).
+Supported fresh VMs: Ubuntu 22.04/24.04 and Debian 12/13 with `sudo` or root.
+The installer provisions `git`, `curl`, OpenSSL, Python 3, Docker Engine,
+Buildx, and Compose as needed.
+It binds the API and console to loopback. To use the console from your laptop:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
+```
+
+Open `http://127.0.0.1:3000` locally. For a permanent public hostname, use a TLS
+reverse proxy, pass `--public-url https://boss.example.com` to the installer,
+and set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env`. The proxy
+must overwrite the forwarded host and scheme headers; see the installer guide.
+Details and flags: [installer guide](../../scripts/install/README.md) · [install.sh](../../install.sh).
+Mission Control asks for its own password. On the VM, run
+`python3 scripts/install/console_password.py show` from the install directory
+to display it privately; `reset` rotates it and prints the web restart command.
+
+To add the official Claude Code, Codex CLI, and Grok Build binaries on the VM,
+pass `--install-coding-clis`. BOSS then reports local login status without
+transferring credentials. Authenticate with each provider on the VM; a laptop
+subscription session does not automatically follow an SSH connection. Explicit
+`--connect-claude` and `--connect-codex` import the supported CLI credential
+through BOSS and prove it works. Grok requires `grok login --device-auth` as
+the `boss` user inside the API container; its login volume is shared with the
+worker. See the
+[coding subscriptions guide](../../scripts/install/README.md#optional-coding-subscriptions).
 
 ## What you will run
 

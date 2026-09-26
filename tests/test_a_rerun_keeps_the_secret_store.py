@@ -147,6 +147,52 @@ def test_the_console_url_stays_unless_this_run_set_one(tmp_path):
     assert _val(new.read_text(), "NEXT_PUBLIC_BOSS_API_URL") == "http://198.51.100.8:8000"
 
 
+def test_custom_ports_survive_and_legacy_public_bind_becomes_loopback(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_API_PORT=8111\nBOSS_WEB_PORT=3111\n"
+           "BOSS_POSTGRES_PORT=5544\nBOSS_BIND_ADDRESS=0.0.0.0\n")
+    _write(new, "BOSS_API_PORT=8000\nBOSS_WEB_PORT=3000\n"
+           "BOSS_POSTGRES_PORT=5432\nBOSS_BIND_ADDRESS=127.0.0.1\n")
+    _restore(old, new)
+    text = new.read_text()
+    assert _val(text, "BOSS_API_PORT") == "8111"
+    assert _val(text, "BOSS_WEB_PORT") == "3111"
+    assert _val(text, "BOSS_POSTGRES_PORT") == "5544"
+    assert _val(text, "BOSS_BIND_ADDRESS") == "127.0.0.1"
+
+
+def test_operator_added_settings_survive_without_evaluating_their_values(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    marker = tmp_path / "must-not-exist"
+    raw = f"literal$(touch {marker})`whoami`"
+    _write(old, "BOSS_CODE_AGENT_ENGINE=codex\nBOSS_CHAT_LLM_ENGINE=claude_code\n"
+           "BOSS_ACCOUNT_CONNECT_URL=https://account.example.invalid\n"
+           f"CUSTOM_FLAG={raw}\nINVALID-KEY=ignored\n")
+    _write(new, "BOSS_EDITION=community\nBOSS_ACCOUNT_CONNECT_URL=\n")
+    _restore(old, new)
+    text = new.read_text()
+    assert _val(text, "BOSS_CODE_AGENT_ENGINE") == "codex"
+    assert _val(text, "BOSS_CHAT_LLM_ENGINE") == "claude_code"
+    assert _val(text, "BOSS_ACCOUNT_CONNECT_URL") == "https://account.example.invalid"
+    assert _val(text, "CUSTOM_FLAG") == raw
+    assert "INVALID-KEY" not in text
+    assert not marker.exists()
+
+
+def test_console_login_secrets_survive_a_rerun(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_CONSOLE_PASSWORD=" + "a" * 48 + "\n"
+           "BOSS_CONSOLE_SESSION_SECRET=" + "b" * 64 + "\n")
+    _write(new, "BOSS_CONSOLE_PASSWORD=" + "c" * 48 + "\n"
+           "BOSS_CONSOLE_SESSION_SECRET=" + "d" * 64 + "\n")
+    _restore(old, new)
+    assert _val(new.read_text(), "BOSS_CONSOLE_PASSWORD") == "a" * 48
+    assert _val(new.read_text(), "BOSS_CONSOLE_SESSION_SECRET") == "b" * 64
+
+
 def test_the_live_env_is_replaced_only_after_the_old_key_is_back():
     """The generator runs on the installed .env. The previous key has to already be in that
     file, and the live file must not be truncated before the restore succeeds."""

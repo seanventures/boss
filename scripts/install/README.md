@@ -1,66 +1,147 @@
 # BOSS Community installer
 
-Idiot-proof, one-line Community edition setup — OpenClaw style.
+One-line Community setup for a supported Linux VM.
 
 ## One-liner
 
-> **While `seanheiney/boss` is private this URL returns 404.** Until the repo is public, clone
-> it with your own credentials and run the installer from the checkout:
+> **Public launch pending:** `seanventures/boss` is the intended public home, but the
+> repository and raw installer URL are not available yet. Until publication, invited
+> contributors can clone the private checkout and run its installer:
 >
 > ```bash
-> git clone https://github.com/seanheiney/boss.git ~/boss && cd ~/boss && ./install.sh
+> git clone https://github.com/seanheiney/boss.git ~/boss
+> cd ~/boss
+> BOSS_REPO_URL=https://github.com/seanheiney/boss.git ./install.sh --dir "$PWD"
 > ```
->
-> `BOSS_REPO_URL` also accepts a token-bearing URL if you would rather the installer fetch it.
+
+After the public repository is live, the command will be:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
 ```
 
-With a model key already in the environment:
+The installer reads prompts from the terminal even when piped through `curl`. Paste a
+model key at the hidden prompt, or press Enter and connect one later. Do not place API
+keys in shell arguments, which can appear in process listings and shell history.
+
+For unattended automation, pass the key to the `bash` process through its environment:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash -s -- \
-  --openai-key "$OPENAI_API_KEY"
+curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
+  OPENAI_API_KEY="$OPENAI_API_KEY" bash -s -- --yes
 ```
 
-Non-interactive (CI / automation):
+Or start without a model key and add one to `.env` later:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash -s -- \
-  -y --openai-key "$OPENAI_API_KEY" --dir ~/boss
-```
-
-From a local checkout:
-
-```bash
-./install.sh --dir "$(pwd)" --openai-key "$OPENAI_API_KEY"
+curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
+  bash -s -- --yes --skip-model-key
 ```
 
 ## What it does
 
-1. Checks OS tools (`git`, `docker`, Compose, disk, ports)  
+1. On a fresh Ubuntu 22.04/24.04 or Debian 12/13 VM, installs `git`, `curl`, OpenSSL, Python 3, Docker Engine, Buildx and Compose from the signed Docker apt repository; leaves existing runtimes untouched if they conflict
 2. Prompts for install directory and **BYOK** model key (optional skip)  
-3. Clones/updates the BOSS repo  
+3. Clones or fast-forwards the BOSS repo without deleting a nonempty directory or overwriting tracked local changes
 4. Writes a private `.env` (API key generated, mode 600)  
 5. `docker compose` builds and starts **Postgres + API + worker** (+ Mission Control if selected)  
-6. Waits for `/health`, runs DB seed  
-7. Verifies Community edition + ProviderOps surface  
+6. Waits for `/health`, runs DB seed, and fails visibly if seeding or edition verification fails
+7. Verifies Community edition + ProviderOps surface
+
+On rerun, the existing database/API credentials, model keys, secret-store encryption key,
+console login, public URL, and port settings are retained. Take a private backup of `.env` and the
+Postgres volume before upgrading a long-lived install.
+
+Mission Control has a separate single-operator password and signed session secret,
+generated on first install and stored only in the private `.env`. The password is
+never the BOSS API key. On the VM, retrieve or rotate it deliberately:
+
+```bash
+cd ~/boss
+python3 scripts/install/console_password.py show
+python3 scripts/install/console_password.py reset
+# After reset, run the web recreate command printed by the helper.
+```
+
+`show` requires a terminal so the password is not piped into logs. Keep the
+console on loopback or behind an HTTPS reverse proxy; the web login refuses
+non-HTTPS requests outside loopback. For a public console hostname, set
+`BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env` and recreate
+web. The reverse proxy must **overwrite** `Host`, `X-Forwarded-Host`, and
+`X-Forwarded-Proto` with the external HTTPS host and scheme; passing through
+client-supplied values is unsafe. Keep the Next listener bound to loopback.
+This setting does not replace TLS. The proxy configuration needs a live login
+and CSRF check before public access is enabled.
 
 No BOSS Cloud / Account Connect required.
+
+### Optional coding subscriptions
+
+On the VM, add `--install-coding-clis` to install missing official Claude Code,
+Codex CLI, and Grok Build binaries for the VM user. Existing working binaries are
+left alone; each new binary must pass `--version`. This option also reports which
+VM logins can be verified. The installer downloads each provider's native install
+script over HTTPS before running it. Review the upstream install methods at
+[Claude Code](https://code.claude.com/docs/en/setup),
+[Codex CLI](https://github.com/openai/codex#installing-and-running-codex-cli), and
+[Grok Build](https://docs.x.ai/build/overview).
+
+```bash
+# After BOSS is installed (or on a rerun):
+./install.sh --dir "$PWD" --yes --skip-model-key --install-coding-clis
+```
+
+The VM cannot discover a subscription login on your laptop. Sign in using the
+provider's official CLI **on the VM**, under the account you intend to use:
+
+```bash
+codex login --device-auth
+claude login
+grok login --device-auth
+```
+
+`--discover-subscriptions` only checks status; it sends no credentials. For
+Claude or Codex, an explicit `--connect-claude` or `--connect-codex` stores the
+official CLI credential through BOSS's credential endpoint and runs a real,
+read-only proof in BOSS's container. For Claude, run `claude setup-token` in a
+VM terminal so its official prompts remain visible; the installer accepts the
+token through a hidden terminal prompt or `CLAUDE_CODE_OAUTH_TOKEN` environment
+variable. Codex uses its CLI auth JSON, read only from the current VM user's
+private file. BOSS never prints either credential. A database-backed install asks you to add
+`--accept-database-fallback` before a subscription credential can be stored in
+Postgres; the `--secret-store infisical` option provisions a dedicated store.
+
+Grok's device session is tied to the Unix account and home that runs BOSS.
+A login under the SSH admin account does not authenticate the containers.
+The API and worker images include Grok and share an owner-only `.grok` volume;
+run the device login as `boss` **inside the API container**:
+
+```bash
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  exec -u boss api grok login --device-auth
+```
+
+The installer does not copy or parse `~/.grok/auth.json`. Once the Grok
+harness is available and its BOSS readiness proof passes, set
+`BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker.
+This selects Grok for governed coding work; it does not select the console's
+chat model. A host CLI being installed does not by itself mean the BOSS
+containers are connected.
 
 ## Files
 
 | Path | Role |
 |---|---|
 | `install.sh` | One-line entry (repo root) |
+| `scripts/install/coding_subscriptions.py` | Read-only VM CLI discovery and explicit Claude/Codex binding |
 | `scripts/install/community-compose.yml` | Self-contained Community stack |
 | `.env` (generated) | Secrets + ports — never commit |
 
 ## Requirements
 
-- Docker Desktop (macOS/Windows) or Docker Engine + Compose (Linux)
-- `git`, `curl`
+- Fresh VM: Ubuntu 22.04/24.04 or Debian 12/13, 64-bit, with `sudo` or root access
+- Existing Linux/macOS host: `git`, `curl`, running Docker Engine/Desktop and Compose
+- Existing distro Docker packages are not removed automatically; upgrade those manually
 
 ### Sizing — measured, not estimated
 
@@ -69,7 +150,7 @@ wrong by an order of magnitude and would strand a build half-way.
 
 | | Need | Why |
 |---|---|---|
-| **Disk** | **100 GB** | Images are ~11.5 GB (api 4.1, infisical 3.8, web 1.6, worker 1.5, postgres 0.4). Building them generates tens of GB of layer cache — a real build reached 58 GB before pruning. Every agent run also clones the target repo and may `npm install` Playwright browsers. |
+| **Disk** | **100 GB** | Images are ~11.5 GB (api 4.1, infisical 3.8, web 1.6, worker 1.5, postgres 0.4). Building them generates tens of GB of layer cache — a real build reached 58 GB before pruning. Every agent run also clones the target repo and may `npm install` Playwright browsers. The installer warns below 80 GB. |
 | **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at ~1.6 GB. The coding agent runs INSIDE the api container, so a build adds a Node process plus whatever the task installs. A 7.6 GB allocation ran a 39-file build successfully; less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 
@@ -95,18 +176,19 @@ instance, where it must be the address **the browser** will use, not `127.0.0.1`
 
 ### Installing on a server (not a laptop)
 
-One extra flag, and it is the one that decides whether the console works:
+The default VM install binds API and web to loopback. Reach it immediately through an SSH
+tunnel from your laptop:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash -s -- \
-  --public-url boss.example.internal      # the address YOUR BROWSER will use
+ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-`NEXT_PUBLIC_BOSS_API_URL` is compiled into the web bundle at image build time. Without this
-flag it is `127.0.0.1`, which is right on a laptop and wrong on every server: the browser then
-tries to reach the API on the machine it is running on — yours — and every preview link points
-at nothing while the previews themselves are fine. A bare host, `host:port`, or a full URL are
-all accepted.
+Then open `http://127.0.0.1:3000` locally. For a permanent public site, put HTTPS and an
+access policy in front of the loopback ports and pass `--public-url https://boss.example.com`
+when installing or updating. Set `BOSS_CONSOLE_PUBLIC_ORIGIN` to the console's
+HTTPS origin as described above. The public URL is baked into the web build. Community
+keeps API and web ports on loopback even if an older `.env` had a public bind;
+remote access goes through an SSH tunnel or a TLS reverse proxy.
 
 ### Did it work?
 
