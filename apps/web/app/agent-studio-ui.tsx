@@ -397,6 +397,11 @@ export function AgentStudio({
               The reviewed starter catalog adds agent definitions, panels, and workflows to this project.
               It does not start a run or spend budget.
             </p>
+            {requestedRole ? (
+              <p data-testid="as-missing-definition">
+                No agent definition for {compact(requestedRole)}. This role has no Studio definition.
+              </p>
+            ) : null}
           </div>
           <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
             <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}

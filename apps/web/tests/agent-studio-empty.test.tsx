@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentStudioFeed } from "../lib/agent-studio";
+import { codeOnly } from "./_helpers/source";
 
 /**
  * BOSS-347 — Agent Studio empty/error honesty.
@@ -72,6 +73,20 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
     expect(markup).not.toContain("as-metrics");
     expect(markup).not.toContain("Live coordination");
     expect(markup).not.toContain("Test all");
+    expect(markup).not.toContain("has no Studio definition");
+  });
+
+  it("names a linked role that has no Studio definition without dropping the catalog install", () => {
+    // The empty library returns before the workbench, so the canvas sentence
+    // "No agent definition for …" never mounts. A studio_role on that branch
+    // still has to name the role and keep the install action.
+    const src = codeOnly("app/agent-studio-ui.tsx");
+    const firstRun = src.slice(src.indexOf("if (libraryEmpty)"), src.indexOf("as-workbench"));
+    expect(firstRun).toContain("requestedRole");
+    expect(firstRun).toContain("No agent definition for {compact(requestedRole)}");
+    expect(firstRun).toContain("This role has no Studio definition.");
+    expect(firstRun).toContain("Install BOSS starter catalog");
+    expect(firstRun).toContain('data-testid="as-missing-definition"');
   });
 
   it("keeps the workbench only after specialists exist", () => {

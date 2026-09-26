@@ -606,6 +606,10 @@ export function OrgChartArea({ chart, projectId, actor }: {
               <div className="org-unassigned-row" key={n.id}
                    data-testid={`org-bench-${n.id}`}>
                 <span>{displayName(n)}</span>
+                <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
+                        data-testid={`org-work-${n.id}`}>Work</button>
+                <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
+                        data-testid={`org-definition-${n.id}`}>Definition</button>
                 <select aria-label={`Reports to for ${displayName(n)}`}
                         value={placementTargets[n.id] ?? ""}
                         onChange={(event) => setPlacementTargets((current) =>
@@ -630,7 +634,15 @@ export function OrgChartArea({ chart, projectId, actor }: {
         <details className="org-unassigned" data-testid="roster-alone">
           <summary>No recent handoffs <span>{isolated.length}</span></summary>
           <div className="org-unassigned-list">
-            {isolated.map((n) => <div className="org-unassigned-row" key={n.id}>{displayName(n)}</div>)}
+            {isolated.map((n) => (
+              <div className="org-unassigned-row" key={n.id} data-testid={`org-alone-${n.id}`}>
+                <span>{displayName(n)}</span>
+                <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
+                        data-testid={`org-work-${n.id}`}>Work</button>
+                <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
+                        data-testid={`org-definition-${n.id}`}>Definition</button>
+              </div>
+            ))}
           </div>
         </details>
       ) : null}

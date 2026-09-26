@@ -172,4 +172,37 @@ describe("v1 Org Chart", () => {
     expect(out).toContain("Add agent from template");
     expect(out).toContain("Choose a role to place");
   });
+
+  it("offers work and definition on roles that are not in the structure", () => {
+    // The default planned view is this list when nothing has been placed. Place must
+    // not be the only action, or work and definition are unreachable from the row.
+    const node = { id: "qa_lead", name: "QA Lead", role: "qa_lead", depth: 0, connected: false } as never;
+    const out = renderToStaticMarkup(
+      <OrgChartArea chart={chart({ nodes: [node] })} projectId="p" actor="ceo" />);
+    const row = out.slice(
+      out.indexOf('data-testid="org-bench-qa_lead"'),
+      out.indexOf("</details>"),
+    );
+    expect(out).toContain("Roles not in structure");
+    expect(row).toContain('data-testid="org-work-qa_lead"');
+    expect(row).toContain('data-testid="org-definition-qa_lead"');
+    expect(row).toContain(">Work<");
+    expect(row).toContain(">Definition<");
+    expect(row).toContain(">Place<");
+  });
+
+  it("offers work and definition on roles with no recent handoffs", () => {
+    // Isolated rows render only in the observed view, which static markup does not switch
+    // to. The same helpers the tree uses have to be on that row, not behind Place.
+    const src = codeOnly("app/workforce-ui.tsx");
+    const start = src.indexOf('data-testid="roster-alone"');
+    const slice = src.slice(start, src.indexOf("</details>", start));
+    expect(slice).toContain("No recent handoffs");
+    expect(slice).toContain("openRoleWork(n.id)");
+    expect(slice).toContain("openAgentDefinition(n.id)");
+    expect(slice).toContain('data-testid={`org-work-${n.id}`}');
+    expect(slice).toContain('data-testid={`org-definition-${n.id}`}');
+    expect(slice).toContain(">Work</button>");
+    expect(slice).toContain(">Definition</button>");
+  });
 });
