@@ -40,9 +40,36 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import ssl
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+
+def _tls_context() -> ssl.SSLContext | None:
+    """Trust what curl trusts.
+
+    THE GATE COULD NOT BE RUN FROM A LAPTOP AT ALL. Stock macOS Python ships its own narrow CA
+    bundle, so an HTTPS BOSS behind an ordinary certificate raises CERTIFICATE_VERIFY_FAILED
+    while `curl` to the same URL is fine. Every one of the ten required checks then failed with
+    "unreachable", and `summary: required 0/10 passed` reads as a broken install — on 2026-09-26
+    it reported exactly that against an install whose /health was answering ok the whole time.
+
+    The runbook says a shared-tag bump without this gate at 10/10 is not a release, so a gate
+    that cannot run is a release that cannot happen. `deploy_ops.py` and `examples/_common.py`
+    both already carry this fix; this was the third place that needed it.
+
+    None means "use the default", which is right everywhere certifi is absent.
+    """
+    try:
+        import certifi
+    except ImportError:
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+#: Built once: creating an SSL context per request is measurable on a gate that makes dozens.
+TLS = _tls_context()
 
 GATE_NAME = "live_dogfood_gate"
 GATE_VERSION = "1.0.0"
@@ -388,7 +415,8 @@ class BossApiClient:
         request = Request(url, data=encoded, headers=headers, method=method)
         started = time.monotonic()
         try:
-            with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:  # noqa: S310
+            with urlopen(request, timeout=timeout_seconds or self.timeout_seconds,
+                         context=TLS) as response:  # noqa: S310
                 raw = response.read().decode("utf-8", errors="replace")
                 status = int(response.status)
         except HTTPError as error:
