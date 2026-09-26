@@ -90,12 +90,17 @@ reused, not duplicated.
 Paste a link, say what you want done in plain English, get an edited video waiting for your
 approval before it reaches your channel.
 
-**Steps:** fetch → plan → edit → publish (stops for you)
-**Skills:** `media.fetch_link`, `video.plan_edit`, `video.apply_plan`, `publish_youtube`
+**Steps:** fetch → **let an agent work it out** → publish (stops for you)
+**Skills the editing agent holds:** `media.fetch_link`, `media.fetch_image`, `video.trim`,
+`video.cut`, `video.reframe`, `video.caption`, `video.overlay_image`, `video.watermark`,
+`video.bookend`
 **Needs:** a connected model, and a Google account for the first and last step
 
-Shows: a model writing a validated plan rather than touching the work; two agents with
-different authority; an approval that cannot be switched off.
+Shows: **a step that binds no skill at all.** The middle step carries your sentence and the
+agent composes its own skills to satisfy it — so "trim it" and "trim it, make it portrait and put
+a slide on the end" are the same step, and making it do something new means giving the agent
+another skill rather than changing the workflow. Also: two agents with different authority, and
+an approval that cannot be switched off.
 
 ### [meeting-to-tickets](meeting-to-tickets/) — a transcript becomes tracked work
 
