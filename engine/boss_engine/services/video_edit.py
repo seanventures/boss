@@ -271,14 +271,72 @@ def watermark(
     return out
 
 
+#: How long a still image stands on screen when it is used as a title card or an ending slide.
+#: Long enough to read a line of text and see a logo; short enough that nobody skips it.
+STILL_SECONDS_DEFAULT = 4.0
+
+#: Codecs ffprobe reports for a single frame rather than a video. A still has no duration, so it
+#: cannot be concatenated as-is — it has to be held on screen for a stated length first.
+_STILL_CODECS = frozenset({"png", "mjpeg", "bmp", "gif", "webp", "tiff", "jpeg2000"})
+
+
+def is_a_still(path: str) -> bool:
+    """A single image rather than a clip.
+
+    ASKED BY DURATION, NOT BY FILE EXTENSION. A `.png` is the obvious case, but the thing that
+    matters downstream is whether ffmpeg can place it on a timeline, and what settles that is
+    whether it has a duration. `.mp4` holding one frame behaves the same way.
+    """
+    info = probe(path)
+    if info.get("duration_seconds"):
+        return False
+    return str(info.get("video_codec") or "").lower() in _STILL_CODECS
+
+
+def still_to_clip(image: str, *, work_dir: str, seconds: float = STILL_SECONDS_DEFAULT) -> str:
+    """Hold a still image on screen for `seconds`, as a silent clip.
+
+    WHY THIS EXISTS. An "ending slide" is a picture far more often than it is a video, and
+    `bookend` could only take clips: a PNG has no duration, so it hit "neither audio nor a
+    readable duration, so silence cannot be matched to it" — a sentence that describes the
+    internals rather than the situation. The picture was always the normal case; refusing it was
+    the bug.
+
+    Silent on purpose. `bookend` synthesises the silence it needs at the right length, so adding
+    an audio track here would be a second answer to a question already settled.
+    """
+    _require_ffmpeg()
+    if not os.path.exists(image):
+        raise VideoEditError(f"No image at {image}.")
+    length = max(0.5, min(float(seconds or STILL_SECONDS_DEFAULT), 60.0))
+    # `.mp4` SPELT OUT, not `_output`. That helper keeps the input's extension, which is right
+    # for every other operation here — video in, video out — and wrong for exactly this one: it
+    # produced `end.slide.png` and ffmpeg then refused to write h264 into a PNG container, with
+    # "Conversion failed!" after a successful encode.
+    stem = os.path.splitext(os.path.basename(image))[0]
+    out = os.path.join(work_dir, f"{stem}.slide.mp4")
+    # `-loop 1` with `-t` is what turns one frame into a clip. yuv420p and an even frame size
+    # because libx264 refuses odd dimensions, and an image straight off a phone often has them.
+    _run([
+        "ffmpeg", "-nostdin", "-y", "-loop", "1", "-i", image,
+        "-t", f"{length:.3f}", "-r", "30",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-movflags", "+faststart",
+        out,
+    ])
+    return out
+
+
 def bookend(
     source: str,
     *,
     work_dir: str,
     intro: Optional[str] = None,
     outro: Optional[str] = None,
+    still_seconds: float = STILL_SECONDS_DEFAULT,
 ) -> str:
-    """Put a title clip before and a thank-you clip after.
+    """Put a title card before and an ending slide after. Either may be a clip or an image.
 
     Normalises every part to one format first. Concatenating clips that differ in resolution,
     frame rate or audio layout is the single most common way this produces a file that plays
@@ -296,6 +354,15 @@ def bookend(
     width, height = target.get("width"), target.get("height")
     if not width or not height:
         raise VideoEditError("Could not read the source video's dimensions.")
+
+    # A STILL BECOMES A CLIP BEFORE ANYTHING ELSE HAPPENS, so the rest of this function has one
+    # kind of input to reason about. The source itself is never a still — it is the video being
+    # edited — so only the cards are converted.
+    parts = [
+        still_to_clip(part, work_dir=work_dir, seconds=still_seconds)
+        if part is not source and is_a_still(part) else part
+        for part in parts
+    ]
 
     inputs: list[str] = []
     for part in parts:

@@ -572,7 +572,10 @@ cmd_env() {
   # Printed for `eval`, so it goes to stdout bare. It contains a secret; do not paste it about.
   echo "export BOSS_API=http://${host}:${API_PORT}"
   echo "export BOSS_API_KEY=${key}"
-  echo "export PROJECT=${PROJECT_ID}"
+  # BOSS_PROJECT, NOT PROJECT. The example scripts read BOSS_PROJECT, so a bare `PROJECT`
+  # exported nothing they look at — the output was correct and useless, which is worse than
+  # wrong: everything appears set and the default project is used anyway.
+  echo "export BOSS_PROJECT=${PROJECT_ID}"
 }
 
 cmd_tunnel() {

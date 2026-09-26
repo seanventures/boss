@@ -19,6 +19,8 @@ const VIEWS: Record<string, (project: string) => string> = {
     `/v1/delivery-workflows/custom-steps?project_id=${encodeURIComponent(p)}`,
   installed: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
+  schedules: (p) =>
+    `/v1/delivery-workflows/schedules?project_id=${encodeURIComponent(p)}`,
   // Where a build can go. The registry has always existed and nothing over HTTP could read it,
   // so the form that starts work could not offer a choice and every build went to whatever the
   // deployment's global default happened to be.
@@ -99,9 +101,60 @@ const ACTIONS: Record<string, string> = {
   start: "/v1/delivery-workflows/start",
   advance: "/v1/delivery-workflows/run-capabilities",
   define_step: "/v1/delivery-workflows/custom-steps",
+  schedule: "/v1/delivery-workflows/schedules",
 };
 
 /** Actions addressed to ONE run. Kept apart because their path carries the run id. */
+/** One POST to the API, with its own message forwarded verbatim.
+ *
+ *  Extracted when schedules added a second POST shape: two copies of the fetch/parse/forward
+ *  dance drift, and the one that drifts is the one that swallows the API's sentence. */
+async function proxyPost(path: string, payload: unknown) {
+  try {
+    const r = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const raw = await r.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+    if (!r.ok) {
+      const detail = (parsed as { detail?: string })?.detail;
+      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+                               { status: r.status });
+    }
+    return NextResponse.json(parsed);
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
+async function proxyDelete(path: string) {
+  try {
+    const r = await fetch(`${API_URL}${path}`,
+                          { method: "DELETE", headers: authHeaders({}), cache: "no-store" });
+    const raw = await r.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+    if (!r.ok) {
+      const detail = (parsed as { detail?: string })?.detail;
+      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+                               { status: r.status });
+    }
+    return NextResponse.json(parsed);
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
+/** Actions addressed to ONE schedule. Its id lives in the path, like a run's does. */
+const SCHEDULE_ACTIONS: Record<string, (id: string) => string> = {
+  schedule_enabled: (id) =>
+    `/v1/delivery-workflows/schedules/${encodeURIComponent(id)}/enabled`,
+};
+
 const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
   // Re-test what stopped this run and put back whatever can now proceed. Addressed to the RUN,
@@ -129,6 +182,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
   }
   const action = String(body.action ?? "");
+  const scheduleAction = SCHEDULE_ACTIONS[action];
+  if (scheduleAction) {
+    const id = String((body as { schedule_id?: string }).schedule_id ?? "");
+    if (!id) {
+      return NextResponse.json({ error: `'${action}' needs a schedule_id` }, { status: 400 });
+    }
+    const { action: _a, schedule_id: _s, ...rest } = body;
+    return proxyPost(scheduleAction(id), rest);
+  }
   const runAction = RUN_ACTIONS[action];
   const runId = String((body as { run_id?: string }).run_id ?? "");
   const path = runAction ? (runId ? runAction(runId) : "") : ACTIONS[action];
@@ -218,6 +280,15 @@ export async function DELETE(req: Request) {
   const project = params.get("project_id")?.trim() ?? "";
   const key = params.get("step_key")?.trim() ?? "";
   const actor = params.get("actor")?.trim() || "operator";
+  const scheduleId = params.get("schedule_id")?.trim() ?? "";
+  if (scheduleId) {
+    if (!project) {
+      return NextResponse.json({ error: "project_id is required" }, { status: 400 });
+    }
+    return proxyDelete(
+      `/v1/delivery-workflows/schedules/${encodeURIComponent(scheduleId)}`
+        + `?project_id=${encodeURIComponent(project)}&actor=${encodeURIComponent(actor)}`);
+  }
   if (!project || !key) {
     return NextResponse.json({ error: "project_id and step_key are required" }, { status: 400 });
   }

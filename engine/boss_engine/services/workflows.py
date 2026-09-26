@@ -27,6 +27,7 @@ from .workflow_capabilities import (
     estimate_minutes as capability_minutes,
     project_requirements as capability_project_requirements,
     validate_step as capability_problems,
+    validate_captain,
 )
 
 logger = logging.getLogger(__name__)
@@ -288,7 +289,34 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(binding, dict):
             raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
         step["binding"] = binding
-        if kind == "capability" and binding.get("custom_step"):
+        if kind == "capability" and binding.get("agent_work"):
+            # A STEP WHOSE SPECIFICATION IS A SENTENCE. It binds no capability and no custom
+            # step, so neither of the checks below applies — what it needs is an instruction and,
+            # optionally, an agent. See services/agent_steps.py for why this shape exists.
+            wiring = binding.get("inputs") or {}
+            if not isinstance(wiring, dict) or "instructions" not in wiring:
+                raise WorkflowValidationError(
+                    f"step '{step_id}' must wire 'instructions' — that is the whole of what it "
+                    "tells the agent to do. Read it from the run's input, or pin a literal.")
+            # WHETHER THE NAMED AGENT EXISTS is checked here; whether it HOLDS anything is
+            # checked in `_validate_bindings`, which has the project in hand. Both fail closed,
+            # because a step given to an agent that can do nothing is a run that wastes a gate.
+            captain_problems = validate_captain(step)
+            if captain_problems:
+                raise WorkflowValidationError(" ".join(captain_problems))
+            approval = dict(step.get("approval") or {})
+            mode = str(approval.get("mode", "auto")).lower()
+            if mode not in ("auto", "manual"):
+                raise WorkflowValidationError(
+                    f"step '{step_id}' approval mode must be 'auto' or 'manual'.")
+            # AUTO DOES NOT MEAN UNATTENDED. The agent's own loop suspends on any skill at or
+            # above the risk floor, so a step that reaches a tier-3 publish stops for a person
+            # whatever this says. Recorded as asked rather than rewritten, because the gate that
+            # fires is the skill's, not the step's.
+            approval["mode"] = mode
+            approval.setdefault("on_timeout", "block")
+            step["approval"] = approval
+        elif kind == "capability" and binding.get("custom_step"):
             # A step the customer defined. It cannot be checked here — whether the skill it
             # binds still exists, and what risk tier it really carries, are facts about the
             # project, not about the spec. `_validate_bindings` does it with a connection in
@@ -297,6 +325,13 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 raise WorkflowValidationError(
                     f"step '{step_id}' does not say which custom step it runs."
                 )
+            # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
+            # had their captain checked — so a typo in a role on a customer's step published
+            # cleanly and was denied at run time, twenty minutes into a workflow, as
+            # "caller 'vidoe_editor' not in allowed_callers".
+            captain_problems = validate_captain(step)
+            if captain_problems:
+                raise WorkflowValidationError(" ".join(captain_problems))
             approval = dict(step.get("approval") or {})
             mode = str(approval.get("mode", "auto")).lower()
             if mode not in ("auto", "manual"):
@@ -886,6 +921,34 @@ def publish_version(
     if existing:
         result = _serialize_version(existing)
         result["duplicate"] = True
+        # IDENTICAL TO AN OLDER VERSION IS NOT THE SAME AS IDENTICAL TO THE CURRENT ONE.
+        #
+        # Returning the match and stopping is right when it IS the active version: nothing to
+        # do. When it is an older one, the operator has just submitted a spec that differs from
+        # what is live and been told nothing changed — so reverting by re-saving a previous
+        # configuration silently did nothing and left the version they were correcting in place.
+        # Found by restoring a workflow after a bad save and watching the bad one stay active.
+        #
+        # Publishing the same content twice must not create two versions, so the match is
+        # ACTIVATED rather than copied: the history stays honest and the intent is carried out.
+        if str(definition.get("active_version_id") or "") != str(existing["id"]):
+            connection.execute(
+                text(
+                    """
+                    UPDATE workflow_definitions
+                    SET active_version_id=:version_id, status='active', updated_at=now()
+                    WHERE id=:definition_id AND project_id=:project_id
+                    """
+                ),
+                {"version_id": existing["id"], "definition_id": definition_id,
+                 "project_id": project_id},
+            )
+            result["reactivated"] = True
+            emit_event(
+                connection, project_id, "workflow.version_reactivated", actor,
+                "workflow_version", str(existing["id"]),
+                {"definition_id": definition_id, "version": existing["version"]},
+            )
         return result
     next_version = int(
         connection.execute(

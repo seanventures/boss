@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
+import { formatDateTime } from "../lib/datetime";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
 import { AgentChip } from "./agent-chip";
@@ -113,6 +114,19 @@ type Installed = {
   /** What starting it will ask for. Absent on a workflow that declares nothing, which is
    *  every catalogue workflow today. */
   input_schema?: unknown;
+};
+
+/** When a workflow runs without anybody asking. `describes` is rendered by the API so the
+ *  console cannot word a schedule differently from the thing that fires it. */
+type Schedule = {
+  id: string;
+  workflow_key: string;
+  name: string;
+  describes: string;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_error: string | null;
 };
 
 export type RunStep = {
@@ -264,6 +278,28 @@ type Draft = {
   capability?: string;
   /** Set instead of `capability` when the step is one the customer defined. */
   customStep?: string;
+  /** HOW THIS STEP'S INPUTS ARE WIRED, exactly as the saved spec has them.
+   *
+   *  Dropped on load and rebuilt on save, every input became `{from_input: <name>}` — so
+   *  opening a workflow whose steps feed each other and pressing Save replaced
+   *  `{from_step: "fetch-link", field: "media_artifact_id"}` with a demand that the operator
+   *  type a media artifact id by hand. The chain was destroyed by viewing and saving, with
+   *  nothing on screen having been changed. */
+  inputs?: Record<string, unknown>;
+  /** WHICH AGENT RUNS THIS STEP. A capability step's captain has always become the actor; a
+   *  custom step ignored it, so a customer's workflow had no agent in it anywhere. */
+  captain?: string;
+  /** THIS STEP'S WHOLE SPECIFICATION, when it is an agent step.
+   *
+   *  Every other kind of step binds a skill and BOSS decides what happens. This one says what is
+   *  WANTED and the agent works out how, using the skills it holds. That is what stops the
+   *  product needing a release per use case: a new kind of request needs the agent to hold a
+   *  skill, not BOSS to ship a step.
+   *
+   *  Either a run input the operator fills in at the start ({from_input}), or a literal pinned
+   *  here for a workflow that always does the same thing. */
+  agentWork?: boolean;
+  instructions?: unknown;
   approval?: string;
   config?: Record<string, unknown>;
 };
@@ -340,7 +376,7 @@ type WorkflowSpec = {
 //: buried in the builder's palette, below however many steps already existed, so the way to
 //: make one was the thing you had to scroll to find. The palette still LISTS them, because
 //: that is where you place one; it no longer tries to be where you author one too.
-const TABS = ["running", "catalogue", "design", "steps"] as const;
+const TABS = ["running", "yours", "catalogue", "design", "steps"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -463,6 +499,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [riskFloor, setRiskFloor] = useState(2);
+  /** The agents a step can be given to. Taken from the capabilities payload rather than the
+   *  agent directory, because THIS list is the one the publish-time captain check validates
+   *  against — offering a role that would then be refused is worse than offering none. */
+  const [stepRoles, setStepRoles] = useState<string[]>([]);
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
@@ -475,6 +515,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // EVERY AGENT THIS PROJECT HAS, so "assign" can offer them by name rather than by role_key.
   // One fetch for the whole screen: a picker per run would be one request per run.
   const [roles, setRoles] = useState<Array<{ role_key: string; display_name?: string | null }>>([]);
+  /** WHICH AGENT HOLDS WHICH SKILL, `role_key` → skill ids.
+   *
+   *  Needed because naming an agent on a step is only half the decision. The other half is
+   *  whether that agent is allowed to do the thing — `skill_runtime` checks `role_skills` at run
+   *  time and refuses if the grant is missing. Without this the builder happily let someone put
+   *  an agent on a tier-3 publish step, save it, start it, wait for the approval, and only then
+   *  be told the agent could not call it. One fetch; the whole project's assignments. */
+  const [holdings, setHoldings] = useState<Record<string, string[]>>({});
+  const loadHoldings = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/skills?view=assignments&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (!r.ok) return;
+      const body = await r.json();
+      const next: Record<string, string[]> = {};
+      for (const a of (body?.assignments ?? []) as Array<{ role_key: string; skill_id: string }>) {
+        (next[a.role_key] ??= []).push(a.skill_id);
+      }
+      setHoldings(next);
+    } catch { /* the builder still works; it just cannot warn about a missing grant */ }
+  }, [projectId]);
+  useEffect(() => { void loadHoldings(); }, [loadHoldings]);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -576,6 +639,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [composerOpen, setComposerOpen] = useState(false);
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
   // WHAT WAS JUST MADE, so the builder can SAY it was made.
   //
   // Import worked and looked like it had not: the form closed, the toolbar came back looking
@@ -585,23 +649,30 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [justMade, setJustMade] = useState<{ id: string; name: string; from?: string } | null>(null);
 
   const load = useCallback(async () => {
-    const [caps, cat, inst, live, mine] = await Promise.all([
+    const [caps, cat, inst, live, mine, sched] = await Promise.all([
       get<{ capabilities: Capability[]; blocks: Block[]; manual_approval_risk_floor: number }>(
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
       get<{ runs: Run[] }>("runs", projectId),
       get<{ steps: CustomStep[]; bindable: Bindable }>("custom_steps", projectId),
+      get<{ schedules: Schedule[] }>("schedules", projectId),
     ]);
+    // SCHEDULES ARE NOT LOAD-BEARING. An install whose schedule table predates this feature
+    // must still show its workflows, so a failure here empties the list rather than failing
+    // the screen — unlike the five above it, without which there is nothing to draw.
     const failure = [caps, cat, inst, live, mine].find((r) => "error" in r) as { error: string } | undefined;
     if (failure) {
       setState("failed");
       setError(failure.error);
       return;
     }
+    setSchedules(("error" in (sched as object))
+      ? [] : ((sched as { schedules?: Schedule[] }).schedules ?? []));
     setCapabilities((caps as { capabilities: Capability[] }).capabilities ?? []);
     setBlocks((caps as { blocks?: Block[] }).blocks ?? []);
     setRiskFloor((caps as { manual_approval_risk_floor: number }).manual_approval_risk_floor ?? 2);
+    setStepRoles((caps as { roles?: string[] }).roles ?? []);
     setCatalogue((cat as { items: CatalogueEntry[] }).items ?? []);
     setInstalled((inst as { items: Installed[] }).items ?? []);
     setRuns((live as { runs: Run[] }).runs ?? []);
@@ -770,7 +841,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   className="dw-tab" data-active={tab === t}
                   onClick={() => setTab(t)} data-testid={`dw-tab-${t}`}>
             {t === "running" ? `Running (${runs.length})`
-              : t === "catalogue" ? `Catalogue (${catalogue.length + ownWorkflows(installed).length})`
+              : t === "yours" ? `Yours (${ownWorkflows(installed).length})`
+              // The catalogue counts what BOSS ships, and only that. It used to add the
+              // customer's own to the total, so the number answered no question anybody had.
+              : t === "catalogue" ? `Catalogue (${catalogue.length})`
               : t === "design" ? "Design a workflow"
               : `Your steps (${customSteps.length})`}
           </button>
@@ -893,6 +967,56 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             work_class: "project.new", from_run: run.id,
             input: inputForRerun(run.input),
           })}
+        />
+      ) : tab === "yours" ? (
+        <YoursView
+          installed={installed} schedules={schedules} busy={busy}
+          onStart={(key, workClass) =>
+            act(`Start ${key}`, "start", { workflow_key: key, work_class: workClass,
+                                           sample: true })}
+          onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
+          onSchedule={async (key, name) => {
+            // ASKED, NOT ASSUMED. Monday 08:00 is the common case and the zone is not
+            // guessable — a report arriving at 3am because the browser's zone was used and
+            // nobody said so is the failure this avoids.
+            const zone = window.prompt(
+              `Run "${name}" every Monday at 08:00 — in which time zone?\n\n`
+              + "An IANA name: Europe/London, America/New_York, Asia/Kolkata, UTC.",
+              Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+            if (!zone) return;
+            const result = await act(`Schedule ${name}`, "schedule", {
+              workflow_key: key, name: `${name} — weekly`,
+              cadence: "weekly", weekday: 0, hour: 8, minute: 0, timezone: zone,
+            });
+            if (result.ok) await load();
+          }}
+          onToggleSchedule={async (id, enabled) => {
+            setBusy(enabled ? "Resume schedule" : "Pause schedule");
+            try {
+              const r = await fetch("/api/delivery-workflows", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "schedule_enabled", schedule_id: id,
+                                       enabled, project_id: projectId, actor }),
+              });
+              const body = await r.json();
+              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
+              await load();
+            } finally { setBusy(null); }
+          }}
+          onDeleteSchedule={async (id) => {
+            setBusy("Remove schedule");
+            try {
+              const r = await fetch(
+                `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
+                  + `&project_id=${encodeURIComponent(projectId)}`
+                  + `&actor=${encodeURIComponent(actor)}`,
+                { method: "DELETE" });
+              const body = await r.json();
+              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
+              await load();
+            } finally { setBusy(null); }
+          }}
         />
       ) : tab === "catalogue" ? (
         <CatalogueView
@@ -1035,6 +1159,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           justMade={justMade} onDismissJustMade={() => setJustMade(null)}
           onManageSteps={() => setTab("steps")}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
+          stepRoles={stepRoles} holdings={holdings} onGranted={loadHoldings}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
           onCreate={async (name, spec, fromKey) => {
             // TWO CALLS, AND THE ORDER MATTERS.
@@ -3887,6 +4012,141 @@ function ownWorkflows(installed: Installed[]): Installed[] {
 }
 
 
+/** A CUSTOMER'S OWN WORKFLOWS, ON THEIR OWN SCREEN.
+ *
+ *  These sat under the twelve BOSS ships, on a tab called Catalogue — so the thing somebody
+ *  built was filed beneath the things they did not, and the count on the tab was the two added
+ *  together. Examples make that worse: install three and your own work is below a list you did
+ *  not write.
+ *
+ *  Same cards, their own tab, plus the one thing a workflow of your own needs that a catalogue
+ *  entry does not — a way to say when it should run without anybody asking. */
+function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule,
+                     onToggleSchedule, onDeleteSchedule }: {
+  installed: Installed[];
+  schedules: Schedule[];
+  busy: string | null;
+  onStart: (key: string, workClass: string) => void;
+  onEditMine: (definitionId: string) => void;
+  onSchedule: (key: string, name: string) => void;
+  onToggleSchedule: (id: string, enabled: boolean) => void;
+  onDeleteSchedule: (id: string) => void;
+}) {
+  const ours = useMemo(() => ownWorkflows(installed), [installed]);
+  const byWorkflow = useMemo(() => {
+    const map = new Map<string, Schedule[]>();
+    for (const s of schedules) {
+      map.set(s.workflow_key, [...(map.get(s.workflow_key) ?? []), s]);
+    }
+    return map;
+  }, [schedules]);
+
+  if (ours.length === 0) {
+    return (
+      <div className="dw-catalogue">
+        <p className="detail" data-testid="dw-yours-empty">
+          Nothing of your own yet. Build one on <b>Design a workflow</b>, or run one of the
+          setup scripts in <code>examples/</code> to get a working one to take apart.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dw-catalogue">
+      <div className="dw-grid">
+        {ours.map((item) => {
+          const mine = byWorkflow.get(item.workflow_key) ?? [];
+          return (
+            <article key={item.id} className="dw-card" data-testid={`dw-mine-${item.workflow_key}`}>
+              <header className="dw-card-head">
+                <h4>{item.name}</h4>
+                <span className="dw-class" data-class="yours">yours</span>
+              </header>
+              <p className="detail dw-card-desc">{item.description || "No description."}</p>
+              <dl className="dw-stats">
+                <div><dt>Steps</dt><dd>{item.step_count ?? 0}</dd></div>
+                <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
+                <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
+              </dl>
+              {item.steps?.length ? (
+                <ol className="dw-card-steps" data-testid={`dw-mine-steps-${item.workflow_key}`}>
+                  {item.steps.map((step, i) => (
+                    <li key={step.id || i}>
+                      <span className="dw-card-step-n">{i + 1}</span>
+                      <span className="dw-card-step-label">{step.label}</span>
+                      {step.approval === "manual" ? (
+                        <span className="dw-card-step-gate" title="stops for a person">
+                          needs you
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+
+              {/* WHEN IT RUNS WITHOUT ANYBODY ASKING. Rendered as the sentence the API
+                  produced, so the console cannot describe a schedule differently from the
+                  thing that fires it. */}
+              {mine.length ? (
+                <ul className="dw-card-schedules" data-testid={`dw-sched-${item.workflow_key}`}>
+                  {mine.map((s) => (
+                    <li key={s.id} data-enabled={s.enabled}>
+                      <span className="dw-sched-when">{s.describes}</span>
+                      <span className="detail">
+                        {s.enabled
+                          // formatDateTime, not toLocaleString: the server renders in one zone
+                          // and the browser in another, and the mismatch is a hydration error
+                          // rather than a cosmetic difference. There is a guard for this.
+                          ? (s.next_run_at ? `next ${formatDateTime(s.next_run_at)}` : "")
+                          : "paused"}
+                        {s.last_error ? ` · last run failed: ${s.last_error}` : ""}
+                      </span>
+                      <span className="dw-sched-actions">
+                        <button type="button" className="linklike" disabled={!!busy}
+                                data-testid={`dw-sched-toggle-${s.id}`}
+                                onClick={() => onToggleSchedule(s.id, !s.enabled)}>
+                          {s.enabled ? "pause" : "resume"}
+                        </button>
+                        <button type="button" className="linklike" disabled={!!busy}
+                                onClick={() => onDeleteSchedule(s.id)}>remove</button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <div className="dw-card-actions">
+                <button type="button" className="cap-btn primary"
+                        disabled={!!busy || !item.active_version}
+                        onClick={() => onStart(item.workflow_key, "")}
+                        data-testid={`dw-start-mine-${item.workflow_key}`}>
+                  {item.active_version ? "Start one" : "No version yet"}
+                </button>
+                <button type="button" className="cap-btn" disabled={!!busy}
+                        onClick={() => onEditMine(item.id)}
+                        data-testid={`dw-edit-mine-${item.workflow_key}`}>
+                  Edit
+                </button>
+                {/* Offered only once there is something to run. A schedule pointing at a
+                    workflow with no published version is refused by the API anyway, and
+                    offering it is how somebody meets that refusal for no reason. */}
+                {item.active_version ? (
+                  <button type="button" className="cap-btn" disabled={!!busy}
+                          data-testid={`dw-schedule-${item.workflow_key}`}
+                          onClick={() => onSchedule(item.workflow_key, item.name)}>
+                    Schedule
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork,
                         onEditMine }: {
   catalogue: CatalogueEntry[];
@@ -3917,71 +4177,8 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
   // does not exist in Catalogue and how is it coming to Edit mode, it is completely wrong".
   //
   // It is not the Edit list that was wrong. It was this one, for leaving them out.
-  const ours = useMemo(() => ownWorkflows(installed), [installed]);
   return (
     <div className="dw-catalogue">
-      {ours.length > 0 ? (
-        <section className="dw-mine" data-testid="dw-mine">
-          <div className="dw-runs-head">
-            <span className="detail">
-              Your workflows · {ours.length}
-            </span>
-          </div>
-          <div className="dw-grid">
-            {ours.map((item) => (
-              <article key={item.id} className="dw-card" data-testid={`dw-mine-${item.workflow_key}`}>
-                <header className="dw-card-head">
-                  <h4>{item.name}</h4>
-                  <span className="dw-class" data-class="yours">yours</span>
-                </header>
-                <p className="detail dw-card-desc">
-                  {item.description || "No description."}
-                </p>
-                <dl className="dw-stats">
-                  <div><dt>Steps</dt><dd>{item.step_count ?? 0}</dd></div>
-                  <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
-                  <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
-                </dl>
-                {/* THE STEPS THEMSELVES, in order. A count answers "how big" and the question
-                    an operator has before starting a run is "what will this do" — which used to
-                    need a trip into the editor. The one that stops for a person is marked,
-                    because that is the other thing worth knowing in advance. */}
-                {item.steps?.length ? (
-                  <ol className="dw-card-steps" data-testid={`dw-mine-steps-${item.workflow_key}`}>
-                    {item.steps.map((step, i) => (
-                      <li key={step.id || i}>
-                        <span className="dw-card-step-n">{i + 1}</span>
-                        <span className="dw-card-step-label">{step.label}</span>
-                        {step.approval === "manual" ? (
-                          <span className="dw-card-step-gate" title="stops for a person">
-                            needs you
-                          </span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ol>
-                ) : null}
-                <div className="dw-card-actions">
-                  {/* Startable only once a version exists — a definition with no published
-                      version has nothing to run, and offering the button anyway is how an
-                      operator gets an error instead of a run. */}
-                  <button type="button" className="cap-btn primary"
-                          disabled={!!busy || !item.active_version}
-                          onClick={() => onStart(item.workflow_key, "")}
-                          data-testid={`dw-start-mine-${item.workflow_key}`}>
-                    {item.active_version ? "Start one" : "No version yet"}
-                  </button>
-                  <button type="button" className="cap-btn" disabled={!!busy}
-                          onClick={() => onEditMine(item.id)}
-                          data-testid={`dw-edit-mine-${item.workflow_key}`}>
-                    Edit
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
       <div className="dw-runs-head">
         <span className="detail">
           {have.size} of {catalogue.length} standard workflows installed
@@ -4390,7 +4587,7 @@ function StepsView({
 }
 
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
-                      customSteps, bindable, onManageSteps,
+                      customSteps, bindable, onManageSteps, stepRoles, holdings, onGranted,
                       justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate }: {
   capabilities: Capability[];
@@ -4403,6 +4600,12 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   /** Take the operator to where steps are authored. The palette places them; it does not
    *  make them. */
   onManageSteps: () => void;
+  /** Agents a step can be assigned to, exactly as the publish-time check will accept them. */
+  stepRoles: string[];
+  /** `role_key` → the skills that agent HOLDS, so the row can say whether the agent named on a
+   *  step is actually permitted to run it — and offer the grant instead of failing mid-run. */
+  holdings: Record<string, string[]>;
+  onGranted: () => void;
   /** The workflow created a moment ago, so the builder can confirm it rather than looking
    *  identical to the state before the click. */
   justMade: { id: string; name: string; from?: string } | null;
@@ -4435,6 +4638,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   //: Which step "Customize this step" sent them to, so the row can say so. Cleared on the
   //: next selection — a highlight that never goes away stops meaning anything.
   const [focusStep, setFocusStep] = useState<string | null>(null);
+  /** Which step has its inputs open. One at a time: a canvas with every step expanded is a
+   *  form, and the thing being edited is the ORDER as much as the wiring. */
+  const [wiringStep, setWiringStep] = useState<string | null>(null);
   //: MAKING ONE COMES FIRST, and the default has to agree with the tabs.
   //:
   //: The tab ORDER already says this — "somebody who opens 'Build your own' is usually here to
@@ -4502,6 +4708,17 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         capability: binding.capability ? String(binding.capability) : undefined,
         customStep: binding.custom_step ? String(binding.custom_step) : undefined,
         approval: approval.mode ? String(approval.mode) : "auto",
+        // Carried through untouched. The builder cannot yet AUTHOR a step-to-step reference,
+        // which is a gap; silently discarding one somebody else authored is a bug.
+        inputs: (binding.inputs ?? undefined) as Record<string, unknown> | undefined,
+        captain: step.captain ? String(step.captain) : undefined,
+        // AN AGENT STEP, which binds no capability and no custom step. Read back off the same
+        // binding it was saved into, so opening a workflow and saving it cannot turn one into a
+        // step that runs nothing — the bug that destroyed step wiring once already.
+        agentWork: Boolean(binding.agent_work) || undefined,
+        instructions: binding.agent_work
+          ? ((binding.inputs ?? {}) as Record<string, unknown>).instructions
+          : undefined,
         // Everything that is not id/kind/binding/approval/next is the block's own
         // configuration — wait_seconds, workflow_version_id — and must survive a round trip
         // or editing one step would quietly reset another.
@@ -4659,6 +4876,25 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       config: {},
     }]);
 
+  /** A step that says what is wanted and lets an agent work out how.
+   *
+   *  IT BINDS NOTHING, and that is the whole point. Every other step on this canvas names a
+   *  skill, so a request the skill cannot express needs BOSS to ship a new one — which is how a
+   *  framework turns into a thousand special cases. This one carries an instruction, and the
+   *  agent's own skills are the vocabulary.
+   *
+   *  `auto` is honest here: the agent's loop still stops for a person on any skill at or above
+   *  the risk floor, so a step that reaches a publish waits whatever this says.
+   */
+  const addAgentWork = () =>
+    setDraft((current) => [...current, {
+      id: nextId(current, "agent_work"),
+      kind: "capability",
+      agentWork: true,
+      approval: "auto",
+      config: {},
+    }]);
+
   /** A step the customer defined. Its approval mode follows the resolved risk tier, so a
    *  tier-3 tool arrives on the canvas already marked manual rather than being switched
    *  silently at save time. */
@@ -4680,6 +4916,48 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       config: { ...(block.defaults ?? {}) },
     }]);
 
+  /** What this step takes, and whether each one is required — the customer's own steps declare
+   *  it, the built-in capabilities declare it, and the wiring panel needs one answer. */
+  const declaredInputs = useCallback((step: Draft) => {
+    if (step.customStep) {
+      const mine = customSteps.find((c) => c.step_key === step.customStep);
+      return (mine?.inputs ?? []).map((i) => ({ name: i.name, required: i.required }));
+    }
+    const capability = capabilities.find((c) => c.key === step.capability);
+    return [
+      ...(capability?.required_inputs ?? []).map((name) => ({ name, required: true })),
+      ...(capability?.optional_inputs ?? []).map((name) => ({ name, required: false })),
+    ];
+  }, [capabilities, customSteps]);
+
+  /** What the steps BEFORE this one produce. Only earlier steps: a workflow that reads from a
+   *  step which has not run yet cannot resolve, and the runtime would fail it mid-run rather
+   *  than at save — so the choice is not offered in the first place. */
+  const upstream = useCallback((index: number) =>
+    draft.slice(0, index).map((step) => {
+      const mine = step.customStep
+        ? customSteps.find((c) => c.step_key === step.customStep)
+        : undefined;
+      const capability = step.capability
+        ? capabilities.find((c) => c.key === step.capability)
+        : undefined;
+      return {
+        id: step.id,
+        label: mine?.label ?? capability?.label ?? step.id,
+        fields: (mine?.produces ?? capability?.produces ?? []) as string[],
+      };
+    }), [draft, capabilities, customSteps]);
+
+  /** Change one input's wiring on one step. */
+  const setWire = useCallback((stepId: string, input: string, value: unknown) =>
+    setDraft((current) => current.map((step) => {
+      if (step.id !== stepId) return step;
+      const inputs = { ...(step.inputs ?? {}) };
+      if (value === undefined) delete inputs[input];
+      else inputs[input] = value;
+      return { ...step, inputs };
+    })), []);
+
   const move = (from: number, to: number) =>
     setDraft((current) => {
       if (to < 0 || to >= current.length || from === to) return current;
@@ -4698,6 +4976,30 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         // runtime looks for `wait_seconds` and `workflow_version_id`.
         return { id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}), next };
       }
+      if (step.agentWork) {
+        return {
+          id: step.id,
+          kind: "capability",
+          binding: {
+            agent_work: true,
+            inputs: {
+              // Everything else the step passes along is context the agent is given as facts —
+              // an artifact id an earlier step produced, which it must use verbatim.
+              ...(step.inputs ?? {}),
+              // The instruction is the step. Defaulted to the run's own `instructions` field,
+              // because "say what you want when you start it" is the shape almost every one of
+              // these has.
+              instructions: step.instructions ?? { from_input: "instructions" },
+            },
+          },
+          approval: { mode: step.approval },
+          // NO CAPTAIN IS A REAL CHOICE HERE, and a different one from the other kinds: it means
+          // "whichever agent fits this instruction", which BOSS works out from what each agent
+          // is for and what it holds.
+          ...(step.captain ? { captain: step.captain } : {}),
+          next,
+        };
+      }
       if (step.customStep) {
         const defined = customSteps.find((c) => c.step_key === step.customStep);
         return {
@@ -4705,11 +5007,18 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           kind: "capability",
           binding: {
             custom_step: step.customStep,
-            inputs: Object.fromEntries(
+            // What the step was saved with wins. The default below — every input read from the
+            // run's input by name — is a starting point for a step just dropped on the canvas,
+            // not a rule to impose on one that already has wiring.
+            inputs: step.inputs ?? Object.fromEntries(
               (defined?.inputs ?? []).map((i) => [i.name, { from_input: i.name }]),
             ),
           },
           approval: { mode: step.approval },
+          // Only when one was chosen. An absent captain is the existing behaviour — the step
+          // runs as the anonymous workflow runner — and writing an empty string would make
+          // every step look like it had been assigned to nobody on purpose.
+          ...(step.captain ? { captain: step.captain } : {}),
           next,
         };
       }
@@ -4720,12 +5029,16 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         binding: {
           capability: step.capability,
           // Required inputs are read from the run's input by name. The builder does not invent
-          // values — a workflow that hard-codes the thing being built only works once.
-          inputs: Object.fromEntries(
+          // values — a workflow that hard-codes the thing being built only works once. Same
+          // rule as above: existing wiring is preserved rather than overwritten.
+          inputs: step.inputs ?? Object.fromEntries(
             (capability?.required_inputs ?? []).map((name) => [name, { from_input: name }]),
           ),
         },
         approval: { mode: step.approval },
+        // A capability already has a default captain; naming one here overrides it for this
+        // workflow, which the runtime has honoured all along.
+        ...(step.captain ? { captain: step.captain } : {}),
         next,
       };
     }),
@@ -4752,6 +5065,20 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         <p className="detail dw-palette-summary">
           Click a step to add it, or make one of your own that runs your skill or an MCP tool.
         </p>
+        {/* FIRST IN THE PALETTE, because it is the general answer and the fourteen below it are
+            the specific ones. An operator whose request does not match a listed capability used
+            to have nothing to reach for; this is the step for "just do what I asked". */}
+        <button type="button" className="dw-palette-item dw-palette-agent"
+                onClick={addAgentWork} disabled={!!busy}
+                data-testid="dw-palette-agent-work"
+                title="The step carries your instructions; the agent uses the skills it holds">
+          <span className="dw-palette-label">Let an agent work it out</span>
+          <span className="detail dw-palette-summary">
+            You write what you want in plain English. An agent does it with the skills it holds —
+            no fixed list of operations, so a new kind of request needs a new skill on the agent,
+            not a new step here.
+          </span>
+        </button>
         {capabilities.map((c) => (
           <button key={c.key} type="button" className="dw-palette-item"
                   onClick={() => add(c)} disabled={!!busy}
@@ -5096,11 +5423,14 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   <span className="dw-draft-label">
                     {step.kind !== "capability"
                       ? blocks.find((b) => b.kind === step.kind)?.label ?? step.kind
-                      : step.customStep
-                        ? mine?.label ?? step.customStep
-                        : capability?.label ?? step.capability}
+                      : step.agentWork
+                        ? "Let an agent work it out"
+                        : step.customStep
+                          ? mine?.label ?? step.customStep
+                          : capability?.label ?? step.capability}
                   </span>
                   {step.customStep ? <span className="dw-draft-kind">yours</span> : null}
+                  {step.agentWork ? <span className="dw-draft-kind">agent</span> : null}
                   {/* A control block is visibly a different sort of thing from a work step. */}
                   {step.kind !== "capability" ? (
                     <span className="dw-draft-kind">flow</span>
@@ -5112,13 +5442,19 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       manual. Every field here was already on the client; none of it was drawn. */}
                   <span className="dw-draft-what">
                     <span className="dw-draft-runs">
-                      {mine
-                        ? (mine.usable ? `runs ${mine.risk_source}` : mine.unusable_reason)
-                        : capability
-                          ? `${capability.skills.length} skill${
-                              capability.skills.length === 1 ? "" : "s"}${
-                              capability.captain ? ` · ${capability.captain}` : ""}`
-                          : null}
+                      {step.agentWork
+                        ? (step.captain
+                            ? `${(holdings[step.captain] ?? []).length} skill${
+                                (holdings[step.captain] ?? []).length === 1 ? "" : "s"
+                              } to choose from`
+                            : "whichever agent fits the instruction")
+                        : mine
+                          ? (mine.usable ? `runs ${mine.risk_source}` : mine.unusable_reason)
+                          : capability
+                            ? `${capability.skills.length} skill${
+                                capability.skills.length === 1 ? "" : "s"}${
+                                capability.captain ? ` · ${capability.captain}` : ""}`
+                            : null}
                     </span>
                     {(mine?.summary || capability?.summary) ? (
                       <span className="dw-draft-summary">
@@ -5146,6 +5482,87 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       </span>
                     ) : null}
                   </span>
+                  {/* THE STEP'S WHOLE SPECIFICATION, editable in the row.
+                      Two shapes, because both are things operators say: ask me when the run
+                      starts (the usual one — the same workflow does a different job each time),
+                      or pin it here for a workflow that always does the same thing. */}
+                  {step.agentWork ? (
+                    <span className="dw-draft-agentwork">
+                      <label className="dw-agentwork-mode">
+                        <select className="input"
+                                value={isFromInput(step.instructions) ? "ask" : "fixed"}
+                                data-testid={`dw-agentwork-mode-${step.id}`}
+                                onChange={(e) => setDraft((c) => c.map((st, i) => (i === index
+                                  ? { ...st, instructions: e.target.value === "ask"
+                                      ? { from_input: "instructions" } : "" }
+                                  : st)))}>
+                          <option value="ask">ask me when the run starts</option>
+                          <option value="fixed">always do this</option>
+                        </select>
+                      </label>
+                      {isFromInput(step.instructions) ? (
+                        <span className="detail dw-agentwork-hint">
+                          The agent is given whatever you type in the{" "}
+                          <code>{String((step.instructions as {from_input: string}).from_input)}</code>{" "}
+                          box when you start a run.
+                        </span>
+                      ) : (
+                        <textarea className="input dw-agentwork-text" rows={3}
+                                  value={typeof step.instructions === "string"
+                                         ? step.instructions : ""}
+                                  data-testid={`dw-agentwork-text-${step.id}`}
+                                  placeholder={"What you want done, in plain English. The agent\n"
+                                    + "works out which of its skills to use, and in what order."}
+                                  onChange={(e) => setDraft((c) => c.map((st, i) => (i === index
+                                    ? { ...st, instructions: e.target.value } : st)))} />
+                      )}
+                    </span>
+                  ) : null}
+                  {/* WHO RUNS IT. The premise of the product is that agents do the work and
+                      the steps track it — which is already true of BOSS's own pipelines, where
+                      a capability's captain becomes the actor. A customer's step ignored it and
+                      the builder never offered it, so their workflows had no agent anywhere.
+                      Empty is the existing behaviour: the anonymous workflow runner — EXCEPT on
+                      an agent step, where it means "whichever agent fits", which BOSS works out
+                      from what each one is for and what it holds. */}
+                  {step.kind === "capability" && stepRoles.length ? (
+                    <select className="input dw-draft-captain" value={step.captain ?? ""}
+                            onChange={(e) => setDraft((c) =>
+                              c.map((st, i) => (i === index
+                                ? { ...st, captain: e.target.value || undefined } : st)))}
+                            aria-label={`Agent for ${step.id}`}
+                            data-testid={`dw-draft-captain-${step.id}`}>
+                      <option value="">
+                        {step.agentWork
+                          ? "whichever agent fits — BOSS picks"
+                          : capability?.captain
+                            ? `${capability.captain} (default)`
+                            : "no agent — runs as the workflow"}
+                      </option>
+                      {stepRoles.map((role) => (
+                        <option key={role} value={role}>{role}</option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {/* CAN THAT AGENT ACTUALLY DO IT?
+                      Naming an agent is half the decision; holding the skill is the other half,
+                      and it is the half the run enforces. Checked here, in the row, with the
+                      grant one click away — because the alternative is finding out after the
+                      run has waited on a human approval. */}
+                  {step.agentWork ? (
+                    // AN AGENT STEP HAS NO ONE SKILL TO CHECK — the whole of what the agent
+                    // holds is what it may use. What is worth saying is when it holds NOTHING,
+                    // because then the step is guaranteed to fail.
+                    step.captain && (holdings[step.captain] ?? []).length === 0 ? (
+                      <span className="dw-draft-grant" data-testid={`dw-empty-${step.id}`}>
+                        {step.captain} holds no skills, so it cannot do anything. Open it on the
+                        Agents page and give it the skills this work needs.
+                      </span>
+                    ) : null
+                  ) : (
+                    <CaptainCanRunIt projectId={projectId} step={step} mine={mine}
+                                     holdings={holdings} onGranted={onGranted} />
+                  )}
                   <select className="input dw-draft-approval" value={step.approval}
                           disabled={step.kind !== "capability"
                                     || capability?.approval_forced_manual
@@ -5167,6 +5584,112 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                     <button type="button" className="cap-btn" aria-label={`Remove ${step.id}`}
                             onClick={() => setDraft((c) => c.filter((_, i) => i !== index))}>×</button>
                   </span>
+                  {/* WHERE EACH INPUT COMES FROM.
+                      Every input was written as "ask the operator for it by name", so a
+                      workflow built here could not feed one step into the next — the one thing
+                      a workflow is for. It also could not pin a value, which is how a publish
+                      step chooses between two connected channels. */}
+                  {step.kind === "capability" && declaredInputs(step).length ? (
+                    <button type="button" className="linklike dw-draft-wire-toggle"
+                            data-testid={`dw-wire-${step.id}`}
+                            onClick={() => setWiringStep(wiringStep === step.id ? null : step.id)}>
+                      {wiringStep === step.id ? "hide inputs" : `inputs (${declaredInputs(step).length})`}
+                    </button>
+                  ) : null}
+                  {wiringStep === step.id ? (
+                    <div className="dw-wire" data-testid={`dw-wire-panel-${step.id}`}>
+                      {declaredInputs(step).map((declared) => {
+                        const wire = (step.inputs ?? {})[declared.name] as
+                          Record<string, unknown> | string | undefined;
+                        const mode = wire && typeof wire === "object"
+                          ? ("from_step" in wire ? "step" : "run")
+                          : wire === undefined ? "run" : "fixed";
+                        const sources = upstream(index);
+                        return (
+                          <div key={declared.name} className="dw-wire-row">
+                            <label className="dw-wire-name">
+                              {declared.name}
+                              {declared.required ? null : <span className="detail"> (optional)</span>}
+                            </label>
+                            <select className="input dw-wire-mode" value={mode}
+                                    data-testid={`dw-wire-mode-${step.id}-${declared.name}`}
+                                    onChange={(e) => {
+                                      const next = e.target.value;
+                                      if (next === "run") {
+                                        setWire(step.id, declared.name, { from_input: declared.name });
+                                      } else if (next === "fixed") {
+                                        setWire(step.id, declared.name, "");
+                                      } else {
+                                        const first = sources[0];
+                                        setWire(step.id, declared.name, {
+                                          from_step: first?.id ?? "",
+                                          field: first?.fields[0] ?? "",
+                                        });
+                                      }
+                                    }}>
+                              <option value="run">asked when the run starts</option>
+                              <option value="step" disabled={sources.length === 0}>
+                                {sources.length ? "from an earlier step" : "from an earlier step (none yet)"}
+                              </option>
+                              <option value="fixed">a fixed value</option>
+                            </select>
+
+                            {mode === "run" ? (
+                              <input className="input dw-wire-value"
+                                     value={String((wire as { from_input?: string })?.from_input
+                                                   ?? declared.name)}
+                                     aria-label={`Name asked for ${declared.name}`}
+                                     onChange={(e) => setWire(step.id, declared.name,
+                                                              { from_input: e.target.value })} />
+                            ) : null}
+
+                            {mode === "fixed" ? (
+                              <input className="input dw-wire-value" value={String(wire ?? "")}
+                                     placeholder="e.g. youtube_2"
+                                     aria-label={`Fixed value for ${declared.name}`}
+                                     data-testid={`dw-wire-fixed-${step.id}-${declared.name}`}
+                                     onChange={(e) => setWire(step.id, declared.name, e.target.value)} />
+                            ) : null}
+
+                            {mode === "step" ? (
+                              <span className="dw-wire-pair">
+                                <select className="input"
+                                        value={String((wire as { from_step?: string })?.from_step ?? "")}
+                                        aria-label={`Step supplying ${declared.name}`}
+                                        data-testid={`dw-wire-step-${step.id}-${declared.name}`}
+                                        onChange={(e) => setWire(step.id, declared.name, {
+                                          from_step: e.target.value,
+                                          field: sources.find((u) => u.id === e.target.value)
+                                                   ?.fields[0] ?? "",
+                                        })}>
+                                  {sources.map((u) => (
+                                    <option key={u.id} value={u.id}>{u.label}</option>
+                                  ))}
+                                </select>
+                                {/* FREE TEXT, NOT A CLOSED LIST. `produces` is what a step
+                                    DECLARES; a skill can return more, and a picker that only
+                                    offered the declared ones would make the rest unreachable. */}
+                                <input className="input dw-wire-value"
+                                       list={`dw-fields-${step.id}-${declared.name}`}
+                                       value={String((wire as { field?: string })?.field ?? "")}
+                                       placeholder="which field"
+                                       aria-label={`Field supplying ${declared.name}`}
+                                       onChange={(e) => setWire(step.id, declared.name, {
+                                         from_step: (wire as { from_step?: string })?.from_step ?? "",
+                                         field: e.target.value,
+                                       })} />
+                                <datalist id={`dw-fields-${step.id}-${declared.name}`}>
+                                  {(sources.find(
+                                    (u) => u.id === (wire as { from_step?: string })?.from_step,
+                                  )?.fields ?? []).map((f) => <option key={f} value={f} />)}
+                                </datalist>
+                              </span>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
@@ -5175,4 +5698,78 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       </section>
     </div>
   );
+}
+
+
+/**
+ * Whether the agent named on a step is permitted to run it, said in the row.
+ *
+ * WHY IT IS ITS OWN COMPONENT. It owns a request — granting the skill — and putting that state
+ * in the builder would mean one `busy` flag shared by every row.
+ *
+ * WHAT IT IS CHECKING. `skill_runtime` lets a step's captain call a skill on one of two
+ * grounds: the skill's own `allowed_callers` names it, or the agent HOLDS the skill in
+ * `role_skills`. The second is the one an operator controls, so it is the one offered here.
+ * Silent when there is nothing to say — a row cluttered with green ticks teaches people to stop
+ * reading it.
+ */
+export function CaptainCanRunIt({ projectId, step, mine, holdings, onGranted }: {
+  projectId: string;
+  step: Draft;
+  mine?: CustomStep;
+  holdings: Record<string, string[]>;
+  onGranted: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState("");
+
+  const captain = String(step.captain ?? "").trim();
+  const skillId = String(mine?.skill_id ?? "").trim();
+  // Nothing to check: no agent named, or the step runs an MCP tool rather than a skill — a
+  // connector's authority comes from the connection, not from a grant on the agent.
+  if (!captain || !skillId) return null;
+  if ((holdings[captain] ?? []).includes(skillId)) {
+    return (
+      <span className="dw-draft-holds" data-testid={`dw-holds-${step.id}`}>
+        {captain} holds {skillId}
+      </span>
+    );
+  }
+
+  const grant = async () => {
+    setBusy(true);
+    setFailed("");
+    try {
+      const r = await fetch("/api/skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "assign", project_id: projectId, role_key: captain,
+                               skill_id: skillId, actor: "executive_console" }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) { setFailed(String(body?.error ?? `HTTP ${r.status}`)); return; }
+      onGranted();
+    } catch (e) {
+      setFailed(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span className="dw-draft-grant" data-testid={`dw-grant-${step.id}`}>
+      {captain} does not hold {skillId} — this step will be refused when it runs.
+      <button type="button" className="linklike" disabled={busy}
+              data-testid={`dw-grant-do-${step.id}`} onClick={() => void grant()}>
+        {busy ? "giving…" : `Give ${skillId} to ${captain}`}
+      </button>
+      {failed ? <span className="dw-draft-forced"> {failed}</span> : null}
+    </span>
+  );
+}
+
+
+/** Whether a step's instruction is read from the run's input rather than pinned on the step. */
+function isFromInput(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && "from_input" in (value as object));
 }

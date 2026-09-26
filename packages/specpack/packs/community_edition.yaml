@@ -43,6 +43,19 @@ installs:
   # `youtube` and `video` are the media pipeline. In COMMUNITY deliberately: enterprise
   # and cloud both require this pack, so listing them here is what makes publishing
   # available in every edition rather than only the paid ones.
+  # `meeting_ops` turns a transcript into tickets through whichever tracker `work_tracker`
+  # adapts — same reasoning as the media pair: in COMMUNITY so every edition has it.
+  # `email` joined them when its executor was written. The skills and the SMTP adapter had both
+  # existed for a long time with nothing binding them, so the bundle sat in no pack and no
+  # edition's catalogue offered it — a sending step could be declared in a workflow and never
+  # enabled. Sending is still off until BOSS_EMAIL_REAL_SEND_ALLOWED says otherwise; being in
+  # the catalogue is not being switched on.
+  # `agent_code` is what stops the product needing a release per use case: an agent that holds it
+  # can write a program for work no skill covers, and keep it for the next run. In COMMUNITY for
+  # the same reason as the media pair — a framework whose extension mechanism is a paid tier is
+  # not a framework. Nobody holds it by default: `allowed_callers` is empty, so it is reachable
+  # only by being given to an agent on purpose, and it refuses to run at all without a real
+  # container boundary.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
-           mattermost, youtube, video]
+           mattermost, youtube, video, meeting_ops, email, agent_code]
 status: active  # Independent product; Cloud is opt-in via Easy Connect

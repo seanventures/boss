@@ -10,6 +10,15 @@
 | **Date** | 2026-08-13 |
 | **Verdict** | **NOT READY.** Do not flip `boss-engine` (or this monorepo) public. Do not stamp BOSS-293 or BOSS-300 Done. |
 
+**2026-09-24 scope note:** The product owner requested a full Community repository at
+`seanventures/boss` and selected Apache License 2.0 as the intended license.
+The required counsel reference and a reviewed Community/paid code boundary are
+still pending. This engine-extract checklist does not, by itself, clear a full
+monorepo publication. A redacted gitleaks scan of `origin/main` history found
+eight matches, including a committed `.env.bak-edition`; findings need review
+and any live credentials need rotation before any public push. The report is
+stored outside the repository under the task's `public-readiness` audit folder.
+
 > **Hard rule:** Authoring this file is not a public flip, not a license choice, and not GA.
 > Engine `LICENSE` files (Apache-2.0) **bias** options A/C; they are **not** a substitute for
 > the BOSS-300 human legal/product decision. Do not change `LICENSE`. Do not enable GitHub
@@ -35,9 +44,9 @@ status is `DECIDED` in the decision doc (not inferred from code).
 | ID | Gate | Owner | Blocker? | Evidence required | Status (2026-08-13) |
 |---|---|---|---|---|---|
 | PF-1 | **License decision (BOSS-300)** | Legal + Product (human) | **Yes — hard** | Decision doc header `Status: DECIDED` with chosen option A/B/C (or recorded alternative), date, and signer. NOTICE / package metadata / marketing language agree. Plane BOSS-300 comment with the decision — then and only then may 300 move Done. | **BLOCKED / Open.** Doc is `Status: OPEN`. Recommendation C is **not** a decision. Engine Apache-2.0 files are **not** a decision. |
-| PF-2 | **SECURITY.md private reporting channel** | Security + Release owner | **Yes** | `engine/SECURITY.md` names an approved private destination (security advisory URL and/or monitored mailbox). Placeholder “not yet configured” text removed. CoC reporting destination agrees. | **Open.** `engine/SECURITY.md` exists; reporting address is an explicit placeholder and is itself a public-release blocker. |
-| PF-3 | **Secret scan (full history)** | Security | **Yes** | gitleaks + trufflehog (or approved equivalent) on the **extracted** `boss-engine` history *and* a second pre-flip pass. Zero unresolved hits. Report attached to BOSS-293. | **Open.** No attached full-history scan report. `make public-flip-check` does **not** count as this scan. |
-| PF-4 | **No-credential git history** | Eng + Security | **Yes** | After PF-3: no live secrets, customer data, private hostnames, or unapproved internal endpoints in reachable history. Current tree has no committed `.env` / credential files (mechanical). Rewrite only **before** first shared/public push. | **Open.** Current index has `.env.example` only (mechanical). Full-history rewrite/review is unproven because extract (live `boss-engine`) is not the SoT yet. |
+| PF-2 | **SECURITY.md private reporting channel** | Security + Release owner | **Yes** | `engine/SECURITY.md` names an approved private destination (security advisory URL and/or monitored mailbox). CoC reporting destination agrees. | **Partial.** Product owner supplied `boss@sean.net`; root and engine policies now name it on this branch. Confirm mailbox monitoring and merge before marking Done. |
+| PF-3 | **Secret scan (full history)** | Security | **Yes** | gitleaks + trufflehog (or approved equivalent) on the approved publication history *and* a second pre-flip pass. Zero unresolved hits. Report attached to BOSS-293. | **Blocked.** Initial `origin/main` gitleaks pass found eight matches. Finding review, credential rotation, target-history scan, and second pass remain. |
+| PF-4 | **No-credential git history** | Eng + Security | **Yes** | After PF-3: no live secrets, customer data, private hostnames, or unapproved internal endpoints in reachable history. Rewrite only **before** first shared/public push. | **Blocked.** A historical `.env.bak-edition` is among the scan matches. A clean current tree cannot clear reachable history. |
 | PF-5 | **Community claims freeze** | Product + Marketing | **Yes** (for any public announce) | Public README, release notes, blogs, videos, and landing copy use **only** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) Allowed claims. Forbidden claims absent. GA living plan **C4**. | **Partial (doc).** Freeze exists and is in force. Flip-time copy review is not signed. Do not announce “public OSS” / “Community GA” off this row. |
 | PF-6 | **14-day qa-live** | Ops + QA | **Yes** if the flip is bundled with Community GA language. **No** for a silent private-repo hygiene rehearsal. | [`QA_LIVE_14DAY.md`](QA_LIVE_14DAY.md) shows **14 consecutive PASS** days with logs. GA living plan **C1**. Do not backfill. | **Open.** Calendar is **Day 1/14** (2026-08-13). Same-day re-run does not add a day. |
 | PF-7 | **Private → public GitHub steps** | Release owner (human) | **Yes** | Operator runbook below executed **after** PF-1…PF-6 (and PF-8/PF-9). Visibility change recorded (who / when / repo URL). Actions remain **off** unless a separate, approved enablement ticket says otherwise. | **Open.** Not executed. This repo must stay private. |
@@ -61,7 +70,7 @@ Status key: **BLOCKED** = cannot proceed until a named human decision or missing
 | [`14-engine-repo-extraction.md`](../planning/oss-readiness/14-engine-repo-extraction.md) | Spec for private extract → partners → flip |
 | [`DECISION-oss-licensing-strategy.md`](../planning/oss-readiness/DECISION-oss-licensing-strategy.md) | BOSS-300 options A / B / C — still OPEN |
 | [`engine/COMMUNITY_READINESS.md`](../../engine/COMMUNITY_READINESS.md) | Engine-kit hard gates (hygiene files, not approval) |
-| [`engine/SECURITY.md`](../../engine/SECURITY.md) | Vulnerability reporting — placeholder contact |
+| [`engine/SECURITY.md`](../../engine/SECURITY.md) | Private vulnerability reporting to `boss@sean.net`; monitoring check pending |
 | [`engine/DESIGN_PARTNER_ONBOARDING.md`](../../engine/DESIGN_PARTNER_ONBOARDING.md) | Partner pack (BOSS-292) |
 | [`GTM_PRODUCT_GAP_RECONCILIATION.md`](../product/GTM_PRODUCT_GAP_RECONCILIATION.md) | Public-OSS language still blocked on #300 |
 
@@ -96,7 +105,7 @@ Send **before** PF-7 step 9. Keep partner names out of the public repo.
 - What stays private (goldeneye, customer tenants, this monorepo if still private, credentials).
 - Date/time of the flip and the public URL that will exist afterwards.
 - Ask partners to close or redact private issues that contain hostnames, keys, or customer names.
-- Post-flip support channel (still not the unconfigured SECURITY.md placeholder).
+- Post-flip support channel and private security reporting at `boss@sean.net`.
 - Reminder that the license in force is whatever BOSS-300 **DECIDED** — not a guess.
 
 If no partners have been invited, write that fact on BOSS-292/293 and keep PF-9 Open

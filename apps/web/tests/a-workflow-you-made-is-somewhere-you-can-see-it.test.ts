@@ -24,29 +24,32 @@ import { codeOnly } from "./_helpers/source";
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
 
 describe("a workflow you made appears where workflows are listed", () => {
+  // THEY MOVED, AND THE POINT DID NOT. These cards were a section at the top of the Catalogue
+  // tab and are now a screen of their own — filing what somebody built beneath the twelve they
+  // did not was the next version of the same mistake this file was written about. The
+  // assertions follow them to YoursView; what they assert is unchanged.
+  const YOURS = UI.slice(UI.indexOf("function YoursView("),
+                         UI.indexOf("function CatalogueView("));
+
   it("the operator's own workflows are DRAWN, not counted", () => {
-    expect(UI).toContain('data-testid="dw-mine"');
     // As cards in a grid, the same as the shipped ones — because they are the same kind of
     // thing to the person looking at them.
-    expect(UI).toContain("dw-mine-${item.workflow_key}");
+    expect(YOURS).toContain("dw-mine-${item.workflow_key}");
     // And the number-only version is gone: it was the whole bug.
     expect(UI).not.toContain("${mine} of your own");
     expect(UI).not.toContain("mine > 0 ?");
   });
 
   it("each one says how big it is and which version is live", () => {
-    const block = UI.slice(UI.indexOf('data-testid="dw-mine"'));
-    const card = block.slice(0, block.indexOf("</section>"));
-    expect(card).toContain("item.step_count");
-    expect(card).toContain("item.active_version");
+    expect(YOURS).toContain("item.step_count");
+    expect(YOURS).toContain("item.active_version");
   });
 
   it("a definition with no published version cannot be started", () => {
     // A definition exists before its first version does. Offering "Start one" there hands the
     // operator an error instead of a run.
-    const block = UI.slice(UI.indexOf('data-testid="dw-mine"'));
-    expect(block.slice(0, 2400)).toContain("!item.active_version");
-    expect(block.slice(0, 2400)).toContain("No version yet");
+    expect(YOURS).toContain("!item.active_version");
+    expect(YOURS).toContain("No version yet");
   });
 
   it("editing from the card lands in the same builder the picker uses", () => {

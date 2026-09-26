@@ -25,9 +25,8 @@ All of these must be true before a public flip:
 - [ ] Dependency and license audit evidence is attached to the release record;
       incompatible dependencies have been removed or received approved legal
       treatment.
-- [ ] A security contact and disclosure route are configured in
-      [SECURITY.md](./SECURITY.md). The current placeholder is intentionally a
-      public-release blocker.
+- [ ] The private reporting address in [SECURITY.md](./SECURITY.md) is confirmed
+      monitored by the release owner and the repository reporting route works.
 - [ ] A versioning/release owner and signing or provenance policy are approved.
 - [ ] Two external design partners have self-served the canonical sample task
       and their friction items have been triaged (BOSS-292).

@@ -774,7 +774,11 @@ describe("the panel's buttons wrap as a group", () => {
  */
 describe("the workflow area is organised around intent", () => {
   it("has a tab per thing an operator does", () => {
-    expect(UI).toContain('const TABS = ["running", "catalogue", "design", "steps"] as const;');
+    // `yours` was added when the operator's own workflows moved off the Catalogue tab. They
+    // had been filed beneath the twelve BOSS ships, which reads as an afterthought and gets
+    // worse the moment somebody installs the examples.
+    expect(UI).toContain(
+      'const TABS = ["running", "yours", "catalogue", "design", "steps"] as const;');
   });
 
   it("both ways to author a workflow are on the same page", () => {
@@ -800,12 +804,16 @@ describe("the workflow area is organised around intent", () => {
     expect(UI).toContain("`Your steps (${customSteps.length})`");
   });
 
-  it("the Catalogue count includes the workflows the operator made", () => {
-    // It read `catalogue.length` — shipped entries only — while the screen underneath also
-    // renders the operator's own. So authoring a workflow made it appear on the tab and left
-    // the number at 12, which reads as "it was not saved".
-    expect(UI).toContain(
-      "`Catalogue (${catalogue.length + ownWorkflows(installed).length})`");
+  it("each tab counts what is actually on it", () => {
+    // ORIGINALLY: Catalogue counted shipped entries only while the screen underneath also
+    // rendered the operator's own, so authoring a workflow left the number at 12 — reading as
+    // "it was not saved". The fix then was to add them together.
+    //
+    // NOW they are separate screens, and adding them together would be the same bug pointing
+    // the other way: a Catalogue count that grows when you build something that is not in the
+    // catalogue. Each tab counts its own contents.
+    expect(UI).toContain("`Catalogue (${catalogue.length})`");
+    expect(UI).toContain("`Yours (${ownWorkflows(installed).length})`");
   });
 
   it("decides 'mine' in one place, so the count and the grid cannot disagree", () => {

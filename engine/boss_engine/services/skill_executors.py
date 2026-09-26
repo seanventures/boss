@@ -104,9 +104,49 @@ def resolve_executor(
 ) -> Optional[SkillExecutor]:
     """Resolve a bound one-argument callable, or ``None`` for unbacked skills."""
 
-    handler = _EXECUTORS.get(skill_id.strip())
+    key = skill_id.strip()
+    handler = _EXECUTORS.get(key)
+
     if handler is None:
-        return None
+        # AN AUTHORED SKILL RUNS THE EXECUTOR FOR ITS BEHAVIOUR.
+        #
+        # THIS WIRE WAS MISSING ENTIRELY. `skill.sandboxed_command` has been registered since
+        # authored skills shipped, and nothing ever called it: an authored skill resolves by its
+        # own key, no executor is registered under a key a customer invented, and the invocation
+        # failed with "No server-side executor is registered for skill 'my_thing'". So the whole
+        # point of authoring a skill — that a customer can add a capability without a release —
+        # did not work, and the failure named the skill rather than the missing wire.
+        #
+        # The behaviour is what says how to run it, so the behaviour is what picks the executor.
+        # `_skill_key` is passed along because those executors load the definition themselves:
+        # the source, the image and the timeout are facts about the project, and re-reading them
+        # at execution means a skill edited between publish and run behaves as edited.
+        authored = _authored_skill(context, key)
+        if authored is None:
+            return None
+        behaviour = str(authored.get("behaviour_kind") or "").strip()
+        if behaviour == "builtin":
+            # A `builtin` skill NAMES an executor BOSS already ships. It is a wrapper that gives
+            # an existing capability knowledge and a risk tier, so it runs that executor with the
+            # inputs untouched — there is no behaviour executor to reach for.
+            named = str((authored.get("config") or {}).get("executor_id") or "").strip()
+            handler = _EXECUTORS.get(named)
+            if handler is None:
+                return None
+        else:
+            handler = _EXECUTORS.get(f"skill.{behaviour}")
+            if handler is None:
+                return None
+
+        wrapping = behaviour != "builtin"
+
+        def execute_authored(inputs: dict[str, Any]) -> dict[str, Any]:
+            if context is None:
+                raise SkillExecutorConfigurationError(
+                    f"Skill '{key}' requires a server-side executor context.")
+            return handler(context, {**inputs, "_skill_key": key} if wrapping else inputs)
+
+        return execute_authored
 
     def execute(inputs: dict[str, Any]) -> dict[str, Any]:
         if context is None:
@@ -116,6 +156,24 @@ def resolve_executor(
         return handler(context, inputs)
 
     return execute
+
+
+def _authored_skill(
+    context: Optional[SkillExecutorContext], skill_key: str
+) -> Optional[dict[str, Any]]:
+    """The definition of a skill this project authored, or None if it authored no such skill.
+
+    Swallows its own failures on purpose: resolution runs on every invocation, and a skill that
+    simply has no executor must come back as "unbacked" rather than as a database error.
+    """
+    if context is None or getattr(context, "connection", None) is None:
+        return None
+    try:
+        from .skill_definitions import get_skill
+
+        return get_skill(context.connection, context.project_id, skill_key) or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def registered_executor_ids() -> tuple[str, ...]:
@@ -618,6 +676,237 @@ def execute_sandboxed_command(
         sandbox.teardown()
 
 
+#: Languages an agent may write. A fixed set, because each one is an interpreter that has to
+#: exist in the sandbox image, and "whatever you like" would fail at run time on the third one.
+_AGENT_LANGUAGES = {
+    "python": ("program.py", ["python3", "program.py"]),
+    "bash": ("program.sh", ["bash", "program.sh"]),
+    "sh": ("program.sh", ["sh", "program.sh"]),
+}
+
+#: Bounded, because an agent's own estimate of how long its code needs is not evidence.
+_AGENT_CODE_TIMEOUT_MAX = 300
+
+
+@register_executor("code.write_and_run")
+def execute_code_write_and_run(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a program the agent just wrote, in the container boundary and nowhere else.
+
+    WHY THIS EXISTS. Everything else an agent can do had to be shipped as a skill first, which
+    means a customer asking for something new waits for a release. This closes the class: if the
+    work is a computation and no skill covers it, the agent writes the computation — and if it
+    worked, `code.remember` keeps it so the next run does not pay for it again.
+
+    WHAT IS NOT NEGOTIABLE — all of it enforced in `_run_a_program`
+    ---------------------------------------------------------------
+    * THE BOUNDARY IS THE CONTAINER, and it fails closed: no network, non-root, every Linux
+      capability dropped, no-new-privileges, hard memory/CPU/PID limits. Where that is not
+      configured this REFUSES rather than degrading to the control plane's own host — which is
+      where an agent's shell reached a production DATABASE_URL and cleared 204 tables on
+      2026-09-02.
+    * THE SOURCE IS WRITTEN TO A FILE, never passed through a shell, so a program containing a
+      quote is not a different program.
+    * A SCRATCH DIRECTORY PER CALL, discarded after. Two invocations share nothing.
+    * TIER 2, so a person approves it. Code written a moment ago is not a skill a human authored
+      and pinned by digest.
+    """
+    why = _required_text(inputs, "why")
+    result = _run_a_program(
+        context,
+        language=str(inputs.get("language") or "python").strip().lower(),
+        source=str(inputs.get("source") or ""),
+        files=inputs.get("files") or {},
+        timeout=max(5, min(int(inputs.get("timeout_seconds") or 60), _AGENT_CODE_TIMEOUT_MAX)),
+        label="code.write_and_run",
+    )
+    return {"why": why, **result}
+
+
+def _run_a_program(
+    context: SkillExecutorContext,
+    *,
+    language: str,
+    source: str,
+    files: dict[str, Any],
+    timeout: int,
+    label: str,
+) -> dict[str, Any]:
+    """Run one program in the container boundary and nowhere else.
+
+    Shared by the skill that writes a program and the skill that reruns a remembered one,
+    because the boundary must not have two implementations — the second one is always the one
+    that forgets to drop a capability.
+    """
+    import json as _json
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from .container_runner import ContainerCommandRunner, ContainerUnavailable
+
+    if language not in _AGENT_LANGUAGES:
+        raise SkillExecutorConfigurationError(
+            f"{language!r} is not a language this runs. Use one of: "
+            f"{', '.join(sorted(_AGENT_LANGUAGES))}.")
+    if not source.strip():
+        raise SkillExecutorConfigurationError("source is required — the program to run.")
+
+    runtime = str(getattr(context.settings, "sandbox_command_runtime", "") or "").strip().lower()
+    if runtime != "docker":
+        # SAID, NOT SILENTLY WEAKENED. An operator reading this knows exactly what to set and
+        # what the alternative would have cost them.
+        raise SandboxIsolationUnavailable(
+            f"{label} needs a real boundary and this deployment has none: "
+            f"BOSS_SANDBOX_COMMAND_RUNTIME is {runtime or 'unset'}, so a program would run in "
+            "the control plane's own container with its filesystem and network. Set it to "
+            "'docker'. It will not run anywhere else.")
+
+    filename, argv = _AGENT_LANGUAGES[language]
+    root = Path(tempfile.mkdtemp(prefix="boss-agent-code-"))
+    try:
+        (root / filename).write_text(source, encoding="utf-8")
+        # FILES THE CALLER BRINGS WITH IT. How a program receives what an earlier skill
+        # produced, without the program needing to reach anything.
+        for name, contents in (files or {}).items():
+            safe = Path(str(name)).name          # no traversal: one flat directory, by design
+            if not safe or safe.startswith("."):
+                continue
+            (root / safe).write_text(str(contents), encoding="utf-8")
+
+        try:
+            with ContainerCommandRunner(root, context.settings,
+                                        task_id="agentcode") as runner:
+                outcome = runner.run(" ".join(argv), timeout=timeout)
+        except ContainerUnavailable as error:
+            raise SandboxIsolationUnavailable(
+                f"{label} could not get an isolated sandbox: {error}") from error
+
+        stdout = str(getattr(outcome, "stdout", "") or "")
+        # A PROGRAM THAT PRINTS JSON BECOMES A STEP THAT PRODUCES NAMED VALUES. That is what
+        # lets a later step wire from this one; anything else is a wall of text.
+        produced: dict[str, Any] = {}
+        try:
+            parsed = _json.loads(stdout.strip() or "null")
+            if isinstance(parsed, dict):
+                produced = parsed
+        except ValueError:
+            pass
+
+        return {
+            "language": language,
+            "exit_code": int(getattr(outcome, "exit_code", 1) or 0),
+            "stdout": stdout[-8000:],
+            "stderr": str(getattr(outcome, "stderr", "") or "")[-4000:],
+            "result": produced,
+            "timed_out": bool(getattr(outcome, "timed_out", False)),
+        }
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@register_executor("skill.agent_program")
+def execute_agent_program(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Rerun a program an agent wrote on an earlier run and the workflow kept.
+
+    THE POINT OF THE WHOLE ARRANGEMENT. The first run of a workflow pays a model to work out how
+    to do something no skill covered. Every run after it reuses the program — no model call, the
+    same result, and an operator can read the code that will run before it runs. An agent that
+    improvises every time is expensive and non-deterministic; one that accumulates is neither.
+    """
+    from .skill_definitions import get_skill
+
+    skill_key = _required_text(inputs, "_skill_key")
+    skill = get_skill(context.connection, context.project_id, skill_key)
+    if skill is None:
+        raise SkillExecutorConfigurationError(f"no skill {skill_key!r} in this project.")
+    if not skill["enabled"]:
+        raise SkillExecutorConfigurationError(f"skill {skill_key!r} is disabled.")
+
+    config = skill["config"] or {}
+    missing = [entry["name"] for entry in skill["inputs"]
+               if entry.get("required") and not str(inputs.get(entry["name"], "")).strip()]
+    if missing:
+        raise SkillExecutorConfigurationError(f"{skill_key} needs {', '.join(missing)}.")
+
+    # THE DECLARED INPUTS BECOME FILES THE PROGRAM CAN READ, one per input, plus inputs.json
+    # holding all of them. A remembered program cannot take arguments — it was written against a
+    # shape, and the shape is what the skill declares.
+    import json as _json
+
+    supplied = {entry["name"]: inputs.get(entry["name"])
+                for entry in skill["inputs"] if entry["name"] in inputs}
+    files = {"inputs.json": _json.dumps(supplied, default=str)}
+
+    result = _run_a_program(
+        context,
+        language=str(config.get("language") or "python"),
+        source=str(config.get("source") or ""),
+        files=files,
+        timeout=max(5, min(int(config.get("timeout_seconds") or 60), _AGENT_CODE_TIMEOUT_MAX)),
+        label=skill_key,
+    )
+    return {"skill_key": skill_key, "reused": True,
+            "written_by": config.get("written_by") or "", **result}
+
+
+@register_executor("code.remember")
+def execute_code_remember(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep a program the agent just wrote, so the next run reuses it instead of rewriting it.
+
+    WHY THE AGENT DOES THIS AND NOT BOSS. Only the agent knows whether the program it just ran is
+    the general answer or a one-off hack that happened to work on this input. Saving is therefore
+    a decision it makes deliberately, with a name and a description it has to write — and an
+    operator can read, edit, disable or delete what it saved, because it lands in exactly the
+    same place as a skill a person authored.
+
+    IT IS NOT AUTOMATICALLY GIVEN TO ANYBODY. Saving records the program; the grant is still a
+    separate, explicit act. An agent cannot widen its own reach by writing code.
+    """
+    from .skill_definitions import SkillDefinitionError, save_skill
+
+    key = _required_text(inputs, "skill_key")
+    language = str(inputs.get("language") or "python").strip().lower()
+    source = str(inputs.get("source") or "")
+    try:
+        saved = save_skill(
+            context.connection,
+            project_id=context.project_id,
+            actor=context.actor,
+            skill_key=key,
+            label=str(inputs.get("label") or key.replace("_", " ")),
+            summary=_required_text(inputs, "summary"),
+            behaviour_kind="agent_program",
+            knowledge=str(inputs.get("knowledge") or ""),
+            inputs=inputs.get("inputs") or [],
+            produces=inputs.get("produces") or [],
+            config={
+                "language": language,
+                "source": source,
+                "timeout_seconds": int(inputs.get("timeout_seconds") or 60),
+                "written_by": context.actor,
+                "written_for": str(inputs.get("written_for") or ""),
+                "written_in_run": str(inputs.get("written_in_run") or ""),
+            },
+            # THE TIER IT INHERITS. A program an agent wrote is approved by a person the first
+            # time it is used from a step, the same as the skill that produced it.
+            risk_tier=int(inputs.get("risk_tier") or 2),
+            trusted=False,
+        )
+    except SkillDefinitionError as error:
+        raise SkillExecutorConfigurationError(str(error)) from error
+    return {"skill_key": key, "saved": True, "version": saved.get("updated_at"),
+            "note": "kept for the next run. Somebody still has to give it to an agent."}
+
+
 # ---------------------------------------------------------------------------
 # Media: editing a video, and publishing it
 # ---------------------------------------------------------------------------
@@ -762,18 +1051,25 @@ def execute_video_watermark(
 def execute_video_bookend(
     context: "SkillExecutorContext", inputs: dict[str, Any]
 ) -> dict[str, Any]:
-    from .video_edit import bookend
+    """Join a title card before and/or an ending slide after. Either may be a picture.
+
+    `seconds` is how long a STILL is held on screen. Ignored for a clip, which has its own
+    length — so it is optional rather than conditional on something the caller has to know.
+    """
+    from .video_edit import STILL_SECONDS_DEFAULT, bookend
 
     if not (str(inputs.get("intro_artifact_id") or "").strip()
             or str(inputs.get("outro_artifact_id") or "").strip()):
         raise ValueError("bookend needs an intro_artifact_id, an outro_artifact_id, or both")
+    held = float(inputs.get("seconds") or STILL_SECONDS_DEFAULT)
     return _edit_in_drive(
         context, inputs, operation="bookend",
         extra_downloads=("intro_artifact_id", "outro_artifact_id"),
         apply_edit=lambda src, work, extra: bookend(
             src, work_dir=work,
             intro=extra.get("intro_artifact_id"),
-            outro=extra.get("outro_artifact_id")),
+            outro=extra.get("outro_artifact_id"),
+            still_seconds=held),
     )
 
 
@@ -874,6 +1170,245 @@ def execute_video_caption(
     )
 
 
+@register_executor("model.generate_text")
+def execute_model_generate_text(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Write something, using the model this project chose.
+
+    DECLARED SINCE THE SPECPACK WAS WRITTEN AND NEVER BOUND. Every workflow that wanted a step
+    to draft, summarise or write anything had to bring its own skill; the one general-purpose
+    writing step in the catalogue could not run.
+    """
+    from .claude_cli_adapter import make_agent_chat_adapter
+    from .setup_service import chat_engine_for
+
+    prompt = str(inputs.get("prompt") or inputs.get("message") or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required — say what should be written")
+
+    settings = context.settings
+    try:
+        engine = chat_engine_for(context.connection, settings, context.project_id)
+        if engine:
+            settings = settings.model_copy(update={"chat_llm_engine": engine})
+    except Exception:  # noqa: BLE001 — a settings read must not fail the step
+        pass
+
+    # MATERIAL FROM AN EARLIER STEP, appended rather than interpolated.
+    #
+    # A workflow step wires whole VALUES — it cannot build "write a newsletter from: {dossier}"
+    # out of two of them, and a template language in the binding would be a second, worse
+    # programming language inside a JSON field. So the standing instruction is `prompt` and
+    # whatever an earlier step produced is `context`, and the step concatenates them once.
+    material = inputs.get("context") or inputs.get("material") or ""
+    if not isinstance(material, str):
+        import json as _json
+
+        material = _json.dumps(material, indent=2, default=str)
+    material = material.strip()
+    if material:
+        prompt = f"{prompt}\n\n--- material ---\n{material}"
+
+    system = str(inputs.get("system") or inputs.get("instructions") or "").strip()
+    _ref, text_out, usage = make_agent_chat_adapter(settings).create_text_response(
+        prompt, system_prompt=system)
+    body = str(text_out or "").strip()
+    if not body:
+        raise ValueError("the model returned nothing to write")
+    return {"text": body, "characters": len(body),
+            "model": (usage or {}).get("model")}
+
+
+@register_executor("email.send_real_guarded")
+@register_executor("email.send_real")
+def execute_email_send(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Send an email through the configured SMTP server.
+
+    The adapter has existed all along; nothing bound it to the skill, so a workflow could
+    declare a sending step and never send. Both skill ids share this executor because they are
+    the same act — the difference between them is POLICY (the guarded one requires an approval
+    in its own spec), and policy is enforced before an executor is reached, not inside it.
+
+    REFUSES RATHER THAN PRETENDS. An install without SMTP configured gets a message naming the
+    setting that is missing, not a success with nothing sent.
+    """
+    from .email_adapter import EmailAdapter
+    from .email_config import settings_for
+
+    to = str(inputs.get("to") or inputs.get("channel") or "").strip()
+    if not to:
+        raise ValueError("to is required — the address this goes to")
+    body = str(inputs.get("body") or inputs.get("text") or "").strip()
+    if not body:
+        raise ValueError("body is required — an empty email is not a message")
+    subject = str(inputs.get("subject") or "").strip() or None
+
+    # THIS PROJECT'S MAIL SERVER, falling back to the environment. An install that configured
+    # SMTP with env vars keeps working; one that set it up in the console no longer needs to.
+    settings = settings_for(context.connection, context.settings, context.project_id)
+    # THE ADAPTER TAKES A CHANNEL, NOT AN ADDRESS. It wants `email:someone@example.com` and
+    # refuses a bare address — which is a sensible rule for a channel abstraction and a trap
+    # for a workflow input called `to`. Nobody types a scheme into a To field, so it is added
+    # here rather than made the operator's problem.
+    channel = to if to.startswith("email:") else f"email:{to}"
+    message_id = EmailAdapter(settings).send_message(channel, subject, body)
+    return {"to": to, "subject": subject, "message_id": message_id,
+            "characters": len(body)}
+
+
+@register_executor("meeting.extract_actions")
+def execute_meeting_extract_actions(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Read a transcript; write down what was decided and what somebody has to do.
+
+    Creates nothing. Its whole output is a list a person approves before the next step turns it
+    into tickets other people will see — the same split as planning an edit before rendering it.
+    """
+    from .meeting_actions import extract
+    from .claude_cli_adapter import make_agent_chat_adapter
+    from .setup_service import chat_engine_for
+
+    transcript = str(inputs.get("transcript") or inputs.get("notes") or "").strip()
+    if not transcript:
+        raise ValueError(
+            "transcript is required — paste the meeting notes or transcript")
+
+    # The engine THIS PROJECT chose. Without it the adapter falls through to OpenAI and an
+    # install running on a Claude subscription fails with "OPENAI_API_KEY is not configured".
+    settings = context.settings
+    try:
+        engine = chat_engine_for(context.connection, settings, context.project_id)
+        if engine:
+            settings = settings.model_copy(update={"chat_llm_engine": engine})
+    except Exception:  # noqa: BLE001 — a settings read must not fail the step
+        pass
+
+    result = extract(
+        make_agent_chat_adapter(settings),
+        transcript=transcript,
+        context=str(inputs.get("context") or ""),
+    )
+    return {
+        "decisions": result["decisions"],
+        "actions": result["actions"],
+        "unclear": result["unclear"],
+        "summary": result["summary"],
+        "action_count": len(result["actions"]),
+    }
+
+
+@register_executor("tracker.issues.create")
+def execute_tracker_issues_create(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Create issues in the project's work tracker — Plane by default.
+
+    TAKES A LIST, not one issue. A meeting produces several actions and a workflow's step list
+    is fixed, so one step per ticket is not expressible; the same reason video.apply_plan takes
+    a plan rather than one operation.
+
+    PARTIAL SUCCESS IS REPORTED, NOT HIDDEN. Six tickets where the fourth fails leaves five
+    real ones behind, and a step that raises would say nothing about which. Each result carries
+    its own outcome and the step fails only if EVERY one did.
+    """
+    from sqlalchemy import text as _sql
+
+    from .work_tracker_adapters import get_adapter
+
+    actions = inputs.get("actions") or inputs.get("issues")
+    if isinstance(actions, dict):
+        actions = [actions]
+    if not isinstance(actions, list):
+        raise ValueError("actions must be a list of {title, detail} items")
+    if not actions:
+        # NOT AN ERROR. A meeting that produced no actions is a real outcome, and failing here
+        # would make "nothing to do" look like a broken workflow.
+        return {"created": [], "failed": [], "created_count": 0,
+                "note": "no actions were given, so no tickets were created"}
+
+    wanted = str(inputs.get("provider_key") or "").strip().lower()
+    row = context.connection.execute(
+        _sql(
+            """
+            SELECT provider_key, display_name, configuration
+            FROM work_tracker_providers
+            WHERE project_id = :p AND status = 'active'
+              AND (:k = '' OR provider_key = :k)
+            ORDER BY is_default DESC, updated_at DESC
+            LIMIT 1
+            """
+        ),
+        {"p": context.project_id, "k": wanted},
+    ).mappings().first()
+    if row is None:
+        raise ValueError(
+            f"this project has no {'active work tracker' if not wanted else wanted} "
+            f"configured. Connect one first — Plane, Jira, Linear, GitHub Issues or Azure "
+            f"DevOps.")
+
+    adapter = get_adapter(row["provider_key"])
+    config = dict(row["configuration"] or {})
+
+    created: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict):
+            failed.append({"index": index, "error": "not an object"})
+            continue
+        title = str(action.get("title") or "").strip()
+        if not title:
+            failed.append({"index": index, "error": "no title"})
+            continue
+        body = _issue_body(action)
+        try:
+            result = adapter.create_issue(
+                config, title=title[:200],
+                description_html=body.replace("\n", "<br>"), description_text=body)
+            if result is None:
+                # An adapter that declines rather than raises. Reported as a failure, because
+                # "no ticket exists" is the same outcome either way.
+                failed.append({"index": index, "title": title,
+                               "error": "the tracker did not create it and gave no reason"})
+                continue
+            created.append({
+                "title": title,
+                # IssueCreateResult's own field names — not guessed. A URL is what makes the
+                # step's output useful to the person who approved it.
+                "url": result.external_url,
+                "key": result.external_key,
+                "external_id": result.external_issue_id,
+                "owner": action.get("owner"),
+            })
+        except Exception as error:  # noqa: BLE001 — one bad ticket is not six
+            failed.append({"index": index, "title": title, "error": str(error)[:300]})
+
+    if failed and not created:
+        raise ValueError(
+            f"none of the {len(failed)} tickets could be created in "
+            f"{row['display_name']}: {failed[0]['error']}")
+    return {
+        "created": created,
+        "failed": failed,
+        "created_count": len(created),
+        "tracker": row["display_name"],
+    }
+
+
+def _issue_body(action: dict[str, Any]) -> str:
+    """What the ticket says, for somebody who was not in the meeting."""
+    parts = [str(action.get("detail") or "").strip()]
+    if action.get("owner"):
+        parts.append(f"Owner as named in the meeting: {action['owner']}")
+    if action.get("due"):
+        parts.append(f"Timing as discussed: {action['due']}")
+    parts.append("Created by BOSS from a meeting transcript.")
+    return "\n\n".join(p for p in parts if p)
+
+
 @register_executor("media.fetch_link")
 def execute_media_fetch_link(
     context: "SkillExecutorContext", inputs: dict[str, Any]
@@ -950,6 +1485,92 @@ def execute_media_fetch_link(
         "copied": True,
         "source_url": url,
         "duration_seconds": info.get("duration_seconds"),
+    }
+
+
+@register_executor("media.fetch_image")
+def execute_media_fetch_image(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Turn a pasted image link into an artifact the editing steps can put on screen.
+
+    THE MISSING HALF OF `media.fetch_link`. That one refuses anything that is not a video, which
+    is right for the thing being edited — and left NO WAY to get a picture into BOSS. There is no
+    artifact upload in the console, so an operator asked to supply an "ending slide" had to name
+    an artifact id they had no means of obtaining. The Start form asked for something unobtainable,
+    which is the same dead end as a start form with no fields at all.
+
+    IT RETURNS `assets` AS WELL AS AN ID. `video.plan_edit` takes {name: artifact_id} and a step
+    output is a single value, so handing back the map is what lets the two steps join with nothing
+    in between. The name matters: the planning model reads it to work out what the picture is FOR,
+    so "ending slide" plans differently from "logo".
+
+    A BLANK URL IS NOT AN ERROR. This step is optional in a workflow — most edits have no slide —
+    and a required step that fails on an empty optional field is a workflow that cannot be run
+    without one.
+    """
+    from .media_storage import MediaStorageError, fetch, store
+    from .media_providers import resolve_link
+    from .drive_media import record_artifact, workspace
+    from .video_edit import is_a_still, probe, VideoEditError
+
+    url = str(inputs.get("url") or inputs.get("link") or "").strip()
+    label = str(inputs.get("name") or "").strip() or "slide"
+    if not url:
+        return {"image_artifact_id": "", "assets": {}, "name": label,
+                "provider": "", "skipped": "no link given"}
+
+    link = resolve_link(url)
+    connection_key = inputs.get("connection_key")
+    with workspace("boss-fetch-image-") as work:
+        fetched = fetch(context.connection, context.settings,
+                        project_id=context.project_id, link=link, dest_dir=work,
+                        connection_key=connection_key)
+        # WHAT CAME BACK HAS TO BE A PICTURE. A share link that needs a sign-in returns an HTML
+        # page with a 200, and storing that produces an artifact the render fails on with an
+        # ffmpeg error instead of "that link did not give us an image".
+        try:
+            info = probe(fetched["path"])
+        except VideoEditError as exc:
+            raise MediaStorageError(
+                f"what {url} returned is not an image BOSS can read ({exc}). A share link that "
+                "needs a sign-in usually returns a web page, which is what this looks like."
+            ) from exc
+        if not info.get("width") or not info.get("height"):
+            raise MediaStorageError(
+                f"what {url} returned has no picture in it at all.")
+        # A SHORT CLIP IS ACCEPTED TOO, deliberately. An "ending slide" is a PNG most of the time
+        # and a four-second animated card the rest of the time, and `bookend` takes either — so
+        # refusing the clip here would be this skill inventing a restriction the render does not
+        # have.
+        still = is_a_still(fetched["path"])
+
+        name = str(inputs.get("output_name") or "").strip() or fetched["name"]
+        written = store(context.connection, context.settings,
+                        project_id=context.project_id, local_path=fetched["path"], name=name,
+                        provider_key=str(inputs.get("store_provider") or "google"),
+                        container=str(inputs.get("output_folder_id") or ""),
+                        actor=context.actor)
+
+    artifact_id = record_artifact(
+        context.connection, project_id=context.project_id, actor=context.actor,
+        kind="media_image" if still else "media_video", drive_file=written,
+        detail={"operation": "fetch_image", "source_url": url,
+                "source_provider": link.provider_key, "still": still, **info},
+    )
+    return {
+        "image_artifact_id": artifact_id,
+        # KEYED BY THE LABEL, so this wires straight into plan_edit's `assets` and the planning
+        # model is told what the picture is for rather than guessing from a bare id.
+        "assets": {label: artifact_id},
+        "drive_file_id": written["file_id"],
+        "view_url": written["view_url"],
+        "name": name,
+        "provider": link.provider_key,
+        "source_url": url,
+        "still": still,
+        "width": info.get("width"),
+        "height": info.get("height"),
     }
 
 
