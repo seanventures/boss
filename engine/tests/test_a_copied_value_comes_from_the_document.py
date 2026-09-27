@@ -98,13 +98,13 @@ def test_a_copied_value_is_marked_and_a_written_one_is_not():
 
     assert values["description"] == "A summary I wrote myself."
     assert "description" not in copied, "the agent wrote this one; it stands as written"
-    assert copied["title"] == "சுயலாபத்திற்காகவா?"
+    assert copied["title"] == ("", "சுயலாபத்திற்காகவா?")
 
 
 def test_a_single_line_value_needs_no_ending_quote():
     values, copied = _declared('{"title": {"copied": true, "value": "மதுராந்தகத்தில்"}}',
                                ["title"])
-    assert copied == {"title": ""}
+    assert copied == {"title": ("", "")}
     assert values["title"] == "மதுராந்தகத்தில்"
 
 
@@ -152,3 +152,87 @@ def test_the_resolution_runs_before_the_value_is_passed_on():
     resolve = source.index("_copied_exactly(")
     hand_on = source.index("produced.update(declared)")
     assert resolve < hand_on, "a copied value must be resolved before the next step reads it"
+
+
+# --------------------------------------------------------------------------- #
+# Pointing with digits, because a quote is retyped too
+# --------------------------------------------------------------------------- #
+# Pointing at the value fixed the corruption — the Tamil that came back was clean. It was also
+# the WRONG LINE, because the pointer itself had to be retyped: the agent quoted
+# "மதுராந்தகத்தில்இட்டற்றலெ...?", its own damaged copy of the title, and the closest match to that
+# was the first line of the description. A line number is ASCII and cannot be damaged.
+def test_a_line_number_resolves_to_that_exact_line():
+    from boss_engine.services.agent_steps import _lines_of
+
+    lines = BRIEF.split("\n")
+    where = lines.index(REAL_TITLE) + 1
+    assert _lines_of([BRIEF], str(where)) == REAL_TITLE
+
+
+def test_a_range_comes_through_whole():
+    from boss_engine.services.agent_steps import _lines_of
+
+    got = _lines_of(["one", "a\nb\nc\nd\ne"][1:], "2-4")
+    assert got == "b\nc\nd"
+
+
+def test_a_dash_the_model_typed_as_an_em_dash_still_works():
+    """Refusing a range over the width of a hyphen would be absurd."""
+    from boss_engine.services.agent_steps import _lines_of
+
+    document = "a\nb\nc\nd"
+    assert _lines_of([document], "2–3") == "b\nc"
+    assert _lines_of([document], " 2 - 3 ") == "b\nc"
+
+
+def test_a_range_past_the_end_resolves_to_nothing():
+    """Rather than silently clamping to the last line and passing on the wrong value."""
+    from boss_engine.services.agent_steps import _lines_of
+
+    assert _lines_of(["a\nb"], "5-9") is None
+    assert _lines_of(["a\nb"], "0") is None
+    assert _lines_of(["a\nb"], "3-1") is None
+    assert _lines_of(["a\nb"], "") is None
+    assert _lines_of([], "1") is None
+
+
+def test_the_last_document_read_is_the_one_meant():
+    """An agent that read a brief and then something else is pointing at what it just looked at."""
+    from boss_engine.services.agent_steps import _lines_of
+
+    assert _lines_of(["first\nfirst2", "second\nsecond2"], "1") == "second"
+
+
+def test_a_pointer_needs_no_sample_of_the_text():
+    """Insisting on a quote alongside the numbers would be asking for the one thing that cannot
+    be copied safely."""
+    values, copied = _declared('{"title": {"copied": true, "lines": "8"}}', ["title"])
+    assert copied["title"][0] == "8"
+    assert "title" in values
+
+
+def test_the_numbered_view_is_what_the_agent_points_at():
+    from boss_engine.services.drive_media import _with_line_numbers
+
+    numbered = _with_line_numbers("தலைப்பு\n\nவிளக்கம்")
+    assert numbered.split("\n")[0] == "1: தலைப்பு"
+    assert numbered.split("\n")[2] == "3: விளக்கம்"
+
+
+def test_a_very_long_document_is_not_numbered_twice_over():
+    """The numbered copy doubles the payload, and a document this long is not one an agent is
+    picking a title out of."""
+    from boss_engine.services.drive_media import MAX_NUMBERED_CHARACTERS, _with_line_numbers
+
+    assert _with_line_numbers("x" * (MAX_NUMBERED_CHARACTERS + 1)) == ""
+
+
+def test_numbers_are_preferred_over_a_quote():
+    import inspect
+
+    from boss_engine.services import agent_steps
+
+    source = inspect.getsource(agent_steps.run)
+    by_number = source.index("_lines_of(")
+    by_quote = source.index("_copied_exactly(")
+    assert by_number < by_quote, "the pointer that cannot be damaged has to be tried first"

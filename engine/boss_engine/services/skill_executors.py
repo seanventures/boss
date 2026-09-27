@@ -1626,6 +1626,9 @@ def execute_media_read_document(
     )
     return {
         "text": result["text"],
+        # THE SAME TEXT, NUMBERED, so a value can be pointed at rather than retyped. Retyping is
+        # what turned a Tamil title into a different sentence; see `agent_steps._copied_exactly`.
+        "numbered_text": result.get("numbered_text") or "",
         "name": result["name"],
         "characters": result["characters"],
         "mime_type": result["mime_type"],

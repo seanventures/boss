@@ -519,6 +519,19 @@ def _text_by_asking_drive_to_convert(
             pass
 
 
+#: Past this, the numbered copy is left out: it doubles the payload, and a document this long is
+#: not one an agent is picking a title out of.
+MAX_NUMBERED_CHARACTERS = 40_000
+
+
+def _with_line_numbers(body: str) -> str:
+    """The document as something an agent can refer to by number rather than by quotation."""
+    if len(body) > MAX_NUMBERED_CHARACTERS:
+        return ""
+    return "\n".join(f"{number}: {line}"
+                      for number, line in enumerate(body.split("\n"), start=1))
+
+
 def read_document(
     connection: Connection,
     settings: Settings,
@@ -632,6 +645,15 @@ def read_document(
     if len(text_value) > MAX_DOCUMENT_BYTES:
         text_value = text_value[:MAX_DOCUMENT_BYTES]
     return {
+        # THE SAME TEXT, WITH SOMETHING AN AGENT CAN POINT AT.
+        #
+        # An agent that has to hand a value to the next step cannot retype it — Tamil does not
+        # survive being written back out, so a title arrived as a different sentence. It points
+        # at the value instead. But a pointer made of the document's own words is retyped too,
+        # and arrives damaged: one run pointed at "மதுராந்தகத்தில்இட்டற்றலெ...?" and matched the
+        # wrong paragraph. A LINE NUMBER IS ASCII AND CANNOT BE DAMAGED, so the numbered view
+        # goes with the text and the agent quotes digits.
+        "numbered_text": _with_line_numbers(text_value),
         "file_id": file_id,
         "name": name,
         "mime_type": mime,

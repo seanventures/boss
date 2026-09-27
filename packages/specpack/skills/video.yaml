@@ -481,6 +481,10 @@ skills:
       language: string?
     output_schema:
       text: string
+      # The same text with "N: " in front of every line. An agent hands a value to the next step
+      # by pointing at the lines it is on — retyping it corrupts non-Latin script, and a pointer
+      # made of the document's own words is corrupted the same way. Digits are safe.
+      numbered_text: string
       name: string
       characters: number
       mime_type: string

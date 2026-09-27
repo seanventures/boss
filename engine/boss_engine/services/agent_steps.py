@@ -357,16 +357,18 @@ def run(
             + "\nIf the instruction points at a document for any of them, read it and take the "
               "value from there rather than inventing one. Where a value genuinely is not "
               "available, use an empty string — do not guess."
-            + "\n\nIF A VALUE IS COPIED OUT OF A DOCUMENT, DO NOT RETYPE IT. Write it as\n"
-              '  \"name\": {\"copied\": true, \"value\": \"the first words of it\", '
-              '\"to\": \"the last words of it\"}\n'
-              "and the exact original is taken from the document you read. A few words at each "
-              "end are enough — everything between them comes through as written. Leave out "
-              '\"to\" only when the value is a single line.'
-              " Copying text through a "
-              "reply damages it: Tamil, Hindi, Arabic and every other non-Latin script come out "
-              "as different words, and long text comes out shortened. Only write a value out in "
-              "full when it is YOURS — something you wrote rather than found."
+            + "\n\nIF A VALUE IS COPIED OUT OF A DOCUMENT, DO NOT RETYPE IT. Point at it:\n"
+              '  \"name\": {\"copied\": true, \"lines\": \"12-18\"}\n'
+              "using the numbers from `numbered_text` in the result of the read, and the exact "
+              "original is taken from the document. One line is \"12\"; a value that runs over "
+              "several is \"12-18\", and everything between comes through as written. If you have "
+              "no numbered copy, quote instead — "
+              '\"value\": \"the first words\", \"to\": \"the last words\" — '
+              "but the numbers are better, because a QUOTE IS RETYPED TOO and arrives damaged."
+              "\n\nWHY THIS MATTERS. Text copied through a reply comes out changed: Tamil, "
+              "Hindi, Arabic and every other non-Latin script come out as different words, and "
+              "long text comes out shortened. Write a value out in full only when it is YOURS — "
+              "something you wrote rather than found."
         )
 
     facts = ""
@@ -405,11 +407,17 @@ def run(
     if copied_keys:
         # THE ORIGINAL BYTES, NOT THE AGENT'S COPY OF THEM. See `_copied_exactly`.
         documents = _documents_the_agent_read(connection, run_of_the_agent)
-        for key, ends_with in copied_keys.items():
-            original = _copied_exactly(str(declared.get(key) or ""), documents,
-                                       ends_with=ends_with)
-            if original is not None:
+        for key, (line_range, ends_with) in copied_keys.items():
+            original = _lines_of(documents, line_range)
+            if original is None:
+                original = _copied_exactly(str(declared.get(key) or ""), documents,
+                                           ends_with=ends_with)
+            if original:
                 declared[key] = original
+            elif not str(declared.get(key) or "").strip():
+                # It pointed at nothing findable and quoted nothing. An empty value must not
+                # travel on as an answer.
+                declared.pop(key, None)
     produced.update(declared)
     return {
         # EVERY FIELD THE SKILLS RETURNED, FLATTENED IN, so a later step can wire from this one
@@ -529,6 +537,40 @@ COPY_FLOOR = 0.35
 MAX_COPIED_LINES = 20
 
 
+def _lines_of(documents: list[str], line_range: str) -> Optional[str]:
+    """The lines an agent pointed at, exactly as the document has them.
+
+    A LINE NUMBER IS THE ONE POINTER THAT SURVIVES BEING WRITTEN OUT. An agent asked to quote
+    the start of a Tamil title pointed at "மதுராந்தகத்தில்இட்டற்றலெ...?" — its own damaged copy of
+    the words — and the closest match to that was the wrong paragraph. Digits cannot be damaged,
+    so `numbered_text` goes out with every document and the agent quotes "12-18".
+
+    Resolved against the LAST document read first: an agent that read a brief and then something
+    else is pointing at the one it just looked at. Returns None when the range is missing or fits
+    no document, and the quoted-words route is tried instead.
+    """
+    text_value = line_range.strip().replace("–", "-").replace("—", "-")
+    if not text_value or not documents:
+        return None
+    parts = [piece.strip() for piece in text_value.split("-") if piece.strip()]
+    try:
+        first = int(parts[0])
+        last = int(parts[-1]) if len(parts) > 1 else first
+    except (ValueError, IndexError):
+        return None
+    if first < 1 or last < first:
+        return None
+
+    for document in reversed(documents):
+        lines = document.split("\n")
+        if last > len(lines):
+            continue
+        span = "\n".join(lines[first - 1:last]).strip()
+        if span:
+            return span
+    return None
+
+
 def _copied_exactly(claimed: str, documents: list[str],
                     ends_with: str = "") -> Optional[str]:
     """The span of the document the agent was pointing at, in the document's own bytes.
@@ -620,7 +662,7 @@ def _closest(matcher: "difflib.SequenceMatcher", wanted: str,
 
 
 def _declared(final_text: str,
-              wanted: list[str]) -> tuple[dict[str, Any], dict[str, str]]:
+              wanted: list[str]) -> tuple[dict[str, Any], dict[str, tuple[str, str]]]:
     """The declared values, and which of them the agent said it had COPIED rather than written.
 
     A copied value is written as {"copied": true, "value": "..."} — see `_copied_exactly` for
@@ -629,16 +671,22 @@ def _declared(final_text: str,
     """
     raw = _declared_values(final_text, wanted, unwrap=False)
     values: dict[str, Any] = {}
-    #: key -> the agent's rough quote of the LAST line of the value, "" when it did not say.
-    copied: dict[str, str] = {}
+    #: key -> (the line range it pointed at, its rough quote of the last line). Either may be
+    #: empty; the range is preferred because digits survive being written out and words do not.
+    copied: dict[str, tuple[str, str]] = {}
     for key, value in raw.items():
         if isinstance(value, dict):
             inner = value.get("value")
             if inner in (None, "", [], {}) or not str(inner).strip():
-                continue
+                # A POINTER NEEDS NO QUOTE. `{"copied": true, "lines": "12-18"}` says everything
+                # — insisting on a sample of the text alongside it would be asking for the one
+                # thing that cannot be copied safely.
+                if not str(value.get("lines") or "").strip():
+                    continue
+                inner = ""
             values[key] = inner
             if bool(value.get("copied")):
-                copied[key] = str(value.get("to") or "")
+                copied[key] = (str(value.get("lines") or ""), str(value.get("to") or ""))
         else:
             values[key] = value
     return values, copied
