@@ -2653,21 +2653,32 @@ def tick(
         # for ever with nothing recorded against them. A SAVEPOINT per run makes the isolation
         # real: a failure rolls back that run's work and leaves the connection usable.
         savepoint = connection.begin_nested()
+        # WHICH PHASE FAILED, NOT JUST THAT ONE DID.
+        #
+        # A run does four distinct things per tick, and a database error in any of them leaves
+        # every statement afterwards raising InFailedSqlTransaction — so the exception that
+        # escapes names whichever query happened to come next, not the one that broke. Chasing
+        # the live failure meant reading a poisoned-transaction message about a SELECT that was
+        # perfectly correct, twice. The label travels with the error so the report says where.
+        phase = "read the spec"
         try:
             spec = workflows._run_spec(connection, run_id)
             spec_steps = {s["id"]: s for s in spec.get("steps", [])}
 
             # Work that FINISHED while we were away, first of all: a build that completed a
             # moment ago should release the next step in this pass rather than a tick later.
+            phase = "resume awaited work"
             performed.extend(resume_awaited(
                 connection, project_id=project_id, run_id=run_id, worker_id=worker_id
             ))
 
             # Answered gates next, so a step approved a moment ago is released in the same
             # tick rather than waiting for the next one.
+            phase = "resume answered gates"
             performed.extend(_resume_answered_gates(
                 connection, project_id, {**dict(run), "id": run_id}
             ))
+            phase = "open gates and claim work"
 
             # Then gates to open: they are not claimable work, and leaving them until after the
             # claim would let the runner treat a waiting approval as an idle step forever.
@@ -2851,11 +2862,12 @@ def tick(
             # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
             # names neither what went wrong nor where, and it cost a day of guessing.
             log.warning(
-                "capability runner skipped run %s (non-fatal): %s: %s",
-                run_id, type(error).__name__, error,
+                "capability runner skipped run %s while it tried to %s (non-fatal): %s: %s",
+                run_id, phase, type(error).__name__, error,
             )
             performed.append({
                 "run_id": run_id, "outcome": "skipped",
+                "phase": phase,
                 "error": f"{type(error).__name__}: {error}",
             })
         else:
