@@ -455,19 +455,24 @@ skills:
     mock_mode: false
     load: on_demand
     description: >-
-      Read a Google Doc, Slides deck, Sheet or plain text file from Drive and return its text.
-      Use it when the operator points at a document for the details — a title, a description,
-      a brief. Any script: the text comes back as UTF-8, so Tamil and other non-Latin writing
-      survives intact. It cannot read a PDF or an image.
+      Read a Google Doc, Slides deck, Sheet, PDF or plain text file from Drive and return its
+      text. Use it when the operator points at a document for the details — a title, a
+      description, a brief. Any script: the text comes back as UTF-8 in the order it was
+      written, so Tamil and other non-Latin writing survives intact, including out of a PDF,
+      where the glyphs are stored in the order they are PAINTED and have to be put back. A
+      scanned PDF is read by OCR; give `language` (an ISO code such as "ta") if you know it.
+      It cannot read an image — use media.fetch_image for that.
     data_boundary: internal
     input_schema:
       url: string
       file_id: string?
+      language: string?
     output_schema:
       text: string
       name: string
       characters: number
       mime_type: string
+      read_via: string
       file_id: string
     cost: { estimator: fixed, category: tool }
     retry: { max_attempts: 2, backoff: exponential }

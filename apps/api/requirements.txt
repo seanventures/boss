@@ -16,3 +16,4 @@ reportlab==4.5.1
 markdown==3.9
 redis==5.2.1
 playwright==1.60.0  # one-time browser fetch: python -m playwright install chromium
+pypdf==5.9.0

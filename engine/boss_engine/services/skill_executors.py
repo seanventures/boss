@@ -1591,6 +1591,12 @@ def execute_media_read_document(
     rather than downloading them (a Doc has no bytes to download) and decodes UTF-8
     deliberately rather than letting the HTTP client guess — a wrong guess turns non-Latin text
     into mojibake that still looks like a successful read.
+
+    A PDF IS WHAT PEOPLE ACTUALLY LINK, and it is not text — it is instructions for painting a
+    page. The first real brief that reached this skill was one, and was refused. It is read now,
+    by asking Drive to convert it (which OCRs a scan and returns logical-order text) and falling
+    back to local extraction with the glyph order repaired. `read_via` in the result says which
+    route answered.
     """
     from .drive_media import read_document
     from .media_providers import resolve_link
@@ -1611,6 +1617,9 @@ def execute_media_read_document(
     result = read_document(
         context.connection, context.settings, project_id=context.project_id,
         file_id=file_id,
+        # ONLY USED WHEN A PDF HAS TO BE OCR'D. An ISO code — "ta" for Tamil, "hi", "en".
+        # Naming it costs nothing and OCR in the wrong language returns confident nonsense.
+        language=str(inputs.get("language") or "").strip(),
         connection_key=str(inputs.get("connection_key") or "youtube_default"),
     )
     return {
@@ -1618,6 +1627,7 @@ def execute_media_read_document(
         "name": result["name"],
         "characters": result["characters"],
         "mime_type": result["mime_type"],
+        "read_via": result["read_via"],
         "file_id": result["file_id"],
     }
 

@@ -20,3 +20,4 @@ markdown==3.9
 redis==5.2.1
 # playwright is only needed by the visual/design screenshot path; install
 # separately if you enable those gates:  pip install playwright==1.60.0
+pypdf==5.9.0

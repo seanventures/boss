@@ -24,10 +24,13 @@ whether the step succeeds or throws.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import shutil
 import tempfile
+import unicodedata
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -276,13 +279,194 @@ GOOGLE_NATIVE_EXPORT = {
     "application/vnd.google-apps.spreadsheet": "text/csv",
 }
 
-#: Plain files that are already text. A PDF is deliberately absent: extracting text from one is
-#: a different problem with its own failure modes, and pretending otherwise would return
-#: something that looks like prose and is not.
+#: Plain files that are already text.
 READABLE_TEXT_PREFIXES = ("text/", "application/json", "application/xml")
+
+#: A PDF, which is NOT text and needs its words lifted out of the page description.
+#:
+#: IT WAS REFUSED HERE UNTIL A REAL BRIEF TURNED OUT TO BE ONE. The comment that used to sit
+#: on the line above said a PDF was "deliberately absent" because extraction "would return
+#: something that looks like prose and is not" — and the first operator to link a brief linked
+#: a PDF. Refusing the format people actually have is not caution, it is the feature missing.
+#: The honest failure it was worried about is handled below instead: a PDF whose pages are
+#: images has NO text to lift, and that is said plainly rather than returned as empty prose.
+PDF_MIME = "application/pdf"
 
 #: A document is prose, not media. Anything larger than this is not a brief somebody wrote.
 MAX_DOCUMENT_BYTES = 5_000_000
+
+
+#: Vowel signs that a PDF paints BEFORE the consonant they belong to, while Unicode stores them
+#: AFTER it. This is why lifting glyphs out of a PDF is not the same as reading its text, and it
+#: is not a rounding error: extraction turned "சிந்தனை" into "சிந்தைன" — a different word.
+#:
+#: The list is additive. Only signs that are genuinely pre-base in their script belong here;
+#: Telugu and Kannada are absent because their signs are not.
+PREBASE_VOWEL_SIGNS = frozenset(
+    "\u093f"              # Devanagari ि
+    "\u09c7\u09c8"        # Bengali ে ৈ
+    "\u0a3f"              # Gurmukhi ਿ
+    "\u0abf"              # Gujarati િ
+    "\u0b47\u0b48"        # Oriya େ ୈ
+    "\u0bc6\u0bc7\u0bc8"  # Tamil ெ ே ை
+    "\u0d46\u0d47\u0d48"  # Malayalam െ േ ൈ
+    "\u0dd9\u0dda"        # Sinhala ෙ ේ
+)
+
+#: The character that joins two consonants into a cluster. A pre-base sign belongs after the
+#: WHOLE cluster — "க்ரெ" is one — so reordering has to step over these.
+VIRAMAS = frozenset("\u094d\u09cd\u0a4d\u0acd\u0b4d\u0bcd\u0c4d\u0ccd\u0d4d\u0dca")
+
+
+def in_the_order_a_reader_wrote_it(extracted: str) -> str:
+    """Put glyphs lifted out of a PDF back into the order the words are actually stored in.
+
+    A PDF says where to paint each glyph, and for Tamil — Devanagari, Bengali, Malayalam, the
+    same family — some vowel signs are painted to the LEFT of the consonant they modify. Read
+    the glyphs off the page in the order they were painted and you get the sign before the
+    consonant, which is a different string from the one the author typed:
+
+        typed      சிந்தனை       ச ி ந ் த ன ை
+        extracted  சிந்தைன       ச ி ந ் த ை ன     ← the same glyphs, the wrong word
+
+    Nothing downstream can recover from that. A title read this way looks like Tamil, passes
+    every check a program could make on it, and is wrong in a way only a reader can see — so it
+    is fixed here, at the only point where the visual order is known to be visual.
+
+    Each pre-base sign is moved after the cluster it belongs to, then NFC recomposes the split
+    vowels that fall out of it (ெ + ா is ொ). Text with none of these signs comes back untouched.
+    """
+    if not any(ch in PREBASE_VOWEL_SIGNS for ch in extracted):
+        return extracted
+
+    pieces: list[str] = []
+    index, length = 0, len(extracted)
+    while index < length:
+        sign = extracted[index]
+        if sign in PREBASE_VOWEL_SIGNS:
+            after = index + 1
+            # The cluster is a letter, plus any number of virama-joined letters after it.
+            if after < length and unicodedata.category(extracted[after]) == "Lo":
+                after += 1
+                while (after + 1 < length and extracted[after] in VIRAMAS
+                       and unicodedata.category(extracted[after + 1]) == "Lo"):
+                    after += 2
+                pieces.append(extracted[index + 1:after])
+                pieces.append(sign)
+                index = after
+                continue
+        pieces.append(sign)
+        index += 1
+    return unicodedata.normalize("NFC", "".join(pieces))
+
+
+def _tidied(extracted: str) -> str:
+    """The spacing artefacts of a page, removed.
+
+    Glyphs are painted at coordinates, not typed, so extraction reports the gaps between them:
+    a word break can come back as two or three spaces and a full stop can come back detached
+    from the word before it. Left alone, "பகுதி ." is not the string anybody wrote and no
+    comparison against the original succeeds.
+    """
+    lines = []
+    for line in extracted.split("\n"):
+        line = re.sub(r"[ \t]{2,}", " ", line)
+        line = re.sub(r" +([.,;:!?)\]])", r"\1", line)
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
+
+def _text_out_of_a_pdf(payload: bytes, name: str) -> str:
+    """The words in a PDF, or a straight answer about why there are none.
+
+    A PDF is a description of how to PAINT a page, not a document with text in it. Two kinds
+    arrive and they have to be told apart, because one of them cannot be read at all:
+
+      * EXPORTED from a word processor — every glyph carries a ToUnicode mapping, so the
+        characters come back, Tamil included. This is what a brief written in Google Docs and
+        saved as PDF looks like, and it reads correctly.
+      * SCANNED, or exported as images — the pages are pictures. There is no text to extract,
+        and `extract_text()` returns "" for every page. Returning that empty string would hand
+        the agent a document it believes it read and found blank, which is how an empty title
+        gets published. It raises instead, and says what to do about it.
+
+    Nothing is stored and nothing is guessed. The pages are joined in order, so a title on page
+    one stays before a description on page two.
+    """
+    try:
+        from pypdf import PdfReader
+    except ModuleNotFoundError as exc:  # pragma: no cover - a deployment fault, not a user one
+        raise DriveMediaError(
+            f"'{name}' is a PDF and this install cannot read PDFs: pypdf is not present. "
+            "Export the brief as a Google Doc, or type the details into the form.") from exc
+
+    try:
+        reader = PdfReader(io.BytesIO(payload))
+        pages = [(page.extract_text() or "") for page in reader.pages]
+    except Exception as exc:  # pypdf raises a family of its own errors for a damaged file
+        raise DriveMediaError(
+            f"Could not read '{name}' as a PDF: {exc}. If it is encrypted or damaged, open it "
+            "and save it again, or put the text in a Google Doc.") from exc
+
+    text_value = _tidied("\n\n".join(page for page in pages if page.strip()))
+    text_value = in_the_order_a_reader_wrote_it(text_value)
+    if not text_value:
+        raise DriveMediaError(
+            f"'{name}' is a PDF with {len(pages)} page(s) and no text in any of them — the "
+            "pages are images, so the words are part of the picture and there is nothing to "
+            "lift out. Put the text in a Google Doc and link that instead, or type the title "
+            "and description into the start form.")
+    return text_value
+
+
+def _text_by_asking_drive_to_convert(
+    httpx: Any, headers: dict[str, str], *, file_id: str, name: str, language: str = "",
+) -> str:
+    """Let Google read the PDF, because Google knows what the glyphs MEAN.
+
+    WHY THIS IS TRIED FIRST. Lifting glyphs out of a PDF gives their painted order, and for
+    Tamil and its relatives that is not the order the words are stored in — see
+    `in_the_order_a_reader_wrote_it`, which repairs it. Repairing is second best. Drive can
+    CONVERT the PDF to a Google Doc, and a Doc holds real text: the export comes back in
+    logical order with no repair needed, and a PDF whose pages are images is read by OCR on the
+    way through, so a scan works too.
+
+    The copy is a workspace, not a result. It is created, exported, and deleted in the same
+    call, whatever happens — leaving Google Docs named after other people's briefs scattered
+    through the connected account's Drive would be its own bug.
+    """
+    body = {"name": f"BOSS is reading — {name}",
+            "mimeType": "application/vnd.google-apps.document"}
+    params = {"fields": "id"}
+    if language:
+        # ONLY MATTERS FOR A SCAN. A PDF with real text in it is converted from that text and
+        # the hint is ignored; a PDF of photographs is OCR'd, and OCR in the wrong language
+        # returns confident nonsense.
+        params["ocrLanguage"] = language
+    made = httpx.post(f"{DRIVE_FILES}/{file_id}/copy", params=params, json=body,
+                      headers=headers, timeout=120.0)
+    if made.status_code != 200:
+        raise DriveMediaError(
+            f"Drive would not convert '{name}' ({made.status_code}): {made.text[:200]}")
+    copy_id = str((made.json() or {}).get("id") or "")
+    if not copy_id:
+        raise DriveMediaError(f"Drive converted '{name}' and did not say where to.")
+    try:
+        exported = httpx.get(f"{DRIVE_FILES}/{copy_id}/export",
+                             params={"mimeType": "text/plain"}, headers=headers, timeout=120.0)
+        if exported.status_code != 200:
+            raise DriveMediaError(
+                f"Could not read the converted '{name}' ({exported.status_code}): "
+                f"{exported.text[:200]}")
+        # UTF-8 DELIBERATELY, for the same reason as every other read here.
+        return exported.content.decode("utf-8", errors="replace")
+    finally:
+        # Best effort by design: a copy left behind is untidy, and raising about it would turn a
+        # successful read into a failure.
+        try:
+            httpx.delete(f"{DRIVE_FILES}/{copy_id}", headers=headers, timeout=30.0)
+        except Exception:  # pragma: no cover - the read already succeeded
+            pass
 
 
 def read_document(
@@ -291,6 +475,7 @@ def read_document(
     *,
     project_id: str,
     file_id: str,
+    language: str = "",
     connection_key: str = "youtube_default",
 ) -> dict[str, Any]:
     """Read a Drive document as text, so an agent can act on what it says.
@@ -330,6 +515,7 @@ def read_document(
     info = meta.json() or {}
     mime = str(info.get("mimeType") or "")
     name = str(info.get("name") or file_id)
+    read_via = "export" if mime in GOOGLE_NATIVE_EXPORT else "download"
 
     if mime in GOOGLE_NATIVE_EXPORT:
         # A Google-native file has no bytes to download — export is the only way to read it.
@@ -339,7 +525,7 @@ def read_document(
             headers=headers, timeout=60.0,
         )
         exported_as = GOOGLE_NATIVE_EXPORT[mime]
-    elif any(mime.startswith(prefix) for prefix in READABLE_TEXT_PREFIXES):
+    elif mime == PDF_MIME or any(mime.startswith(prefix) for prefix in READABLE_TEXT_PREFIXES):
         size = int(info.get("size") or 0)
         if size > MAX_DOCUMENT_BYTES:
             raise DriveMediaError(
@@ -353,16 +539,33 @@ def read_document(
     else:
         raise DriveMediaError(
             f"'{name}' is {mime or 'of unknown type'}, which this cannot read as text. It reads "
-            "Google Docs, Slides and Sheets, and plain text files. A PDF or an image needs a "
+            "Google Docs, Slides and Sheets, PDFs, and plain text files. An image needs a "
             "different skill.")
 
     if response.status_code != 200:
         raise DriveMediaError(
             f"Could not read '{name}' ({response.status_code}): {response.text[:200]}")
 
-    # DECODED AS UTF-8 DELIBERATELY. See the docstring: letting the client guess is how Tamil,
-    # Devanagari or anything else non-Latin becomes mojibake that still reads as success.
-    text_value = response.content.decode("utf-8", errors="replace")
+    if mime == PDF_MIME:
+        # TWO ROUTES, BEST FIRST. Drive's conversion returns logical-order text and OCRs a
+        # scan; local extraction returns painted order, which then has to be repaired. The
+        # second exists so a read still works when the account cannot write to Drive, and
+        # `read_via` says which one answered rather than leaving it to be guessed.
+        try:
+            text_value = _text_by_asking_drive_to_convert(
+                httpx, headers, file_id=file_id, name=name, language=language)
+            exported_as = "text/plain"
+            read_via = "drive_conversion"
+            if not text_value.strip():
+                raise DriveMediaError("the conversion came back empty")
+        except DriveMediaError:
+            text_value = _text_out_of_a_pdf(response.content, name)
+            read_via = "extracted_and_reordered"
+    else:
+        # DECODED AS UTF-8 DELIBERATELY. See the docstring: letting the client guess is how
+        # Tamil, Devanagari or anything else non-Latin becomes mojibake that still reads as
+        # success.
+        text_value = response.content.decode("utf-8", errors="replace")
     if len(text_value) > MAX_DOCUMENT_BYTES:
         text_value = text_value[:MAX_DOCUMENT_BYTES]
     return {
@@ -370,6 +573,7 @@ def read_document(
         "name": name,
         "mime_type": mime,
         "exported_as": exported_as,
+        "read_via": read_via,
         "text": text_value,
         "characters": len(text_value),
     }
