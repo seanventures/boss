@@ -83,7 +83,31 @@ def test_the_runner_wraps_each_run_in_a_savepoint():
     from boss_engine.services import workflow_capability_runner as runner
 
     source = inspect.getsource(runner.tick)
-    assert source.count("connection.begin_nested()") == 2, (
-        "both the revival loop and the run loop need their own savepoint")
-    assert source.count("savepoint.rollback()") == 2
-    assert source.count("savepoint.commit()") == 2
+    # Three: the revival loop, the run loop, and each gate within a run. A gate WRITES a
+    # decision, which is the only write in that phase and so the likeliest thing to abort the
+    # transaction — leaving the failure to surface on the claim query that follows it.
+    assert source.count("connection.begin_nested()") == 3, (
+        "the revival loop, the run loop and each gate all need their own savepoint")
+    assert source.count(".rollback()") == 3
+    assert source.count(".commit()") == 3
+
+
+def test_a_failure_says_which_phase_of_the_run_it_was_in():
+    """"Skipped run X: InFailedSqlTransaction on SELECT ..." names a query that was fine. The
+    phase is what tells an operator — or me — where to look."""
+    import inspect
+
+    from boss_engine.services import workflow_capability_runner as runner
+
+    source = inspect.getsource(runner.tick)
+    for label in ('phase = "read the spec"',
+                  'phase = "resume awaited work"',
+                  'phase = "resume answered gates"',
+                  'phase = "claim a step to run"'):
+        assert label in source, f"missing phase label: {label}"
+    # And the per-step ones name the step, because "open the approval gate" is not actionable
+    # without knowing which.
+    assert 'f"decide whether {row[\'step_id\']} needs approval"' in source
+    assert 'f"execute {claimed[\'step_id\']}"' in source
+    # The phase travels into what the tick returns, not only the log.
+    assert '"phase": phase,' in source

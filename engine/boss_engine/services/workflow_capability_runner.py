@@ -2694,19 +2694,42 @@ def tick(
             ).mappings().all()
             for row in gates:
                 spec_step = spec_steps.get(row["step_id"]) or {}
-                subject = _gate_subject(
-                    connection, project_id, spec_step, _run_context(connection, run_id)
-                )
-                if subject is not None:
-                    _open_gate(
-                        connection, project_id, {**dict(run), "id": run_id},
-                        {**dict(row), "_spec": spec_step, "_subject": subject},
+                # PER GATE, so the one that breaks is named and the others still open. Deciding
+                # a gate reads the step definition and the run's context; opening one WRITES a
+                # decision. Both can fail, they fail differently, and without this the error
+                # surfaced later as a poisoned transaction on somebody else's SELECT.
+                phase = f"decide whether {row['step_id']} needs approval"
+                gate_point = connection.begin_nested()
+                try:
+                    subject = _gate_subject(
+                        connection, project_id, spec_step, _run_context(connection, run_id)
                     )
-                    performed.append(
-                        {"run_id": run_id, "step_id": row["step_id"],
-                         "capability": subject["key"], "outcome": "gate_opened"}
-                    )
+                    if subject is not None:
+                        phase = f"open the approval gate for {row['step_id']}"
+                        _open_gate(
+                            connection, project_id, {**dict(run), "id": run_id},
+                            {**dict(row), "_spec": spec_step, "_subject": subject},
+                        )
+                        performed.append(
+                            {"run_id": run_id, "step_id": row["step_id"],
+                             "capability": subject["key"], "outcome": "gate_opened"}
+                        )
+                except Exception as error:  # noqa: BLE001 — one gate must not stop the run
+                    try:
+                        gate_point.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    log.warning("could not %s: %s: %s",
+                                phase, type(error).__name__, error)
+                    performed.append({
+                        "run_id": run_id, "step_id": row["step_id"],
+                        "outcome": "gate_failed", "phase": phase,
+                        "error": f"{type(error).__name__}: {error}",
+                    })
+                else:
+                    gate_point.commit()
 
+            phase = "claim a step to run"
             claimed = workflows.claim_step(
                 connection, project_id=project_id, run_id=run_id,
                 worker_id=worker_id, lease_seconds=LEASE_SECONDS,
@@ -2719,6 +2742,7 @@ def tick(
                 continue
 
             spec_step = spec_steps.get(claimed["step_id"]) or {}
+            phase = f"execute {claimed['step_id']}"
             try:
                 output = execute_step(
                     connection, ctx, project_id=project_id,
