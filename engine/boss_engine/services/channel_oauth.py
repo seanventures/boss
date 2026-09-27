@@ -285,10 +285,21 @@ def save_oauth_client(
         "client_id_hint": f"…{cid[-12:]}" if len(cid) > 12 else cid,
     })
     if existing:
+        # THE ROW MUST FOLLOW THE VALUE TO ITS NEW HOME.
+        #
+        # `ref_kind` and `storage_backend` say WHERE the secret lives, and `resolve_secret_ref`
+        # dispatches on them. This UPDATE left both untouched — so when the chosen backend
+        # changed, the value was written to the new store and the row went on pointing at the
+        # old one. Every read then looked in the empty place and reported the client as
+        # "configured but could not be read", which is exactly what the operator saw after
+        # pasting their client in for the third time: the save returned 200, the value was
+        # safely in Postgres, and the pointer still said local_vault.
         connection.execute(
             text("UPDATE secret_refs SET metadata = CAST(:m AS JSONB), status='active', "
+                 "ref_kind = :kind, storage_backend = :kind, "
+                 "revoked_at = NULL, revoked_by = NULL, "
                  "updated_at = now() WHERE id = :i"),
-            {"m": meta, "i": existing[0]},
+            {"m": meta, "i": existing[0], "kind": kind},
         )
         ref_id = str(existing[0])
     else:
