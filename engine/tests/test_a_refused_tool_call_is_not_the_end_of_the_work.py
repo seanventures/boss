@@ -180,3 +180,37 @@ def test_giving_only_a_file_id_is_enough():
     assert seen["file_id"] == "1TdxfWZUmGDtAUQBIX0p"
     assert out["text"] == "மக்கள் சிந்தனை"
     assert out["read_via"] == "drive_conversion"
+
+
+# --------------------------------------------------------------------------- #
+# A failure that leaves no trace of why
+# --------------------------------------------------------------------------- #
+def test_a_failed_tool_keeps_its_reason_in_the_transcript():
+    """240 characters of a skill invocation is its id, project, skill and status — the reason it
+    failed falls off the end. The agent reads the whole result, so it knew; the transcript is
+    what a PERSON reads, and it showed a failed step with no cause."""
+    from boss_engine.services.agent_loop import _preview_of
+
+    failed = {"id": "skinv_8b57fa80ccdc478c8364", "project_id": "boss-dogfood",
+              "skill_id": "media.read_document", "caller": "video_editor",
+              "created_by_job_id": None, "mode": "real", "status": "failed",
+              "permission_decision": "allow", "attempts": 2, "max_attempts": 2,
+              "reason": "'prompt' is application/octet-stream, which this cannot read as text."}
+
+    kept = _preview_of(failed)
+    assert "application/octet-stream" in kept, "the cause has to survive"
+
+
+def test_a_success_is_still_only_a_preview():
+    """Keeping every successful result whole would bloat every run record for no one's benefit."""
+    from boss_engine.services.agent_loop import _preview_of
+
+    assert len(_preview_of({"status": "succeeded", "text": "x" * 5000})) <= 240
+
+
+def test_a_reason_in_tamil_is_not_escaped_into_noise():
+    """`ensure_ascii` would turn a Tamil failure message into \\uXXXX codepoints — technically
+    the same string and unreadable by the person it is for."""
+    from boss_engine.services.agent_loop import _preview_of
+
+    assert "மக்கள்" in _preview_of({"status": "failed", "reason": "மக்கள் சிந்தனை"})

@@ -376,6 +376,56 @@ def _tidied(extracted: str) -> str:
     return "\n".join(lines).strip()
 
 
+#: Types that tell you nothing. A file uploaded without an extension — "prompt", say — is
+#: application/octet-stream in Drive whatever is inside it, and an empty mimeType means the same.
+UNTYPED = ("", "application/octet-stream", "binary/octet-stream")
+
+
+def _what_the_bytes_say(payload: bytes, name: str) -> str:
+    """The type of a file Drive would not name, worked out by looking at it.
+
+    THIS IS THE SECOND TIME THE SAME MISTAKE COST A RUN. The skill refused PDFs and the first
+    real brief was a PDF. PDFs were added, and the same brief STILL failed — because the file is
+    called "prompt", has no extension, and so reaches us as application/octet-stream:
+
+        'prompt' is application/octet-stream, which this cannot read as text.
+
+    Declared types describe how a file was uploaded, not what it is. A person who writes their
+    title and description in a file and drops it in Drive has told us everything we need; the
+    bytes are right there. So when Drive will not say, this looks — at the magic number, and
+    failing that at whether the whole thing decodes as text, which is the only honest test of
+    whether something IS text.
+    """
+    if payload.startswith(b"%PDF-"):
+        return PDF_MIME
+    if payload[:4] == b"PK\x03\x04":
+        raise DriveMediaError(
+            f"'{name}' is a zip-based document — a .docx, .odt or similar. Open it and save it "
+            "as a Google Doc or a PDF, and this can read it.")
+    # A NUL byte settles it: no document contains one, and several binary formats decode as
+    # text by accident without this check.
+    if b"\x00" not in payload:
+        try:
+            payload.decode("utf-8-sig")
+        except (UnicodeDecodeError, UnicodeError):
+            pass
+        else:
+            return "text/plain; charset=utf-8-sig"
+    # UTF-16 ONLY WITH A BYTE-ORDER MARK. Almost any even-length run of bytes decodes as UTF-16
+    # without complaint, so accepting it on a successful decode alone would call a video a
+    # document. The mark is the file saying what it is.
+    if payload[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            payload.decode("utf-16")
+        except (UnicodeDecodeError, UnicodeError):
+            pass
+        else:
+            return "text/plain; charset=utf-16"
+    raise DriveMediaError(
+        f"Drive does not say what '{name}' is, and it is neither a PDF nor text in any encoding "
+        "this understands. Save it as a Google Doc or a PDF and link that.")
+
+
 def _text_out_of_a_pdf(payload: bytes, name: str) -> str:
     """The words in a PDF, or a straight answer about why there are none.
 
@@ -525,7 +575,8 @@ def read_document(
             headers=headers, timeout=60.0,
         )
         exported_as = GOOGLE_NATIVE_EXPORT[mime]
-    elif mime == PDF_MIME or any(mime.startswith(prefix) for prefix in READABLE_TEXT_PREFIXES):
+    elif (mime == PDF_MIME or mime in UNTYPED
+          or any(mime.startswith(prefix) for prefix in READABLE_TEXT_PREFIXES)):
         size = int(info.get("size") or 0)
         if size > MAX_DOCUMENT_BYTES:
             raise DriveMediaError(
@@ -538,15 +589,22 @@ def read_document(
         exported_as = mime
     else:
         raise DriveMediaError(
-            f"'{name}' is {mime or 'of unknown type'}, which this cannot read as text. It reads "
-            "Google Docs, Slides and Sheets, PDFs, and plain text files. An image needs a "
+            f"'{name}' is {mime}, which this cannot read as text. It reads Google Docs, Slides "
+            "and Sheets, PDFs, plain text, and any file Drive does not type. An image needs a "
             "different skill.")
 
     if response.status_code != 200:
         raise DriveMediaError(
             f"Could not read '{name}' ({response.status_code}): {response.text[:200]}")
 
-    if mime == PDF_MIME:
+    # WHAT IT IS, NOT WHAT IT WAS CALLED. An untyped file is identified from its bytes; a file
+    # Drive did name is taken at its word, because Drive knows what it converted.
+    effective = mime
+    if mime in UNTYPED:
+        effective = _what_the_bytes_say(response.content, name)
+        read_via = f"sniffed:{effective}"
+
+    if effective == PDF_MIME:
         # TWO ROUTES, BEST FIRST. Drive's conversion returns logical-order text and OCRs a
         # scan; local extraction returns painted order, which then has to be repaired. The
         # second exists so a read still works when the account cannot write to Drive, and
@@ -564,14 +622,20 @@ def read_document(
     else:
         # DECODED AS UTF-8 DELIBERATELY. See the docstring: letting the client guess is how
         # Tamil, Devanagari or anything else non-Latin becomes mojibake that still reads as
-        # success.
-        text_value = response.content.decode("utf-8", errors="replace")
+        # success. `utf-8-sig` over plain utf-8 so a byte-order mark does not arrive as a
+        # stray character at the front of a title.
+        charset = "utf-8-sig"
+        if "charset=" in effective:
+            # The sniffer already decoded the whole file to establish this, so it cannot fail.
+            charset = effective.split("charset=", 1)[1].strip()
+        text_value = response.content.decode(charset, errors="replace")
     if len(text_value) > MAX_DOCUMENT_BYTES:
         text_value = text_value[:MAX_DOCUMENT_BYTES]
     return {
         "file_id": file_id,
         "name": name,
         "mime_type": mime,
+        "read_as": effective,
         "exported_as": exported_as,
         "read_via": read_via,
         "text": text_value,

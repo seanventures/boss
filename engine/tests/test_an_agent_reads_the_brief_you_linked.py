@@ -110,12 +110,14 @@ def test_the_text_is_decoded_as_utf8_deliberately():
     from boss_engine.services import drive_media
 
     source = inspect.getsource(drive_media.read_document)
-    assert 'response.content.decode("utf-8", errors="replace")' in source
     # `response.text[:200]` in an ERROR message is fine — that is an HTTP failure body, not the
     # document. What must never happen is the DOCUMENT being read that way, because httpx would
     # guess the encoding from the headers.
     assert "= response.text" not in source
-    assert "text_value = response.content.decode" in source
+    assert "text_value = response.content.decode(charset" in source
+    # The charset is never a guess: either utf-8-sig, or one the sniffer established by decoding
+    # the whole file. There is no path where httpx picks it.
+    assert 'charset = "utf-8-sig"' in source
 
 
 # --------------------------------------------------------------------------- #
@@ -305,3 +307,90 @@ def test_the_skill_still_refuses_an_image():
     assert "different skill" in source
     assert "application/pdf" not in drive_media.READABLE_TEXT_PREFIXES, (
         "a PDF is handled on its own branch, not by pretending it is text")
+
+
+# --------------------------------------------------------------------------- #
+# A file Drive would not put a name to
+# --------------------------------------------------------------------------- #
+# The brief is called "prompt". No extension, so Drive reports it as
+# application/octet-stream whatever is inside, and the read failed a SECOND time after PDFs were
+# added:
+#
+#     'prompt' is application/octet-stream, which this cannot read as text.
+#
+# A declared type describes how a file was uploaded, not what it is. When Drive will not say,
+# the bytes are looked at — which is the only honest test of whether something is text.
+def test_an_untyped_pdf_is_recognised_by_its_magic_number():
+    from boss_engine.services.drive_media import PDF_MIME, _what_the_bytes_say
+
+    assert _what_the_bytes_say(b"%PDF-1.7\n1 0 obj", "prompt") == PDF_MIME
+
+
+def test_untyped_utf8_tamil_is_recognised_as_text():
+    from boss_engine.services.drive_media import _what_the_bytes_say
+
+    said = _what_the_bytes_say("தலைப்பு: மக்கள் சிந்தனை".encode("utf-8"), "prompt")
+    assert said.startswith("text/plain")
+    assert "utf-8" in said
+
+
+def test_a_byte_order_mark_is_not_left_at_the_front_of_a_title():
+    """utf-8-sig rather than utf-8: a BOM would arrive as a stray character in the title."""
+    from boss_engine.services.drive_media import _what_the_bytes_say
+
+    payload = "\ufeffமக்கள்".encode("utf-8")
+    assert _what_the_bytes_say(payload, "prompt").endswith("utf-8-sig")
+    charset = _what_the_bytes_say(payload, "prompt").split("charset=")[1]
+    assert payload.decode(charset) == "மக்கள்", "the mark must be gone"
+
+
+def test_utf16_is_only_believed_when_the_file_says_so():
+    """Almost any even-length run of bytes decodes as UTF-16 without complaint. Accepting that
+    as proof would make a video into a document."""
+    from boss_engine.services.drive_media import DriveMediaError, _what_the_bytes_say
+
+    assert "utf-16" in _what_the_bytes_say("title".encode("utf-16"), "prompt")
+
+    even_binary = bytes([0x41, 0x30] * 40)
+    with pytest.raises(DriveMediaError):
+        _what_the_bytes_say(even_binary + b"\x00", "clip.bin")
+
+
+def test_binary_is_still_refused_with_something_to_do_about_it():
+    from boss_engine.services.drive_media import DriveMediaError, _what_the_bytes_say
+
+    with pytest.raises(DriveMediaError) as raised:
+        _what_the_bytes_say(bytes(range(2, 200)), "prompt")
+    assert "Google Doc" in str(raised.value)
+
+
+def test_a_docx_says_what_it_is_rather_than_failing_as_gibberish():
+    from boss_engine.services.drive_media import DriveMediaError, _what_the_bytes_say
+
+    with pytest.raises(DriveMediaError) as raised:
+        _what_the_bytes_say(b"PK\x03\x04" + bytes(200), "brief")
+    assert ".docx" in str(raised.value)
+
+
+def test_an_untyped_file_reaches_the_download_branch():
+    """The refusal happened before any bytes were fetched, so nothing could look at them."""
+    import inspect
+
+    from boss_engine.services import drive_media
+
+    source = inspect.getsource(drive_media.read_document)
+    assert "mime in UNTYPED" in source
+    assert "application/octet-stream" in drive_media.UNTYPED
+
+
+def test_what_it_is_beats_what_it_was_called():
+    """`read_as` is the type the bytes turned out to be; `mime_type` is what Drive claimed. A
+    run that fails on the difference needs both visible."""
+    import inspect
+
+    from boss_engine.services import drive_media
+
+    source = inspect.getsource(drive_media.read_document)
+    assert "effective = _what_the_bytes_say" in source
+    assert "if effective == PDF_MIME" in source, (
+        "the PDF route must key off what it IS, not off what Drive called it")

@@ -53,6 +53,24 @@ def _unique_tool_name(
 MAX_REFUSED_TOOL_CALLS = 3
 
 
+def _preview_of(result: Any) -> str:
+    """The transcript's record of what a tool returned — and, when it FAILED, why.
+
+    240 characters of a skill invocation is its id, project, skill and status, and the reason it
+    failed falls off the end. The agent reads the whole thing, so it knew; the transcript is what
+    a PERSON reads afterwards, and it showed a failed step with no cause. Diagnosing one read
+    that could not parse a document took a separate query against another endpoint.
+
+    A success does not need more than a preview. A failure is the one case where the detail IS
+    the record, so it is kept.
+    """
+    encoded = json.dumps(result, ensure_ascii=False, default=str)
+    if isinstance(result, dict) and str(result.get("status") or "") in ("failed", "denied",
+                                                                       "error"):
+        return encoded[:2000]
+    return encoded[:240]
+
+
 def _the_provider_refused_the_tool_call(error: Exception) -> Optional[str]:
     """Whether this failure is the model writing a bad call, rather than something being wrong.
 
@@ -1736,7 +1754,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             "step": int(run["step"] or 0),
             "tool": pending.get("tool"),
             "args": pending.get("args"),
-            "result_preview": json.dumps(result)[:240],
+            "result_preview": _preview_of(result),
             "deferred": False,
             "resumed": True,
         }
@@ -2106,7 +2124,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "step": step,
                         "tool": name,
                         "args": args,
-                        "result_preview": json.dumps(result)[:240],
+                        "result_preview": _preview_of(result),
                         "deferred": False,
                     }
                     if tc_idx == 0 and thought:
@@ -2212,7 +2230,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             else:
                 result = _dispatch(connection, project_id, settings, name, args)
                 emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
-            step_obj = {"step": step, "tool": name, "args": args, "result_preview": json.dumps(result)[:240], "deferred": is_deferred}
+            step_obj = {"step": step, "tool": name, "args": args, "result_preview": _preview_of(result), "deferred": is_deferred}
             if tc_idx == 0 and thought:
                 step_obj["thought"] = thought
             transcript.append(step_obj)
