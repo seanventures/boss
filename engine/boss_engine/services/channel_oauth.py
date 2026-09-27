@@ -634,8 +634,24 @@ def complete(
     except SecretUnavailable as error:
         raise ChannelOAuthError(f"Could not store the token: {error}") from error
 
-    secret_ref_id = make_id("secref")
-    connection.execute(
+    # RECONNECTING THE SAME CHANNEL REUSES ITS ROW.
+    #
+    # `ref_key` is derived from the project and the connection key, and `secret_refs` has
+    # UNIQUE(project_id, ref_kind, ref_key) — so a plain INSERT succeeded exactly once per
+    # channel, ever. Every reconnect after the first died on
+    #
+    #   duplicate key value violates unique constraint "secret_refs_project_id_ref_kind_ref_key_key"
+    #
+    # which the operator saw as a raw psycopg IntegrityError after completing Google's consent
+    # screen. The comment on the console's Reconnect button calls this "the weekly path",
+    # because a testing-mode refresh token expires after seven days; it had never once worked
+    # on a channel that was already connected.
+    #
+    # The token ITSELF was already overwritten by `backend_for(...).put(...)` above — only the
+    # row describing it refused to be written twice. RETURNING id gives the existing row's id,
+    # so `secret_ref_ids` below points at the record that actually holds the token rather than
+    # at an id that was never inserted.
+    secret_ref_id = str(connection.execute(
         text(
             """
             INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key,
@@ -643,12 +659,24 @@ def complete(
                                      created_by)
             VALUES (:id, :p, 'project', :p, :kind, :ref_key, 'google', 'oauth_refresh_token',
                     :kind, 'active', CAST(:meta AS JSONB), :actor)
+            ON CONFLICT (project_id, ref_kind, ref_key) DO UPDATE
+               SET status = 'active',
+                   storage_backend = EXCLUDED.storage_backend,
+                   secret_kind = EXCLUDED.secret_kind,
+                   provider = EXCLUDED.provider,
+                   metadata = EXCLUDED.metadata,
+                   -- A re-authorisation is the opposite of a revocation, and a row that still
+                   -- carried one would read as revoked while holding a live token.
+                   revoked_at = NULL,
+                   revoked_by = NULL,
+                   updated_at = now()
+            RETURNING id
             """
         ),
-        {"id": secret_ref_id, "p": project_id, "kind": kind, "ref_key": ref_key,
+        {"id": make_id("secref"), "p": project_id, "kind": kind, "ref_key": ref_key,
          "meta": json.dumps({"scopes": list(YOUTUBE_SCOPES), "provider": "google"}),
          "actor": str((pending["provenance"] or {}).get("started_by") or "system")},
-    )
+    ).scalar())
 
     channel = _channel_identity(settings, refresh_token, client_id, client_secret)
     connection.execute(
