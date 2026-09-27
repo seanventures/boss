@@ -289,12 +289,12 @@ def record_artifact(
         text(
             """
             INSERT INTO artifacts (id, project_id, artifact_type, title, uri, content,
-                                   data_boundary, created_by)
-            VALUES (:id, :p, :kind, :title, :uri, CAST(:content AS JSONB), 'public', :actor)
+                                   data_boundary)
+            VALUES (:id, :p, :kind, :title, :uri, CAST(:content AS JSONB), 'public')
             """
         ),
         {
-            "id": artifact_id, "p": project_id, "kind": kind, "actor": actor,
+            "id": artifact_id, "p": project_id, "kind": kind,
             # The title is what a person reads in the artifact list, so it is the FILENAME
             # rather than the id — "MS_latest_FULL_1080p.mp4" tells you which video this is
             # and "art_9f3c…" does not.
@@ -307,6 +307,22 @@ def record_artifact(
                 "view_url": drive_file.get("view_url"),
                 "bytes": drive_file.get("bytes"),
                 "source_artifact_id": source_artifact_id,
+                # WHO MADE IT, in the blob rather than in a column.
+                #
+                # This INSERT named a `created_by` COLUMN that has never existed on `artifacts`
+                # — the table has `created_by_job_id`, which is a job id and a different fact.
+                # So every media artifact insert failed with UndefinedColumn, which means
+                # `record_artifact` had never once worked and neither had anything downstream of
+                # it: media.fetch_link, every video edit, every publish.
+                #
+                # Nobody saw it because the failure was swallowed five layers deep — the
+                # executor's retry loop caught it, the aborted transaction then made the
+                # invocation record, the step failure and the tick all report a poisoned
+                # transaction naming some other query. The workflow simply stopped.
+                #
+                # The actor is worth keeping, so it goes where the rest of this artifact's facts
+                # already live rather than into a column that would have to be invented.
+                "created_by": actor,
                 **(detail or {}),
             }),
         },
