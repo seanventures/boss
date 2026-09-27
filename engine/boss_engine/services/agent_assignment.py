@@ -70,22 +70,41 @@ def app_key(app_name: str) -> str:
 
 
 def default_roles(spec: Optional[dict[str, Any]] = None) -> list[str]:
-    """The agents that would have done this work anyway.
+    """The agents that will actually work on this run.
 
-    STAGE_ROLES is the map BOSS already uses to attribute every model call to an agent, so it is
-    the honest answer to "who runs this" — it is what actually happened, not a guess. The
-    workflow's own approver roles are added because a gate naming `release_manager` and a
-    project that has not assigned them is precisely the refusal this seeding exists to avoid.
+    WHEN THE WORKFLOW SAYS WHO, THE WORKFLOW WINS.
+    ----------------------------------------------
+    This used to answer with STAGE_ROLES — the map BOSS attributes model calls to — for every
+    run of every workflow. That is the honest answer for the software factory, whose stages
+    ARE those roles. It is nonsense anywhere else: a video workflow whose three steps name
+    `video_editor` and `media_publisher` seeded an Adversarial Reviewer, a Chief Architect, a
+    QA Lead, a Security Reviewer, a Software Engineer and a UX Engineer, and named neither of
+    the two agents actually doing the work.
+
+    That is not cosmetic. The panel under a run reads "Only these agents may sign off this
+    app's gates. Anyone else is refused" — so the seeding decides who can approve, and it was
+    seeding six agents with no connection to the work while omitting the two doing it.
+
+    A step names its agent in `captain`; a gate names one in `approval.approver_role`. Where a
+    spec names anybody at all, those are the agents on the run. STAGE_ROLES remains the answer
+    for a workflow that names nobody, which is every catalogue one.
     """
     from .llm_telemetry import STAGE_ROLES, canonical_role
 
-    roles = {canonical_role(r) for r in STAGE_ROLES.values()}
+    named: set[str] = set()
     for step in ((spec or {}).get("steps") or []):
         if not isinstance(step, dict):
             continue
-        approver = ((step.get("approval") or {}).get("approver_role") or "").strip()
+        captain = str(step.get("captain") or "").strip()
+        if captain:
+            named.add(captain)
+        approver = str((step.get("approval") or {}).get("approver_role") or "").strip()
         if approver:
-            roles.add(approver)
+            named.add(approver)
+    if named:
+        return sorted(r for r in named if r)
+
+    roles = {canonical_role(r) for r in STAGE_ROLES.values()}
     return sorted(r for r in roles if r)
 
 

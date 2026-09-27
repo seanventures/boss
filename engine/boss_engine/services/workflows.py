@@ -421,7 +421,18 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 )
             step["wait_seconds"] = seconds
         if kind == "decision":
-            _clean_text(step.get("question"), f"decision step '{step_id}' question")
+            # A QUESTION IS WANTED, NOT REQUIRED.
+            #
+            # This refused any decision step without one, while the palette offered no way to
+            # write one — so "Approval gate" could be dropped on the canvas and never saved.
+            # The palette asks for it now, and a step that still arrives without one gets a
+            # question composed from the workflow and the step it sits after, which is what a
+            # human reading the Approvals page needs anyway.
+            question = str(step.get("question") or "").strip()
+            step["question"] = question[:400] if question else ""
+            # What the reviewer should look at. Carried as written; the gate joins it to
+            # whatever the earlier steps produced when it opens.
+            step["guidance"] = str(step.get("guidance") or "").strip()[:1000]
         if "compensation" in step and not isinstance(step["compensation"], dict):
             raise WorkflowValidationError(
                 f"step '{step_id}' compensation must be an object."
@@ -1613,6 +1624,39 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     return validate_workflow_spec(_json(row["spec"], {}))
 
 
+def _what_there_is_to_review(connection: Connection, run_id: str) -> dict[str, Any]:
+    """The thing the previous steps made, so an approval can point at it.
+
+    A gate is asked about WORK, and the work is whatever the run has produced by the time it
+    gets here. Taking the most recent step's output means a video gate carries the video, a
+    document gate carries the document, and neither had to declare which kind it was.
+
+    Only fields a reviewer can act on: a link to open, an id to trace, and what the agent said
+    it did. Not the whole output blob — a wall of JSON is not review material.
+    """
+    row = connection.execute(
+        text(
+            """
+            SELECT step_id, output FROM workflow_step_runs
+            WHERE workflow_run_id = :run_id AND status = 'succeeded'
+            ORDER BY completed_at DESC NULLS LAST
+            LIMIT 1
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().first()
+    output = (row or {}).get("output")
+    if not isinstance(output, dict):
+        return {}
+    review: dict[str, Any] = {"produced_by": (row or {}).get("step_id")}
+    for field in ("view_url", "media_artifact_id", "artifact_id", "preview_url", "pr_url",
+                  "summary", "duration_seconds", "width", "height"):
+        value = output.get(field)
+        if value not in (None, "", [], {}):
+            review[field] = value
+    return review if len(review) > 1 else {}
+
+
 def _step_row(
     connection: Connection,
     run_id: str,
@@ -2240,14 +2284,40 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
         )
         return
     if kind == "decision":
+        # WHAT A REVIEWER NEEDS IN ORDER TO ANSWER.
+        #
+        # A gate used to arrive as a bare question and "Workflow wfr_… is waiting at decision
+        # step publish." Nobody can approve that. Reviewing a VIDEO means watching it, so the
+        # link has to be here; reviewing a PRD means reading it, so the document does.
+        #
+        # There is no taxonomy of approval TYPES, deliberately — the run already knows what it
+        # is doing. The step's author writes one sentence of guidance, and this joins it to
+        # whatever the earlier steps actually produced. The same mechanism serves a video, a
+        # spec and a deploy without any of them being a special case.
+        review = _what_there_is_to_review(connection, run["id"])
+        question = str(template.get("question") or "").strip() or (
+            f"Approve {row['step_id']} in {run.get('workflow_key') or 'this workflow'}")
+        guidance = str(template.get("guidance") or "").strip()
+        recommendation = {
+            "action": "resume_workflow",
+            **(template.get("recommendation") or {}),
+            **({"what_to_check": guidance} if guidance else {}),
+            **({"review": review} if review else {}),
+        }
+        where = ""
+        if review.get("view_url"):
+            where = f" Review it at {review['view_url']}."
+        elif review.get("produced_by"):
+            where = f" It was produced by step '{review['produced_by']}'."
         decision_id = create_blocking_decision(
             connection,
             run["project_id"],
             None,
-            template["question"],
-            template.get("recommendation") or {"action": "resume_workflow"},
+            question,
+            recommendation,
             template.get("cost_summary") or {},
-            f"Workflow {run['id']} is waiting at decision step {row['step_id']}.",
+            (f"{guidance} " if guidance else "")
+            + f"Workflow {run['id']} is waiting at decision step {row['step_id']}.{where}",
             risk_tier=int(template.get("risk_tier", 2)),
             default_action=str(template.get("default_action", "hold")),
         )

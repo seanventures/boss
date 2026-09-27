@@ -508,7 +508,21 @@ REGISTERED_ROLES = frozenset({
     # that can put something in front of an audience should not be the one that assembled it,
     # and an editing mistake should be catchable by somebody who did not make it.
     "video_editor",
+    # A PERSON. Not an agent BOSS runs — the one participant it cannot.
+    #
+    # A gate exists because somebody wants a human to look. With no way to SAY that, the only
+    # control on an approval step was a list of AI roles, so naming who approves meant naming a
+    # machine — on the one step whose entire purpose is that a machine does not decide it.
+    #
+    # It is in this set so the builder offers it and `validate_captain` accepts it. Nothing
+    # dispatches work to it: a step whose captain is `human` waits for a person, which is what
+    # a gate already does.
+    "human",
 })
+
+#: The roles that are people rather than agents. Small on purpose — this is not a category to
+#: grow, it is the boundary between what BOSS runs and what it asks somebody to do.
+HUMAN_ROLES = frozenset({"human"})
 
 
 def validate_captain(step: Mapping[str, Any]) -> list[str]:
@@ -798,9 +812,26 @@ CONTROL_BLOCKS: list[dict[str, Any]] = [
         "summary": "Stop and wait for a person, anywhere in the flow — not only where a "
                    "capability already implies one.",
         "canvas_required": False,
-        "defaults": {},
+        # A HUMAN APPROVES A GATE. That is what a gate IS, and leaving `approver_role` blank
+        # for the operator to fill in invited them to type an AI agent's name into the one
+        # control on the step whose whole purpose is that a person looks at it.
+        "defaults": {"approver_role": "human"},
+        # THE SAVE USED TO FAIL HERE AND THE BUILDER COULD NOT SEE WHY.
+        #
+        # `_validate_spec` requires `question` on a decision step; this list offered only
+        # `approver_role`. So the builder collected no question, the save was refused, and the
+        # operator reported the step as simply not working. A field the validator demands has
+        # to be a field the palette offers.
+        #
+        # `guidance` is the other half, and it is what makes an approval answerable: the
+        # reviewer of a video needs the link and what to look for, and the reviewer of a PRD
+        # needs something else entirely. Rather than invent a taxonomy of approval TYPES, the
+        # step carries the sentence its author would have written anyway, and the gate composes
+        # it with whatever the earlier steps produced.
         "configure": [
-            {"field": "approver_role", "label": "Who approves", "type": "text"}
+            {"field": "question", "label": "What is being approved?", "type": "text"},
+            {"field": "guidance", "label": "What should the reviewer check?", "type": "text"},
+            {"field": "approver_role", "label": "Who approves", "type": "text"},
         ],
     },
     {

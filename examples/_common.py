@@ -195,6 +195,29 @@ def define_steps(api: Api, steps: list[dict], args) -> dict[str, str]:
     for step in steps:
         if step["label"] in have:
             row, note = have[step["label"]], "already defined"
+            # REUSING IS NOT THE SAME AS LEAVING IT ALONE.
+            #
+            # Matching by label made re-running safe, and then never updated what it found — so
+            # a step defined by an earlier version of an example kept ITS inputs for ever. On a
+            # live install "Publish to YouTube" still declared only `media_artifact_id` long
+            # after the example had added `title` and `description`, so the workflow wired two
+            # fields the step did not know about. Both were then treated as REQUIRED, and the
+            # run reached the final approval gate before failing on a field the operator was
+            # never asked for.
+            wanted = {(i["name"], bool(i.get("required", True))) for i in step["inputs"]}
+            current = {(i["name"], bool(i.get("required", True)))
+                       for i in (row.get("inputs") or [])}
+            if wanted != current and not args.dry_run:
+                code, updated = api(
+                    "PATCH",
+                    f"/v1/delivery-workflows/custom-steps/{row['step_key']}",
+                    {"project_id": api.project, "actor": api.actor,
+                     "summary": step["summary"], "inputs": step["inputs"]})
+                if code >= 400:
+                    die(f"could not update {step['label']!r}: "
+                        f"{updated.get('detail') or updated}")
+                row = updated.get("custom_step") or updated.get("step") or row
+                note = "updated"
         elif args.dry_run:
             print(f"    would define {step['label']!r} running {step['skill_id']}")
             keys[step["label"]] = "dry-run"
