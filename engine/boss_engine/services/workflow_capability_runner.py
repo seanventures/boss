@@ -2743,12 +2743,34 @@ def tick(
 
             spec_step = spec_steps.get(claimed["step_id"]) or {}
             phase = f"execute {claimed['step_id']}"
+            # A FAILED STEP MUST LEAVE THE CONNECTION USABLE, OR ITS FAILURE CANNOT BE RECORDED.
+            #
+            # `fail_step` below opens with SELECT ... FOR UPDATE. When a step's own work aborts
+            # the transaction — a constraint violation anywhere inside a skill invocation, an
+            # artifact insert, a receipt — that SELECT raises InFailedSqlTransaction and takes
+            # the real exception with it. The step is then left `running` with no error against
+            # it, the tick reports a message about a query that was fine, and the operator sees
+            # a run that has simply stopped. That is precisely how the video workflow sat at
+            # step one for half an hour saying nothing at all.
+            #
+            # Rolling back to the savepoint first restores a working connection, so the handlers
+            # below record the ORIGINAL failure instead of dying on the attempt.
+            step_point = connection.begin_nested()
             try:
-                output = execute_step(
-                    connection, ctx, project_id=project_id,
-                    actor=run.get("actor") or "workflow",
-                    step=spec_step, context=_run_context(connection, run_id),
-                )
+                try:
+                    output = execute_step(
+                        connection, ctx, project_id=project_id,
+                        actor=run.get("actor") or "workflow",
+                        step=spec_step, context=_run_context(connection, run_id),
+                    )
+                except BaseException:
+                    try:
+                        step_point.rollback()
+                    except Exception:  # noqa: BLE001 — already gone; the raise below matters
+                        pass
+                    raise
+                else:
+                    step_point.commit()
                 if str(output.get("status") or "") in _DID_NOT_SHIP:
                     # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
                     #
