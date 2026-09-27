@@ -168,12 +168,21 @@ def test_a_team_nobody_chose_does_not_outrank_the_workflow():
             if row:
                 planted.append(role)
 
-        seeded = set(agent_assignment.ensure_defaults(
-            connection, project_id=PROJECT, app_name=app_name, actor="test",
-            spec=spec).get("seeded") or [])
+        agent_assignment.ensure_defaults(
+            connection, project_id=PROJECT, app_name=app_name, actor="test", spec=spec)
 
-        assert seeded == {"video_editor", "media_publisher"}, (
-            f"a team nobody chose still outranked the workflow: {sorted(seeded)}")
+        # THE TABLE, NOT THE RETURN VALUE.
+        #
+        # This asserted on `seeded` — the list the function says it wrote — and passed through
+        # two fixes while the live run kept showing ten agents. `assign` MATERIALISES the
+        # effective team as extra rows before adding what it was given, so the rows and the
+        # return value disagreed, and only the rows decide who may sign off a gate.
+        on_the_app = set(connection.execute(
+            text("SELECT role_key FROM project_agents WHERE project_id=:p AND app_key=:a"),
+            {"p": PROJECT, "a": agent_assignment.app_key(app_name)}).scalars().all())
+
+        assert on_the_app == {"video_editor", "media_publisher"}, (
+            f"a team nobody chose still outranked the workflow: {sorted(on_the_app)}")
 
         connection.execute(
             text("DELETE FROM project_agents WHERE project_id=:p AND app_key=:a"),
@@ -202,12 +211,16 @@ def test_a_team_a_person_chose_is_still_respected():
                  "'operator', 'ceo') ON CONFLICT DO NOTHING"),
             {"i": make_id("pag"), "p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT})
 
-        seeded = set(agent_assignment.ensure_defaults(
-            connection, project_id=PROJECT, app_name=app_name, actor="test",
-            spec=spec).get("seeded") or [])
+        agent_assignment.ensure_defaults(
+            connection, project_id=PROJECT, app_name=app_name, actor="test", spec=spec)
+        on_the_app = set(connection.execute(
+            text("SELECT role_key FROM project_agents WHERE project_id=:p AND app_key=:a"),
+            {"p": PROJECT, "a": agent_assignment.app_key(app_name)}).scalars().all())
 
-        assert "design_critic" in seeded, "a person's choice was discarded"
-        assert "video_editor" in seeded, "the workflow's own agent must still be added"
+        assert "design_critic" in on_the_app, "a person's choice was discarded"
+        assert "video_editor" in on_the_app, "the workflow's own agent must still be added"
+        # And nothing nobody asked for came along with them.
+        assert on_the_app == {"design_critic", "video_editor"}, sorted(on_the_app)
 
         connection.execute(
             text("DELETE FROM project_agents WHERE project_id=:p AND app_key IN (:a, :b)"),

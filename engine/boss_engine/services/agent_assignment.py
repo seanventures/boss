@@ -162,7 +162,8 @@ def assigned(connection, project_id: str, app_key: str) -> list[dict[str, Any]]:
 
 
 def assign(connection, *, project_id: str, app_name: str, role_keys: Iterable[str],
-           actor: str, source: str = OPERATOR) -> dict[str, Any]:
+           actor: str, source: str = OPERATOR,
+           establishes_team: bool = False) -> dict[str, Any]:
     """Put agents on an app. Idempotent, and it never demotes an operator's choice.
 
     A re-seed that overwrote `operator` with `default` would quietly undo a decision somebody
@@ -184,7 +185,19 @@ def assign(connection, *, project_id: str, app_name: str, role_keys: Iterable[st
     # operator was looking at is the list they keep, plus whoever they just added.
     # Same rule for the project's own team: the Command Center shows BOSS's built-in set when
     # nobody has chosen one, and adding a seventh agent must not leave a team of one.
-    if not assigned(connection, project_id, key):
+    # EXCEPT WHEN THE CALLER IS STATING THE TEAM RATHER THAN ADDING TO IT.
+    #
+    # Materialising first is right for a PERSON adding one agent to an app that was showing an
+    # effective team — the list they were looking at is the list they keep. It is wrong for the
+    # seeder that establishes a run's team: there is nothing on screen to preserve, and
+    # materialising writes a team the workflow never asked for and then adds the real agents on
+    # top of it.
+    #
+    # That is where the strangers came from, and it survived two fixes aimed at the wrong
+    # layer. The run showed ten agents: seven materialised here as `assigned_by: boss`, and the
+    # three the workflow names added afterwards as `ceo`. Both writes in one transaction, which
+    # is why they carried the same timestamp and looked like a single decision.
+    if not establishes_team and not assigned(connection, project_id, key):
         already = (default_roles() if key == PROJECT_DEFAULT
                    else project_team(connection, project_id))
         for existing in already:
@@ -293,8 +306,11 @@ def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = 
                           str((step.get("approval") or {}).get("approver_role") or "").strip()):
                 if named and named not in seeds:
                     seeds.append(named)
+    # ESTABLISHING, NOT ADDING: this call decides the run's team, so nothing underneath it
+    # should be materialised first.
     return {**assign(connection, project_id=project_id, app_name=app_name,
-                     role_keys=seeds, actor=actor, source=DEFAULT),
+                     role_keys=seeds, actor=actor, source=DEFAULT,
+                     establishes_team=True),
             "seeded": seeds}
 
 
