@@ -5260,6 +5260,15 @@ select.input:focus {
 .as-detail-title { margin: 0; font-family: var(--display); font-size: 1.15rem; }
 .as-detail-body .detail { margin: 0; line-height: 1.55; }
 .as-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+/* THE NEXT STEP, where the last one finished. A bordered block so it reads as a conclusion
+   rather than as more explanation, and above the form it supersedes. */
+.as-next {
+  display: grid; gap: 10px; justify-items: start;
+  padding: 14px 16px; border: 1px solid rgba(99, 230, 216, 0.35); border-radius: 6px;
+  background: var(--as-cyan-dim);
+}
+.as-next .detail { margin: 0; }
+
 /* Label/value rows. `dt` in the mono face because these are field names, not prose. */
 .as-facts { display: grid; gap: 0; margin: 4px 0 0; }
 .as-facts > div {

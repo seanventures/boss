@@ -112,7 +112,9 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
       // The secret is cleared from the form the moment it is stored: it cannot be read back,
       // so leaving it on screen only creates somewhere for it to be seen.
       setForm((f) => ({ ...f, client_secret: "" }));
-      setNote({ ok: true, text: "Client saved. You can connect the channel now." });
+      setNote({ ok: true,
+                text: "Client saved. Use “Connect a channel” below to sign in to the Google "
+                      + "account you publish from." });
       void reload();
     } catch (e) {
       setBusy(false);
@@ -307,7 +309,10 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
         <section className="as-detail" aria-label="Details">
           {selected === "client" ? (
             <ClientPane status={status} form={form} setForm={setForm} busy={busy}
-                        onSave={() => void saveClient()} />
+                        channelCount={connected.length}
+                        onSave={() => void saveClient()}
+                        onConnect={() => void connect(
+                          connected.length > 0 ? nextKey() : undefined)} />
           ) : current ? (
             <ChannelPane channel={current} clientReady={Boolean(status?.configured)} busy={busy}
                          onReconnect={() => void connect(current.connection_key)}
@@ -401,22 +406,45 @@ function ChannelPane({ channel, clientReady, busy, onReconnect, onDisconnect }: 
 }
 
 /** The one Google Cloud client the whole project authorises through. */
-function ClientPane({ status, form, setForm, busy, onSave }: {
+function ClientPane({ status, form, setForm, busy, channelCount, onSave, onConnect }: {
   status: ClientStatus | null;
   form: { client_id: string; client_secret: string; redirect_uri: string };
   setForm: React.Dispatch<React.SetStateAction<
     { client_id: string; client_secret: string; redirect_uri: string }>>;
   busy: boolean;
+  channelCount: number;
   onSave: () => void;
+  onConnect: () => void;
 }) {
+  const ready = Boolean(status?.configured);
   return (
     <>
       <div className="as-pane-head">
         <span>Google Cloud client</span>
-        <small>{status?.configured ? `configured · ${status.client_id_hint}` : "not set up"}</small>
+        <small>{ready ? `configured · ${status?.client_id_hint}` : "not set up"}</small>
       </div>
       <div className="as-detail-body">
         <h3 className="as-detail-title">One client, every channel</h3>
+
+        {/* WHAT TO DO NEXT, IN THE PANE WHERE THE WORK JUST HAPPENED.
+            Saving the client put "Client saved. You can connect the channel now." at the top of
+            the page and left the operator looking at a form whose button now read "Replace
+            client" — a sentence describing an action, and the only button in reach being the
+            wrong one. The actual next step was a header button at the far corner of the screen.
+            Reported as "after saving the client I'm clueless what to do — who knows to click
+            + connect a channel". */}
+        {ready ? (
+          <div className="as-next" data-testid="client-next-step">
+            <p className="detail">
+              <b>This client is ready.</b> Nothing else is needed here — connecting a channel
+              signs in to a Google account and authorises it against this client.
+            </p>
+            <button type="button" className="as-button" disabled={busy}
+                    data-testid="client-connect-next" onClick={onConnect}>
+              {channelCount > 0 ? "Connect another channel" : "Connect a channel"}
+            </button>
+          </div>
+        ) : null}
         <p className="detail">
           This is the OAuth application from <b>your own</b> Google Cloud project — your quota is
           yours, and a leak anywhere else cannot reach your channels. Every Google channel in
@@ -424,8 +452,12 @@ function ClientPane({ status, form, setForm, busy, onSave }: {
           nothing new here.
         </p>
         <p className="detail">
-          Create a <b>Web application</b> client with the YouTube Data API and Drive API
-          enabled, then paste it below.
+          {ready
+            ? "The client below is the one in use. Replacing it is only needed if you move to a "
+              + "different Google Cloud project — every channel would then have to be "
+              + "reconnected."
+            : "Create a Web application client with the YouTube Data API and Drive API enabled, "
+              + "then paste it below."}
         </p>
 
         <label className="setup-field">
@@ -455,10 +487,15 @@ function ClientPane({ status, form, setForm, busy, onSave }: {
           </span>
         </label>
         <div className="as-detail-actions">
-          <button type="button" className="as-button" data-testid="channel-client-save"
+          {/* SECONDARY ONCE ONE IS IN PLACE. "Replace client" as the only, primary button read
+              as the thing to do next, when it is the rare action: swapping the Cloud application
+              every channel authorises against. */}
+          <button type="button"
+                  className={ready ? "as-button secondary" : "as-button"}
+                  data-testid="channel-client-save"
                   disabled={busy || !form.client_id.trim() || !form.client_secret.trim()}
                   onClick={onSave}>
-            {busy ? "Saving…" : status?.configured ? "Replace client" : "Save client"}
+            {busy ? "Saving…" : ready ? "Replace this client" : "Save client"}
           </button>
         </div>
       </div>

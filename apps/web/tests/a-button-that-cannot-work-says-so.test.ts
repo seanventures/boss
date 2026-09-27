@@ -80,3 +80,36 @@ describe("selecting something in the list actually selects it", () => {
     expect(UI).toContain("if (!channels) return;");
   });
 });
+
+describe("finishing one step shows the next one", () => {
+  it("a configured client offers the connect action in its own pane", () => {
+    // REPORTED AS "after saving the client I'm clueless what to do — who knows to click
+    // + connect a channel". Saving put a success line at the top of the page and left the
+    // operator looking at a form whose only button now read "Replace client". The real next
+    // step was a header button at the far corner of the screen.
+    expect(UI).toContain('data-testid="client-next-step"');
+    expect(UI).toContain('data-testid="client-connect-next"');
+    expect(UI).toContain("This client is ready.");
+  });
+
+  it("and it is worded for whether a channel already exists", () => {
+    expect(UI).toContain('channelCount > 0 ? "Connect another channel" : "Connect a channel"');
+  });
+
+  it("replacing the client stops being the loudest control once one is set", () => {
+    // It is the rare action — swapping the Cloud application every channel authorises against
+    // — and as the only primary button it read as the thing to do next.
+    expect(UI).toContain('className={ready ? "as-button secondary" : "as-button"}');
+    expect(UI).toContain('ready ? "Replace this client" : "Save client"');
+  });
+
+  it("the success message names a button that is actually in reach", () => {
+    // "You can connect the channel now" described an action without saying where it lives.
+    expect(UI).toContain("Connect a channel” below");
+  });
+
+  it("and says what replacing it would cost", () => {
+    // Every channel authorises against this client; swapping it invalidates all of them.
+    expect(UI).toContain("every channel would then have to be");
+  });
+});
