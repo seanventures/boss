@@ -249,3 +249,38 @@ def test_the_agent_is_told_to_leave_the_heading_out_and_take_all_of_it():
     assert "Leave out the heading" in source
     assert "take ALL of it" in source
     assert "check both ends" in source
+
+
+# --------------------------------------------------------------------------- #
+# The heading that labels a value is not part of it
+# --------------------------------------------------------------------------- #
+def test_a_heading_naming_the_field_is_removed():
+    """"**Title:**" published as part of the title. The agent kept including it after being
+    told twice not to, so it is handled where it can be handled."""
+    from boss_engine.services.agent_steps import _without_its_label
+
+    assert _without_its_label(f"**Title:**\n{REAL_TITLE}", "title") == REAL_TITLE
+    assert _without_its_label("Description:\n\nஒரு விளக்கம்.", "description") == "ஒரு விளக்கம்."
+
+
+def test_a_first_line_that_is_not_about_this_field_is_left_alone():
+    """A value with a stray heading is a nuisance; a value with its first line silently removed
+    is a lie."""
+    from boss_engine.services.agent_steps import _without_its_label
+
+    assert _without_its_label("Note:\nthe rest", "title") == "Note:\nthe rest"
+    assert _without_its_label("மக்கள் சிந்தனை\nஒரு பார்வை", "title") == "மக்கள் சிந்தனை\nஒரு பார்வை"
+
+
+def test_a_long_first_line_is_a_sentence_not_a_heading():
+    from boss_engine.services.agent_steps import _without_its_label
+
+    sentence = ("Here is the title we agreed on after a very long discussion about it:")
+    assert _without_its_label(f"{sentence}\nthe rest", "title") == f"{sentence}\nthe rest"
+
+
+def test_a_single_line_value_is_never_trimmed_away():
+    from boss_engine.services.agent_steps import _without_its_label
+
+    assert _without_its_label("Title:", "title") == "Title:"
+    assert _without_its_label(REAL_TITLE, "title") == REAL_TITLE

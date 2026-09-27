@@ -419,7 +419,7 @@ def run(
                 original = _copied_exactly(str(declared.get(key) or ""), documents,
                                            ends_with=ends_with)
             if original:
-                declared[key] = original
+                declared[key] = _without_its_label(original, key)
             elif not str(declared.get(key) or "").strip():
                 # It pointed at nothing findable and quoted nothing. An empty value must not
                 # travel on as an answer.
@@ -541,6 +541,39 @@ COPY_FLOOR = 0.35
 #: The longest run of lines treated as one value. A title is one line; a description is a few
 #: paragraphs. Beyond this it is the document, not a value out of it.
 MAX_COPIED_LINES = 20
+
+
+#: A heading is short. Anything longer is a sentence that happens to end in a colon.
+LONGEST_LABEL = 40
+
+
+def _without_its_label(value: str, key: str) -> str:
+    """A copied value with the heading that labelled it removed — but only on evidence.
+
+    A brief writes its title under a heading, and an agent pointing at a range keeps including
+    it, twice over after being told not to:
+
+        title        "**Title:**\nமதுராந்தகத்தில் இடைத்தேர்தலே தேவையில்லை! …"
+        description  "**Description:**\n\nமதுராந்தகத்தில் இடைத்தேர்தல் …"
+
+    which is "**Title:**" published as part of the title. Telling the agent again is not a fix —
+    it has been told — and trimming any first line that looks like a heading would eventually eat
+    a real one.
+
+    So it acts only when the line SAYS what it labels: a short line ending in a colon, naming the
+    field it sits above. "**Title:**" over a title, "Description:" over a description. Anything
+    else is left exactly as the document has it, because a value with a stray heading is a
+    nuisance and a value with its first line silently removed is a lie.
+    """
+    lines = value.split("\n")
+    if len(lines) < 2 or not key.strip():
+        return value
+    label = lines[0].strip().strip("*_#").strip()
+    if len(label) > LONGEST_LABEL or not label.endswith(":"):
+        return value
+    if key.strip().lower() not in label.lower():
+        return value
+    return "\n".join(lines[1:]).strip()
 
 
 def _lines_of(documents: list[str], line_range: str) -> Optional[str]:
