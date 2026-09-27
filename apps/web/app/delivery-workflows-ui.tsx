@@ -639,6 +639,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // unless there is nothing to look at yet, in which case an empty page with a closed box is
   // just a dead end.
   const [composerOpen, setComposerOpen] = useState(false);
+  /** The workflow "Start one" chose, so the composer opens on it rather than on a blank path
+   *  question the operator has already answered by pressing a button on that workflow's card. */
+  const [startWith, setStartWith] = useState<string | undefined>(undefined);
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -871,13 +874,18 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             {runs.length ? (
               <button type="button" className="linklike dw-composer-hide"
                       data-testid="dw-composer-hide"
-                      onClick={() => setComposerOpen(false)}>Hide</button>
+                      onClick={() => { setComposerOpen(false); setStartWith(undefined); }}>Hide</button>
             ) : null}
             <NewProjectComposer
               projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
+              startWith={startWith}
+              // KEYED ON THE CHOICE, so pressing "Start one" on a different workflow rebuilds
+              // the composer rather than leaving it on the first one's inputs.
+              key={startWith ?? "blank"}
               onStarted={(runId) => {
                 if (runId) setOpenRun(runId);
                 setComposerOpen(false);
+                setStartWith(undefined);
                 setNotice(runId ? `Started ${runId}.` : "Started.");
                 void load();
               }}
@@ -973,9 +981,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       ) : tab === "yours" ? (
         <YoursView
           installed={installed} schedules={schedules} busy={busy}
-          onStart={(key, workClass) =>
-            act(`Start ${key}`, "start", { workflow_key: key, work_class: workClass,
-                                           sample: true })}
+          onStart={(key, workClass) => {
+            // A WORKFLOW THAT DECLARES INPUTS CANNOT BE STARTED BLIND.
+            //
+            // `sample: true` is "surprise me": the API picks a sample directive for the
+            // workflow's WORK CLASS, which exists for the catalogue's software-building paths.
+            // On a workflow that asks for a video link and editing instructions it is refused
+            // outright (409, no sample for this class) or — worse — injects a software brief
+            // and the run dies on its first step with no video_url, having told the operator
+            // nothing about why. Either way the operator never got to say what they wanted.
+            //
+            // So: if the workflow declared what it needs, open the form on the step that
+            // collects it, with this workflow already chosen. Only a workflow that declares
+            // nothing still starts on a sample, which is what that button was built for.
+            const chosen = installed.find((w) => w.workflow_key === key);
+            if (workflowInputFields(chosen?.input_schema).length) {
+              setStartWith(key);
+              setComposerOpen(true);
+              setTab("running");
+              return;
+            }
+            void act(`Start ${key}`, "start", { workflow_key: key, work_class: workClass,
+                                                sample: true });
+          }}
           onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
           onSchedule={async (key, name) => {
             // ASKED, NOT ASSUMED. Monday 08:00 is the common case and the zone is not
@@ -1379,8 +1407,19 @@ export function linksFrom(draft: NewProjectDraft): string[] {
 }
 
 /** What stops the operator moving on, said as the thing to do rather than as an error. */
-export function blockingReason(step: number, draft: NewProjectDraft): string {
+export function blockingReason(
+  step: number, draft: NewProjectDraft, declaresInputs = false,
+): string {
   if (step === 0) {
+    // A WORKFLOW THAT DECLARES ITS OWN INPUTS DOES NOT NEED A BRIEF.
+    //
+    // This demand exists because the catalogue's paths convene a PANEL that argues from the
+    // text, and a thin brief produces a thin spec. A workflow that asks for a video link and
+    // editing instructions convenes nothing: its steps read the fields it declared, and the
+    // real instruction is one of them. Demanding twenty characters of prose as well is asking
+    // the operator to write a brief nobody reads, to satisfy a check meant for a different
+    // kind of work.
+    if (declaresInputs) return "";
     if (draft.directive.trim().length < 20) {
       return "Describe what you want built — a sentence or two, not a title. "
            + "The panel argues from this text, so a thin brief produces a thin spec.";
@@ -1409,14 +1448,18 @@ export function blockingReason(step: number, draft: NewProjectDraft): string {
  * Four steps, each of which can be skipped by pressing on: nothing here is required except the
  * description, because a wizard that demands ten answers is a wizard people route around.
  */
-function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted }: {
+function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted, startWith }: {
   projectId: string; actor: string;
   workflows: Installed[];
   catalogue: CatalogueEntry[];
   onStarted: (runId: string | null) => void;
+  /** A workflow the operator asked to start, chosen already. Opens on the step that collects
+   *  what that workflow declared it needs, because they have already made the path decision. */
+  startWith?: string;
 }) {
-  const [step, setStep] = useState(0);
-  const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
+  const [step, setStep] = useState(startWith ? 1 : 0);
+  const [draft, setDraft] = useState<NewProjectDraft>(
+    startWith ? { ...EMPTY_DRAFT, workflowKey: startWith } : EMPTY_DRAFT);
   // WHO WILL BE ON IT. Read from the API rather than guessed here: start_run seeds from
   // STAGE_ROLES plus the chosen workflow's approver roles, and a second copy of that rule in
   // the console would drift from the one that actually runs.
@@ -1484,7 +1527,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
     (w) => w.workflow_key === draft.workflowKey)?.input_schema;
   const declaredInputs = workflowInputFields(selectedWorkflowSchema);
 
-  const blocked = blockingReason(step, draft)
+  const blocked = blockingReason(step, draft, declaredInputs.length > 0)
     // A required input still blank blocks the start, and says which one — the run would be
     // refused by the runtime anyway, and being told at the form is the difference between a
     // correction and a failed run.
@@ -1493,7 +1536,19 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
         : null);
 
   const start = async () => {
-    const text = briefFrom(draft).trim();
+    // WHAT THIS RUN IS CALLED, when the operator wrote no brief.
+    //
+    // A workflow that declares its own inputs is started from those, and `briefFrom` returns
+    // "" — which made the button silently do nothing, the worst possible response to a press.
+    // The run still needs something readable in the runs list, so it is named after the
+    // workflow and the instruction the operator actually gave.
+    const chosen = workflows.find((w) => w.workflow_key === draft.workflowKey);
+    const declared = declaredInputs.length > 0;
+    const supplied = String(draft.inputs.instructions ?? "").trim();
+    const text = briefFrom(draft).trim()
+      || (declared
+          ? [chosen?.name ?? draft.workflowKey, supplied].filter(Boolean).join(": ")
+          : "");
     if (!text || busy) return;
     setBusy(true);
     setError(null);
@@ -1721,17 +1776,34 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted 
                     {field.required ? <em className="dw-req" aria-hidden> required</em> : null}
                   </span>
                   {field.help ? <span className="dw-field-hint">{field.help}</span> : null}
-                  <input
-                    type={field.kind === "number" ? "number" : "text"}
-                    inputMode={field.kind === "number" ? "numeric" : undefined}
-                    value={draft.inputs[field.name] ?? ""}
-                    placeholder={field.example}
-                    data-testid={`dw-workflow-input-${field.name}`}
-                    aria-required={field.required || undefined}
-                    onChange={(e) =>
-                      setDraft((d) => ({ ...d,
-                        inputs: { ...d.inputs, [field.name]: e.target.value } }))}
-                  />
+                  {/* A FIELD THAT WANTS A PARAGRAPH GETS ONE. "Keep 0:28 to 1:48, make it
+                      portrait, put the ending slide on the end" is the whole specification of
+                      an agent step, and typing it into a one-line box — where you cannot see
+                      what you wrote — is how it ends up a title instead of an instruction. */}
+                  {field.kind === "multiline" ? (
+                    <textarea
+                      rows={3}
+                      value={draft.inputs[field.name] ?? ""}
+                      placeholder={field.example}
+                      data-testid={`dw-workflow-input-${field.name}`}
+                      aria-required={field.required || undefined}
+                      onChange={(e) =>
+                        setDraft((d) => ({ ...d,
+                          inputs: { ...d.inputs, [field.name]: e.target.value } }))}
+                    />
+                  ) : (
+                    <input
+                      type={field.kind === "number" ? "number" : "text"}
+                      inputMode={field.kind === "number" ? "numeric" : undefined}
+                      value={draft.inputs[field.name] ?? ""}
+                      placeholder={field.example}
+                      data-testid={`dw-workflow-input-${field.name}`}
+                      aria-required={field.required || undefined}
+                      onChange={(e) =>
+                        setDraft((d) => ({ ...d,
+                          inputs: { ...d.inputs, [field.name]: e.target.value } }))}
+                    />
+                  )}
                 </label>
               ))}
             </div>

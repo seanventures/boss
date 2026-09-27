@@ -22,12 +22,19 @@ export type WorkflowInputField = {
   required: boolean;
   example: string;
   /** Only to choose a sensible control; the value is sent as text either way. */
-  kind: "text" | "url" | "number";
+  kind: "text" | "url" | "number" | "multiline";
 };
 
 const KIND_BY_FORMAT: Record<string, WorkflowInputField["kind"]> = {
-  uri: "url", url: "url", "uri-reference": "url",
+  uri: "url", url: "url", "uri-reference": "url", textarea: "multiline", multiline: "multiline",
 };
+
+//: An example longer than this is prose, and prose does not belong in a one-line box.
+//:
+//: INFERRED AS WELL AS DECLARED, because the workflows that most need a paragraph are the ones
+//: whose author never thought about the form. `"format": "textarea"` is the explicit way to say
+//: it; a long example is the tell for everyone who did not.
+const PROSE_EXAMPLE_LENGTH = 60;
 
 function titleise(name: string): string {
   const words = name.replace(/[_.-]+/g, " ").trim();
@@ -57,8 +64,12 @@ export function workflowInputFields(schema: unknown): WorkflowInputField[] {
         help: String(p.description ?? ""),
         required: required.has(name),
         example: examples.length ? String(examples[0]) : "",
-        kind: KIND_BY_FORMAT[format] ?? (p.type === "number" || p.type === "integer"
-          ? "number" : "text"),
+        kind: KIND_BY_FORMAT[format]
+          ?? (examples.length && String(examples[0]).length > PROSE_EXAMPLE_LENGTH
+                ? "multiline"
+                : p.type === "number" || p.type === "integer"
+                  ? "number"
+                  : "text"),
       };
     });
   }

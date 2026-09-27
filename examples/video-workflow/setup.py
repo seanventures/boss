@@ -140,11 +140,28 @@ def main() -> None:
                 },
                 "instructions": {
                     "title": "What you want done",
-                    "description": "Plain English. The agent picks its own operations and their "
-                                   "order from the skills it holds. Timecodes may be seconds, "
-                                   "M:SS or HH:MM:SS.",
-                    "examples": ["Keep 0:28 to 1:48, make it portrait for phones, and put the "
-                                 "ending slide on the end."],
+                    # A PARAGRAPH, AND THE FORM HAS TO KNOW THAT. `format: textarea` is the
+                    # explicit signal; without it the console infers prose from a long example,
+                    # which works but is a guess. This field IS the step — it is the whole
+                    # specification the agent works from — and typing it into a one-line box
+                    # where you cannot see what you wrote is how an instruction becomes a title.
+                    "format": "textarea",
+                    "description": (
+                        "Plain English — say it the way you would to a person. The agent picks "
+                        "its own operations and their order from the skills it holds, so you "
+                        "describe the RESULT, not the steps.\n"
+                        "It can keep a section, cut bits out of the middle, reframe to portrait "
+                        "or square, burn on a caption, put a picture on screen, add a logo, and "
+                        "join a title card or ending slide.\n"
+                        "Timecodes: seconds, M:SS or HH:MM:SS. If your timecodes came off the "
+                        "original recording, say so — each operation applies to the result of "
+                        "the one before it.\n"
+                        "If it needs something it was not given, it says so rather than "
+                        "guessing."),
+                    "examples": [
+                        "Keep 3:42 to 4:50. Convert it to portrait for phones, taking the "
+                        "centre of the frame. The channel badge is already in the top corner — "
+                        "keep it exactly as it is. Put the ending slide on the end."],
                 },
                 "slide_url": {
                     "title": "Ending slide, title card or logo",
