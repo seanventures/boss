@@ -854,6 +854,38 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
 _BACKEND_PREFERENCE = ("infisical", "platform_secret_store", "vault", "database", "local_vault")
 
 
+def durable_secret_backend(settings: Settings) -> str:
+    """A backend for a secret that MUST still be there after a redeploy.
+
+    `default_secret_backend` answers "what is the most protected store available", and for most
+    secrets that is the right question. For a credential the CONSOLE writes and a WORKER reads
+    back days later, it is the wrong one: the most protected store on this installation is a
+    directory inside a container, and a store that loses what it was given protects nothing.
+
+    That is not hypothetical. It destroyed the generated SSH host credentials once, and on
+    2026-09-27 it destroyed a customer's Google OAuth client minutes after they pasted it in —
+    twice, because the second attempt went to the same place as the first.
+
+    So this asks a different question and takes the first backend that answers `durable: True`.
+    A backend that does not SAY it is durable is not assumed to be; the ordering is otherwise
+    the same, so a managed store still wins where one exists.
+    """
+    for kind in _BACKEND_PREFERENCE:
+        try:
+            impl = backend_for(kind, settings)
+            health = impl.health()
+        except Exception:  # noqa: BLE001 — an unusable backend is simply not this one
+            continue
+        if health.get("ok") is False:
+            continue
+        if health.get("durable") is True:
+            return kind
+    # NOT `local_vault`, WHICH IS WHAT THE DEFAULT WOULD HAVE PICKED. If nothing on this
+    # installation claims durability, the database is still the only store here that survives
+    # the container, and saying so loudly beats writing a credential somewhere it will vanish.
+    return "database"
+
+
 def default_secret_backend(settings: Settings) -> str:
     """The best secret backend that actually works on THIS installation.
 

@@ -44,7 +44,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .core import emit_event, make_id, now_utc
-from .secret_backends import SecretUnavailable, backend_for, default_secret_backend
+from .secret_backends import SecretUnavailable, backend_for, durable_secret_backend
 
 #: Google's endpoints. Constants rather than settings: these are not deployment choices, and a
 #: configurable token endpoint is a credential-exfiltration setting wearing a helpful face.
@@ -263,7 +263,9 @@ def save_oauth_client(
         # operator has pasted it into the Cloud Console and waited for a cryptic rejection.
         raise ChannelOAuthError("redirect_uri must be https.")
 
-    kind = default_secret_backend(settings)
+    # DURABLE, NOT MERELY PROTECTED. The console writes this and a WORKER reads it back
+    # days later, through a redeploy. See durable_secret_backend for what that cost.
+    kind = durable_secret_backend(settings)
     ref_key = _client_ref_key(project_id)
     try:
         backend_for(kind, settings).put(
@@ -658,7 +660,9 @@ def complete(
 
     project_id = str(pending["project_id"])
     ref_key = f"channel/{project_id}/{pending['connection_key']}/refresh_token"
-    kind = default_secret_backend(settings)
+    # DURABLE, NOT MERELY PROTECTED. The console writes this and a WORKER reads it back
+    # days later, through a redeploy. See durable_secret_backend for what that cost.
+    kind = durable_secret_backend(settings)
     try:
         backend_for(kind, settings).put(ref_key, refresh_token)
     except SecretUnavailable as error:
