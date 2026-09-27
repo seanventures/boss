@@ -2620,17 +2620,39 @@ def tick(
 
     performed: list[dict[str, Any]] = []
     for run in revivable:
+        # SAME SAVEPOINT, SAME REASON as the main loop below: "must never break the tick" is not
+        # something a bare `except` can deliver once a statement has aborted the transaction.
+        savepoint = connection.begin_nested()
         try:
             performed.extend(resume_awaited(
                 connection, project_id=project_id, run_id=run["id"], worker_id=worker_id
             ))
         except Exception as error:  # noqa: BLE001 — a revival must never break the tick
+            try:
+                savepoint.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             log.warning("could not revive %s: %s", run["id"], error)
+        else:
+            savepoint.commit()
 
     for run in runs:
         if len(performed) >= limit:
             break
         run_id = run["id"]
+        # ONE RUN MUST NOT STOP THE REST, AND CATCHING THE EXCEPTION IS NOT ENOUGH.
+        #
+        # That is what the handler below was written to do, and against a DATABASE error it
+        # cannot. Postgres aborts the whole transaction on the first failed statement; every
+        # statement after it raises InFailedSqlTransaction regardless of what Python caught. So
+        # one bad run poisoned the connection and every later run in the same tick "failed" on a
+        # query that was fine — and the caller saw the innocent query named in the error.
+        #
+        # Observed on 2026-09-27: every tick returned HTTP 500 naming a SELECT in
+        # sweep_gate_timeouts, no delivery workflow advanced at all, and the runs sat at `ready`
+        # for ever with nothing recorded against them. A SAVEPOINT per run makes the isolation
+        # real: a failure rolls back that run's work and leaves the connection usable.
+        savepoint = connection.begin_nested()
         try:
             spec = workflows._run_spec(connection, run_id)
             spec_steps = {s["id"]: s for s in spec.get("steps", [])}
@@ -2820,6 +2842,12 @@ def tick(
                     "outcome": "failed", "error": f"{type(error).__name__}: {error}",
                 })
         except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
+            # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
+            # so even the logging below would fail if it touched the database.
+            try:
+                savepoint.rollback()
+            except Exception:  # noqa: BLE001 — already rolled back, or the connection is gone
+                pass
             # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
             # names neither what went wrong nor where, and it cost a day of guessing.
             log.warning(
@@ -2830,6 +2858,8 @@ def tick(
                 "run_id": run_id, "outcome": "skipped",
                 "error": f"{type(error).__name__}: {error}",
             })
+        else:
+            savepoint.commit()
 
     return {"project_id": project_id, "performed": performed, "count": len(performed)}
 
