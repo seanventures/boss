@@ -12,7 +12,7 @@
  * enough to tell which client is loaded and useless to anyone else.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 type ClientStatus = {
   configured: boolean;
@@ -193,12 +193,24 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
   // WHICH THING THE RIGHT-HAND PANE IS SHOWING. The Google client is an ITEM in the list, not
   // a form underneath a channel — see the comment on the library below for why that matters.
   const [selected, setSelected] = useState<string>("client");
+  // AT MOST ONCE, AND NEVER AGAIN.
+  //
+  // Landing on a channel when there is one is a sensible OPENING, and it was written as an
+  // effect keyed on `selected` — so it did not open anything, it ENFORCED something: clicking
+  // "Google Cloud client" set the selection and the effect put it straight back on the channel,
+  // every time, before a frame was painted. The operator reported it as "when I click on Google
+  // cloud client nothing happens", which is exactly what it looked like.
+  //
+  // A ref rather than a state flag: this decides what to do during a render and must not cause
+  // another one.
+  const landed = useRef(false);
   useEffect(() => {
-    // Land on a channel once there is one; the client is the thing to look at before that.
-    if (selected === "client" && status?.configured && connected.length) {
-      setSelected(connected[0].connection_key);
-    }
-  }, [status?.configured, connected, selected]);
+    if (landed.current) return;
+    if (!channels) return;                       // nothing loaded yet; not a decision
+    landed.current = true;
+    // The client is what everything else needs, so an install without a usable one opens there.
+    if (status?.configured && connected.length) setSelected(connected[0].connection_key);
+  }, [status?.configured, channels, connected]);
 
   const current = connected.find((c) => c.connection_key === selected) ?? null;
 

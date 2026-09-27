@@ -309,22 +309,52 @@ def save_oauth_client(
     return {"provider": "google", "configured": True, "redirect_uri": redirect}
 
 
-def oauth_client_status(connection: Connection, project_id: str) -> dict[str, Any]:
-    """Whether this project has its own client. NEVER returns either half of it."""
+def oauth_client_status(
+    connection: Connection, project_id: str, settings: Optional[Settings] = None,
+) -> dict[str, Any]:
+    """Whether this project has a client THAT CAN BE READ. Never returns either half of it.
+
+    IT USED TO REPORT THE ROW AND NOT THE SECRET, and those are two different facts. The row
+    lives in Postgres and survives anything; the value lived in a vault directory inside the
+    container, which a redeploy destroys. So the console read "configured (…rcontent.com)" off
+    a surviving row four minutes after a deploy had deleted the value it pointed at, and the
+    operator — who had just pasted that client in — had no reason to suspect otherwise until a
+    workflow failed with "is not present in local_vault".
+
+    Reading the value is the only way to answer the question the caller is actually asking, so
+    it reads it and throws it away. `configured` now means usable.
+    """
     row = connection.execute(
-        text("SELECT metadata, updated_at FROM secret_refs WHERE project_id = :p "
+        text("SELECT id, metadata, updated_at, ref_kind FROM secret_refs WHERE project_id = :p "
              "AND ref_key = :k AND status = 'active'"),
         {"p": project_id, "k": _client_ref_key(project_id)},
     ).mappings().first()
     if not row:
         return {"configured": False, "source": None}
     meta = row["metadata"] or {}
+
+    readable, why = True, None
+    if settings is not None:
+        from .secret_backends import resolve_secret_ref
+
+        try:
+            resolve_secret_ref(connection, str(row["id"]), settings)
+        except Exception as error:  # noqa: BLE001 — any failure to read is a failure to use
+            readable, why = False, str(error)
+
     return {
-        "configured": True,
+        "configured": readable,
         "source": "project",
         "redirect_uri": meta.get("redirect_uri"),
         "client_id_hint": meta.get("client_id_hint"),
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        # SAID, NOT INFERRED FROM `configured: false`. "You never set one up" and "the one you
+        # set up has been destroyed" call for different actions and read identically otherwise.
+        **({} if readable else {
+            "stored_but_unreadable": True,
+            "reason": why,
+            "storage_backend": row["ref_kind"],
+        }),
     }
 
 

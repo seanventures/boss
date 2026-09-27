@@ -53,3 +53,30 @@ describe("the answer appears where the question was asked", () => {
     expect(UI).toContain("String(data?.error ?? `HTTP ${r.status}`)");
   });
 });
+
+describe("selecting something in the list actually selects it", () => {
+  it("the opening choice runs once, not on every render", () => {
+    // REPORTED AS "when I click on Google cloud client nothing happens".
+    //
+    // Landing on a channel when one exists is a sensible OPENING. Written as an effect keyed on
+    // `selected`, it stopped being an opening and became an enforcement: the click set the
+    // selection and the effect put it straight back, before a frame was painted. A ref makes it
+    // happen at most once.
+    expect(UI).toContain("const landed = useRef(false)");
+    expect(UI).toContain("if (landed.current) return;");
+  });
+
+  it("and the selection is not in the effect's dependencies", () => {
+    // If it were, the effect would run again on every click — which is the whole defect.
+    const effect = UI.slice(UI.indexOf("const landed = useRef(false)"));
+    const deps = effect.slice(0, effect.indexOf("]);") + 3);
+    expect(deps).not.toContain("selected]");
+    expect(deps).toContain("[status?.configured, channels, connected]");
+  });
+
+  it("nothing is decided before the channels have loaded", () => {
+    // `channels === null` means "not loaded", not "none" — opening on the client because a
+    // fetch had not returned yet would be a guess presented as a decision.
+    expect(UI).toContain("if (!channels) return;");
+  });
+});

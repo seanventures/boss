@@ -6,6 +6,12 @@ services:
       - ./.env
     environment:
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
+      # ON A VOLUME, BECAUSE THE CONTAINER FILESYSTEM IS NOT STORAGE. Artifacts were mounted
+      # here from the start and secrets were not, so every redeploy destroyed every file-backed
+      # credential — twice now: the generated SSH host keys, then a customer's Google OAuth
+      # client four minutes after they pasted it in. Shared with the worker, which reads the
+      # same credentials when it runs a step.
+      BOSS_SECRETS_DIR: /var/lib/boss/secrets
       BOSS_CONTROL_PLANE_URL: http://api:8000
       BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
       BOSS_BOOTSTRAP_SEED_API_ENABLED: ${BOSS_BOOTSTRAP_SEED_API_ENABLED:-false}
@@ -13,6 +19,7 @@ services:
       - "8000"
     volumes:
       - boss-artifacts:/var/lib/boss/artifacts
+      - boss-secrets:/var/lib/boss/secrets
     networks:
       - boss
       - web
@@ -43,10 +50,15 @@ services:
       - ./.env
     environment:
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
+      # The SAME directory the api writes to. A worker running a publish step resolves the same
+      # secret refs the console stored, and two private copies of a vault is the other half of
+      # this bug.
+      BOSS_SECRETS_DIR: /var/lib/boss/secrets
       BOSS_CONTROL_PLANE_URL: http://api:8000
       BOSS_WORKER_ID: ${BOSS_WORKER_ID:-goldeneye-worker-1}
     volumes:
       - boss-artifacts:/var/lib/boss/artifacts
+      - boss-secrets:/var/lib/boss/secrets
     networks:
       - boss
       - boss_supabase
@@ -130,3 +142,4 @@ networks:
 
 volumes:
   boss-artifacts:
+  boss-secrets:

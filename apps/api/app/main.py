@@ -14913,7 +14913,7 @@ def channel_oauth_client_status(provider: str, project_id: str) -> dict:
     if provider != "youtube":
         raise HTTPException(status_code=404, detail=f"no channel provider '{provider}'")
     with begin(engine) as connection:
-        status = oauth_client_status(connection, project_id)
+        status = oauth_client_status(connection, project_id, settings)
     # The path the operator must paste into Google, built from what this API is actually
     # reachable at — so it cannot disagree with the endpoint that receives the redirect.
     base = (settings.google_oauth_redirect_uri or "").strip()
@@ -15038,7 +15038,8 @@ def list_channel_connections(project_id: str) -> dict:
     from .services.channel_oauth import oauth_client_status
 
     with begin(engine) as connection:
-        client_ready = bool(oauth_client_status(connection, project_id).get("configured"))
+        client_ready = bool(
+            oauth_client_status(connection, project_id, settings).get("configured"))
 
     return {"project_id": project_id, "channels": [
         {

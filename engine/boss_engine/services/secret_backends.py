@@ -828,8 +828,30 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
     raise SecretUnavailable(f"no secret backend for {kind!r}")
 
 
-#: Tried in order when nobody has said where a secret should go. Most protected first.
-_BACKEND_PREFERENCE = ("infisical", "platform_secret_store", "vault", "local_vault", "database")
+#: Tried in order when nobody has said where a secret should go. Most protected first — and
+#: `database` ahead of `local_vault`, which is not an ordering by protection.
+#:
+#: WHY, AND IT HAS NOW HAPPENED TWICE. `local_vault` writes encrypted files under
+#: BOSS_SECRETS_DIR, which on a containerised install is the CONTAINER'S OWN FILESYSTEM. A
+#: deployment that mounts a named volume for artifacts and nothing for secrets — which is what
+#: the shipped compose files did — destroys the lot on every `up --force-recreate`.
+#:
+#:   * first it destroyed the generated SSH host credentials. `DatabaseBackend` was written in
+#:     response — read its docstring, it describes this exact failure — and then left BEHIND
+#:     local_vault in this tuple, so nothing started using it.
+#:   * on 2026-09-27 it destroyed a customer's Google OAuth client four minutes after they
+#:     pasted it in, because a deploy went out in between. The console still read
+#:     "configured (…rcontent.com)" from the surviving database row while the value it pointed
+#:     at was gone, and their video workflow failed with "is not present in local_vault".
+#:
+#: Both backends use the SAME AES-GCM envelope with the master key in the environment, so this
+#: costs almost nothing in protection: a database dump is not a key compromise, which is the
+#: argument DatabaseBackend's own docstring already makes. A store that silently loses what it
+#: was given is not the more protected option, whatever its threat model looks like on paper.
+#:
+#: A deployment that DOES mount a durable secrets volume can still ask for local_vault by name;
+#: this is only the default when nobody has said.
+_BACKEND_PREFERENCE = ("infisical", "platform_secret_store", "vault", "database", "local_vault")
 
 
 def default_secret_backend(settings: Settings) -> str:
