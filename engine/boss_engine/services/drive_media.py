@@ -267,6 +267,114 @@ def _safe_name(name: str) -> str:
     return cleaned[:120] or "media"
 
 
+#: What a Google-native document has to be EXPORTED as; it cannot be downloaded directly.
+#: `text/plain` rather than a rich format on purpose — the caller wants the words, and a .docx
+#: would arrive as a zip nothing downstream can read.
+GOOGLE_NATIVE_EXPORT = {
+    "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.presentation": "text/plain",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+}
+
+#: Plain files that are already text. A PDF is deliberately absent: extracting text from one is
+#: a different problem with its own failure modes, and pretending otherwise would return
+#: something that looks like prose and is not.
+READABLE_TEXT_PREFIXES = ("text/", "application/json", "application/xml")
+
+#: A document is prose, not media. Anything larger than this is not a brief somebody wrote.
+MAX_DOCUMENT_BYTES = 5_000_000
+
+
+def read_document(
+    connection: Connection,
+    settings: Settings,
+    *,
+    project_id: str,
+    file_id: str,
+    connection_key: str = "youtube_default",
+) -> dict[str, Any]:
+    """Read a Drive document as text, so an agent can act on what it says.
+
+    WHY THIS EXISTS. An operator wrote the title and description for their video in a Drive doc
+    and linked it. The agent could fetch a VIDEO and an IMAGE and had no way to read a DOCUMENT,
+    so they were asked to retype into a form the things they had already written down.
+
+    TAMIL — AND ANY OTHER SCRIPT — IS THE REASON THE DETAILS BELOW MATTER.
+    ---------------------------------------------------------------------
+    A Google Doc cannot be downloaded; it must be EXPORTED, and the export is UTF-8. Two things
+    would quietly ruin non-Latin text here and both are handled explicitly rather than left to a
+    default:
+
+      * `response.text` lets httpx guess the encoding from headers, and a missing or wrong
+        charset turns "மக்கள் சிந்தனை" into mojibake that still looks like a successful read.
+        The bytes are decoded as UTF-8 deliberately.
+      * `errors="replace"` rather than `strict`: a single bad byte should not throw away a
+        whole document, and U+FFFD is visible to a reader in a way a truncated file is not.
+
+    The text is returned, never stored — a document is the operator's, and the agent needs the
+    words rather than a copy in BOSS.
+    """
+    token = _token(connection, settings, project_id, connection_key)
+    httpx = _http()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    meta = httpx.get(
+        f"{DRIVE_FILES}/{file_id}",
+        params={"fields": "id,name,mimeType,size"},
+        headers=headers, timeout=30.0,
+    )
+    if meta.status_code != 200:
+        raise DriveMediaError(
+            f"Could not read that Drive file ({meta.status_code}): {meta.text[:200]}. "
+            "Check the id, and that the connected Google account can see it.")
+    info = meta.json() or {}
+    mime = str(info.get("mimeType") or "")
+    name = str(info.get("name") or file_id)
+
+    if mime in GOOGLE_NATIVE_EXPORT:
+        # A Google-native file has no bytes to download — export is the only way to read it.
+        response = httpx.get(
+            f"{DRIVE_FILES}/{file_id}/export",
+            params={"mimeType": GOOGLE_NATIVE_EXPORT[mime]},
+            headers=headers, timeout=60.0,
+        )
+        exported_as = GOOGLE_NATIVE_EXPORT[mime]
+    elif any(mime.startswith(prefix) for prefix in READABLE_TEXT_PREFIXES):
+        size = int(info.get("size") or 0)
+        if size > MAX_DOCUMENT_BYTES:
+            raise DriveMediaError(
+                f"'{name}' is {size / 1e6:.1f} MB, which is not a document somebody wrote. "
+                f"This reads files up to {MAX_DOCUMENT_BYTES / 1e6:.0f} MB.")
+        response = httpx.get(
+            f"{DRIVE_FILES}/{file_id}",
+            params={"alt": "media"}, headers=headers, timeout=60.0,
+        )
+        exported_as = mime
+    else:
+        raise DriveMediaError(
+            f"'{name}' is {mime or 'of unknown type'}, which this cannot read as text. It reads "
+            "Google Docs, Slides and Sheets, and plain text files. A PDF or an image needs a "
+            "different skill.")
+
+    if response.status_code != 200:
+        raise DriveMediaError(
+            f"Could not read '{name}' ({response.status_code}): {response.text[:200]}")
+
+    # DECODED AS UTF-8 DELIBERATELY. See the docstring: letting the client guess is how Tamil,
+    # Devanagari or anything else non-Latin becomes mojibake that still reads as success.
+    text_value = response.content.decode("utf-8", errors="replace")
+    if len(text_value) > MAX_DOCUMENT_BYTES:
+        text_value = text_value[:MAX_DOCUMENT_BYTES]
+    return {
+        "file_id": file_id,
+        "name": name,
+        "mime_type": mime,
+        "exported_as": exported_as,
+        "text": text_value,
+        "characters": len(text_value),
+    }
+
+
 def record_artifact(
     connection: Connection,
     *,

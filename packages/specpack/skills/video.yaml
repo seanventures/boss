@@ -442,6 +442,43 @@ skills:
       requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
 
+  - id: media.read_document
+    kind: media_edit
+    # READING WHAT THE OPERATOR ALREADY WROTE DOWN.
+    #
+    # An agent could fetch a video and an image and not a document, so a title and description
+    # written in a Drive doc had to be retyped into a form. This is the third member of the
+    # same family: turn a link into something the agent can use.
+    #
+    # Tier 0 — it reads, and it stores nothing.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Read a Google Doc, Slides deck, Sheet or plain text file from Drive and return its text.
+      Use it when the operator points at a document for the details — a title, a description,
+      a brief. Any script: the text comes back as UTF-8, so Tamil and other non-Latin writing
+      survives intact. It cannot read a PDF or an image.
+    data_boundary: internal
+    input_schema:
+      url: string
+      file_id: string?
+    output_schema:
+      text: string
+      name: string
+      characters: number
+      mime_type: string
+      file_id: string
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm, program_manager]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_capabilities: [storage.read]
+      requires_connection_health: healthy
+
   - id: drive.import_video
     kind: media_edit
     # THE ENTRY POINT. Records where a video is; downloads nothing. Every editing step takes a

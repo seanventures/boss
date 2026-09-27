@@ -1227,6 +1227,10 @@ def execute_step(
                     actor=actor,
                     max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
                     only=list(binding.get("agents") or []) or None,
+                    # What the NEXT step wires to. Without it an agent step can only hand on
+                    # what its skills returned, and a title is a judgement rather than a
+                    # skill's output.
+                    produces=list(binding.get("produces") or []) or None,
                 ),
             }
         except agent_steps.AgentStepError as error:

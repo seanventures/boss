@@ -311,6 +311,7 @@ def run(
     actor: str = "workflow",
     max_steps: Optional[int] = None,
     only: Optional[list[str]] = None,
+    produces: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Hand one instruction to one agent and let it work.
 
@@ -339,6 +340,24 @@ def run(
             "skills this work needs — a step naming an agent that holds nothing is refused here "
             "rather than at the first tool call.")
 
+    # WHAT THE NEXT STEP NEEDS FROM THIS ONE.
+    #
+    # A step's output is otherwise whatever its SKILLS returned, which covers artifacts and
+    # links and nothing an agent decides for itself. A publish step needs a title, and a title
+    # is not the output of any skill — it is a judgement the editing agent makes after reading
+    # the brief. Asked for by name, it becomes a field the next step can wire to.
+    wanted = [str(name).strip() for name in (produces or []) if str(name).strip()]
+    asked_for = ""
+    if wanted:
+        asked_for = (
+            "\n\nWHEN YOU HAVE FINISHED, end your reply with a JSON object on its own line "
+            "containing exactly these keys:\n"
+            + "\n".join(f"  {name}" for name in wanted)
+            + "\nIf the instruction points at a document for any of them, read it and take the "
+              "value from there rather than inventing one. Where a value genuinely is not "
+              "available, use an empty string — do not guess."
+        )
+
     facts = ""
     if context:
         # RECORDED, NOT NARRATED. `media_artifact_id: art_9f3c` is a fact the agent must use
@@ -354,7 +373,7 @@ def run(
         settings,
         project_id,
         agent_brief(connection, project_id, role),
-        f"WHAT I WANT DONE\n{said}{facts}",
+        f"WHAT I WANT DONE\n{said}{facts}{asked_for}",
         max_steps=int(max_steps or DEFAULT_MAX_STEPS),
         # THE WHOLE BOUND, IN ONE PLACE. `agent_loop` reads this and offers these skills as the
         # only tools — no natives, no MCP servers the agent was not given.
@@ -367,6 +386,10 @@ def run(
         },
     )
     produced = _what_the_skills_returned(connection, str(result.get("run_id") or ""))
+    # DECLARED VALUES WIN OVER SKILL OUTPUT FOR THEIR OWN KEYS. A skill returning a field called
+    # `title` means the name of a Drive file; a declared `title` is the answer to the question
+    # the step was asked. Conflating them would publish a video called "short.mp4".
+    produced.update(_declared_values(str(result.get("output_text") or ""), wanted))
     return {
         # EVERY FIELD THE SKILLS RETURNED, FLATTENED IN, so a later step can wire from this one
         # with {from_step: ..., field: media_artifact_id} exactly as it does from a fixed step.
@@ -456,3 +479,42 @@ def _used_skills(connection: Connection, run_id: str) -> list[str]:
         if skill_id and skill_id not in used:
             used.append(skill_id)
     return used
+
+
+def _declared_values(final_text: str, wanted: list[str]) -> dict[str, Any]:
+    """The values an agent was asked to state, out of the last thing it said.
+
+    LENIENT ON PURPOSE. A model asked for JSON produces JSON, and also sometimes produces JSON
+    inside a fenced block, or after a sentence of preamble. Refusing those would fail a step
+    over punctuation, so the LAST balanced object in the reply is taken and read for the keys
+    that were asked for. Anything else in it is ignored — this is not a channel for the agent to
+    set fields nobody asked about.
+    """
+    if not wanted or not final_text.strip():
+        return {}
+    end = final_text.rfind("}")
+    while end != -1:
+        depth = 0
+        for start in range(end, -1, -1):
+            if final_text[start] == "}":
+                depth += 1
+            elif final_text[start] == "{":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(final_text[start:end + 1])
+                    except ValueError:
+                        break
+                    if isinstance(parsed, dict):
+                        # An EMPTY value is the agent saying "I could not find one" — it is
+                        # told to use exactly that — so it must not travel on as an answer. An
+                        # empty title reaching YouTube is a video called nothing.
+                        found = {k: parsed[k] for k in wanted
+                                 if k in parsed
+                                 and parsed[k] not in (None, [], {}, "")
+                                 and str(parsed[k]).strip() != ""}
+                        if found:
+                            return found
+                    break
+        end = final_text.rfind("}", 0, end)
+    return {}

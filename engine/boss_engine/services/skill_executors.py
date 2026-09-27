@@ -1574,6 +1574,54 @@ def execute_media_fetch_image(
     }
 
 
+@register_executor("media.read_document")
+def execute_media_read_document(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Read a linked document as text, so an agent can act on what it says.
+
+    THE GAP THIS CLOSES. An agent could fetch a VIDEO and an IMAGE and could not read a
+    DOCUMENT. So an operator who had written the title and description for their video in a
+    Drive doc — and linked it — was asked to retype both into a form.
+
+    It returns the words and stores nothing. A brief belongs to the person who wrote it; the
+    agent needs to read it, not to keep a copy in BOSS.
+
+    TAMIL AND EVERY OTHER SCRIPT. `drive_media.read_document` exports Google-native files
+    rather than downloading them (a Doc has no bytes to download) and decodes UTF-8
+    deliberately rather than letting the HTTP client guess — a wrong guess turns non-Latin text
+    into mojibake that still looks like a successful read.
+    """
+    from .drive_media import read_document
+    from .media_providers import resolve_link
+
+    url = str(inputs.get("url") or inputs.get("link") or "").strip()
+    file_id = str(inputs.get("file_id") or "").strip()
+    if not url and not file_id:
+        raise ValueError("url is required — the link to the document to read")
+
+    if not file_id:
+        link = resolve_link(url)
+        if link.provider_key != "google":
+            raise ValueError(
+                f"{url} is not a Google Drive link. This reads documents out of the Drive "
+                "account connected to this project.")
+        file_id = link.file_ref
+
+    result = read_document(
+        context.connection, context.settings, project_id=context.project_id,
+        file_id=file_id,
+        connection_key=str(inputs.get("connection_key") or "youtube_default"),
+    )
+    return {
+        "text": result["text"],
+        "name": result["name"],
+        "characters": result["characters"],
+        "mime_type": result["mime_type"],
+        "file_id": result["file_id"],
+    }
+
+
 @register_executor("video.plan_edit")
 def execute_video_plan_edit(
     context: "SkillExecutorContext", inputs: dict[str, Any]

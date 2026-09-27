@@ -53,6 +53,8 @@ DESCRIPTION = (
 EDITING_SKILLS = [
     "media.fetch_link",     # a link becomes a video BOSS holds
     "media.fetch_image",    # a link becomes a picture: an ending slide, a title card, a logo
+    "media.read_document",  # a link becomes TEXT: a brief, a title, a description
+
     "video.trim",           # keep one range
     "video.cut",            # take ranges out of the middle
     "video.reframe",        # portrait, square, landscape
@@ -110,6 +112,10 @@ def main() -> None:
             # fetches, edits and reports back.
             agent_step("edit", from_input("instructions"), ["publish"],
                        agent="video_editor", args=args,
+                       # THE PUBLISHING DETAILS, DECIDED HERE AND WIRED TO THE NEXT STEP.
+                       # If the instruction points at a brief, the agent reads it with
+                       # `media.read_document` and takes them from there.
+                       produces=["title", "description"],
                        context={
                            # OPTIONAL, BOTH OF THEM. A link given here is a fact the agent can
                            # use; a link written into the instruction works just as well.
@@ -119,10 +125,16 @@ def main() -> None:
 
             # No separate review step: publish_youtube is risk tier 3, and BOSS forces a manual
             # approval at or above the floor whatever a workflow asks.
+            # THE DETAILS COME FROM THE EDITING AGENT, NOT FROM A SECOND FORM.
+            #
+            # `title` and `description` were fields the operator had to fill in — having
+            # already written both in the brief they linked. The agent holds
+            # `media.read_document` now, so it reads them and passes them on; the start form is
+            # the fallback for a run that names no brief.
             step("publish", keys["Publish to YouTube"],
                  {"media_artifact_id": from_step("edit", "media_artifact_id"),
-                  "title": from_input("title"),
-                  "description": from_input("description")},
+                  "title": from_step("edit", "title"),
+                  "description": from_step("edit", "description")},
                  [], agent="media_publisher", approval="manual", args=args),
         ],
         # WHAT THE START FORM ASKS FOR. Without this the console has nothing to draw and the
@@ -131,7 +143,9 @@ def main() -> None:
             # ONLY WHAT CANNOT BE INFERRED. `video_url` was required and is not any more: the
             # link can be written into the instruction like everything else, and demanding it
             # twice is what blocked a start that had said everything it needed to.
-            "required": ["instructions", "title"],
+            # JUST THE INSTRUCTION. `title` was required and is not any more: if the brief
+            # names one, the agent reads it; if it does not, the agent is told to write one.
+            "required": ["instructions"],
             "properties": {
                 "video_url": {
                     "title": "Video link (optional — you can put it in the instructions instead)",
@@ -181,12 +195,15 @@ def main() -> None:
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "title": {
-                    "title": "YouTube title",
-                    "description": "Required by YouTube. The upload is PRIVATE either way.",
+                    "title": "YouTube title (optional — or say where to find it)",
+                    "description": "Leave blank if your instructions point at a brief that "
+                                   "contains it. The upload is PRIVATE either way, and YouTube "
+                                   "refuses a video with no title, so the agent writes one from "
+                                   "the brief if you have not.",
                 },
                 "description": {
-                    "title": "YouTube description",
-                    "description": "Optional.",
+                    "title": "YouTube description (optional — or say where to find it)",
+                    "description": "Same: written in the brief, typed here, or left out.",
                 },
             },
         },

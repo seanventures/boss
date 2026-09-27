@@ -295,6 +295,7 @@ def step(step_id: str, key: str, inputs: dict, nxt: list, *,
 
 def agent_step(step_id: str, instructions, nxt: list, *,
                agent: str = "", context: dict | None = None,
+               produces: list[str] | None = None,
                approval: str = "auto", args=None) -> dict:
     """A step that says WHAT IS WANTED and lets an agent work out HOW.
 
@@ -311,7 +312,11 @@ def agent_step(step_id: str, instructions, nxt: list, *,
     """
     spec = {"id": step_id, "kind": "capability",
             "binding": {"agent_work": True,
-                        "inputs": {**(context or {}), "instructions": instructions}},
+                        "inputs": {**(context or {}), "instructions": instructions},
+                        # WHAT A LATER STEP MAY WIRE TO. An agent step hands on whatever its
+                        # skills returned; these are the values it is asked to DECIDE — a
+                        # title read out of a brief, say — which no skill returns.
+                        **({"produces": list(produces)} if produces else {})},
             "approval": {"mode": approval}, "next": nxt}
     if agent and not (args and args.no_agents):
         spec["captain"] = agent
