@@ -69,6 +69,18 @@ def app_key(app_name: str) -> str:
     return identity_key(project_name(name)[0] if name else "")
 
 
+def _names_anybody(spec: Optional[dict[str, Any]]) -> bool:
+    """Whether this workflow says who should work on it, in any step."""
+    for step in ((spec or {}).get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("captain") or "").strip():
+            return True
+        if str((step.get("approval") or {}).get("approver_role") or "").strip():
+            return True
+    return False
+
+
 def default_roles(spec: Optional[dict[str, Any]] = None) -> list[str]:
     """The agents that will actually work on this run.
 
@@ -240,13 +252,29 @@ def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = 
     existing = assigned(connection, project_id, key)
     if existing:
         return {"ok": True, "seeded": [], "assigned": [r["role_key"] for r in existing]}
-    # THE PROJECT'S OWN TEAM FIRST, if somebody set one. Seeding BOSS's built-in list over a
-    # choice the operator made in the Command Center would ignore the one control that path
-    # offers.
+    # THE PROJECT'S OWN TEAM FIRST, IF SOMEBODY ACTUALLY CHOSE IT.
+    #
+    # `source` exists for exactly this question — the schema says so: "`default` was seeded from
+    # the stages that would have run anyway; `operator` was chosen by a person. Kept apart so
+    # 'nobody picked these' is answerable." This read every row regardless, so a team BOSS had
+    # seeded for itself was treated as a decision somebody made.
+    #
+    # The result was a video run listing an Adversarial Reviewer, a Chief Architect, a QA Lead,
+    # a Security Reviewer and a Software Engineer — none of them chosen by anyone, none of them
+    # relevant, all of them able to sign off its gates. Where nobody picked the team and the
+    # workflow names its own agents, the workflow is the better answer.
     chosen = connection.execute(
-        sql("SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = :a"),
+        sql("SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = :a "
+            "AND source = 'operator'"),
         {"p": project_id, "a": PROJECT_DEFAULT},
     ).mappings().all()
+    if not chosen and not _names_anybody(spec):
+        # Nobody chose a team AND the workflow names nobody: fall back to whatever the project
+        # has, seeded or not, because an empty team means nobody may approve anything.
+        chosen = connection.execute(
+            sql("SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = :a"),
+            {"p": project_id, "a": PROJECT_DEFAULT},
+        ).mappings().all()
     seeds = [r["role_key"] for r in chosen] or default_roles(spec)
     if chosen and spec:
         # THE AGENTS THE WORKFLOW NAMES GO ON TOP OF THE PROJECT'S TEAM.

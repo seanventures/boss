@@ -94,7 +94,8 @@ def test_the_workflows_agents_are_seeded_even_when_the_project_has_a_team():
     ]}
     with engine.begin() as connection:
         existing = connection.execute(
-            text("SELECT role_key FROM project_agents WHERE project_id=:p AND app_key=:a"),
+            text("SELECT role_key FROM project_agents WHERE project_id=:p AND app_key=:a "
+                 "AND source='operator'"),
             {"p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT}).scalars().all()
         # THE CONDITION IS THE POINT, SO IT IS ARRANGED RATHER THAN WAITED FOR.
         #
@@ -106,10 +107,13 @@ def test_the_workflows_agents_are_seeded_even_when_the_project_has_a_team():
             from boss_engine.services.core import make_id
 
             for role in ("software_engineer", "qa"):
+                # `operator`, because that is the case this test is about: a team a PERSON
+                # chose, which the workflow adds to rather than replaces. A `default` team is
+                # one BOSS seeded for itself and is covered by its own test below.
                 connection.execute(
                     text("INSERT INTO project_agents (id, project_id, app_key, app_name, "
                          "role_key, source, assigned_by) "
-                         "VALUES (:i, :p, :a, :a, :r, 'default', 'test') "
+                         "VALUES (:i, :p, :a, :a, :r, 'operator', 'test') "
                          "ON CONFLICT DO NOTHING"),
                     {"i": make_id("pag"), "p": PROJECT,
                      "a": agent_assignment.PROJECT_DEFAULT, "r": role})
@@ -132,5 +136,80 @@ def test_the_workflows_agents_are_seeded_even_when_the_project_has_a_team():
         if planted:
             connection.execute(
                 text("DELETE FROM project_agents WHERE project_id=:p AND app_key=:a "
-                     "AND role_key = ANY(:r)"),
+                     "AND role_key = ANY(:r) AND source='operator'"),
                 {"p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT, "r": planted})
+
+
+@needs_db
+def test_a_team_nobody_chose_does_not_outrank_the_workflow():
+    """The strangers came from a team BOSS seeded for itself and called a decision.
+
+    `project_agents.source` exists for this exact question — `default` means BOSS seeded it,
+    `operator` means a person picked it. The lookup ignored the column, so an auto-seeded
+    software team was treated as somebody's choice and every video run inherited five agents
+    with no connection to the work and the right to sign off its gates.
+    """
+    from boss_engine.services import agent_assignment
+    from boss_engine.services.core import make_id
+
+    engine = create_engine(DATABASE_URL)
+    app_name = f"unchosen probe {os.urandom(4).hex()}"
+    spec = {"steps": [{"id": "edit", "captain": "video_editor"},
+                      {"id": "publish", "captain": "media_publisher"}]}
+    planted = []
+    with engine.begin() as connection:
+        for role in ("software_engineer", "qa"):
+            row = connection.execute(
+                text("INSERT INTO project_agents (id, project_id, app_key, app_name, role_key, "
+                     "source, assigned_by) VALUES (:i, :p, :a, :a, :r, 'default', 'boss') "
+                     "ON CONFLICT DO NOTHING RETURNING id"),
+                {"i": make_id("pag"), "p": PROJECT,
+                 "a": agent_assignment.PROJECT_DEFAULT, "r": role}).first()
+            if row:
+                planted.append(role)
+
+        seeded = set(agent_assignment.ensure_defaults(
+            connection, project_id=PROJECT, app_name=app_name, actor="test",
+            spec=spec).get("seeded") or [])
+
+        assert seeded == {"video_editor", "media_publisher"}, (
+            f"a team nobody chose still outranked the workflow: {sorted(seeded)}")
+
+        connection.execute(
+            text("DELETE FROM project_agents WHERE project_id=:p AND app_key=:a"),
+            {"p": PROJECT, "a": agent_assignment.app_key(app_name)})
+        if planted:
+            connection.execute(
+                text("DELETE FROM project_agents WHERE project_id=:p AND app_key=:a "
+                     "AND role_key = ANY(:r) AND source='default'"),
+                {"p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT, "r": planted})
+
+
+@needs_db
+def test_a_team_a_person_chose_is_still_respected():
+    """The reasoning that put this branch here was right: overriding somebody's choice would
+    ignore the one control the Command Center offers."""
+    from boss_engine.services import agent_assignment
+    from boss_engine.services.core import make_id
+
+    engine = create_engine(DATABASE_URL)
+    app_name = f"chosen probe {os.urandom(4).hex()}"
+    spec = {"steps": [{"id": "edit", "captain": "video_editor"}]}
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO project_agents (id, project_id, app_key, app_name, role_key, "
+                 "source, assigned_by) VALUES (:i, :p, :a, :a, 'design_critic', "
+                 "'operator', 'ceo') ON CONFLICT DO NOTHING"),
+            {"i": make_id("pag"), "p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT})
+
+        seeded = set(agent_assignment.ensure_defaults(
+            connection, project_id=PROJECT, app_name=app_name, actor="test",
+            spec=spec).get("seeded") or [])
+
+        assert "design_critic" in seeded, "a person's choice was discarded"
+        assert "video_editor" in seeded, "the workflow's own agent must still be added"
+
+        connection.execute(
+            text("DELETE FROM project_agents WHERE project_id=:p AND app_key IN (:a, :b)"),
+            {"p": PROJECT, "a": agent_assignment.app_key(app_name),
+             "b": agent_assignment.PROJECT_DEFAULT})
