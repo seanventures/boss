@@ -177,6 +177,21 @@ class SkillRuntimeService:
         last_error: Optional[str] = None
         while attempts < max_attempts:
             attempts += 1
+            # THE EXECUTOR RUNS INSIDE A SAVEPOINT, AND CATCHING IS NOT ENOUGH WITHOUT ONE.
+            #
+            # An executor does its own database work — recording an artifact, writing a receipt.
+            # When any of that fails, Postgres aborts the whole transaction, and this handler
+            # catching the exception does not undo that: every statement afterwards raises
+            # InFailedSqlTransaction. So `last_error` held the real message, the retry ran
+            # against a dead connection, the budget settlement below reported a poisoned
+            # transaction instead, and `_record` — the INSERT that would have WRITTEN
+            # `last_error` down — could not run either.
+            #
+            # The result was a skill that failed for a specific, knowable reason and left no
+            # trace of it anywhere: no invocation row, no error on the step, a workflow run that
+            # simply stopped. Chasing one of those through three layers of masking is what this
+            # savepoint exists to prevent.
+            attempt_point = connection.begin_nested()
             try:
                 if mock:
                     result = {"mock": True, "skill_id": skill_id, "echo": inputs}
@@ -191,9 +206,16 @@ class SkillRuntimeService:
                             f"{candidate['status']}"
                         )
                     result = candidate
+                attempt_point.commit()
                 status = "succeeded"
                 break
             except Exception as exc:  # noqa: BLE001 — retry per policy; capture for the record
+                # ROLL BACK FIRST. Until this happens the connection is unusable, so the retry
+                # below and every record of this failure would fail too.
+                try:
+                    attempt_point.rollback()
+                except Exception:  # noqa: BLE001 — already gone; the message is what matters
+                    pass
                 last_error = str(exc)
 
         actual_cost: Optional[int] = None

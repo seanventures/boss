@@ -154,3 +154,29 @@ def test_recording_works_again_after_a_rollback_to_the_savepoint():
         # This is `fail_step` doing its work after a step blew up.
         connection.execute(text("INSERT INTO step_probe VALUES (1)"))
         assert connection.execute(text("SELECT count(*) FROM step_probe")).scalar() == 1
+
+
+def test_an_executor_that_fails_in_the_database_can_still_be_recorded():
+    """The deepest layer of the same masking, and the one that erased the actual cause.
+
+    `SkillRuntimeService.invoke` runs the executor in a retry loop that catches every exception
+    into `last_error` "for the record". An executor does its own database work — recording an
+    artifact, writing a receipt — and when that fails Postgres aborts the transaction. Catching
+    does not undo that: the retry then ran against a dead connection, the budget settlement
+    reported a poisoned transaction instead of the real problem, and `_record` — the INSERT that
+    would have WRITTEN `last_error` down — could not run either.
+
+    A skill failed for a specific, knowable reason and left no trace anywhere: no invocation
+    row, no error on the step, a workflow that simply stopped.
+    """
+    import inspect
+
+    from boss_engine.services.skill_runtime import SkillRuntimeService
+
+    source = inspect.getsource(SkillRuntimeService.invoke)
+    assert "attempt_point = connection.begin_nested()" in source
+    body = source[source.index("attempt_point = connection.begin_nested()"):]
+    # The rollback must come before `last_error` is set, because everything after the abort —
+    # including recording the message — needs a working connection.
+    assert body.index("attempt_point.rollback()") < body.index("last_error = str(exc)")
+    assert "attempt_point.commit()" in source
