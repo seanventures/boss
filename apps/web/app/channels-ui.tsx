@@ -190,173 +190,267 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
     return `youtube_${Date.now()}`;
   }, [channels]);
 
+  // WHICH THING THE RIGHT-HAND PANE IS SHOWING. The Google client is an ITEM in the list, not
+  // a form underneath a channel — see the comment on the library below for why that matters.
+  const [selected, setSelected] = useState<string>("client");
+  useEffect(() => {
+    // Land on a channel once there is one; the client is the thing to look at before that.
+    if (selected === "client" && status?.configured && connected.length) {
+      setSelected(connected[0].connection_key);
+    }
+  }, [status?.configured, connected, selected]);
+
+  const current = connected.find((c) => c.connection_key === selected) ?? null;
+
   return (
-    <section className="panel-stack" aria-label="Channels">
-      {/* NOT COLLAPSIBLE, BECAUSE IT IS ALREADY SHORT.
-          Collapsing this was wrong twice over: a connected channel is ONE LINE, so it was
-          never what made the page long — the client form and the twenty-two built-in skills
-          were — and a summary reading "Channels — Makkal Sinthanai" names one channel, which
-          makes "expand it to connect a different one" incoherent. What varies is how much
-          EXPLANATION is needed: a lot on the first visit, none once a channel is connected. */}
-      <article className="stack-card" data-testid="channel-connections">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Channels</span>
-            <h2>Where BOSS can publish.</h2>
-            {connected.length === 0 ? (
-              <p className="detail">
-                A channel is connected once and held as a credential BOSS uses but no agent can
-                read. Publishing still needs your approval every time.
-              </p>
-            ) : null}
-          </div>
+    <div className="as-shell" data-testid="channels-home">
+      <header className="as-header">
+        <div>
+          <span className="as-kicker">Channels</span>
+          <h2>Where BOSS can publish</h2>
+          <p>
+            One Google Cloud client for the whole project, and a channel for each account it
+            publishes to. Publishing still needs your approval every time.
+          </p>
         </div>
-        {channels === null ? <p className="detail">Loading…</p>
-         : connected.length === 0 ? (
-           <p className="detail" data-testid="channels-empty">
-             No channel connected yet.
-           </p>
-         ) : (
-          <ul className="skill-list" data-testid="channel-list">
-            {connected.map((c) => (
-              <li key={c.connection_key} className="skill-row">
-                <span className="skill-row-main">
+        <button type="button" className="as-button secondary"
+                data-testid="channel-connect"
+                disabled={busy || !status?.configured}
+                title={status?.configured ? undefined
+                       : "Add the Google Cloud client first — it is what authorises a channel"}
+                onClick={() => void connect(connected.length > 0 ? nextKey() : undefined)}>
+          + Connect a channel
+        </button>
+      </header>
+
+      <div className="as-metrics" aria-label="Channels summary">
+        <div>
+          <span>Channels</span><b>{connected.length}</b>
+          <small>{connected.filter((c) => c.health === "healthy").length} usable</small>
+        </div>
+        <div>
+          <span>Google client</span>
+          <b>{status?.configured ? "Set" : "None"}</b>
+          <small>{status?.configured ? status.client_id_hint : "nothing can connect yet"}</small>
+        </div>
+      </div>
+
+      {note ? (
+        <p className={note.ok ? "setup-ok as-note" : "setup-bad as-note"}
+           data-testid="channel-note-top">{note.text}</p>
+      ) : null}
+
+      <div className="as-workbench as-two">
+        {/* THE CLIENT IS AN ITEM IN THIS LIST, DELIBERATELY.
+            It used to be a form BELOW a channel card, and the operator read it as belonging to
+            that channel — "the client ID I'm providing is for same client or different
+            client?". Prose saying "shared by every Google channel in this project" did not fix
+            that, because layout outranks prose: a form under a heading looks like it belongs to
+            the heading. Sitting BESIDE the channels, at the same level, it is visibly one thing
+            they all share. */}
+        <aside className="as-library" aria-label="Channels and the client that authorises them">
+          <div className="as-pane-head">
+            <span>Connections</span>
+            <small>{connected.length + 1} objects</small>
+          </div>
+          <div className="as-object-list">
+            <button type="button"
+                    className={selected === "client" ? "as-object active" : "as-object"}
+                    data-testid="channel-pick-client"
+                    onClick={() => setSelected("client")}>
+              <span className="as-mini-orb workflow">GC</span>
+              <span>
+                <b>Google Cloud client</b>
+                <small>shared by every channel</small>
+              </span>
+              <i className={status?.configured ? "tone-green" : "tone-amber"}>
+                {status?.configured ? "configured" : "not set up"}
+              </i>
+            </button>
+
+            {channels === null ? (
+              <p className="detail as-empty">Loading…</p>
+            ) : connected.length === 0 ? (
+              <p className="detail as-empty" data-testid="channels-empty">
+                No channel connected yet.
+              </p>
+            ) : connected.map((c) => (
+              <button type="button" key={c.connection_key}
+                      className={selected === c.connection_key ? "as-object active" : "as-object"}
+                      data-testid={`channel-pick-${c.connection_key}`}
+                      onClick={() => setSelected(c.connection_key)}>
+                <span className="as-mini-orb">{initials(c.channel?.title || c.connection_key)}</span>
+                <span>
                   <b>{c.channel?.title || c.connection_key}</b>
-                  <span className="cap-badge tone-muted">{c.provider}</span>
-                  {c.health === "healthy" ? (
-                    <span className="cap-badge tone-green">connected</span>
-                  ) : (
-                    <span className="cap-badge tone-amber">{c.health}</span>
-                  )}
+                  <small>{c.provider}</small>
                 </span>
-                {c.channel?.verified === false ? (
-                  <span className="detail">
-                    Stored, but the channel could not be read back: {c.channel?.reason}
-                  </span>
-                ) : null}
-                {/* RECONNECT IS NOT AN EDGE CASE. A testing-mode refresh token expires after
-                    seven days, so this is the weekly path, and the failure it fixes shows up
-                    as a publish failing with an auth error rather than as anything that looks
-                    like an expired credential. */}
-                {/* WHY IT CANNOT BE RECONNECTED, on the row, before the button is pressed.
-                    The client is what mints and refreshes every token; without it this channel
-                    cannot make a single call and cannot be re-authorised either. The card said
-                    CONNECTED in green while that was true. */}
-                {!status?.configured ? (
-                  <span className="detail" data-testid={`channel-needs-client-${c.connection_key}`}>
-                    This project has no Google Cloud client, so this channel cannot be used or
-                    reconnected. Add one below.
-                  </span>
-                ) : null}
-                <div className="skill-assign">
-                  <button type="button" className="linklike"
-                          disabled={busy || !status?.configured}
-                          data-testid={`channel-reconnect-${c.connection_key}`}
-                          title={status?.configured
-                            ? "Re-authorise this channel. Needed about weekly while the app "
-                              + "is in Google testing mode, where refresh tokens expire after "
-                              + "seven days."
-                            : "Add your Google OAuth client below first"}
-                          onClick={() => void connect(c.connection_key)}>
-                    Reconnect
-                  </button>
-                  <button type="button" className="linklike" disabled={busy}
-                          data-testid={`channel-disconnect-${c.connection_key}`}
-                          onClick={() => void disconnect(
-                            c.connection_key, c.channel?.title || c.connection_key)}>
-                    Disconnect
-                  </button>
-                </div>
-              </li>
+                <i className={c.health === "healthy" ? "tone-green" : "tone-amber"}>
+                  {c.health === "healthy" ? "connected" : c.health}
+                </i>
+              </button>
             ))}
-          </ul>
-        )}
-        {/* WHAT JUST HAPPENED, BESIDE THE BUTTONS THAT DID IT.
-            This only rendered inside the OAuth-client section at the bottom of the page. So
-            pressing Reconnect produced a perfectly good "No Google OAuth client for this
-            project…" a screenful away, under a collapsible heading — and the operator reported
-            the button "isn't doing anything". It was doing exactly what it should and saying so
-            somewhere nobody was looking. */}
-        {note ? (
-          <p className={note.ok ? "setup-ok" : "setup-bad"} data-testid="channel-note-top">
-            {note.text}
+          </div>
+        </aside>
+
+        <section className="as-detail" aria-label="Details">
+          {selected === "client" ? (
+            <ClientPane status={status} form={form} setForm={setForm} busy={busy}
+                        onSave={() => void saveClient()} />
+          ) : current ? (
+            <ChannelPane channel={current} clientReady={Boolean(status?.configured)} busy={busy}
+                         onReconnect={() => void connect(current.connection_key)}
+                         onDisconnect={() => void disconnect(
+                           current.connection_key,
+                           current.channel?.title || current.connection_key)} />
+          ) : (
+            <p className="detail as-empty">Choose something on the left.</p>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/** Initials for the orb, from a channel title. */
+function initials(name: string): string {
+  const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "?";
+  return (words[0][0] + (words[1]?.[0] ?? "")).toUpperCase();
+}
+
+/** One channel: what it is, what it may do, and the two things you can do to it. */
+function ChannelPane({ channel, clientReady, busy, onReconnect, onDisconnect }: {
+  channel: Channel; clientReady: boolean; busy: boolean;
+  onReconnect: () => void; onDisconnect: () => void;
+}) {
+  return (
+    <>
+      <div className="as-pane-head">
+        <span>Channel</span>
+        <small>{channel.connection_key}</small>
+      </div>
+      <div className="as-detail-body">
+        <h3 className="as-detail-title">{channel.channel?.title || channel.connection_key}</h3>
+
+        {!clientReady ? (
+          // THE REASON IT CANNOT BE USED, ON THE THING THAT CANNOT BE USED. The token is fine;
+          // what is missing is the client that refreshes it, and that lives one item up the
+          // list — so this says so rather than leaving the operator to connect the two facts.
+          <p className="setup-bad" data-testid={`channel-needs-client-${channel.connection_key}`}>
+            This project has no Google Cloud client, so this channel cannot publish and cannot be
+            reconnected. Select <b>Google Cloud client</b> on the left and add yours.
           </p>
         ) : null}
-        <div className="dm-starters">
-          {/* PRIMARY only when there is nothing connected. Once there is, connecting another
-              is a rare action and should not be the loudest thing on the card. */}
-          <button type="button"
-                  className={connected.length === 0 ? "cap-btn primary" : "linklike"}
-                  data-testid="channel-connect"
-                  disabled={busy || !status?.configured}
-                  title={status?.configured ? undefined
-                         : "Add your Google OAuth client below first"}
-                  onClick={() => void connect(
-                    connected.length > 0 ? nextKey() : undefined)}>
-            {connected.length > 0 ? "Connect another channel" : "Connect YouTube"}
+
+        <dl className="as-facts">
+          <div><dt>Provider</dt><dd>{channel.provider}</dd></div>
+          <div>
+            <dt>State</dt>
+            <dd className={channel.health === "healthy" ? "tone-green" : "tone-amber"}>
+              {channel.health === "healthy" ? "connected" : channel.health}
+            </dd>
+          </div>
+          {channel.channel?.verified === false ? (
+            <div>
+              <dt>Read back</dt>
+              <dd>failed — {channel.channel?.reason}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>May do</dt>
+            <dd>{channel.capabilities?.length
+              ? channel.capabilities.join(", ")
+              : "nothing recorded"}</dd>
+          </div>
+        </dl>
+
+        {/* RECONNECT IS NOT AN EDGE CASE. A testing-mode refresh token expires after seven
+            days, so this is the weekly path, and the failure it fixes shows up as a publish
+            failing with an auth error rather than as anything resembling an expired token. */}
+        <div className="as-detail-actions">
+          <button type="button" className="as-button" disabled={busy || !clientReady}
+                  data-testid={`channel-reconnect-${channel.connection_key}`}
+                  title={clientReady
+                    ? "Re-authorise this channel. Needed about weekly while the app is in "
+                      + "Google testing mode, where refresh tokens expire after seven days."
+                    : "Add the Google Cloud client first"}
+                  onClick={onReconnect}>
+            Reconnect
+          </button>
+          <button type="button" className="as-button secondary" disabled={busy}
+                  data-testid={`channel-disconnect-${channel.connection_key}`}
+                  onClick={onDisconnect}>
+            Disconnect
           </button>
         </div>
-      </article>
+      </div>
+    </>
+  );
+}
 
-      <details className="stack-card" data-testid="channel-client" open={!status?.configured}>
-        <summary className="skill-form-summary">
-          {/* ONE CLIENT FOR THE WHOLE PROJECT, AND THE SUMMARY HAS TO SAY SO.
-              Sitting under a card that names a connected channel, "Google OAuth client" reads
-              as belonging to THAT channel — so an operator connecting a second one cannot tell
-              whether they also need a second client. They do not: the client is the Cloud
-              APPLICATION, and every channel authorises against it. */}
-          {status?.configured
-            ? `Google Cloud client for this project — configured (${status.client_id_hint})`
-            : "Google Cloud client for this project — not set up yet"}
-        </summary>
+/** The one Google Cloud client the whole project authorises through. */
+function ClientPane({ status, form, setForm, busy, onSave }: {
+  status: ClientStatus | null;
+  form: { client_id: string; client_secret: string; redirect_uri: string };
+  setForm: React.Dispatch<React.SetStateAction<
+    { client_id: string; client_secret: string; redirect_uri: string }>>;
+  busy: boolean;
+  onSave: () => void;
+}) {
+  return (
+    <>
+      <div className="as-pane-head">
+        <span>Google Cloud client</span>
+        <small>{status?.configured ? `configured · ${status.client_id_hint}` : "not set up"}</small>
+      </div>
+      <div className="as-detail-body">
+        <h3 className="as-detail-title">One client, every channel</h3>
         <p className="detail">
-          <b>Shared by every Google channel in this project</b>, not one per channel —
-          connecting another channel uses this same client and needs nothing new here.
+          This is the OAuth application from <b>your own</b> Google Cloud project — your quota is
+          yours, and a leak anywhere else cannot reach your channels. Every Google channel in
+          this project authorises against this one client: connecting a second channel needs
+          nothing new here.
         </p>
         <p className="detail">
-          BOSS uses your own Google Cloud project rather than a shared one: your quota is yours,
-          and a leak anywhere else cannot reach your channels. Create an OAuth client (Web
-          application) with the YouTube Data API and Drive API enabled, then paste it here.
+          Create a <b>Web application</b> client with the YouTube Data API and Drive API
+          enabled, then paste it below.
         </p>
-        <div className="setup-form">
-          <label className="setup-field">
-            <span>Client ID</span>
-            <input type="text" value={form.client_id} data-testid="channel-client-id"
-                   spellCheck={false} placeholder="…apps.googleusercontent.com"
-                   onChange={(e) => setForm((f) => ({ ...f, client_id: e.target.value }))} />
-          </label>
-          <label className="setup-field">
-            <span>Client secret</span>
-            {/* Write-only: it is never returned by any read path, so the field starts empty
-                even when a client IS configured. */}
-            <input type="password" value={form.client_secret} data-testid="channel-client-secret"
-                   spellCheck={false} autoComplete="off" placeholder="GOCSPX-…"
-                   onChange={(e) => setForm((f) => ({ ...f, client_secret: e.target.value }))} />
-          </label>
-          <label className="setup-field">
-            <span>Authorised redirect URI</span>
-            <input type="text" value={form.redirect_uri} data-testid="channel-redirect"
-                   spellCheck={false}
-                   onChange={(e) => setForm((f) => ({ ...f, redirect_uri: e.target.value }))} />
-            <span className="detail">
-              Paste this exact value into your OAuth client in Google Cloud Console. A mismatch
-              here is the commonest failure in this flow, and Google reports it as
-              <code> redirect_uri_mismatch</code>.
-            </span>
-          </label>
-          <button type="button" className="cap-btn" data-testid="channel-client-save"
+
+        <label className="setup-field">
+          <span>Client ID</span>
+          <input type="text" value={form.client_id} data-testid="channel-client-id"
+                 spellCheck={false} autoComplete="off"
+                 placeholder="…apps.googleusercontent.com"
+                 onChange={(e) => setForm((f) => ({ ...f, client_id: e.target.value }))} />
+        </label>
+        <label className="setup-field">
+          <span>Client secret</span>
+          {/* Write-only: never returned by any read path, so the field starts empty even when a
+              client IS configured. */}
+          <input type="password" value={form.client_secret} data-testid="channel-client-secret"
+                 spellCheck={false} autoComplete="off" placeholder="GOCSPX-…"
+                 onChange={(e) => setForm((f) => ({ ...f, client_secret: e.target.value }))} />
+        </label>
+        <label className="setup-field">
+          <span>Authorised redirect URI</span>
+          <input type="text" value={form.redirect_uri} data-testid="channel-redirect"
+                 spellCheck={false}
+                 onChange={(e) => setForm((f) => ({ ...f, redirect_uri: e.target.value }))} />
+          <span className="detail">
+            Paste this exact value into your OAuth client in Google Cloud Console. A mismatch
+            here is the commonest failure in this flow, and Google reports it as
+            <code> redirect_uri_mismatch</code>.
+          </span>
+        </label>
+        <div className="as-detail-actions">
+          <button type="button" className="as-button" data-testid="channel-client-save"
                   disabled={busy || !form.client_id.trim() || !form.client_secret.trim()}
-                  onClick={() => void saveClient()}>
+                  onClick={onSave}>
             {busy ? "Saving…" : status?.configured ? "Replace client" : "Save client"}
           </button>
         </div>
-        {note ? (
-          <p className={note.ok ? "setup-ok" : "setup-bad"} data-testid="channel-note">
-            {note.text}
-          </p>
-        ) : null}
-      </details>
-    </section>
+      </div>
+    </>
   );
 }
 

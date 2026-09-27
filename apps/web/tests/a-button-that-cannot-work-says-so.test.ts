@@ -19,28 +19,32 @@ const UI = codeOnly("app/channels-ui.tsx");
 
 describe("a control that cannot succeed does not pretend otherwise", () => {
   it("Reconnect obeys the same precondition as Connect", () => {
-    // Both mint a token through the OAuth client. Neither can work without one.
-    const guards = UI.split("disabled={busy || !status?.configured}").length - 1;
-    expect(guards).toBeGreaterThanOrEqual(2);
+    // Both mint a token through the OAuth client. Neither can work without one. Connect is
+    // guarded on the client status directly; Reconnect is guarded on the same fact passed into
+    // the channel pane as `clientReady`.
+    expect(UI).toContain("disabled={busy || !status?.configured}");
+    expect(UI).toContain("disabled={busy || !clientReady}");
+    expect(UI).toContain("clientReady={Boolean(status?.configured)}");
   });
 
   it("and says why, before it is pressed", () => {
-    expect(UI).toContain("Add your Google OAuth client below first");
-    expect(UI).toContain("cannot be used or");
+    expect(UI).toContain("Add the Google Cloud client first");
+    expect(UI).toContain("cannot publish and cannot be");
   });
 
-  it("the row says it, not just the button's tooltip", () => {
+  it("the reason is on the channel itself, not just the button's tooltip", () => {
     // A tooltip is invisible on a touch screen and to anyone not hovering.
     expect(UI).toContain("channel-needs-client-");
+    // And it points at where the fix is, because the client is a separate item in the list now.
+    expect(UI).toContain("Google Cloud client</b> on the left");
   });
 });
 
 describe("the answer appears where the question was asked", () => {
-  it("a note renders beside the buttons, not only at the foot of the page", () => {
+  it("a note renders under the header, above both panes", () => {
+    // Whatever was pressed, the answer is in one place and it is above the fold.
     expect(UI).toContain('data-testid="channel-note-top"');
-    // The original, at the bottom by the client form, stays — it is the right place for the
-    // result of SAVING a client.
-    expect(UI).toContain('data-testid="channel-note"');
+    expect(UI).toContain('className={note.ok ? "setup-ok as-note" : "setup-bad as-note"}');
   });
 
   it("and the API's own sentence is what gets shown", () => {

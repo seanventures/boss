@@ -5251,6 +5251,31 @@ select.input:focus {
 }
 .as-transport > div { display: flex; align-items: center; gap: 9px; }
 .as-transport > span { color: var(--muted); }
+/* CHANNELS, BUILT ON THE STUDIO SHELL.
+   Two panes rather than three: there is a list and a thing, and no third column of inspector
+   detail to fill. The middle column's minmax would otherwise leave a 260px gap on the right. */
+.as-workbench.as-two { grid-template-columns: minmax(230px, 0.8fr) minmax(460px, 2.4fr); }
+.as-detail { min-width: 0; background: #0a1320; }
+.as-detail-body { display: grid; gap: 14px; padding: 18px 20px 24px; align-content: start; }
+.as-detail-title { margin: 0; font-family: var(--display); font-size: 1.15rem; }
+.as-detail-body .detail { margin: 0; line-height: 1.55; }
+.as-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+/* Label/value rows. `dt` in the mono face because these are field names, not prose. */
+.as-facts { display: grid; gap: 0; margin: 4px 0 0; }
+.as-facts > div {
+  display: grid; grid-template-columns: minmax(110px, 0.4fr) minmax(0, 1.6fr); gap: 14px;
+  padding: 9px 0; border-top: 1px solid var(--as-line);
+}
+.as-facts dt { color: var(--muted); font-family: var(--mono); font-size: 0.62rem; }
+.as-facts dd { margin: 0; font-size: 0.78rem; overflow-wrap: anywhere; }
+.as-facts dd.tone-green { color: var(--green, #89b482); }
+.as-facts dd.tone-amber { color: var(--amber, #d8a657); }
+/* The answer to the last press, directly under the header that holds the buttons. */
+.as-note { margin: 0; padding: 10px 18px; border-bottom: 1px solid var(--as-line); }
+.as-empty { padding: 14px 15px; }
+/* The client is not an agent; a square orb marks it as a different kind of thing in the list. */
+.as-mini-orb.workflow { border-radius: 8px; }
+
 .as-channel-rail { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto; border-bottom: 1px solid var(--as-line); }
 .as-channel-rail > div {
   display: flex;

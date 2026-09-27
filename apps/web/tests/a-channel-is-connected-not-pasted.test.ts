@@ -103,7 +103,9 @@ describe("a channel can be reconnected and disconnected", () => {
   it("reconnect re-authorises THIS channel rather than adding another", () => {
     // Same call, differing only in the key: passing the existing one re-authorises in place.
     expect(UI).toContain("const connect = useCallback(async (connectionKey?: string) => {");
-    expect(UI).toContain("onClick={() => void connect(c.connection_key)}");
+    // The channel pane calls it with the CHANNEL'S OWN key; the header button calls it with a
+    // fresh one. Same function, and which key is passed is the whole difference.
+    expect(UI).toContain("onReconnect={() => void connect(current.connection_key)}");
   });
 
   it("and connect-another gets a key nobody is using", () => {
@@ -133,19 +135,40 @@ describe("a channel can be reconnected and disconnected", () => {
  * "The google oauth client configured is for same existing channel or for new one? The UI is
  * still confusing here."
  *
- * It sits under a card that names a connected channel, so "Google OAuth client" reads as
- * belonging to THAT channel — and an operator connecting a second one cannot tell whether they
- * also need a second client. They do not: the client is the Cloud APPLICATION, and every
+ * It sat under a card that names a connected channel, so "Google OAuth client" read as
+ * belonging to THAT channel — and an operator connecting a second one could not tell whether
+ * they also needed a second client. They do not: the client is the Cloud APPLICATION, and every
  * channel authorises against it.
+ *
+ * FIXED IN PROSE FIRST, AND THE PROSE DID NOT WORK. The card was retitled "Google Cloud client
+ * for this project" and given a bold line reading "Shared by every Google channel in this
+ * project, not one per channel". The operator then asked the same question a third time — "the
+ * client ID I'm providing is for same client or different client" — because LAYOUT OUTRANKS
+ * PROSE: a form underneath a heading belongs to that heading, whatever the words say.
+ *
+ * So the client is now an ITEM IN THE LIST beside the channels, at the same level, selected
+ * like they are. Being visibly one object among several, shared, is a claim the layout makes
+ * by itself. These tests pin the structure rather than the sentence.
  */
-describe("the client card says what it is scoped to", () => {
-  it("names the project, not the channel", () => {
-    expect(UI).toContain("Google Cloud client for this project");
-    expect(UI).not.toContain("`Google OAuth client — configured");
+describe("the client is not presented as belonging to a channel", () => {
+  it("it is a selectable object in the list, beside the channels", () => {
+    expect(UI).toContain('data-testid="channel-pick-client"');
+    expect(UI).toContain('className={selected === "client" ? "as-object active" : "as-object"}');
   });
 
-  it("and says outright that connecting another channel needs nothing new here", () => {
-    expect(UI).toContain("Shared by every Google channel in this project");
-    expect(UI).toContain("needs nothing new here");
+  it("and the list entry says its scope where the eye already is", () => {
+    expect(UI).toContain("<b>Google Cloud client</b>");
+    expect(UI).toContain("shared by every channel");
+  });
+
+  it("the detail pane still says it outright, for whoever reads", () => {
+    expect(UI).toContain("One client, every channel");
+    expect(UI).toContain("connecting a second channel needs");
+  });
+
+  it("and it is no longer nested under a channel card", () => {
+    // The `<details>` that used to wrap it sat inside the connections card. A form under a
+    // heading that names one channel is the whole defect.
+    expect(UI).not.toContain('<details className="stack-card" data-testid="channel-client"');
   });
 });

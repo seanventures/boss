@@ -95,23 +95,24 @@ describe("the skills page fits on a screen", () => {
     expect(builtin.slice(0, 400)).toContain("builtIn.length");
   });
 
-  it("the channel list is not collapsible, because it is already short", () => {
+  it("nothing on the channels page is hidden behind a disclosure", () => {
     // COLLAPSING THIS WAS WRONG TWICE OVER.
     //
-    // A connected channel is one line, so it was never what made the page long — the client
-    // form and the twenty-two built-in skills were. And a summary reading "Channels — Makkal
-    // Sinthanai" names ONE channel, which makes "expand it to connect a different one"
-    // incoherent, which is exactly how it was reported.
-    expect(CHANNELS).toContain('<article className="stack-card" data-testid="channel-connections">');
-    expect(CHANNELS).not.toContain('<details className="stack-card" data-testid="channel-connections"');
+    // A connected channel is one line, so it was never what made the page long. And a summary
+    // reading "Channels — Makkal Sinthanai" names ONE channel, which makes "expand it to
+    // connect a different one" incoherent, which is exactly how it was reported.
+    //
+    // The page is now a two-pane workbench: a list on the left and the selected thing on the
+    // right. Selection replaces disclosure — there is nothing to expand because everything is
+    // one click away and always visible in the list.
+    expect(CHANNELS).not.toContain("<details");
+    expect(CHANNELS).toContain('className="as-workbench as-two"');
   });
 
-  it("what varies is the explanation, not the visibility", () => {
-    // A lot of explanation on the first visit; none once a channel is connected. That is the
-    // thing that should shrink, rather than hiding the status itself.
-    expect(CHANNELS).toContain("{connected.length === 0 ? (");
-    // And connecting another stops being the loudest control once one exists.
-    expect(CHANNELS).toContain(
-      'className={connected.length === 0 ? "cap-btn primary" : "linklike"}');
+  it("the status of every connection is visible without opening anything", () => {
+    // The thing that must never be hidden is whether a channel actually works. Both the list
+    // entry and the detail pane state it.
+    expect(CHANNELS).toContain('<i className={c.health === "healthy" ? "tone-green" : "tone-amber"}>');
+    expect(CHANNELS).toContain("<dt>State</dt>");
   });
 });
