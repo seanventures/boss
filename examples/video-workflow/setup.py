@@ -115,7 +115,7 @@ def main() -> None:
                            # PASSED THROUGH AS A FACT, not interpreted here. If the operator gave
                            # a link to an ending slide, the agent has `media.fetch_image` and
                            # will use it; if they did not, this is simply absent.
-                           "slide_url": from_input("slide_url"),
+                           "asset_url": from_input("asset_url"),
                        }),
 
             # No separate review step: publish_youtube is risk tier 3, and BOSS forces a manual
@@ -156,6 +156,9 @@ def main() -> None:
                         "Timecodes: seconds, M:SS or HH:MM:SS. If your timecodes came off the "
                         "original recording, say so — each operation applies to the result of "
                         "the one before it.\n"
+                        "Going landscape to portrait CROPS THE SIDES, so anything in a corner "
+                        "of the original — a channel badge, a logo — is cut off. To keep it, "
+                        "link the image above and say where it belongs.\n"
                         "If it needs something it was not given, it says so rather than "
                         "guessing."),
                     "examples": [
@@ -163,11 +166,16 @@ def main() -> None:
                         "centre of the frame. The channel badge is already in the top corner — "
                         "keep it exactly as it is. Put the ending slide on the end."],
                 },
-                "slide_url": {
-                    "title": "Ending slide, title card or logo",
-                    "description": "Optional. A link to a PICTURE, or to a short clip. Mention it "
-                                   "in the instructions — \"put the ending slide on the end\" — "
-                                   "and the agent will fetch it and use it.",
+                "asset_url": {
+                    "title": "A picture or clip to use — ending slide, title card, logo, badge",
+                    "description": (
+                        "Optional. A link to a PICTURE or a short clip. Say in your instructions "
+                        "what it is for and the agent uses it accordingly: \"put the ending "
+                        "slide on the end\", \"keep the channel badge in the top-right corner\".\n"
+                        "WORTH KNOWING: converting landscape to portrait crops the sides, so a "
+                        "logo or badge sitting in a corner of the original is cut off. If you "
+                        "want it kept, link the image here and say where it goes — the agent "
+                        "fetches it and puts it back."),
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "title": {
@@ -190,7 +198,7 @@ def main() -> None:
     instructions   what you want, in plain English. For example:
                    "Keep 0:28 to 1:48, make it portrait for phones, and put the
                     ending slide on the end."
-    slide_url      optional — a link to the ending slide, if your instructions mention one
+    asset_url      optional — a picture to use: ending slide, logo, badge
     title          the YouTube title
 
   The editing step has no fixed list of operations. To let it do something new, give
