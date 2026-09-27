@@ -247,14 +247,24 @@ def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = 
         sql("SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = :a"),
         {"p": project_id, "a": PROJECT_DEFAULT},
     ).mappings().all()
-    seeds = ([r["role_key"] for r in chosen] or default_roles(spec)) if True else []
+    seeds = [r["role_key"] for r in chosen] or default_roles(spec)
     if chosen and spec:
-        # A workflow's own approver roles are added on top: a gate naming release_manager with
-        # nobody assigned to it is the refusal this seeding exists to avoid.
+        # THE AGENTS THE WORKFLOW NAMES GO ON TOP OF THE PROJECT'S TEAM.
+        #
+        # Approvers were already added here, for a good reason: a gate naming `release_manager`
+        # with nobody assigned to it is the refusal this seeding exists to avoid. The agents
+        # that DO THE WORK were not, and they need it for exactly the same reason — a run of
+        # the video workflow was seeded with the project's software team and neither
+        # `video_editor` nor `media_publisher`, the two agents its steps actually name. The
+        # panel under a run reads "Only these agents may sign off this app's gates. Anyone else
+        # is refused", so leaving them off is not cosmetic.
         for step in (spec.get("steps") or []):
-            approver = ((step.get("approval") or {}).get("approver_role") or "").strip()
-            if approver and approver not in seeds:
-                seeds.append(approver)
+            if not isinstance(step, dict):
+                continue
+            for named in (str(step.get("captain") or "").strip(),
+                          str((step.get("approval") or {}).get("approver_role") or "").strip()):
+                if named and named not in seeds:
+                    seeds.append(named)
     return {**assign(connection, project_id=project_id, app_name=app_name,
                      role_keys=seeds, actor=actor, source=DEFAULT),
             "seeded": seeds}

@@ -55,3 +55,82 @@ def test_a_workflow_that_names_nobody_still_gets_a_team():
 
 def test_no_spec_at_all_behaves_as_before():
     assert default_roles() == default_roles(None) != []
+
+
+# --------------------------------------------------------------------------- #
+# The path that actually runs, which is not the one I fixed first.
+# --------------------------------------------------------------------------- #
+import os
+
+import pytest
+from sqlalchemy import create_engine, text
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+needs_db = pytest.mark.skipif(not DATABASE_URL, reason="no database configured")
+PROJECT = "boss-dogfood"
+
+
+@needs_db
+def test_the_workflows_agents_are_seeded_even_when_the_project_has_a_team():
+    """FIXING `default_roles` WAS NOT ENOUGH, AND THE LIVE RUN SAID SO.
+
+    `ensure_defaults` prefers the project's stored default team, so `default_roles(spec)` is never
+    reached on a project that has one — which is every real project. Only the spec's APPROVER
+    roles were added on top. A video run therefore seeded the software team plus `human`, and
+    still omitted `video_editor` and `media_publisher`.
+
+    I checked the live run after deploying the first fix and the strangers were still there.
+    This is the path that matters.
+    """
+    from boss_engine.services import agent_assignment
+
+    engine = create_engine(DATABASE_URL)
+    app_name = f"seed probe {os.urandom(4).hex()}"
+    spec = {"steps": [
+        {"id": "edit", "captain": "video_editor"},
+        {"id": "gate", "kind": "decision",
+         "approval": {"mode": "manual", "approver_role": "human"}},
+        {"id": "publish", "captain": "media_publisher"},
+    ]}
+    with engine.begin() as connection:
+        existing = connection.execute(
+            text("SELECT role_key FROM project_agents WHERE project_id=:p AND app_key=:a"),
+            {"p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT}).scalars().all()
+        # THE CONDITION IS THE POINT, SO IT IS ARRANGED RATHER THAN WAITED FOR.
+        #
+        # This first skipped when the project had no default team — which is exactly the branch
+        # that was NOT broken. A test that skips past the defect it was written for is worse
+        # than no test: it reports green for the thing it never ran.
+        planted = []
+        if not existing:
+            from boss_engine.services.core import make_id
+
+            for role in ("software_engineer", "qa"):
+                connection.execute(
+                    text("INSERT INTO project_agents (id, project_id, app_key, app_name, "
+                         "role_key, source, assigned_by) "
+                         "VALUES (:i, :p, :a, :a, :r, 'default', 'test') "
+                         "ON CONFLICT DO NOTHING"),
+                    {"i": make_id("pag"), "p": PROJECT,
+                     "a": agent_assignment.PROJECT_DEFAULT, "r": role})
+                planted.append(role)
+        team = existing or planted
+
+        result = agent_assignment.ensure_defaults(
+            connection, project_id=PROJECT, app_name=app_name, actor="test", spec=spec)
+        seeded = set(result.get("seeded") or [])
+
+        # The project's team is kept — somebody chose it.
+        assert set(team) <= seeded
+        # AND the agents this workflow names are on it, or they are refused at its own gate.
+        for named in ("video_editor", "media_publisher", "human"):
+            assert named in seeded, f"{named} is named by the workflow and was not seeded"
+
+        connection.execute(
+            text("DELETE FROM project_agents WHERE project_id=:p AND app_key=:a"),
+            {"p": PROJECT, "a": agent_assignment.app_key(app_name)})
+        if planted:
+            connection.execute(
+                text("DELETE FROM project_agents WHERE project_id=:p AND app_key=:a "
+                     "AND role_key = ANY(:r)"),
+                {"p": PROJECT, "a": agent_assignment.PROJECT_DEFAULT, "r": planted})
