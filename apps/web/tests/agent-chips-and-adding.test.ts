@@ -73,7 +73,11 @@ describe("adding an agent adds one", () => {
     // Not a UI workaround: the server does it, so every caller gets add-semantics rather than
     // each one remembering to send the whole list.
     const ASSIGN = codeOnly("../../engine/boss_engine/services/agent_assignment.py");
-    expect(ASSIGN).toContain("if not assigned(connection, project_id, key):");
+    // `establishes_team` excuses the SEEDER, which is stating a run's team rather than adding
+    // to one — it was materialising a team the workflow never asked for and putting the real
+    // agents on top. Every other caller still gets add-semantics.
+    expect(ASSIGN).toContain(
+      "if not establishes_team and not assigned(connection, project_id, key):");
     expect(ASSIGN).toContain("ON CONFLICT (project_id, app_key, role_key) DO NOTHING");
   });
 

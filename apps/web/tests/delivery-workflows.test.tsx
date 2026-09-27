@@ -268,8 +268,13 @@ describe("the flow blocks the runtime always had", () => {
     // wait_seconds and workflow_version_id live at the top level of the step, not in binding.
     // Asserted WITHOUT the empty-object literals: `codeOnly` collapses `{}` to a space when
     // it strips leftover JSX-comment braces, so a string containing one never matches.
-    expect(UI).toContain("return { id: step.id, kind: step.kind, binding:");
+    expect(UI).toContain("id: step.id, kind: step.kind, binding:");
     expect(UI).toContain("...(step.config ?? ");
+    // AND ITS CAPTAIN. An Approval gate is a control block, and it is the one step where naming
+    // who answers is the entire point; the save used to drop it.
+    // Without the trailing `{}`, for the reason stated above: `codeOnly` collapses an empty
+    // object literal, so a string containing one can never match.
+    expect(UI).toContain("...(step.captain ? { captain: step.captain } :");
   });
 });
 

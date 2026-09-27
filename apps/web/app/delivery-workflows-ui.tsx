@@ -5068,7 +5068,15 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       if (step.kind !== "capability") {
         // A control block carries its own configuration at the top level, which is where the
         // runtime looks for `wait_seconds` and `workflow_version_id`.
-        return { id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}), next };
+        //
+        // AND ITS CAPTAIN, which this dropped. An Approval gate is the one step where naming
+        // who answers is the whole point, and the save threw it away — so even once the control
+        // appeared, choosing `human` on a gate would not have survived the version.
+        return {
+          id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}),
+          ...(step.captain ? { captain: step.captain } : {}),
+          next,
+        };
       }
       if (step.agentWork) {
         return {
@@ -5619,7 +5627,13 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       Empty is the existing behaviour: the anonymous workflow runner — EXCEPT on
                       an agent step, where it means "whichever agent fits", which BOSS works out
                       from what each one is for and what it holds. */}
-                  {step.kind === "capability" && stepRoles.length ? (
+                  {/* A GATE NEEDS AN AGENT TOO, AND IT IS THE ONE STEP WHERE THAT MATTERS MOST.
+                      This rendered only for `capability`, so an Approval gate — kind
+                      `decision` — showed no agent control at all: the operator could place the
+                      one step whose entire purpose is that a PERSON answers it, and had nowhere
+                      to say who. */}
+                  {(step.kind === "capability" || step.kind === "decision")
+                   && stepRoles.length ? (
                     <select className="input dw-draft-captain" value={step.captain ?? ""}
                             onChange={(e) => setDraft((c) =>
                               c.map((st, i) => (i === index
@@ -5627,11 +5641,13 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                             aria-label={`Agent for ${step.id}`}
                             data-testid={`dw-draft-captain-${step.id}`}>
                       <option value="">
-                        {step.agentWork
-                          ? "whichever agent fits — BOSS picks"
-                          : capability?.captain
-                            ? `${capability.captain} (default)`
-                            : "no agent — runs as the workflow"}
+                        {step.kind === "decision"
+                          ? "human (default)"
+                          : step.agentWork
+                            ? "whichever agent fits — BOSS picks"
+                            : capability?.captain
+                              ? `${capability.captain} (default)`
+                              : "no agent — runs as the workflow"}
                       </option>
                       {stepRoles.map((role) => (
                         <option key={role} value={role}>{role}</option>

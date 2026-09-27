@@ -7,9 +7,9 @@ line corresponds to something you could do by hand. README.md does exactly that.
 
 WHAT IT BUILDS, AND WHY IT IS THIS SHORT NOW
 --------------------------------------------
-    fetch-link  →  edit  →  publish
-    video_editor   video_editor   media_publisher     ← the agent for each step
-    auto           auto           NEEDS A PERSON
+    edit  →  publish
+    video_editor   media_publisher      ← who runs it
+    auto           NEEDS A PERSON
 
 The middle step used to be two — "plan the edit" and "apply the plan" — bound to a pair of
 skills with a fixed list of operations between them. That shape does not survive contact with
@@ -62,13 +62,10 @@ EDITING_SKILLS = [
     "video.bookend",        # a title card before, an ending slide after
 ]
 
-#: The two steps that still bind a skill, because both are single, exact acts with nothing to
-#: decide: turn this link into a video, and upload this file to that channel.
+#: The ONE step that still binds a skill, because it is a single exact act with nothing to
+#: decide: upload this file to that channel. Fetching a link is not — the agent holds
+#: `media.fetch_link` and decides for itself when to use it.
 STEPS = [
-    {"label": "Fetch the video", "skill_id": "media.fetch_link",
-     "summary": "Turn the pasted link into a video BOSS holds.",
-     "inputs": [{"name": "url", "required": True}],
-     "agent": "video_editor"},
     {"label": "Publish to YouTube", "skill_id": "publish_youtube",
      "summary": "Upload the approved video as private.",
      # TITLE IS REQUIRED BY THE SKILL. Leaving it off the step meant the run reached the last
@@ -97,24 +94,26 @@ def main() -> None:
         return
 
     publish(api, name=NAME, description=DESCRIPTION, args=args, spec={
-        "entry_step": "fetch-link",
+        "entry_step": "edit",
         "steps": [
-            step("fetch-link", keys["Fetch the video"],
-                 {"url": from_input("video_url")},
-                 ["edit"], agent="video_editor", args=args),
-
-            # THE STEP THAT BINDS NOTHING.
+            # ONE STEP, AND IT BINDS NOTHING.
             #
-            # It gets your sentence and the video the step before it produced. What it does with
-            # them is the agent's decision, made from the skills it holds — so "trim it" and
-            # "trim it, make it portrait and put a slide on the end" are the same step.
+            # There used to be a `fetch-link` step in front of this, wired to a required
+            # `video_url` field. It meant the operator had to split what they wanted across two
+            # boxes — the link in one, the instruction in the other — and pasting the whole
+            # thing into the instruction, which is what anybody would do, failed the start with
+            # "this workflow needs 1 input(s) it was not given: video_url".
+            #
+            # The agent already holds `media.fetch_link`. Fetching a link IS one of its skills,
+            # so making it a separate step was BOSS deciding the order of operations for work
+            # the agent is supposed to order itself. Say what you want, links included, and it
+            # fetches, edits and reports back.
             agent_step("edit", from_input("instructions"), ["publish"],
                        agent="video_editor", args=args,
                        context={
-                           "media_artifact_id": from_step("fetch-link", "media_artifact_id"),
-                           # PASSED THROUGH AS A FACT, not interpreted here. If the operator gave
-                           # a link to an ending slide, the agent has `media.fetch_image` and
-                           # will use it; if they did not, this is simply absent.
+                           # OPTIONAL, BOTH OF THEM. A link given here is a fact the agent can
+                           # use; a link written into the instruction works just as well.
+                           "video_url": from_input("video_url"),
                            "asset_url": from_input("asset_url"),
                        }),
 
@@ -129,13 +128,16 @@ def main() -> None:
         # WHAT THE START FORM ASKS FOR. Without this the console has nothing to draw and the
         # workflow cannot be started from the UI at all.
         "input_schema": {
-            "required": ["video_url", "instructions", "title"],
+            # ONLY WHAT CANNOT BE INFERRED. `video_url` was required and is not any more: the
+            # link can be written into the instruction like everything else, and demanding it
+            # twice is what blocked a start that had said everything it needed to.
+            "required": ["instructions", "title"],
             "properties": {
                 "video_url": {
-                    "title": "Video link",
-                    "description": "Google Drive share link, or any direct HTTPS link to the "
-                                   "file. A Drive link is not copied — it is already where the "
-                                   "editing steps read from.",
+                    "title": "Video link (optional — you can put it in the instructions instead)",
+                    "description": "Google Drive share link, or any direct HTTPS link. Leave it "
+                                   "blank and write the link into your instructions; the agent "
+                                   "fetches whatever you point it at either way.",
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "instructions": {

@@ -2016,7 +2016,7 @@ def _mark_skipped(connection: Connection, run_id: str, step_id: str, reason: str
         text(
             """
             UPDATE workflow_step_runs
-            SET status='skipped', output=CAST(:output AS JSONB), completed_at=now(), updated_at=now()
+            SET status='skipped', output=CAST(:output AS JSONB), completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id AND status='pending'
             """
         ),
@@ -2042,7 +2042,7 @@ def _succeed_internal(
             UPDATE workflow_step_runs
             SET status='succeeded', output=CAST(:output AS JSONB),
                 lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
-                completed_at=now(), updated_at=now()
+                completed_at=clock_timestamp(), updated_at=now()
             WHERE workflow_run_id=:run_id AND step_id=:step_id AND iteration=:iteration
             """
         ),
@@ -2221,7 +2221,7 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
                 text(
                     """
                     UPDATE workflow_step_runs SET status='failed', last_error=:reason,
-                        completed_at=now(), updated_at=now() WHERE id=:id
+                        completed_at=clock_timestamp(), updated_at=now() WHERE id=:id
                     """
                 ),
                 {"id": row["id"], "reason": reason},
@@ -2419,6 +2419,17 @@ def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[st
                 _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
                 progressed = True
             elif decision and decision["status"] in {"rejected", "expired"}:
+                # THE STEP HAS TO SAY SO TOO.
+                #
+                # `_block_run` updates `workflow_runs` and nothing else, so a rejected gate left
+                # its step `waiting` — for ever, and with no record of the answer. The operator
+                # pressed Reject, watched the gate go on saying "waiting", and had nothing to
+                # tell them their decision had landed. The run was blocked the whole time.
+                _refuse_step(
+                    connection, run_id, step["step_id"], int(step["iteration"]),
+                    decision_id=str(step["decision_id"]),
+                    outcome=str(decision["status"]),
+                )
                 _block_run(
                     connection,
                     run_id,
@@ -2549,7 +2560,7 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
             """
             UPDATE workflow_runs
             SET status='completed', output=context, current_frontier='[]'::jsonb,
-                completed_at=now(), updated_at=now()
+                completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id AND status IN ('running','waiting')
             """
         ),
@@ -2563,6 +2574,36 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
         "workflow_run",
         run_id,
         {"status_counts": by_status},
+    )
+
+
+def _refuse_step(
+    connection: Connection, run_id: str, step_id: str, iteration: int,
+    *, decision_id: str, outcome: str,
+) -> None:
+    """Record that a gate was answered NO, on the step that asked.
+
+    A rejection is an answer, and the step is where somebody looks for it. Leaving it `waiting`
+    said the opposite of what had happened: the person had decided, and the console showed the
+    question still open.
+
+    `failed` rather than a status of its own — the run is blocked either way, and a step that
+    did not pass is the thing every other reader of this table already understands.
+    """
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='failed', completed_at=clock_timestamp(), updated_at=now(),
+                last_error=:reason,
+                output = COALESCE(output, '{}'::jsonb) || CAST(:out AS JSONB)
+            WHERE workflow_run_id=:run_id AND step_id=:step_id AND iteration=:iteration
+              AND status='waiting'
+            """
+        ),
+        {"run_id": run_id, "step_id": step_id, "iteration": iteration,
+         "reason": f"a person {outcome} this step",
+         "out": json.dumps({"decision_id": decision_id, "outcome": outcome})},
     )
 
 
@@ -2638,10 +2679,16 @@ def claim_step(
     updated = connection.execute(
         text(
             """
+            -- clock_timestamp(), NOT now(). `now()` is the TRANSACTION's start time and is
+            -- constant for its whole duration, so a step claimed and completed inside one tick
+            -- got the same value for `started_at` and `completed_at`. Every step in the console
+            -- therefore reported a duration of zero, and the run view showed nothing at all —
+            -- which is what the operator noticed. The lease columns keep now(): a lease is
+            -- about the transaction's view of time, a duration is about the wall clock.
             UPDATE workflow_step_runs
             SET status='leased', attempt=attempt+1, lease_owner=:worker_id,
                 lease_expires_at=:expires_at, heartbeat_at=now(),
-                started_at=COALESCE(started_at, now()), updated_at=now()
+                started_at=COALESCE(started_at, clock_timestamp()), updated_at=now()
             WHERE id=:id
             RETURNING *
             """
@@ -2716,7 +2763,7 @@ def force_complete_waiting_step(
             """
             UPDATE workflow_step_runs
             SET status='succeeded', output=CAST(:output AS JSONB),
-                completed_at=now(), updated_at=now()
+                completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id AND project_id=:project_id AND status='waiting'
             RETURNING *
             """
@@ -2773,7 +2820,7 @@ def force_fail_waiting_step(
         text(
             """
             UPDATE workflow_step_runs
-            SET status='failed', last_error=:error, completed_at=now(), updated_at=now()
+            SET status='failed', last_error=:error, completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id AND project_id=:project_id AND status='waiting'
             RETURNING *
             """
@@ -2927,7 +2974,7 @@ def park_step_awaiting(
             UPDATE workflow_step_runs
             SET status='waiting', output=CAST(:output AS JSONB),
                 lease_owner=NULL, lease_expires_at=NULL,
-                started_at=COALESCE(started_at, now()), updated_at=now()
+                started_at=COALESCE(started_at, clock_timestamp()), updated_at=now()
             WHERE id=:id
             RETURNING *
             """
@@ -2974,7 +3021,7 @@ def complete_step(
             SET status='succeeded', output=CAST(:output AS JSONB),
                 evidence=CAST(:evidence AS JSONB), lease_owner=NULL,
                 lease_expires_at=NULL, heartbeat_at=NULL,
-                completed_at=now(), updated_at=now()
+                completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id RETURNING *
             """
         ),
@@ -3231,7 +3278,7 @@ def cancel_run(
     connection.execute(
         text(
             """
-            UPDATE workflow_step_runs SET status='cancelled', completed_at=now(), updated_at=now()
+            UPDATE workflow_step_runs SET status='cancelled', completed_at=clock_timestamp(), updated_at=now()
             WHERE workflow_run_id=:run_id AND status IN ('pending','ready','waiting')
             """
         ),
@@ -3241,7 +3288,7 @@ def cancel_run(
         text(
             """
             UPDATE workflow_runs SET status='cancelled', error=:reason,
-                current_frontier='[]'::jsonb, completed_at=now(), updated_at=now()
+                current_frontier='[]'::jsonb, completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id
             """
         ),
@@ -3572,7 +3619,7 @@ def complete_compensation(
         connection.execute(
             text(
                 """
-                UPDATE workflow_runs SET status='compensated', completed_at=now(),
+                UPDATE workflow_runs SET status='compensated', completed_at=clock_timestamp(),
                     updated_at=now() WHERE id=:id
                 """
             ),

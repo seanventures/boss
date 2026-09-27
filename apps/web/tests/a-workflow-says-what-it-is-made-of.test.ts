@@ -145,12 +145,12 @@ describe("a step can be given to an agent", () => {
   it("writes a captain into the spec only when one was chosen", () => {
     // An empty string would make every step look deliberately assigned to nobody.
     //
-    // ONE PER SAVE BRANCH, and there are three: a built-in capability, a step the customer
-    // defined, and an agent step that carries an instruction instead of binding a skill. A
-    // branch that forgot this line would silently drop the agent off that kind of step, which is
-    // the bug this counts rather than describes.
+    // ONE PER SAVE BRANCH, and there are four: a built-in capability, a step the customer
+    // defined, an agent step that carries an instruction instead of binding a skill, and a
+    // control block — which is where an Approval gate lives, and the one step where naming who
+    // answers is the entire point. That branch dropped it, so a gate could never keep `human`.
     const occurrences = ui.split("...(step.captain ? { captain: step.captain } : {})").length - 1;
-    expect(occurrences).toBe(3);
+    expect(occurrences).toBe(4);
   });
 
   it("an agent step means something different by 'no agent'", () => {
