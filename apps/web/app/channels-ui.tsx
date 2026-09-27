@@ -238,12 +238,25 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
                     seven days, so this is the weekly path, and the failure it fixes shows up
                     as a publish failing with an auth error rather than as anything that looks
                     like an expired credential. */}
+                {/* WHY IT CANNOT BE RECONNECTED, on the row, before the button is pressed.
+                    The client is what mints and refreshes every token; without it this channel
+                    cannot make a single call and cannot be re-authorised either. The card said
+                    CONNECTED in green while that was true. */}
+                {!status?.configured ? (
+                  <span className="detail" data-testid={`channel-needs-client-${c.connection_key}`}>
+                    This project has no Google Cloud client, so this channel cannot be used or
+                    reconnected. Add one below.
+                  </span>
+                ) : null}
                 <div className="skill-assign">
-                  <button type="button" className="linklike" disabled={busy}
+                  <button type="button" className="linklike"
+                          disabled={busy || !status?.configured}
                           data-testid={`channel-reconnect-${c.connection_key}`}
-                          title="Re-authorise this channel. Needed about weekly while the app
-                                 is in Google testing mode, where refresh tokens expire after
-                                 seven days."
+                          title={status?.configured
+                            ? "Re-authorise this channel. Needed about weekly while the app "
+                              + "is in Google testing mode, where refresh tokens expire after "
+                              + "seven days."
+                            : "Add your Google OAuth client below first"}
                           onClick={() => void connect(c.connection_key)}>
                     Reconnect
                   </button>
@@ -258,6 +271,17 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
             ))}
           </ul>
         )}
+        {/* WHAT JUST HAPPENED, BESIDE THE BUTTONS THAT DID IT.
+            This only rendered inside the OAuth-client section at the bottom of the page. So
+            pressing Reconnect produced a perfectly good "No Google OAuth client for this
+            project…" a screenful away, under a collapsible heading — and the operator reported
+            the button "isn't doing anything". It was doing exactly what it should and saying so
+            somewhere nobody was looking. */}
+        {note ? (
+          <p className={note.ok ? "setup-ok" : "setup-bad"} data-testid="channel-note-top">
+            {note.text}
+          </p>
+        ) : null}
         <div className="dm-starters">
           {/* PRIMARY only when there is nothing connected. Once there is, connecting another
               is a rare action and should not be the loudest thing on the card. */}

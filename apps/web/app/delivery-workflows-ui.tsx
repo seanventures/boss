@@ -1359,7 +1359,7 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
 type Repo = { id: string; full_name: string; role?: string | null; default_branch?: string };
 
 /** What the wizard has collected so far. One object so a Back button costs nothing. */
-type NewProjectDraft = {
+export type NewProjectDraft = {
   title: string;
   directive: string;
   audience: string;
