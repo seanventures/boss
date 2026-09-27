@@ -1604,7 +1604,9 @@ def execute_media_read_document(
     url = str(inputs.get("url") or inputs.get("link") or "").strip()
     file_id = str(inputs.get("file_id") or "").strip()
     if not url and not file_id:
-        raise ValueError("url is required — the link to the document to read")
+        raise ValueError(
+            "give either url (the Drive share link) or file_id (the id out of it) — "
+            "this needs one of them to know which document to read")
 
     if not file_id:
         link = resolve_link(url)

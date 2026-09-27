@@ -462,9 +462,21 @@ skills:
       where the glyphs are stored in the order they are PAINTED and have to be put back. A
       scanned PDF is read by OCR; give `language` (an ISO code such as "ta") if you know it.
       It cannot read an image — use media.fetch_image for that.
+      GIVE EITHER `url` (the share link) OR `file_id` (the id out of it) — one of them, not both.
     data_boundary: internal
     input_schema:
-      url: string
+      # NEITHER IS REQUIRED, BECAUSE EITHER WILL DO — and the declaration is the contract the
+      # MODEL PROVIDER ENFORCES, not a hint. `url: string` meant the tool schema said url was
+      # required; an agent that had already extracted the id called it with `file_id` alone and
+      # Groq refused the call before BOSS ever saw it:
+      #
+      #   Tool call validation failed: parameters for tool skill_media_read_document did not
+      #   match schema: errors: [missing properties: 'url']
+      #
+      # The step deadlettered over a schema that disagreed with its own executor, which has
+      # always accepted either. A declaration that overstates what is required is a lie the
+      # provider tells on your behalf. The executor rejects a call with neither, and says so.
+      url: string?
       file_id: string?
       language: string?
     output_schema:

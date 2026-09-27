@@ -48,6 +48,32 @@ def _unique_tool_name(
     return candidate
 
 
+#: How many refused tool calls an agent may make before the step gives up. Three is enough for
+#: a model to read the parameters again; more than that is a loop, not a correction.
+MAX_REFUSED_TOOL_CALLS = 3
+
+
+def _the_provider_refused_the_tool_call(error: Exception) -> Optional[str]:
+    """Whether this failure is the model writing a bad call, rather than something being wrong.
+
+    The two are worlds apart and arrive identically — as a 400 from the completion request. A
+    provider that validates tool calls server-side (Groq does) refuses the malformed one and
+    never returns a message, so the exception surfaces where no assistant turn exists yet:
+
+        Tool call validation failed: parameters for tool skill_media_read_document did not
+        match schema: errors: [missing properties: 'url']
+
+    Treated as an outage that is a step deadlettered and work thrown away. Recognised for what
+    it is, it is one turn of feedback. Anything not matching stays an exception, because a real
+    outage must not be retried as though the agent could word its way out of it.
+    """
+    detail = str(error)
+    lowered = detail.lower()
+    if "tool_use_failed" in lowered or "tool call validation failed" in lowered:
+        return detail[:600]
+    return None
+
+
 def _skill_tool_parameters(input_schema: dict[str, Any]) -> dict[str, Any]:
     if input_schema.get("type") == "object":
         return input_schema
@@ -1843,10 +1869,47 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
 
     final_text: Optional[str] = None
     last_step = step0
+    refused_calls = 0
     for i in range(steps_cap):
         step = step0 + i
         last_step = step
-        message, usage = adapter.create_chat_completion(messages, tools=schemas)
+        try:
+            message, usage = adapter.create_chat_completion(messages, tools=schemas)
+        except Exception as exc:  # noqa: BLE001 — sorted by what it is, one line down
+            complaint = _the_provider_refused_the_tool_call(exc)
+            if complaint is None or refused_calls >= MAX_REFUSED_TOOL_CALLS:
+                raise
+            # A MALFORMED CALL IS A MISTAKE, NOT THE END OF THE WORK.
+            #
+            # Some providers validate a tool call against its schema and return 400 instead of
+            # the message, so the exception lands HERE — before any assistant turn exists — and
+            # killed the whole step. A video edit that had already trimmed and reframed correctly
+            # was deadlettered because one later call omitted a property.
+            #
+            # A person told "that form was filled in wrong" fills it in again. The refusal is
+            # handed back as the next thing the agent reads, and the loop carries on with
+            # everything it has already done intact. Bounded, so a model that cannot get it
+            # right does not spend the run trying.
+            refused_calls += 1
+            messages.append({
+                "role": "user",
+                "content": (
+                    "YOUR LAST TOOL CALL WAS REFUSED BEFORE IT RAN, so nothing happened and "
+                    "nothing changed. The model provider checked it against the tool's "
+                    "parameters and rejected it:\n\n"
+                    f"{complaint}\n\n"
+                    "This is a fault in how the call was written, not in the tool. Read that "
+                    "tool's parameters again, include every property it marks required, and "
+                    "make the call again. Everything you have already done still stands — do "
+                    "not repeat it."
+                ),
+            })
+            emit_event(
+                connection, project_id, "agent.tool_call_refused", "agent_loop",
+                "agent_run", run_id,
+                {"attempt": refused_calls, "detail": complaint[:500]},
+            )
+            continue
         add_usage(usage)
         messages.append(message["raw"])
         tool_calls = message.get("tool_calls")
