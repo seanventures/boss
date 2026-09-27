@@ -15022,12 +15022,38 @@ def list_channel_connections(project_id: str) -> dict:
             ),
             {"p": project_id},
         ).mappings().all()
+    # A CONNECTION IS NOT USABLE WITHOUT THE CLIENT THAT MINTED IT.
+    #
+    # `health_status` records how the last token exchange went and is never revisited. The
+    # OAuth CLIENT — the Client ID and secret from the operator's own Google Cloud project — is
+    # what refreshes that token, and it lives somewhere else entirely: a secret ref, or the
+    # installation's environment. Lose it and every stored token becomes unrefreshable while
+    # the row still reads `active / healthy`.
+    #
+    # That is not a cosmetic discrepancy. It reported "connected, healthy, drive.read,
+    # drive.write" for a channel that could not make a single call, a workflow run then failed
+    # on its first step with "No Google OAuth client for this project", and the health field had
+    # said the opposite one minute earlier. A signal that confidently contradicts the thing it
+    # describes is worse than no signal.
+    from .services.channel_oauth import oauth_client_status
+
+    with begin(engine) as connection:
+        client_ready = bool(oauth_client_status(connection, project_id).get("configured"))
+
     return {"project_id": project_id, "channels": [
         {
             "connection_key": r["connection_key"],
             "provider": r["integration_key"],
             "status": r["status"],
-            "health": r["health_status"],
+            "health": r["health_status"] if client_ready else "unusable",
+            # Said plainly, next to the health it explains, so nobody has to know that a
+            # connection and a client are two different things to understand the answer.
+            **({} if client_ready else {
+                "unusable_reason":
+                    "this project has no Google OAuth client, so the stored token cannot be "
+                    "refreshed and every call fails. Channels → add the Client ID, secret and "
+                    "redirect URI from your own Google Cloud project.",
+            }),
             "capabilities": r["granted_capabilities"],
             "max_risk_tier": r["max_risk_tier"],
             # The channel identity, NOT the provenance blob: that carries the state nonce and
