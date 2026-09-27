@@ -185,6 +185,24 @@ def _unused_product(connection: Connection, project_id: str,
     return dict(rng.choice(fresh))
 
 
+def catalogue_work_class(workflow_key: str) -> str:
+    """The class a shipped workflow is for, or "" when the key is the customer's own.
+
+    "Start one" on a workflow the customer made used to read
+    ``workflow_definitions.work_class``. That column was never created, so the click
+    raised an undefined-column error and the run never began. The class lives on the
+    catalogue entry. A key that is not in the catalogue has no class; ``sample_for``
+    treats that as a self-contained product brief.
+    """
+    from .workflow_catalogue import CATALOGUE
+
+    key = (workflow_key or "").strip()
+    for entry in CATALOGUE:
+        if entry.get("key") == key:
+            return str(entry.get("work_class") or "")
+    return ""
+
+
 def sample_for(connection: Connection, project_id: str, work_class: str,
                *, seed: Optional[int] = None) -> Optional[dict[str, Any]]:
     """A runnable input for this work class, or None when the project cannot supply one.

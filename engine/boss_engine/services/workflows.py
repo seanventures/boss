@@ -815,16 +815,11 @@ def list_definitions(
         item["steps"] = _step_outline(row["step_specs"], step_labels)
         item["active_version"] = (
             int(row["active_version"]) if row["active_version"] is not None else None)
-        # WHAT STARTING IT WILL ASK FOR.
-        #
-        # SELECTED BY THE QUERY ABOVE SINCE THE DAY IT WAS WRITTEN, AND NEVER COPIED ONTO THE
-        # ITEM. The comment in the SQL says exactly what it is for — "the console's start form
-        # renders FROM this" — and the value never arrived. So the form drew nothing for every
-        # workflow that declares inputs, and "Start one", which decides whether to open the form
-        # by asking whether any were declared, always concluded "none" and started the run on a
-        # sample instead. The operator pressed the button on a workflow needing a video link and
-        # got a software-delivery sample.
-        item["input_schema"] = row["input_schema"] if isinstance(row["input_schema"], dict) else {}
+        # WHAT STARTING IT WILL ASK FOR. The query above already loads this from the live
+        # version. Leaving it off the item made every workflow look like it declared nothing,
+        # so "Start one" sent a sample brief instead of asking for the fields the steps read.
+        schema = _json(row["input_schema"], {})
+        item["input_schema"] = schema if isinstance(schema, dict) else {}
         items.append(item)
     return items
 

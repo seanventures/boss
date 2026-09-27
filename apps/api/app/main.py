@@ -21692,16 +21692,14 @@ def start_delivery_workflow(payload: dict) -> dict:
     # already built (duplicate work is refused at the build, so a repeat would end the demo on
     # an error). A console cannot know either of those.
     if payload.get("sample"):
-        from boss_engine.services.workflow_samples import sample_for, why_no_sample
+        from boss_engine.services.workflow_samples import (
+            catalogue_work_class, sample_for, why_no_sample,
+        )
 
         with begin(engine) as connection:
-            wanted = work_class
-            if not wanted and workflow_key:
-                wanted = connection.execute(
-                    text("SELECT work_class FROM workflow_definitions "
-                         "WHERE project_id = :p AND workflow_key = :k LIMIT 1"),
-                    {"p": project_id, "k": workflow_key},
-                ).scalar() or ""
+            wanted = work_class or (
+                catalogue_work_class(workflow_key) if workflow_key else ""
+            )
             chosen = sample_for(connection, project_id, str(wanted or ""))
         if not chosen:
             # REFUSING IS THE CORRECT ANSWER when the project cannot supply an example. The
@@ -21735,6 +21733,11 @@ def start_delivery_workflow(payload: dict) -> dict:
             # The honest failure: nobody chose a workflow for this class of work. Picking one
             # anyway is how work silently follows a process nobody agreed to.
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except workflow_runtime.WorkflowValidationError as error:
+            # A sample brief, or a caller that skipped the form, is missing a field the
+            # workflow declared. 422 with the field name; an uncaught error was a 500 and
+            # the operator never learned which input to supply.
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except workflow_runtime.WorkflowBindingBlockedError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         # Named in the response rather than dropped in silence: a caller that asked for

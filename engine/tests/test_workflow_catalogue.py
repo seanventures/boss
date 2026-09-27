@@ -224,3 +224,37 @@ def test_an_unmapped_class_of_work_resolves_to_nothing_rather_than_a_guess(eng, 
     assert resolved["status"] == "unmapped"
     assert resolved["selected"] is None
     assert "No approved workflow mapping" in resolved["reason"]
+
+
+def test_the_list_the_console_reads_includes_declared_inputs(eng, project):
+    """Start one decides whether to open the form from this field.
+
+    The list query loaded input_schema and then dropped it, so every workflow looked like
+    it declared nothing. The button sent a sample brief, and a workflow that needed a
+    video link never asked for one.
+    """
+    schema = {
+        "required": ["video_url"],
+        "properties": {
+            "video_url": {"type": "string", "format": "uri", "title": "Video link"},
+        },
+    }
+    spec = {
+        "entry_step": "hold",
+        "input_schema": schema,
+        "steps": [{"id": "hold", "kind": "timer", "wait_seconds": 1,
+                   "binding": {}, "next": []}],
+    }
+    with eng.begin() as c:
+        made = workflows.create_definition(
+            c, project_id=project, workflow_key="needs_a_video", name="Needs a video",
+            description=None, actor="test", namespace=workflows.PRODUCT_NAMESPACE,
+        )
+        workflows.publish_version(
+            c, project_id=project, definition_id=made["id"], spec=spec, actor="test",
+        )
+        listed = {
+            row["workflow_key"]: row
+            for row in workflows.list_definitions(c, project, namespace="product")
+        }
+    assert listed["needs_a_video"]["input_schema"] == schema
