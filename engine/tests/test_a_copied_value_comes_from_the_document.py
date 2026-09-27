@@ -236,3 +236,16 @@ def test_numbers_are_preferred_over_a_quote():
     by_number = source.index("_lines_of(")
     by_quote = source.index("_copied_exactly(")
     assert by_number < by_quote, "the pointer that cannot be damaged has to be tried first"
+
+
+def test_the_agent_is_told_to_leave_the_heading_out_and_take_all_of_it():
+    """Pointing at lines 12-13 gave a title of "**Title:**\\nமதுராந்தகத்தில்…" — the label
+    published as part of the value — and a description that stopped after its first paragraph."""
+    import inspect
+
+    from boss_engine.services import agent_steps
+
+    source = inspect.getsource(agent_steps.run)
+    assert "Leave out the heading" in source
+    assert "take ALL of it" in source
+    assert "check both ends" in source

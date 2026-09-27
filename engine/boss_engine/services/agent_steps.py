@@ -361,7 +361,13 @@ def run(
               '  \"name\": {\"copied\": true, \"lines\": \"12-18\"}\n'
               "using the numbers from `numbered_text` in the result of the read, and the exact "
               "original is taken from the document. One line is \"12\"; a value that runs over "
-              "several is \"12-18\", and everything between comes through as written. If you have "
+              "several is \"12-18\", and everything between comes through as written."
+              "\n\nTHE RANGE HAS TO COVER THE VALUE AND NOTHING ELSE. Leave out the heading "
+              "that labels it — a line like \"**Title:**\" or \"Description:\" is not part of "
+              "the value and would be published as though it were. And take ALL of it: if the "
+              "value continues over blank lines and further paragraphs, the range runs to the "
+              "last line of it, stopping before whatever comes next. Read the numbered copy and "
+              "check both ends of your range against it before you answer. If you have "
               "no numbered copy, quote instead — "
               '\"value\": \"the first words\", \"to\": \"the last words\" — '
               "but the numbers are better, because a QUOTE IS RETYPED TOO and arrives damaged."
