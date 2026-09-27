@@ -230,22 +230,88 @@ def test_the_step_cap_is_bounded():
 # --------------------------------------------------------------------------- #
 # What the step produces, which is what makes it chainable
 # --------------------------------------------------------------------------- #
-def test_the_results_of_the_skills_become_the_steps_output():
-    """LATER CALLS WIN, and that is the point.
+@needs_db
+def test_the_results_of_the_skills_become_the_steps_output(db):
+    """LATER CALLS WIN, and the operator's whole run depends on it.
 
-    An agent that fetches, then renders, then verifies has produced three `media_artifact_id`s,
-    and the one a publish step wants is the LAST. Without this an agent step is a dead end: it
-    does the work and the next step cannot read the result — which would make the whole idea
-    unusable, however good the loop is.
+    An agent that trims, then reframes, then watermarks has produced three `media_artifact_id`s
+    and the one the PUBLISH step wants is the last — the finished video, not the raw upload.
+    Get this wrong and the run succeeds, the gate opens, a person approves, and YouTube receives
+    the untrimmed original.
+
+    EXERCISED against a real agent run rather than read off the source, because "the code says
+    merged[key] = value" is not the same claim as "the right artifact comes out".
     """
-    import inspect
+    import json
 
-    source = inspect.getsource(agent_steps._what_the_skills_returned)
-    assert "merged[key] = value" in source
-    # The runtime's bookkeeping must not leak into a step's output — an `invocation_id` in there
-    # is something somebody will wire.
-    assert "invocation_id" in source
-    assert '"denied"' in source, "a refused call must not contribute a result"
+    from sqlalchemy import text as sql
+
+    from boss_engine.services.core import make_id
+
+    run_id = make_id("arun")
+    # The shape the loop writes: one tool message per skill call, newest last.
+    messages = [
+        {"role": "system", "content": "…"},
+        {"role": "user", "content": "Keep 3:42 to 4:50, portrait, badge on top right."},
+        {"role": "tool", "content": json.dumps({
+            "status": "succeeded", "skill_id": "video.trim", "invocation_id": "skinv_1",
+            "result": {"media_artifact_id": "art_TRIM", "duration_seconds": 68.0,
+                       "width": 1280, "height": 720}})},
+        {"role": "tool", "content": json.dumps({
+            "status": "succeeded", "skill_id": "video.reframe", "invocation_id": "skinv_2",
+            "result": {"media_artifact_id": "art_REFRAME", "width": 404, "height": 720}})},
+        # A refused call in the middle must contribute NOTHING, or a denied publish would
+        # hand the next step whatever it echoed back.
+        {"role": "tool", "content": json.dumps({
+            "status": "denied", "skill_id": "publish_youtube",
+            "result": {"media_artifact_id": "art_SHOULD_NOT_WIN"}})},
+        {"role": "tool", "content": json.dumps({
+            "status": "succeeded", "skill_id": "video.watermark", "invocation_id": "skinv_3",
+            "result": {"media_artifact_id": "art_FINAL", "view_url": "https://drive/FINAL"}})},
+    ]
+    db.execute(
+        sql("INSERT INTO agent_runs (id, project_id, status, messages, transcript, usage, "
+            "finalize_ctx, step) VALUES (:i, :p, 'completed', CAST(:m AS JSONB), "
+            "'[]'::jsonb, '{}'::jsonb, '{}'::jsonb, 4)"),
+        {"i": run_id, "p": PROJECT, "m": json.dumps(messages)})
+
+    produced = agent_steps._what_the_skills_returned(db, run_id)
+
+    # THE LAST SUCCESSFUL ARTIFACT, which is the finished video.
+    assert produced["media_artifact_id"] == "art_FINAL"
+    # Earlier facts still come through where nothing later overwrote them.
+    assert produced["duration_seconds"] == 68.0
+    assert produced["width"] == 404 and produced["height"] == 720
+    assert produced["view_url"] == "https://drive/FINAL"
+    # The runtime's own bookkeeping does not leak into a step's output — an `invocation_id` in
+    # there is something somebody will eventually wire a step to.
+    assert "invocation_id" not in produced
+    assert "skill_id" not in produced and "status" not in produced
+
+    # And which skills it chose is answerable, which is what the operator reads before approving.
+    assert agent_steps._used_skills(db, run_id) == [
+        "video.trim", "video.reframe", "publish_youtube", "video.watermark"]
+
+
+@needs_db
+def test_a_run_that_produced_nothing_does_not_invent_an_artifact(db):
+    """An agent that failed every call must not hand the next step a stale id."""
+    import json
+
+    from sqlalchemy import text as sql
+
+    from boss_engine.services.core import make_id
+
+    run_id = make_id("arun")
+    db.execute(
+        sql("INSERT INTO agent_runs (id, project_id, status, messages, transcript, usage, "
+            "finalize_ctx, step) VALUES (:i, :p, 'completed', CAST(:m AS JSONB), "
+            "'[]'::jsonb, '{}'::jsonb, '{}'::jsonb, 1)"),
+        {"i": run_id, "p": PROJECT, "m": json.dumps([
+            {"role": "tool", "content": json.dumps(
+                {"status": "failed", "skill_id": "video.trim",
+                 "reason": "no such artifact"})}])})
+    assert agent_steps._what_the_skills_returned(db, run_id) == {}
 
 
 # --------------------------------------------------------------------------- #
