@@ -41,6 +41,7 @@ already enforces, connected rather than invented:
 """
 from __future__ import annotations
 
+import difflib
 import json
 from typing import Any, Optional
 
@@ -356,6 +357,16 @@ def run(
             + "\nIf the instruction points at a document for any of them, read it and take the "
               "value from there rather than inventing one. Where a value genuinely is not "
               "available, use an empty string — do not guess."
+            + "\n\nIF A VALUE IS COPIED OUT OF A DOCUMENT, DO NOT RETYPE IT. Write it as\n"
+              '  \"name\": {\"copied\": true, \"value\": \"the first words of it\", '
+              '\"to\": \"the last words of it\"}\n'
+              "and the exact original is taken from the document you read. A few words at each "
+              "end are enough — everything between them comes through as written. Leave out "
+              '\"to\" only when the value is a single line.'
+              " Copying text through a "
+              "reply damages it: Tamil, Hindi, Arabic and every other non-Latin script come out "
+              "as different words, and long text comes out shortened. Only write a value out in "
+              "full when it is YOURS — something you wrote rather than found."
         )
 
     facts = ""
@@ -385,11 +396,21 @@ def run(
             },
         },
     )
-    produced = _what_the_skills_returned(connection, str(result.get("run_id") or ""))
+    run_of_the_agent = str(result.get("run_id") or "")
+    produced = _what_the_skills_returned(connection, run_of_the_agent)
     # DECLARED VALUES WIN OVER SKILL OUTPUT FOR THEIR OWN KEYS. A skill returning a field called
     # `title` means the name of a Drive file; a declared `title` is the answer to the question
     # the step was asked. Conflating them would publish a video called "short.mp4".
-    produced.update(_declared_values(str(result.get("output_text") or ""), wanted))
+    declared, copied_keys = _declared(str(result.get("output_text") or ""), wanted)
+    if copied_keys:
+        # THE ORIGINAL BYTES, NOT THE AGENT'S COPY OF THEM. See `_copied_exactly`.
+        documents = _documents_the_agent_read(connection, run_of_the_agent)
+        for key, ends_with in copied_keys.items():
+            original = _copied_exactly(str(declared.get(key) or ""), documents,
+                                       ends_with=ends_with)
+            if original is not None:
+                declared[key] = original
+    produced.update(declared)
     return {
         # EVERY FIELD THE SKILLS RETURNED, FLATTENED IN, so a later step can wire from this one
         # with {from_step: ..., field: media_artifact_id} exactly as it does from a fixed step.
@@ -481,8 +502,154 @@ def _used_skills(connection: Connection, run_id: str) -> list[str]:
     return used
 
 
-def _declared_values(final_text: str, wanted: list[str]) -> dict[str, Any]:
+def _documents_the_agent_read(connection: Connection, run_id: str) -> list[str]:
+    """Every document the agent read during this step, as text, in the order it read them."""
+    documents: list[str] = []
+    for payload in _tool_messages(connection, run_id):
+        if str(payload.get("status") or "").lower() in {"denied", "failed", "error",
+                                                        "deferred_for_approval"}:
+            continue
+        for source in (payload.get("result"), payload):
+            if not isinstance(source, dict):
+                continue
+            body = source.get("text")
+            if isinstance(body, str) and body.strip() and body not in documents:
+                documents.append(body)
+    return documents
+
+
+#: How alike a declared value and a span of the document have to be before the span is taken as
+#: the thing the agent meant. The agent has already SAID it was copying, so this only has to
+#: rule out a match that is nothing to do with it. The corrupt Tamil title that prompted all of
+#: this scored 0.78 against its own line and 0.40 against the next best.
+COPY_FLOOR = 0.35
+
+#: The longest run of lines treated as one value. A title is one line; a description is a few
+#: paragraphs. Beyond this it is the document, not a value out of it.
+MAX_COPIED_LINES = 20
+
+
+def _copied_exactly(claimed: str, documents: list[str],
+                    ends_with: str = "") -> Optional[str]:
+    """The span of the document the agent was pointing at, in the document's own bytes.
+
+    WHY POINTING EXISTS AT ALL. An agent read a brief correctly — the Tamil arrived intact, every
+    character of it — and then wrote the title into its reply, and what came out was
+
+        மதுராந்தகத்தில் இடைத்தேர்தலே தேவையில்லை!      what the brief says
+        மதுராந்தகத்தில்இட்டைத்தெற்றலே தவெய்ல்ளை!      what the agent typed back
+
+    a different sentence, published as if it were the operator's own words. The description came
+    back shortened, with "(full description as extracted from the document)" where the rest
+    should have been. Neither is a bug in the reading; both are what happens when text goes
+    through a model's reply. No prompt fixes it, because the model is not making a mistake it can
+    be told about — it is re-generating the characters.
+
+    So a value that was COPIED is transferred by reference. The agent says which part it means,
+    roughly, and the original is lifted out of the document BOSS already holds. A value the agent
+    WROTE still comes through as written — that text has no original to be faithful to.
+
+    Returns None when nothing in the documents resembles the claim, and the agent's own words
+    stand: better a value that is theirs than a confident substitution of the wrong paragraph.
+    """
+    wanted = claimed.strip()
+    if not wanted or not documents:
+        return None
+
+    # (text, which document, which line it starts on) — the position is needed because a value
+    # that says where it ENDS is resolved by walking forward from where it begins.
+    candidates: list[tuple[str, int, int]] = []
+    for which, document in enumerate(documents):
+        lines = document.split("\n")
+        for start in range(len(lines)):
+            if not lines[start].strip():
+                continue
+            for length in range(1, MAX_COPIED_LINES + 1):
+                if start + length > len(lines):
+                    break
+                span = "\n".join(lines[start:start + length]).strip()
+                if span:
+                    candidates.append((span, which, start))
+    if not candidates:
+        return None
+
+    matcher = difflib.SequenceMatcher(autojunk=False)
+    best = _closest(matcher, wanted, candidates)
+    if best is None:
+        return None
+    span, which, start = best
+
+    if not ends_with.strip():
+        return span
+
+    # THE AGENT SAID WHERE IT ENDS, so the span runs from the line it begins on to the line that
+    # closes it. Without this a description of four paragraphs resolves to its first one — which
+    # is exactly what the agent pointed at, and a quarter of what it meant.
+    lines = documents[which].split("\n")
+    tail = [(line, which, index) for index, line in enumerate(lines)
+            if index >= start and line.strip()]
+    closing = _closest(matcher, ends_with.strip(), tail)
+    if closing is None:
+        return span
+    return "\n".join(lines[start:closing[2] + 1]).strip()
+
+
+def _closest(matcher: "difflib.SequenceMatcher", wanted: str,
+             candidates: list[tuple[str, int, int]]) -> Optional[tuple[str, int, int]]:
+    """The candidate most like `wanted`, or None if none of them is like it at all.
+
+    `quick_ratio` is a cheap upper bound, so it narrows the field and only the plausible few are
+    measured properly. On a long document that is the difference between milliseconds and
+    seconds, on a path every agent step with a copied value walks.
+    """
+    matcher.set_seq2(wanted)
+    rough: list[tuple[float, tuple[str, int, int]]] = []
+    for candidate in candidates:
+        matcher.set_seq1(candidate[0])
+        rough.append((matcher.quick_ratio(), candidate))
+    rough.sort(key=lambda pair: pair[0], reverse=True)
+
+    best_score = 0.0
+    best: Optional[tuple[str, int, int]] = None
+    for _, candidate in rough[:40]:
+        matcher.set_seq1(candidate[0])
+        score = matcher.ratio()
+        if score > best_score:
+            best_score, best = score, candidate
+    return best if best_score >= COPY_FLOOR else None
+
+
+def _declared(final_text: str,
+              wanted: list[str]) -> tuple[dict[str, Any], dict[str, str]]:
+    """The declared values, and which of them the agent said it had COPIED rather than written.
+
+    A copied value is written as {"copied": true, "value": "..."} — see `_copied_exactly` for
+    why that exists. A plain string still works and is taken at face value, because an agent
+    that wrote the value itself has given us the only version there is.
+    """
+    raw = _declared_values(final_text, wanted, unwrap=False)
+    values: dict[str, Any] = {}
+    #: key -> the agent's rough quote of the LAST line of the value, "" when it did not say.
+    copied: dict[str, str] = {}
+    for key, value in raw.items():
+        if isinstance(value, dict):
+            inner = value.get("value")
+            if inner in (None, "", [], {}) or not str(inner).strip():
+                continue
+            values[key] = inner
+            if bool(value.get("copied")):
+                copied[key] = str(value.get("to") or "")
+        else:
+            values[key] = value
+    return values, copied
+
+
+def _declared_values(final_text: str, wanted: list[str],
+                     unwrap: bool = True) -> dict[str, Any]:
     """The values an agent was asked to state, out of the last thing it said.
+
+    `unwrap` flattens a {"copied": true, "value": ...} entry to its value. `_declared` needs the
+    wrapper intact to know which values must be lifted out of the document rather than trusted.
 
     LENIENT ON PURPOSE. A model asked for JSON produces JSON, and also sometimes produces JSON
     inside a fenced block, or after a sentence of preamble. Refusing those would fail a step
@@ -509,10 +676,23 @@ def _declared_values(final_text: str, wanted: list[str]) -> dict[str, Any]:
                         # An EMPTY value is the agent saying "I could not find one" — it is
                         # told to use exactly that — so it must not travel on as an answer. An
                         # empty title reaching YouTube is a video called nothing.
-                        found = {k: parsed[k] for k in wanted
-                                 if k in parsed
-                                 and parsed[k] not in (None, [], {}, "")
-                                 and str(parsed[k]).strip() != ""}
+                        found: dict[str, Any] = {}
+                        for k in wanted:
+                            if k not in parsed:
+                                continue
+                            value = parsed[k]
+                            if isinstance(value, dict) and "value" in value:
+                                if unwrap:
+                                    value = value.get("value")
+                                elif str(value.get("value") or "").strip():
+                                    found[k] = value
+                                    continue
+                            # An EMPTY value is the agent saying "I could not find one" — it is
+                            # told to use exactly that — so it must not travel on as an answer.
+                            # An empty title reaching YouTube is a video called nothing.
+                            if value in (None, [], {}, "") or not str(value).strip():
+                                continue
+                            found[k] = value
                         if found:
                             return found
                     break

@@ -72,7 +72,7 @@ def test_a_declared_value_beats_a_skill_field_of_the_same_name():
 
     source = inspect.getsource(agent_steps.run)
     merge = source.index("_what_the_skills_returned")
-    declared = source.index("_declared_values(")
+    declared = source.index("produced.update(declared)")
     assert merge < declared, "the declared values must be applied last, or the skill field wins"
 
 
