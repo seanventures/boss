@@ -212,7 +212,8 @@ class TestTheGateWasDisarmedByTheRegistryTheAgentUses:
                    (b.kind, b.reversibility, b.self_executable), name
 
     def test_arbitrary_sql_needs_a_person(self):
-        spec = build_discuss_read_registry().get("write_db")
+        assert "write_db" not in build_discuss_read_registry().names()
+        spec = build_default_registry().get("write_db")
         assert spec.reversibility == "destroys_work"
         assert spec.self_executable is False
 
@@ -502,8 +503,9 @@ class TestTheLogToolPointsSomewhereReal:
 
     def test_those_tools_actually_exist(self):
         names = build_discuss_read_registry().names()
-        for tool in ("get_run_activity", "read_run_turns", "diagnose_run", "query_db"):
+        for tool in ("get_run_activity", "read_run_turns", "diagnose_run"):
             assert tool in names, tool
+        assert "query_db" not in names
 
     def test_and_the_pattern_filter_still_applies(self):
         """Filtering is why anybody passes a pattern; dropping it when the source changed

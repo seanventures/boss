@@ -1757,7 +1757,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             # skipped.
             return {"ok": False,
                     "error": (f"{placeholder} looks invented. Look up the real value first — "
-                              "query_db or list_code_tasks — then propose with it. An action "
+                              "list_code_tasks or get_code_task — then propose with it. An action "
                               "the operator cannot actually run is worse than no offer."),
                     "proposed": False}
         return {"ok": True, "proposed": True, "tool": name,
@@ -3526,7 +3526,10 @@ _WRITE_KEYWORDS = re.compile(
     r"merge|call|do|vacuum|analyze|reindex|comment|lock|into)\b",
     re.IGNORECASE,
 )
-_SECRET_TABLES = re.compile(r"\b(secret_refs|secret_material)\b", re.IGNORECASE)
+_SECRET_TABLES = re.compile(
+    r"\b(secret_refs|secret_material|pg_shadow|pg_authid|pg_auth_members)\b",
+    re.IGNORECASE,
+)
 
 
 #: Tables named in a statement: FROM x, JOIN y, INTO z. Deliberately loose — this drives a
@@ -6030,10 +6033,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "describe_schema",
-        "The database's own shape: tables, columns and types. query_db can read ANY "
-        "table, but only if you know it exists — 244 tables and 68k events are useless "
-        "to someone guessing names. Call this first when a question has no dedicated "
-        "tool, then write the SELECT.",
+        "The database's own shape: tables, columns and types. Use it to inspect the "
+        "schema when troubleshooting; use project-scoped read tools for data. Raw SQL "
+        "is unavailable from project-pinned chat.",
         _obj({"table": {"type": "string", "description": "optional: one table's columns"},
               "like": {"type": "string", "description": "optional name filter, e.g. deployment"}}),
     )
@@ -6064,7 +6066,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 ({"like": f"%{like}%"} if like else {})).mappings().all()
         return {"tables": [f"{r['table_name']} ({r['cols']} cols)" for r in rows],
                 "count": len(rows),
-                "hint": "call describe_schema with table=<name> for columns, then query_db"}
+                "hint": "call describe_schema with table=<name> for columns; use project-scoped read tools for data"}
 
     @reg.tool(
         "inspect_host",
@@ -6488,16 +6490,11 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 "note": "secret-shaped names report only whether a value is present"}
 
 
-# Enterprise discuss can use unrestricted SQL. Community cannot.
-#
-# This held `query_db` back, so Ask BOSS answered from ~17 canned reports while the
-# capability to answer anything sat one registry away. That is the wrong trade for a
-# single-tenant, self-hosted product: every unanswerable question became a request for
-# another tool, and the list never catches up with what an operator wants to ask.
-#
-# Without database row policies this is unsafe for a project-scoped Community actor.
-# The edition-aware registry omits it, and the tool handler also rejects direct calls.
-_DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset()
+# A project-pinned conversation may not run arbitrary SQL against the control-plane DB.
+# The SQL handlers have no project predicate or tenant row policy, even in paid editions.
+# Keep direct/admin tools registered separately, but hold raw SQL out of this surface until
+# a database-enforced project boundary exists.
+_DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset({"query_db"})
 
 
 def build_default_registry() -> ToolRegistry:
@@ -6670,31 +6667,26 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "decide",
     "waive_gates",
     "send_feedback",
-    # Full CRUD. `query_db` already reads every table; state that no structured tool models
-    # still has to be fixable, or "BOSS can see the problem and cannot touch it" comes back in
-    # a narrower form.
-    "write_db",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
 #:
-#: Every other write in the default registry is chat-reachable on purpose — owning a tool and
-#: not being allowed to use it is how "BOSS only gives advice" happened, and a test enforces
-#: it. These two are the stated exception: they are how the workflow's `research` and `meeting`
-#: STEPS do their work (see workflow_capabilities), and they must keep working there. What they
-#: must not be is a way for a conversation to start one on its own — the operator's rule is
-#: that research and the panel only ever happen inside a workflow, so that the run is what you
-#: open and its document is the outcome. `start_workflow` is the chat's way in.
+#: The workflow's `research` and `meeting` steps need these tools, but a chat must start a
+#: workflow so the run and its outcome stay linked. The separate raw SQL hold below protects
+#: project-pinned chat until the database enforces project scope.
 _WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
+_DISCUSS_UNSCOPED_WRITE_TOOLS = frozenset({"write_db"})
 
 
 def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     """Project-pinned tools for IntentRouter's tool-grounded discuss path.
 
-    Every read tool, plus the operational writes in ``_DISCUSS_OPERATIONS_TOOLS``.
+    Project-safe read tools, plus the operational writes in
+    ``_DISCUSS_OPERATIONS_TOOLS``.
     ``project_id`` is stripped from schemas/args so the model cannot override the authorised
-    project. Community excludes unrestricted SQL and arbitrary URL probes; direct
-    invocations are separately rejected by the handlers.
+    project. Raw SQL is excluded in every edition because its handlers cannot
+    enforce that project boundary. Community also excludes arbitrary URL probes;
+    direct Community SQL invocations are separately rejected by the handlers.
     """
     source = build_default_registry()
     reg = ToolRegistry()

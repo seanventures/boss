@@ -519,7 +519,9 @@ _MUTATING_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke",
     "copy", "call", "vacuum", "refresh", "comment", "reindex", "lock", "into",
 )
-_SECRET_TABLES = ("secret_refs", "secret_material")
+_SECRET_TABLES = (
+    "secret_refs", "secret_material", "pg_shadow", "pg_authid", "pg_auth_members",
+)
 _QUERY_ROW_CAP = 200
 
 

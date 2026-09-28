@@ -162,6 +162,7 @@ def test_the_tools_the_operator_needs_are_in_the_discuss_registry():
     from boss_engine.tools.builtin import build_discuss_read_registry
 
     names = set(build_discuss_read_registry().names())
-    for needed in ("read_logs", "query_db", "inspect_self", "find_starved_work",
+    for needed in ("read_logs", "project_status", "inspect_self", "find_starved_work",
                    "consistency_report"):
         assert needed in names, f"{needed} is not reachable from a question"
+    assert "query_db" not in names

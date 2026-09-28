@@ -128,16 +128,17 @@ def test_boss_owns_a_tool_for_what_operators_ask(ask, tool):
 def test_no_write_is_registered_but_unreachable():
     """Owning eighteen tools and being allowed five is how "it only recommends" happened.
 
-    The one exception is NAMED, not a slackened rule: `create_discovery` and `request_meeting`
-    are how the workflow's research and meeting steps do their work, and are withheld from chat
-    so that a conversation cannot start either on its own. Anything else going missing is the
-    old regression coming back.
+    The exceptions are named: workflow-only steps and raw SQL, whose handler has no
+    project boundary. Other writes remain reachable from chat.
     """
-    from boss_engine.tools.builtin import _WORKFLOW_ONLY_TOOLS
+    from boss_engine.tools.builtin import (
+        _DISCUSS_UNSCOPED_WRITE_TOOLS, _WORKFLOW_ONLY_TOOLS,
+    )
 
     reg_writes = {s.name for s in build_default_registry().specs(kind="write")}
-    assert reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) == set(_WORKFLOW_ONLY_TOOLS), (
-        f"unreachable: {sorted(reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) - _WORKFLOW_ONLY_TOOLS)}")
+    excluded = set(_WORKFLOW_ONLY_TOOLS) | set(_DISCUSS_UNSCOPED_WRITE_TOOLS)
+    assert reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) == excluded, (
+        f"unreachable: {sorted(reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) - excluded)}")
 
 
 def test_the_ability_to_act_is_not_narrowed_again():
@@ -145,7 +146,7 @@ def test_the_ability_to_act_is_not_narrowed_again():
     fail HERE with a readable message — mutation-testing showed it otherwise surfaced only as a
     collection error in an unrelated test, which reads like a broken suite, not a broken rule."""
     allowed = set(_DISCUSS_OPERATIONS_TOOLS)
-    for tool in ("redeploy", "write_db", "start_preview", "cancel_job", "decide"):
+    for tool in ("redeploy", "create_deployment_target", "start_preview", "cancel_job", "decide"):
         assert tool in allowed, f"BOSS can no longer {tool} — it will go back to giving advice"
     assert len(allowed) >= 15, f"write surface shrank to {len(allowed)} tools"
 
@@ -218,16 +219,10 @@ def test_replies_that_promise_nothing_are_untouched(reply):
     assert _boss_cannot_call_you_back(reply) == reply
 
 
-def test_write_db_tells_the_model_it_is_the_no_dedicated_tool_escape_hatch():
-    """Asked to deploy to production, BOSS found the app had only a staging target and said
-    creating one was a "custom admin action (requires a human to add a row)". It was holding
-    write_db, which does exactly that -- verified: the INSERT passes _is_single_write. The model
-    only sees tool DESCRIPTIONS, so "there is no create-target tool" has to be answered where it
-    is reading: in the description of the tool that is the general case."""
-    spec = {s.name: s for s in build_discuss_read_registry().specs()}["write_db"]
-    d = spec.description.lower()
-    assert "requires a human" in d and "no dedicated tool" in d
-    assert "deployment_targets" in d, "name the case that actually came up"
+def test_chat_can_create_a_target_without_raw_sql():
+    names = build_discuss_read_registry().names()
+    assert "create_deployment_target" in names
+    assert "write_db" not in names
 
 
 # --------------------------------------------------------------------------- #

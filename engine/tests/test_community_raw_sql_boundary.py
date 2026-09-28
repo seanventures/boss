@@ -53,7 +53,18 @@ def test_legacy_agent_query_db_blocks_before_execute(edition):
     assert "Community" in result["error"]
 
 
-def test_enterprise_registry_keeps_raw_sql_tools():
-    names = build_discuss_read_registry(edition="enterprise_self_hosted").names()
-    assert "query_db" in names
-    assert "write_db" in names
+@pytest.mark.parametrize("edition", ["cloud", "enterprise", "enterprise_cloud",
+                                     "enterprise_self_hosted", None])
+def test_paid_project_pinned_chat_holds_unscoped_sql(edition):
+    registry = build_discuss_read_registry(edition=edition)
+    names = registry.names()
+    assert "query_db" not in names
+    assert "write_db" not in names
+    assert "project_status" in names
+    assert "create_deployment_target" in names
+    offered = registry.invoke(
+        "propose_action", _NoDatabase(edition or "enterprise_self_hosted"),
+        project_id="own", actor="member",
+        args={"tool": "write_db", "args": {"sql": "DELETE FROM projects"}},
+    )
+    assert offered["ok"] is False

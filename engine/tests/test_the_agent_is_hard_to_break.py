@@ -44,9 +44,10 @@ class TestNothingDestroysWorkWithoutAClick:
         chose, and one click runs it verbatim — it costs a click, and it cannot cost an
         afternoon."""
         names = set(build_discuss_read_registry().names())
-        for tool in EngineAgent.DESTRUCTIVE:
+        for tool in EngineAgent.DESTRUCTIVE - {"write_db"}:
             assert tool in names, f"{tool} became unreachable instead of confirmable"
             assert tool in _DISCUSS_OPERATIONS_TOOLS, tool
+        assert "write_db" not in names
 
     def test_the_gate_is_on_the_tool_not_the_sentence(self):
         """A heuristic over natural language will always have a hole. This one cannot: the
@@ -193,7 +194,7 @@ class TestTheSetsDoNotDrift:
 
     def test_every_destructive_tool_exists(self):
         names = set(build_discuss_read_registry().names())
-        missing = EngineAgent.DESTRUCTIVE - names
+        missing = EngineAgent.DESTRUCTIVE - names - {"write_db"}
         assert not missing, f"named as destructive but not registered: {sorted(missing)}"
 
     def test_every_propose_only_tool_exists(self):
@@ -209,5 +210,5 @@ class TestTheSetsDoNotDrift:
     def test_no_destructive_tool_is_silently_a_read(self):
         """A destructive tool registered as `kind="read"` would bypass every write gate."""
         registry = build_discuss_read_registry()
-        for tool in EngineAgent.DESTRUCTIVE:
+        for tool in EngineAgent.DESTRUCTIVE - {"write_db"}:
             assert registry.get(tool).kind == "write", tool

@@ -284,31 +284,18 @@ def test_duplicate_registration_rejected():
         reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
 
 
-def test_discuss_read_registry_exposes_everything_and_hides_project_override():
-    """The discuss path is an operator console: it withholds no READ capability.
-
-    This previously asserted the opposite — that `query_db` was hidden from chat. That
-    fence existed for cross-tenant isolation, and in a single-tenant product it bought
-    nothing while costing the console its ability to answer any question nobody had
-    written a report for. When multi-tenant arrives the fence belongs in the database
-    (Postgres RLS on the authorised project), not in a hand-maintained deny-list that
-    would also have to stay right about two dozen other tools.
-
-    What still holds, and is the real invariant here: no tool takes `project_id` from the
-    model, so it cannot reach outside the project the API already authorised.
-    """
+def test_discuss_read_registry_exposes_scoped_reads_and_hides_project_override():
+    """Chat admits project-scoped tools; raw SQL cannot enforce that project boundary."""
     reg = build_discuss_read_registry()
-    assert "query_db" in reg.names()
+    assert "query_db" not in reg.names()
+    assert "write_db" not in reg.names()
     assert "project_status" in reg.names()
     assert "get_code_task" in reg.names()
     assert "get_costs" in reg.names()
-    # Every read tool, nothing withheld — asserted as "the same set the default registry has"
-    # rather than a count, so adding a read tool cannot silently fail to reach a question.
-    # That is the actual invariant: `inspect_self` was built for exactly this path, and a bare
-    # count would have failed here while proving nothing about reachability.
+    # Every other read tool remains available to the conversation.
     default_reads = {s.name for s in build_default_registry().specs(kind="read")}
     discuss_reads = {s.name for s in reg.specs(kind="read")}
-    assert default_reads - discuss_reads == set(), (
+    assert default_reads - discuss_reads == {"query_db"}, (
         f"these read tools cannot be reached from a question: "
         f"{sorted(default_reads - discuss_reads)}")
     assert "inspect_self" in discuss_reads

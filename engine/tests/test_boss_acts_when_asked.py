@@ -101,10 +101,13 @@ def test_every_write_the_registry_has_is_reachable():
     The exception is written down and enumerated — `_WORKFLOW_ONLY_TOOLS` — so withholding one
     is a decision on the record rather than a quiet edit to an allow-list.
     """
-    from boss_engine.tools.builtin import _WORKFLOW_ONLY_TOOLS
+    from boss_engine.tools.builtin import (
+        _DISCUSS_UNSCOPED_WRITE_TOOLS, _WORKFLOW_ONLY_TOOLS,
+    )
 
     reg_writes = {s.name for s in build_default_registry().specs(kind="write")}
-    unreachable = reg_writes - set(_DISCUSS_OPERATIONS_TOOLS) - set(_WORKFLOW_ONLY_TOOLS)
+    unreachable = (reg_writes - set(_DISCUSS_OPERATIONS_TOOLS)
+                   - set(_WORKFLOW_ONLY_TOOLS) - set(_DISCUSS_UNSCOPED_WRITE_TOOLS))
     assert not unreachable, f"unreachable writes: {sorted(unreachable)}"
 
 

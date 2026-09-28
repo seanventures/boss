@@ -89,8 +89,9 @@ def test_an_empty_statement_is_refused():
 # Reachability and accountability
 # --------------------------------------------------------------------------- #
 def test_boss_can_reach_it_from_a_question():
-    assert "write_db" in build_discuss_read_registry().names()
-    assert "write_db" in _DISCUSS_OPERATIONS_TOOLS
+    assert "write_db" not in build_discuss_read_registry().names()
+    assert "write_db" not in _DISCUSS_OPERATIONS_TOOLS
+    assert "write_db" in build_default_registry().names()
 
 
 def test_it_demands_a_reason():

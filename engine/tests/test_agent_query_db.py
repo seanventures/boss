@@ -143,6 +143,9 @@ def test_secret_tables_are_not_queryable():
         "SELECT * FROM secret_refs",
         "SELECT ciphertext FROM secret_material",
         "WITH s AS (SELECT * FROM secret_refs) SELECT * FROM s",
+        "SELECT * FROM pg_shadow",
+        "SELECT * FROM pg_authid",
+        "SELECT * FROM pg_auth_members",
     ):
         assert _query_rejection(sql) is not None, sql
 
@@ -151,7 +154,8 @@ def test_builtin_query_db_refuses_into_and_secret_catalogs():
     """The MCP/default registry has its own guard. Both must refuse the same writes."""
     ok, why = _is_read_only("SELECT * INTO stolen FROM secret_refs")
     assert ok is False and why
-    ok, why = _is_read_only("SELECT * FROM secret_material")
-    assert ok is False and why
+    for table in ("secret_material", "pg_shadow", "pg_authid", "pg_auth_members"):
+        ok, why = _is_read_only(f"SELECT * FROM {table}")
+        assert ok is False and why
     ok, _ = _is_read_only("SELECT id, status FROM jobs LIMIT 5")
     assert ok is True
