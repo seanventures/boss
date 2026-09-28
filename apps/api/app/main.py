@@ -1656,6 +1656,21 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
         raise HTTPException(status_code=403, detail=str(error)) from error
 
 
+def require_project_reader(connection, project_id: str) -> None:
+    """Limit project-scoped reads to an active member of that project or its org."""
+    if not current_transport_authenticated.get():
+        # Explicitly unauthenticated local development keeps its existing behavior.
+        return
+    principal = current_api_principal.get()
+    if not principal:
+        raise HTTPException(status_code=403, detail="Project member principal required.")
+    try:
+        members.require_member(connection, project_id, principal)
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        record_policy_denial(project_id, principal, "project_read", str(error))
+        raise HTTPException(status_code=403, detail=str(error)) from error
+
+
 def require_decision_actor_binding(
     connection,
     decision_id: str,
@@ -19391,6 +19406,7 @@ def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
 @app.get("/v1/workers")
 def list_workers(project_id: str) -> dict[str, Any]:
     with begin(engine) as connection:
+        require_project_reader(connection, project_id)
         return {"project_id": project_id, "items": worker_registry.list(connection, project_id)}
 
 
@@ -19450,6 +19466,7 @@ def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
 @app.get("/v1/decisions/inbox", response_model=DecisionInboxResponse)
 def decision_inbox(project_id: str) -> DecisionInboxResponse:
     with begin(engine) as connection:
+        require_project_reader(connection, project_id)
         decisions.expire_overdue(connection, project_id)
         rows = connection.execute(
             text(
@@ -19492,7 +19509,7 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
         row = connection.execute(
             text(
                 f"""
-                SELECT id, task_id, question, status, risk_tier, default_action,
+                SELECT id, project_id, task_id, question, status, risk_tier, default_action,
                        recommendation, options, cost_summary, deadline_at,
                        approved_by, approved_at, delegated_to, delegated_by,
                        delegated_at, revision_requested_by, revision_requested_at,
@@ -19507,6 +19524,7 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Decision not found")
+        require_project_reader(connection, row["project_id"])
         return decision_card_from_row(row)
 
 
