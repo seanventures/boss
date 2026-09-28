@@ -89,8 +89,10 @@ services:
       BOSS_EDITION: community
       BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
       BOSS_API_KEY: ${BOSS_API_KEY}
-      BOSS_API_KEYS: ${BOSS_API_KEY}
-      BOSS_API_KEY_PRINCIPALS: ${BOSS_API_KEY}:ceo
+      # The installer preserves an operator's extra keys and principal map on
+      # rerun; forward them instead of rebuilding a single-key map here.
+      BOSS_API_KEYS: ${BOSS_API_KEYS:-${BOSS_API_KEY}}
+      BOSS_API_KEY_PRINCIPALS: ${BOSS_API_KEY_PRINCIPALS:-${BOSS_API_KEY}:ceo}
       BOSS_WORKER_PRINCIPAL: ${BOSS_WORKER_PRINCIPAL:-ceo}
       BOSS_DEFAULT_ORG_ID: ${BOSS_DEFAULT_ORG_ID:-org_boss}
       BOSS_DEFAULT_WORKSPACE_ID: ${BOSS_DEFAULT_WORKSPACE_ID:-ws_boss}

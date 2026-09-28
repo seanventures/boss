@@ -18,9 +18,13 @@ a missing encryption key would be generated.
 from __future__ import annotations
 
 import os
+import json
+import shutil
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 RESTORE = REPO / "scripts" / "install" / "restore_preserved_env.sh"
@@ -132,6 +136,56 @@ def test_a_second_api_key_and_a_chosen_model_survive(tmp_path):
     assert _val(text, "BOSS_API_KEYS") == "key-a,key-b"
     assert _val(text, "BOSS_API_KEY_PRINCIPALS") == "key-a:ceo,key-b:worker"
     assert _val(text, "OPENAI_MODEL") == "anthropic/claude-sonnet-4.5"
+
+
+def _resolved_compose_env(env_file: Path) -> dict:
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose CLI is unavailable")
+    environment = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
+    result = subprocess.run(
+        ["docker", "compose", "--env-file", str(env_file),
+         "-f", str(REPO / "scripts/install/community-compose.yml"),
+         "config", "--format", "json"],
+        text=True, capture_output=True, env=environment, check=False,
+    )
+    if "docker: 'compose' is not a docker command" in result.stderr:
+        pytest.skip("Docker Compose CLI is unavailable")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)["services"]
+
+
+def test_compose_default_worker_identity_matches_the_installer_key(tmp_path):
+    env_file = tmp_path / "fresh.env"
+    _write(env_file, "BOSS_API_KEY=fresh-key\nBOSS_DB_PASSWORD=test-db\n"
+           "BOSS_CONSOLE_PASSWORD=test-console\n"
+           "BOSS_CONSOLE_SESSION_SECRET=test-session\n"
+           "INFISICAL_ENCRYPTION_KEY=test-encryption\n"
+           "INFISICAL_AUTH_SECRET=test-auth\n")
+    services = _resolved_compose_env(env_file)
+    api = services["api"]["environment"]
+    worker = services["worker"]["environment"]
+    assert api["BOSS_API_KEYS"] == "fresh-key"
+    assert api["BOSS_API_KEY_PRINCIPALS"] == "fresh-key:ceo"
+    assert api["BOSS_WORKER_PRINCIPAL"] == "ceo"
+    assert worker["BOSS_API_KEY"] == "fresh-key"
+
+
+def test_restored_multi_key_map_reaches_api_after_rerun(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_API_KEY=key-a\nBOSS_API_KEYS=key-a,key-b\n"
+           "BOSS_API_KEY_PRINCIPALS=key-a:ceo,key-b:auditor\n")
+    _write(new, "BOSS_API_KEY=key-a\nBOSS_API_KEYS=key-a\n"
+           "BOSS_API_KEY_PRINCIPALS=key-a:ceo\nBOSS_DB_PASSWORD=test-db\n"
+           "BOSS_CONSOLE_PASSWORD=test-console\n"
+           "BOSS_CONSOLE_SESSION_SECRET=test-session\n"
+           "INFISICAL_ENCRYPTION_KEY=test-encryption\n"
+           "INFISICAL_AUTH_SECRET=test-auth\n")
+    _restore(old, new)
+    api = _resolved_compose_env(new)["api"]["environment"]
+    assert api["BOSS_API_KEYS"] == "key-a,key-b"
+    assert api["BOSS_API_KEY_PRINCIPALS"] == "key-a:ceo,key-b:auditor"
+    assert api["BOSS_WORKER_PRINCIPAL"] == "ceo"
 
 
 def test_the_console_url_stays_unless_this_run_set_one(tmp_path):
