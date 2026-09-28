@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -96,8 +97,18 @@ def container(workspace: Path):
         runner.stop()
 
 
+def _require_shared_workspace(container: ContainerCommandRunner) -> None:
+    """macOS Docker VMs can run containers without sharing the host test path."""
+    if sys.platform != "darwin":
+        return
+    probe = container.run("python3 -c \"import os;print(os.path.isfile('app.py'))\"")
+    if probe.stdout.strip() != "True":
+        pytest.skip("Docker daemon cannot mount the macOS test workspace")
+
+
 @requires_docker
 def test_a_command_runs_and_reports_its_result(container) -> None:
+    _require_shared_workspace(container)
     out = container.run("python3 app.py")
     assert out.ok and out.exit_code == 0
     assert "hello" in out.stdout
@@ -127,6 +138,7 @@ def test_it_does_not_run_as_root(container) -> None:
 @requires_docker
 def test_writes_land_on_the_host_so_boss_can_read_the_diff(container, workspace: Path) -> None:
     """The change of record is the git diff. A write BOSS cannot see is work lost."""
+    _require_shared_workspace(container)
     container.run("python3 -c \"open('written.txt','w').write('x')\"")
     assert (workspace / "written.txt").read_text() == "x"
 
