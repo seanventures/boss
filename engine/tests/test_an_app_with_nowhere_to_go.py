@@ -38,6 +38,7 @@ Six defects, each independently sufficient to produce that screen:
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -231,6 +232,10 @@ class TestAnInventedValueIsNotWritten:
     @staticmethod
     def _write(sql: str):
         class Ctx:
+            # Community blocks raw SQL before the legacy placeholder check.
+            # Exercise that check on the paid path where write_db remains available.
+            settings = SimpleNamespace(boss_edition="enterprise_self_hosted")
+
             def begin(self):
                 raise AssertionError("EXECUTED — the placeholder check did not run")
 
