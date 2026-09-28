@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
 
-
 PROJECT_ID = "boss-dogfood"
 
 
@@ -313,11 +312,11 @@ def test_apply_is_idempotent_when_no_change(client):
 
 
 def test_ensure_tables_and_unconfigured_status_are_honest(client, engine):
+    from boss_engine.config import get_settings
+    from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
     from sqlalchemy import text
 
     from apps.api.app.db import begin
-    from boss_engine.config import get_settings
-    from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
 
     svc = WorkerAutoscalingService(get_settings())
     with begin(engine) as connection:
@@ -336,7 +335,7 @@ def test_ensure_tables_and_unconfigured_status_are_honest(client, engine):
 
     status = client.get(
         "/v1/worker-autoscaling/status",
-        params={"project_id": "proj_as_none"},
+        params={"project_id": PROJECT_ID},
     )
     assert status.status_code == 200, status.text
     body = status.json()
@@ -345,13 +344,13 @@ def test_ensure_tables_and_unconfigured_status_are_honest(client, engine):
     assert isinstance(body["pools"], list)
     history = client.get(
         "/v1/worker-autoscaling/history",
-        params={"project_id": "proj_as_none"},
+        params={"project_id": PROJECT_ID},
     )
     assert history.status_code == 200, history.text
     assert history.json()["items"] == []
     policies = client.get(
         "/v1/worker-autoscaling/policies",
-        params={"project_id": "proj_as_none"},
+        params={"project_id": PROJECT_ID},
     )
     assert policies.status_code == 200, policies.text
     assert policies.json()["items"] == []

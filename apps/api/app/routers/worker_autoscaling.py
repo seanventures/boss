@@ -41,24 +41,19 @@ def _service() -> WorkerAutoscalingService:
     )
 
 
-def _authorize(
-    connection, project_id: str, actor: str, permission: str, *,
-    allow_missing: bool = False,
-) -> str:
+def _authorize(connection, project_id: str, actor: str, permission: str) -> str:
     # The HTTP principal, when present, is the authority and the audit actor.
     # Keep the explicit actor for local, unauthenticated development calls.
     from apps.api.app.main import current_api_principal, require_project_actor
 
     checked_actor = current_api_principal.get() or actor
-    # Preserve the existing honest empty-state response for a project that has
-    # never existed; there is no project data to reveal. Mutations fail closed.
+    # Return the same not-found result for unknown projects before attempting
+    # default-member repair. Callers need a real project before any read/write.
     project_exists = connection.execute(
         text("SELECT 1 FROM projects WHERE id = :project_id"),
         {"project_id": project_id},
     ).first()
     if not project_exists:
-        if allow_missing:
-            return checked_actor
         raise HTTPException(status_code=404, detail="Project not found.")
     require_project_actor(connection, project_id, checked_actor, permission)
     return checked_actor
@@ -101,10 +96,7 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(
-                connection, project_id, "executive_console", "providerops_manage",
-                allow_missing=True,
-            )
+            _authorize(connection, project_id, "executive_console", "providerops_manage")
             ready = svc.ensure_tables(connection)
             items = svc.list_policies(connection, project_id)
             return {
@@ -195,10 +187,7 @@ def status(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(
-                connection, project_id, "executive_console", "providerops_manage",
-                allow_missing=True,
-            )
+            _authorize(connection, project_id, "executive_console", "providerops_manage")
             svc.ensure_tables(connection)
             return svc.status(connection, project_id)
     except ProgrammingError as error:
@@ -235,10 +224,7 @@ def history(
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(
-                connection, project_id, "executive_console", "providerops_manage",
-                allow_missing=True,
-            )
+            _authorize(connection, project_id, "executive_console", "providerops_manage")
             svc.ensure_tables(connection)
             items = svc.history(
                 connection, project_id, pool_key=pool_key, limit=limit

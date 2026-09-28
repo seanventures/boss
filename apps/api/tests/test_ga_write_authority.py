@@ -275,6 +275,10 @@ def test_worker_autoscaling_requires_project_infra_grant(client, authenticated_k
         "/v1/worker-autoscaling/policies", headers=_auth("coo-key"),
         params={"project_id": PROJECT},
     ).status_code == 403
+    assert client.get(
+        "/v1/worker-autoscaling/policies", headers=_auth("ceo-key"),
+        params={"project_id": "missing-project"},
+    ).status_code == 404
     assert client.put(
         "/v1/worker-autoscaling/policies", headers=_auth("ceo-key"), json=policy,
     ).status_code == 200

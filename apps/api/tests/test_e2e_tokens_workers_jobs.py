@@ -16,12 +16,11 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from boss_engine.services.token_efficiency import ensure_tables as ensure_token_tables
+from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
 from sqlalchemy import text
 
 from apps.api.app.db import begin
-from boss_engine.services.token_efficiency import ensure_tables as ensure_token_tables
-from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
-
 
 SHARED_DB_NAMES = frozenset({"boss", "postgres", ""})
 # jobs / worker_autoscaling_policies FK to projects — use the seeded demo org
@@ -178,7 +177,7 @@ def test_worker_autoscaling_http_empty_then_evaluate_does_not_provision(
 
     get_settings.cache_clear()
 
-    empty_pid = f"proj_e2e_as_empty_{uuid4().hex[:10]}"
+    empty_pid = SEEDED_PROJECT
     status = client.get(
         "/v1/worker-autoscaling/status", params={"project_id": empty_pid}
     )
