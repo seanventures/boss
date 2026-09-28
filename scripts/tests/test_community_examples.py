@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import ClassVar
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,8 +22,8 @@ REQUIRED = {
 
 
 class _Api(http.server.BaseHTTPRequestHandler):
-    requests: list[tuple[str, str]] = []
-    specs: list[dict] = []
+    requests: ClassVar[list[tuple[str, str]]] = []
+    specs: ClassVar[list[dict]] = []
     step_count = 0
 
     def _send(self, status: int, payload: dict) -> None:
@@ -33,7 +34,7 @@ class _Api(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib handler interface
+    def do_GET(self) -> None:
         self.requests.append(("GET", self.path))
         if self.path.startswith("/v1/settings?"):
             self._send(200, {})
@@ -44,7 +45,7 @@ class _Api(http.server.BaseHTTPRequestHandler):
         else:
             self._send(404, {"detail": "Unexpected test read"})
 
-    def do_POST(self) -> None:  # noqa: N802 - stdlib handler interface
+    def do_POST(self) -> None:
         self.requests.append(("POST", self.path))
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path.startswith("/v1/skills/") and self.path.endswith("/enable"):
@@ -123,6 +124,28 @@ def test_all_five_dry_runs_make_only_reads() -> None:
         assert result.stdout.count("would create") == 5
         assert "would schedule it Monday 08:00 UTC" in result.stdout
         assert _Api.requests and all(method == "GET" for method, _ in _Api.requests)
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_video_example_stores_operator_overrides_for_publishing() -> None:
+    server, thread = _server()
+    try:
+        result = _run(server, ROOT / "examples" / "video-workflow" / "setup.py")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(_Api.specs) == 1
+        spec = _Api.specs[0]
+        assert set(spec["input_schema"]["required"]) == {"instructions"}
+        assert {"title", "description"} <= set(spec["input_schema"]["properties"])
+        publish = next(step for step in spec["steps"] if step["id"] == "publish")
+        assert publish["approval"]["mode"] == "manual"
+        assert publish["binding"]["inputs"]["title"] == {
+            "from_step": "edit", "field": "title", "override_from_input": "title",
+        }
+        assert publish["binding"]["inputs"]["description"] == {
+            "from_step": "edit", "field": "description", "override_from_input": "description",
+        }
     finally:
         server.shutdown()
         thread.join()

@@ -331,5 +331,9 @@ def from_input(field: str, *, default: str | None = None) -> dict:
     return reference
 
 
-def from_step(step_id: str, field: str) -> dict:
-    return {"from_step": step_id, "field": field}
+def from_step(step_id: str, field: str, *, override_from_input: str | None = None) -> dict:
+    """Read a step output, unless this run explicitly supplied an override."""
+    reference = {"from_step": step_id, "field": field}
+    if override_from_input is not None:
+        reference["override_from_input"] = override_from_input
+    return reference

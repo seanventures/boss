@@ -101,6 +101,12 @@ def _resolve_inputs(
                 )
             resolved[name] = supplied
         elif isinstance(value, dict) and "from_step" in value:
+            override_field = str(value.get("override_from_input") or "")
+            if override_field:
+                supplied = (context.get("input") or {}).get(override_field)
+                if isinstance(supplied, str) and supplied.strip():
+                    resolved[name] = supplied.strip()
+                    continue
             step_id = str(value["from_step"])
             field = str(value.get("field") or "")
             produced = (context.get("steps") or {}).get(step_id) or {}

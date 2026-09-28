@@ -133,8 +133,9 @@ def main() -> None:
             # the fallback for a run that names no brief.
             step("publish", keys["Publish to YouTube"],
                  {"media_artifact_id": from_step("edit", "media_artifact_id"),
-                  "title": from_step("edit", "title"),
-                  "description": from_step("edit", "description")},
+                  "title": from_step("edit", "title", override_from_input="title"),
+                  "description": from_step("edit", "description",
+                                           override_from_input="description")},
                  [], agent="media_publisher", approval="manual", args=args),
         ],
         # WHAT THE START FORM ASKS FOR. Without this the console has nothing to draw and the

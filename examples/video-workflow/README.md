@@ -198,8 +198,8 @@ This is the part that makes it a workflow rather than two separate steps. Open e
 | Let an agent work it out | `video_url` | optional run input → `video_url` |
 | Let an agent work it out | `asset_url` | optional run input → `asset_url` |
 | Publish to YouTube | `media_artifact_id` | **from an earlier step** → Let an agent work it out → `media_artifact_id` |
-| Publish to YouTube | `title` | **from an earlier step** → Let an agent work it out → `title` |
-| Publish to YouTube | `description` | **from an earlier step** → Let an agent work it out → `description` |
+| Publish to YouTube | `title` | the title you supplied, or **from an earlier step** → Let an agent work it out → `title` |
+| Publish to YouTube | `description` | the description you supplied, or **from an earlier step** → Let an agent work it out → `description` |
 
 Everything the agent step is given other than `instructions` is passed to the agent as **facts it
 must use exactly** — an artifact id it must not invent. The agent step's own output carries
@@ -232,7 +232,8 @@ does accept. That is the separation being enforced rather than described.
 | `video_url` | optional link to your recording; you can put it in the instruction instead |
 | `instructions` | *"Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."* |
 | `asset_url` | optional link to an ending slide, logo, or badge |
-| `title` | the editing agent derives the title from your brief |
+| `title` | optional; overrides the title the editing agent derives from your brief |
+| `description` | optional; overrides the description the editing agent derives |
 
 Watch the run. The editing step proceeds, then **Publish** stops and waits. Open the
 agent step to see **which skills it chose, in what order, and why** — that record is the answer
