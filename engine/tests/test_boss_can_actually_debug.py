@@ -843,7 +843,8 @@ class TestTheOperatorCanSeeItThinking:
         import pathlib
 
         main = pathlib.Path("apps/api/app/main.py").read_text()
-        assert "FROM investigations \"\n                 \"WHERE thread_id = :t AND status IN" in main
+        assert "FROM investigations \"\n                 \"WHERE thread_id = :t AND project_id = :p " in main
+        assert "AND status IN ('queued', 'running')" in main
         assert '"investigation": ({"id": live["id"]' in main
 
 
