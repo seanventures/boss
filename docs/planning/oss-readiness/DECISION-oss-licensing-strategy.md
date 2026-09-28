@@ -1,11 +1,13 @@
 # DECISION — How much of BOSS goes open source (fork #1)
 
-> **Status: OPEN — needs a product + legal call before the OSS engine split (#25) can be finalized.**
+> **Status: DECIDED — Apache License 2.0 for the reviewed full Community repository at `seanventures/boss`, recorded 2026-09-28; counsel reference `01049940`.**
 > This is the single decision that determines the repo boundary, the license, the monetization
 > model, and the competitive exposure of the whole open-source initiative. Everything in
 > [01-oss-engine-split-and-packaging.md](01-oss-engine-split-and-packaging.md) hangs off it —
 > in particular BLK-03 (how aggressively to split `main.py` into community vs enterprise routers)
 > and PKG-01/02 (what gets a `pyproject.toml` + which LICENSE).
+
+> Historical analysis below predates this decision. The product owner confirmed counsel approval on 2026-09-28. The approved scope is recorded in [OSS_LICENSING_DECISION.md](../../operations/OSS_LICENSING_DECISION.md). Cloud and Enterprise code remain outside the Community export. BOSS-300 and public publication remain open until implementation and the separate release gates are complete.
 
 ## 1. Why this is blocking
 

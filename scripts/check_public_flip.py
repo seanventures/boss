@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Mechanical public-flip readiness checks (Plane BOSS-293).
+"""Mechanical public-flip checks (Plane BOSS-293).
 
 This script NEVER authorizes a public flip, NEVER changes LICENSE, NEVER
 enables GitHub Actions, and NEVER stamps BOSS-293 / BOSS-300 Done.
 
-It fails closed while the OSS licensing decision is still UNDECIDED
-(BOSS-300 / docs/planning/oss-readiness/DECISION-oss-licensing-strategy.md).
+It fails closed while the Community licensing decision is still UNDECIDED
+(BOSS-300 / docs/operations/OSS_LICENSING_DECISION.md).
 
 Mechanical passes (SECURITY.md exists, claims freeze exists, no committed
 .env) are printed for honesty. They are not approval to change visibility.
@@ -24,8 +24,8 @@ from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
-LICENSE_DECISION = Path("docs/planning/oss-readiness/DECISION-oss-licensing-strategy.md")
-SECURITY_MD = Path("engine/SECURITY.md")
+LICENSE_DECISION = Path("docs/operations/OSS_LICENSING_DECISION.md")
+SECURITY_MD = Path("SECURITY.md")
 CLAIMS_FREEZE = Path("docs/operations/COMMUNITY_GA_CLAIMS_FREEZE.md")
 CHECKLIST = Path("docs/operations/PUBLIC_FLIP_CHECKLIST.md")
 
@@ -178,8 +178,8 @@ def evaluate(
                 ok=license_status == DECIDED,
                 detail=(
                     f"{LICENSE_DECISION.as_posix()} status={license_status}. "
-                    "Engine Apache-2.0 files are not a substitute. "
-                    "Do not invent a license or close BOSS-300 from this script."
+                    "Package LICENSE files alone are not a decision. "
+                    "Do not close BOSS-300 from this script."
                 ),
                 blocker=True,
             )
@@ -189,7 +189,7 @@ def evaluate(
     checks.append(
         CheckResult(
             id="security_md_exists",
-            title="engine/SECURITY.md exists",
+            title="Community SECURITY.md exists",
             ok=security_text is not None,
             detail=(
                 f"file present: {SECURITY_MD.as_posix()}"
@@ -276,16 +276,16 @@ def evaluate(
         )
     )
 
-    ready = all(check.ok for check in checks)
+    mechanical_pass = all(check.ok for check in checks)
     return {
-        "ready": ready,
-        "verdict": "READY" if ready else "BLOCKED",
+        "mechanical_pass": mechanical_pass,
+        "verdict": "MECHANICAL_PASS" if mechanical_pass else "BLOCKED",
         "license_status": license_status,
         "plane": {"checklist": "BOSS-293", "license": "BOSS-300"},
         "note": (
-            "Passing this script is necessary but not sufficient for a public flip. "
-            "It does not run a full-history secret scan, does not flip visibility, "
-            "does not enable Actions, and does not close Plane issues."
+            "Passing this script does not authorize publication. BOSS-293 still "
+            "requires export review, full-history secret scans, runtime and "
+            "live QA evidence, partner and claims review, and release approval."
         ),
         "checks": [asdict(check) for check in checks],
     }
@@ -293,7 +293,7 @@ def evaluate(
 
 def render_report(report: dict[str, object]) -> str:
     lines = [
-        f"PUBLIC FLIP: {report['verdict']}",
+        f"PUBLIC FLIP MECHANICAL CHECK: {report['verdict']}",
         f"license_status={report['license_status']}  plane={report['plane']}",
         "",
     ]
@@ -322,7 +322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(report, indent=2))
     else:
         print(render_report(report))
-    return 0 if report["ready"] else 1
+    return 0 if report["mechanical_pass"] else 1
 
 
 if __name__ == "__main__":

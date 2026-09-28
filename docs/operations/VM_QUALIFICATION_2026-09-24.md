@@ -90,7 +90,7 @@ removed `.env` and all four named volumes while retaining source and backups.
 Restoring the recorded source commit and `.env`, waiting for Postgres readiness,
 running `pg_restore`, unpacking artifacts, and starting the default web profile
 recovered the database row, artifact marker and API health. The exact recovery
-commands are in [the installer guide](../../scripts/install/README.md#upgrade--recover).
+commands are in “Upgrade & recover” in `scripts/install/README.md` in the source checkout.
 
 The first recovery attempt immediately after `up -d db` failed because
 Postgres had not finished starting. The guide now waits for `pg_isready`.

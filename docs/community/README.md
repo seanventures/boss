@@ -42,13 +42,15 @@ Private design-partner invite: [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](
 (`make onboard`). That path does not claim a public repository or that
 sandboxes always work.
 
-**One-line (recommended):**
+The public one-line installer is pending repository publication. Invited
+contributors can install from their authorized checkout:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+cd /path/to/authorized/boss
+./install.sh --dir "$PWD"
 ```
 
-That installer checks your machine, installs dependencies via Docker, prompts for BYOK model keys, starts Postgres + API + worker (+ Mission Control), seeds `boss-dogfood`, and verifies health. See [QUICKSTART.md](./QUICKSTART.md) and [`scripts/install/README.md`](../../scripts/install/README.md).
+That installer checks your machine, installs dependencies via Docker, prompts for BYOK model keys, starts Postgres + API + worker (+ Mission Control), seeds `boss-dogfood`, and verifies health. See [QUICKSTART.md](./QUICKSTART.md) and `scripts/install/README.md` in the source checkout.
 
 ## Contributing
 
@@ -56,4 +58,4 @@ Prefer small, reviewable PRs with tests for state machines and budget/receipt pa
 
 ## License
 
-Packaging license is under active legal review (`license_candidate` in the community pack). Do not invent a final public license statement beyond what is published with a release.
+The product owner confirmed counsel approval for Apache License 2.0 for the reviewed BOSS Community export (reference `01049940`). The public repository is not published yet; see the [licensing decision](../operations/OSS_LICENSING_DECISION.md) and [public release checklist](../operations/PUBLIC_FLIP_CHECKLIST.md) for remaining gates.

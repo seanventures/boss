@@ -40,7 +40,8 @@ installer's source repository is not your project repository.
 
 Installing coding CLIs does not sign in to subscriptions. A laptop login is
 not available on the VM. Codex and Claude have explicit connect steps after
-official VM login; see the [installer guide](../../scripts/install/README.md#optional-coding-subscriptions).
+official VM login; see “Optional coding subscriptions” in `scripts/install/README.md`
+in the source checkout.
 For Grok, run device login as the BOSS service user in the API container:
 
 ```bash
@@ -61,8 +62,8 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 Open `http://127.0.0.1:3000` on the laptop. To retrieve the console password
 privately on the VM, run `python3 scripts/install/console_password.py show`
 from the install directory. For a remote hostname, terminate HTTPS at a trusted
-reverse proxy while keeping BOSS bound to loopback; follow the
-[installer guide](../../scripts/install/README.md) for the proxy and origin
+reverse proxy while keeping BOSS bound to loopback; follow
+`scripts/install/README.md` in the source checkout for the proxy and origin
 requirements.
 
 Check health and the seeded Community edition on the VM:
@@ -106,5 +107,5 @@ Run `./install.sh --dir "$PWD" --yes --skip-model-key` to resume. To remove
 data intentionally, add `--purge-data`; the script backs up first and requires
 the separate `DELETE-BOSS-DATA` confirmation. Purge also removes CLI session
 volumes, so provider sign-in is required after recovery. See
-[upgrade and recovery](../../scripts/install/README.md#upgrade--recover) for
+“Upgrade & recover” in `scripts/install/README.md` in the source checkout for
 exact restore steps and limits.

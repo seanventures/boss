@@ -1,7 +1,7 @@
 # BOSS architecture and contracts
 
 The rules the control plane holds itself to, and the API surface that enforces them. Written for
-people changing BOSS, not people running it — see the [README](../README.md) to run it.
+people changing BOSS, not people running it — see the [Community quickstart](community/QUICKSTART.md) to run it.
 
 ## Operating invariants
 

@@ -5,7 +5,7 @@ The control plane API is the **primary product surface**. Mission Control, worke
 | Resource | Location |
 |----------|----------|
 | Live OpenAPI (JSON) | `GET /openapi.json` (when API is running) |
-| Contract (YAML) | [`api/openapi.yaml`](../../api/openapi.yaml) |
+| Contract (YAML) | `api/openapi.yaml` in the source checkout |
 | Machine catalog | `GET /v1/meta/api-catalog` |
 | OpenAPI coverage | `GET /v1/meta/openapi-coverage` |
 | Full route list | [`ROUTE_INDEX.md`](ROUTE_INDEX.md) (generated) |

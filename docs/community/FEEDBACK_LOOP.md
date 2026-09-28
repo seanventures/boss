@@ -1,6 +1,6 @@
 # Community feedback
 
-The GitHub issue is the public record for a Community bug, setup problem, or feature request. Use the [bug](../../.github/ISSUE_TEMPLATE/bug.yml), [installation](../../.github/ISSUE_TEMPLATE/install.yml), or [feature](../../.github/ISSUE_TEMPLATE/feature.yml) form when the repository becomes public. For a suspected vulnerability, do not open an issue; email **boss@sean.net** privately as described in [SECURITY.md](../../SECURITY.md).
+The GitHub issue is the public record for a Community bug, setup problem, or feature request. Use the bug, installation, or feature form in `.github/ISSUE_TEMPLATE/` when the repository becomes public. For a suspected vulnerability, do not open an issue; email **boss@sean.net** privately as described in `SECURITY.md` in the source checkout.
 
 ## How a report becomes a change
 
