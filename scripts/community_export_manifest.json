@@ -200,7 +200,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "4134a53f3a7f3d91b8d35bbfaa8aaf6977d5c852511a29238da726861d7e4f3f"
+    "sha256": "c34a4c690b633a615c9fcff6417f96cdff401ae25610156775448c39bc2fd447"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",

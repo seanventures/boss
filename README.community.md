@@ -30,6 +30,12 @@ Authenticate each provider on the VM under the runtime user after installation. 
 
 Start in **Command Center** to submit a goal. Use **Approvals** for decisions and **Activity log** for receipts and failures. **Agent work** shows recent activity by role. **Team structure** holds planned roles and actual handoffs; changing the plan does not route tasks. **Agent Studio** holds definitions you can test and run. Installing a template does not start work or control a device.
 
+New Discovery web research and BOSS-initiated SSH workload planning and deployment are paused in
+Community while their spend, recovery, and effect safeguards are completed.
+Existing Discovery dossiers and deployment records remain readable. The SSH
+install and tunnel commands above still work; they do not deploy an app through
+BOSS.
+
 The console and [terminal](docs/community/TERMINAL_API.md) use the authenticated HTTP API. [MCP](docs/community/MCP.md) exposes a project-scoped set of governed engine tools with its own transport access controls; its available actions differ from the HTTP API.
 
 For a guided start, [five example workflows](examples/README.md) show agents

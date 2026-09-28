@@ -49,8 +49,8 @@ export function OnboardingHelpCard() {
           <h3 className="help-h">What is not here yet</h3>
           <ul className="help-list">
             <li>
-              Deploying needs a <b>host and a target</b> configured first (CI/CD → Hosts). BOSS
-              will not invent infrastructure.
+              You can record a <b>host and a target</b> under CI/CD → Hosts. BOSS-initiated
+              SSH planning and deployment are paused in Community.
             </li>
             <li>
               Merge state is <b>not tracked</b> — the console shows PRs opened, not merged. That

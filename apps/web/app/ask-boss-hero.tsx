@@ -1908,11 +1908,13 @@ export function AskBossHero({
                 <section className="askboss-sheet-flow">
                   <h4>What BOSS will do</h4>
                   <ol>
-                    <li>Research the idea and cite what it finds</li>
+                    {researchAvailable ? <li>Research the idea and cite what it finds</li>
+                      : <li>Start from your brief — new Discovery research is paused in Community</li>}
                     <li>Convene a panel of roles to argue the shape of it</li>
                     <li>Write a PRD — <strong>you approve it</strong> before any code</li>
                     <li>Build, review and test it, then open a pull request</li>
-                    <li>Deploy it when you approve the release</li>
+                    {researchAvailable ? <li>Deploy it when you approve the release</li>
+                      : <li>Review the release; SSH host deployment is paused in Community</li>}
                   </ol>
                 </section>
 

@@ -1,6 +1,6 @@
 # BOSS
 
-**Describe an outcome. BOSS researches it, writes the spec, builds it, tests it, and opens a pull request — and shows you its evidence at every step.**
+**Describe an outcome. BOSS helps plan it, writes the spec, builds it, tests it, and opens a pull request — with evidence you can inspect at each step.**
 
 [![Release](https://img.shields.io/badge/release-v0.14.0-blue.svg)](CHANGELOG.md)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-Docker-2496ED.svg)](#quick-start)
@@ -13,8 +13,9 @@ without a reservation.
 
 It runs on your machine with your own model keys. There is no hosted dependency.
 
-**Community is a fully functional product, not a crippled trial.** Cloud is an optional path
-when you want hosted capacity — not something you need to get started.
+**Community runs on your infrastructure without a hosted BOSS account.**
+Its current feature limits are recorded in [the Community checklist](docs/community/FEATURES.md).
+Cloud is an optional path when you want hosted capacity.
 
 ---
 
@@ -153,8 +154,9 @@ schedule BOSS at all. Every one of them is a failure that has actually happened 
 ### 5. Give it something to do
 
 Open the console and describe an outcome in your own words — *"a calendar that shows change
-freezes and warns on overlaps"*. BOSS researches it, convenes a panel, writes a PRD for you to
-approve, then builds and tests it and opens a pull request.
+freezes and warns on overlaps"*. BOSS convenes a panel, writes a PRD for you to approve,
+then builds and tests it and opens a pull request. New Discovery web research is paused in
+Community until its budget and recovery safeguards are ready; saved dossiers remain readable.
 
 ### Taking it off again
 
@@ -347,8 +349,9 @@ question, which costs money and is the only way to tell *connected* from *workin
 ### 5. Give it something to do
 
 Open the console and describe an outcome in your own words — *"a calendar that shows change
-freezes and warns on overlaps"*. BOSS researches it, convenes a panel, writes a PRD for you to
-approve, then builds and tests it and opens a pull request.
+freezes and warns on overlaps"*. BOSS convenes a panel, writes a PRD for you to approve,
+then builds and tests it and opens a pull request. New Discovery web research is paused in
+Community until its budget and recovery safeguards are ready; saved dossiers remain readable.
 
 ### Taking it off again
 

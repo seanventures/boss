@@ -159,6 +159,11 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
       sub: "Governed projects and gated PRs",
     };
   }
+  if (areaId === "discovery") {
+    return {
+      sub: "Saved dossiers and candidate outcomes; new research paused",
+    };
+  }
   if (areaId === "reports") {
     return {
       label: "QA",

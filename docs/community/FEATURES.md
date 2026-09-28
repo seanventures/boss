@@ -64,10 +64,12 @@ fallback when no trusted CA is available.
 | Spec / architecture / implement / test phases | ✅ |
 | Sandbox execution plane | ◐ Local subprocess is the Community coding path. Firecracker/microVM claims are **frozen** (`BOSS_MICROVM_CLAIMS_FROZEN=true`). In-repo Go S1 is a fail-closed scaffold — not live, not GA. Retained sandbox inspection requires project access; hold and delete controls are disabled until their budget, approval, rollback, and receipt paths are complete. |
 | Evidence-backed completion | ✅ |
+| Discovery web research | ◐ Saved dossiers are readable; new and deeper research is paused until leased model jobs and spend reconciliation are complete. |
 | Factory quality pass after green verify | ◐ One improve pass if UI/UX evidence is thin. Frozen tests stay frozen; failed pass restores last green impl. Unknown JTBD / `a11y_violations` stay `not_scored`. Stays partial. **Not public GA.** |
 | PR / review packets (with GitHub) | ✅ |
 | Browser / automated test evidence | ✅ |
-| Deployment targets and runs | ✅ |
+| Deployment target metadata and recorded history | ✅ |
+| SSH workload planning and deployment | ◐ Paused in Community until its governed effect and recovery path is complete. SSH installation and console tunnels remain available. |
 | Managed elastic worker fleets | ✦ Cloud (planned) |
 
 ## GitHub

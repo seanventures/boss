@@ -899,7 +899,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             <span className="dw-composer-plus" aria-hidden>+</span>
             Start a project
             <span className="detail">
-              describe an outcome and BOSS researches, specs, builds and ships it
+              describe an outcome, choose a workflow, and follow its progress
             </span>
           </button>
         )

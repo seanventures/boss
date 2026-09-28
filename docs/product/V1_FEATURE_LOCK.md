@@ -70,7 +70,7 @@ Community spec. Partial is still in v1; it is not shipped.
 | V1-IN-028 | Factory quality pass after green verify | community | in | ◐ | Factory quality | Stays partial |
 | V1-IN-029 | PR / review packets (with GitHub) | community | in | ✅ | review packets | |
 | V1-IN-030 | Browser / automated test evidence | community | in | ✅ | Browser / automated | |
-| V1-IN-031 | Deployment targets and runs | community | in | ✅ | Deployment targets | Not Cloud fleets |
+| V1-IN-031 | Deployment targets and runs | community | in | ✅ | Deployment targets | Metadata and run history; SSH planning and actuation paused for GA |
 | V1-IN-032 | Project connection + repo binding | community | in | ✅ | repo binding | |
 | V1-IN-033 | Easy connect patterns | community | in | ✅ | Easy connect | GitHub easy connect |
 | V1-IN-034 | Branch policies and immutable snapshots | community | in | ✅ | Branch policies | |
