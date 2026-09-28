@@ -632,6 +632,30 @@ from .schemas import (
     LlmCallSummaryGroup,
     LlmCallSummaryResponse,
 )
+from .request_bodies import (
+    CodeTaskFeedbackBody,
+    CodeTaskFollowUpBody,
+    CodeTaskStartBody,
+    CodeTaskSteerBody,
+    PrdDecomposeBody,
+    ProjectAgentsBody,
+    ProjectBody,
+    RoleSkillBody,
+    WebAppBuildBody,
+    WorkflowApplyBody,
+    WorkflowCreateBody,
+    WorkflowCustomStepBody,
+    WorkflowCustomStepUpdateBody,
+    WorkflowDeployTargetBody,
+    WorkflowForkBody,
+    WorkflowRecheckBody,
+    WorkflowRetryStepBody,
+    WorkflowRunInputBody,
+    WorkflowSaveBody,
+    WorkflowScheduleBody,
+    WorkflowScheduleEnabledBody,
+    WorkflowStartBody,
+)
 from .services.a2a import (
     A2ANotFoundError,
     A2AService,
@@ -5568,7 +5592,7 @@ def run_meeting_step_endpoint(payload: dict):
 
 
 @app.post("/v1/code-tasks")
-def start_code_task_endpoint(payload: dict):
+def start_code_task_endpoint(payload: CodeTaskStartBody):
     """Convene a durable coding task: clone -> agent edits + tests -> gated PR.
     Returns the run_id; a `code.task` worker picks it up and runs the pipeline.
 
@@ -5576,6 +5600,7 @@ def start_code_task_endpoint(payload: dict):
     evidence and do not enqueue a job, reserve budget, or call a model. It is
     not a sealed factory path. ``open_pr=true`` with ``simulated=true`` is 422.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = payload.get("project_id")
@@ -5683,12 +5708,13 @@ def start_code_task_endpoint(payload: dict):
 
 
 @app.post("/v1/prd/decompose", status_code=201)
-def decompose_prd_endpoint(payload: dict):
+def decompose_prd_endpoint(payload: PrdDecomposeBody):
     """Autonomous PRD -> scoped coding tasks -> build. BOSS reads a PRD (or a feature directive),
     decomposes it into a SMALL ordered set of composable coding tasks, and runs them as ONE branch
     lineage (scaffold -> features -> wire-up) — each task auto-starts when the prior lands. Body:
     {project_id, prd | directive, owner?, repo?, base_branch?, task_id?, profile?, risk_tier?,
     max_tasks?, plan_only?}. plan_only=true returns the decomposition WITHOUT starting the build."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = payload.get("project_id")
@@ -5720,11 +5746,12 @@ def decompose_prd_endpoint(payload: dict):
 
 
 @app.post("/v1/web-app", status_code=201)
-def build_web_app_endpoint(payload: dict):
+def build_web_app_endpoint(payload: WebAppBuildBody):
     """SINGLE-TASK web-app build — the robust path for a website. Seeds a deterministic
     Vite+React+TS+Tailwind scaffold (0 agent turns), then ONE governed task builds the whole app on
     top (fits the guest turn cap; no fragile decomposition chain). Body: {project_id, directive,
     owner?, repo?, task_id?, review?}. review defaults to false so the FIRST pass just works."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = payload.get("project_id")
@@ -5993,7 +6020,7 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
 
 
 @app.post("/v1/code-tasks/{run_id}/follow-up", status_code=201)
-def follow_up_code_task_endpoint(run_id: str, payload: dict):
+def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
     """Ask for a change to an app that already exists, naming the run that built it.
 
     Most software work is changing software that already exists, and BOSS had no route for it:
@@ -6001,6 +6028,7 @@ def follow_up_code_task_endpoint(run_id: str, payload: dict):
     "save this to a database instead of React state" had to locate the app's git branch by hand
     and post a base_branch. This is that capability, using the same lineage rules.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     instructions = str((payload or {}).get("instructions") or "").strip()
@@ -6580,12 +6608,13 @@ def list_investigations_endpoint(project_id: str, limit: int = 10):
 
 
 @app.post("/v1/code-tasks/{run_id}/steer")
-def code_task_steer_endpoint(run_id: str, payload: dict):
+def code_task_steer_endpoint(run_id: str, payload: CodeTaskSteerBody):
     """Redirect a RUNNING task. The guidance is applied at the next stage boundary.
 
     Without this a run is fire-and-wait: you watch it head the wrong way and the only lever
     is cancel-and-restart, discarding everything done so far. This turns a 25-minute wrong
     answer into a one-stage correction."""
+    payload = payload.payload()
     guidance = str((payload or {}).get("guidance") or "").strip()
     if not guidance:
         raise HTTPException(status_code=422, detail="guidance is required")
@@ -8667,8 +8696,9 @@ def get_code_task_feedback_endpoint(run_id: str):
 
 
 @app.post("/v1/code-tasks/{run_id}/feedback")
-def submit_code_task_feedback_endpoint(run_id: str, payload: dict):
+def submit_code_task_feedback_endpoint(run_id: str, payload: CodeTaskFeedbackBody):
     """Ask/clarify/structure iteration feedback; never dispatch without confirmation."""
+    payload = payload.payload()
     from .services.feedback_agent import submit_feedback
     try:
         return submit_feedback(
@@ -12330,8 +12360,9 @@ def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
 
 
 @app.post("/v1/projects/{project_id}/agents")
-def assign_project_agents(project_id: str, payload: dict = Body(...)) -> dict:
+def assign_project_agents(project_id: str, payload: ProjectAgentsBody = Body(...)) -> dict:
     """Put agents on an app, take them off, or seed the ones that would have run anyway."""
+    payload = payload.payload()
     from boss_engine.services import agent_assignment
 
     app_name = str(payload.get("app") or payload.get("app_name") or "").strip()
@@ -14582,7 +14613,7 @@ def disconnect_channel(
 
 
 @app.post("/v1/role-skills/sync")
-def sync_project_role_skills(payload: dict) -> dict:
+def sync_project_role_skills(payload: ProjectBody) -> dict:
     """Give every installed agent the skills its role spec says it may use.
 
     Needed because role specs and role_skills were never joined: an agent was TOLD what it
@@ -14591,6 +14622,7 @@ def sync_project_role_skills(payload: dict) -> dict:
 
     Additive. It never removes an assignment an operator made by hand.
     """
+    payload = payload.payload()
     from boss_engine.services.skill_definitions import sync_role_skills
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -14620,13 +14652,14 @@ def list_role_skill_assignments(project_id: str) -> dict:
 
 
 @app.post("/v1/role-skills", status_code=201)
-def assign_role_skill(payload: dict) -> dict:
+def assign_role_skill(payload: RoleSkillBody) -> dict:
     """Give one skill to one agent.
 
     Independent of any workflow step that also runs it: the same skill can be held by an agent,
     placed in a step, both, or neither. `workflow_manage` is the gate, the same permission that
     authors the skill in the first place — deciding who can do what with it is the same act.
     """
+    payload = payload.payload()
     from .services.skill_definitions import SkillDefinitionError, assign_skill_to_role
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21265,7 +21298,8 @@ def list_workflow_schedules(project_id: str, actor: str = "executive_console") -
 
 
 @app.post("/v1/delivery-workflows/schedules", status_code=201)
-def create_workflow_schedule(payload: dict) -> dict:
+def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
+    payload = payload.payload()
     from boss_engine.services import workflow_schedules as schedules
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21297,7 +21331,8 @@ def create_workflow_schedule(payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/schedules/{schedule_id}/enabled")
-def set_workflow_schedule_enabled(schedule_id: str, payload: dict) -> dict:
+def set_workflow_schedule_enabled(schedule_id: str, payload: WorkflowScheduleEnabledBody) -> dict:
+    payload = payload.payload()
     from boss_engine.services import workflow_schedules as schedules
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21494,9 +21529,10 @@ def _authorize_delivery_target_input(
 
 
 @app.post("/v1/delivery-workflows/custom-steps")
-def create_delivery_custom_step(payload: dict) -> dict:
+def create_delivery_custom_step(payload: WorkflowCustomStepBody) -> dict:
     """Define a step. The risk tier is NOT accepted from the caller — it is resolved from
     whatever the step binds, which is what stops "custom step" being a way around the floor."""
+    payload = payload.payload()
     from boss_engine.services import workflow_custom_steps as custom_steps
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21526,7 +21562,7 @@ def create_delivery_custom_step(payload: dict) -> dict:
 
 
 @app.patch("/v1/delivery-workflows/custom-steps/{step_key}")
-def update_delivery_custom_step(step_key: str, payload: dict) -> dict:
+def update_delivery_custom_step(step_key: str, payload: WorkflowCustomStepUpdateBody) -> dict:
     """Change a step that exists, keeping its key.
 
     PATCH rather than PUT, and the key is not in the body: the key is what workflow specs bind
@@ -21534,6 +21570,7 @@ def update_delivery_custom_step(step_key: str, payload: dict) -> dict:
     all. The risk tier is still resolved from what the step binds, never accepted here — that
     is what stops editing a step being a way around the approval floor.
     """
+    payload = payload.payload()
     from boss_engine.services import workflow_custom_steps as custom_steps
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21584,8 +21621,9 @@ def list_delivery_catalogue() -> dict:
 
 
 @app.post("/v1/delivery-workflows/catalogue/install")
-def install_delivery_catalogue(payload: dict) -> dict:
+def install_delivery_catalogue(payload: ProjectBody) -> dict:
     """Install the catalogue into a project. Idempotent — safe to call on every boot."""
+    payload = payload.payload()
     from boss_engine.services.workflow_catalogue import seed
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21598,7 +21636,7 @@ def install_delivery_catalogue(payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/apply")
-def apply_delivery_workflow(payload: dict) -> dict:
+def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
     """Point a class of work at a workflow.
 
     "New projects here use Standard Product Delivery." Uses the runtime's existing mapping
@@ -21623,6 +21661,7 @@ def apply_delivery_workflow(payload: dict) -> dict:
     the new version. Anything else asks the operator to go and delete a row they have never
     been shown.
     """
+    payload = payload.payload()
     from boss_engine.services.workflow_catalogue import WORK_CLASSES, work_class_label
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -22158,13 +22197,14 @@ def _free_workflow_key(connection, project_id: str, name: str) -> str:
 
 
 @app.post("/v1/delivery-workflows/create")
-def create_delivery_workflow(payload: dict) -> dict:
+def create_delivery_workflow(payload: WorkflowCreateBody) -> dict:
     """A new workflow, from scratch.
 
     Creates the definition only. There is no version until the first save, because a workflow
     with no steps is not a thing the runtime can validate — `entry_step` is required — and
     publishing an empty one just to have a row would put an unrunnable version in the ledger.
     """
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     name = str(payload.get("name") or "").strip()
     actor = _delivery_workflow_actor(payload)
@@ -22183,12 +22223,13 @@ def create_delivery_workflow(payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/fork")
-def fork_delivery_workflow(payload: dict) -> dict:
+def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
     """Copy a workflow into one the customer owns and can edit.
 
     Forking rather than editing in place is what keeps "reset to the standard" meaningful and
     keeps the customer's diff against it visible.
     """
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     source_key = str(payload.get("workflow_key") or "").strip()
     new_key = str(payload.get("new_key") or "").strip()
@@ -22241,12 +22282,13 @@ def fork_delivery_workflow(payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/save")
-def save_delivery_workflow(payload: dict) -> dict:
+def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
     """Publish a new version of a customer's own workflow.
 
     Saving never mutates a published version — it produces version N+1, so runs in flight keep
     the version they started on and saving cannot change the meaning of work already underway.
     """
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     definition_id = str(payload.get("definition_id") or "").strip()
     spec = payload.get("spec")
@@ -22334,13 +22376,14 @@ def delete_delivery_workflow(definition_id: str, project_id: str,
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/retry-step")
-def retry_delivery_step(run_id: str, payload: dict) -> dict:
+def retry_delivery_step(run_id: str, payload: WorkflowRetryStepBody) -> dict:
     """Put a failed or dead-lettered step back in the queue.
 
     A step that failed for a reason since dealt with — a target that did not exist, a service
     that was down — had no way back: the run sat dead-lettered and the only recourse was to
     start the whole workflow again and repeat every step before it. This resets THAT step.
     """
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     step_id = str(payload.get("step_id") or "").strip()
     if not project_id or not step_id:
@@ -22376,7 +22419,7 @@ def retry_delivery_step(run_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/recheck")
-def recheck_delivery_run(run_id: str, payload: dict) -> dict:
+def recheck_delivery_run(run_id: str, payload: WorkflowRecheckBody) -> dict:
     """Re-test what stopped this run, and put back whatever can now proceed.
 
     The manual refresh an operator asked for after watching BOSS fix the very thing a step was
@@ -22384,6 +22427,7 @@ def recheck_delivery_run(run_id: str, payload: dict) -> dict:
     missing, having had to reconcile a dead-lettered run with hand-written SQL because nothing
     exposed this.
     """
+    payload = payload.payload()
     from boss_engine.services.workflow_recheck import recheck_run
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -22397,7 +22441,7 @@ def recheck_delivery_run(run_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")
-def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
+def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBody) -> dict:
     """Give this run somewhere to ship to, and point its deploy step at it.
 
     `deploy_app` refuses unless an ACTIVE target already exists for the environment, and it
@@ -22409,6 +22453,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
     Idempotent: an app already registered for this environment is reused rather than refused,
     because pressing the button twice should not be an error.
     """
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     host_id = str(payload.get("host_id") or "").strip()
     environment = str(payload.get("environment") or "staging").strip()
@@ -22579,7 +22624,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/input")
-def set_delivery_run_input(run_id: str, payload: dict) -> dict:
+def set_delivery_run_input(run_id: str, payload: WorkflowRunInputBody) -> dict:
     """Set a value the remaining steps will read — the deployment target, most of all.
 
     `deploy` takes an optional `target_id`, and optional inputs are filled from the run's own
@@ -22589,6 +22634,7 @@ def set_delivery_run_input(run_id: str, payload: dict) -> dict:
     Deliberately an allowlist: a run's input is what its steps were bound against, and letting
     a form overwrite any of it would let somebody redirect a build after the fact.
     """
+    payload = payload.payload()
     # `title` is on the list because a run can end up misnamed and there was no way to correct
     # it. Two runs reached the console called "Product Requirements Document (PRD)" — the
     # naming bug behind that is fixed, but the rows already written kept the bad name for good,
@@ -22632,8 +22678,9 @@ def set_delivery_run_input(run_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/delivery-workflows/start")
-def start_delivery_workflow(payload: dict) -> dict:
+def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     """Launch a piece of work on a workflow."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     work_class = str(payload.get("work_class") or "").strip()
     workflow_key = str(payload.get("workflow_key") or "").strip()

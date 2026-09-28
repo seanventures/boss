@@ -64,16 +64,20 @@ def test_community_curated_request_fields_are_audited_and_never_paid_only():
     community = json.loads(COMMUNITY_MATRIX.read_text())
     rows = {(row["method"], row["path"]): row for row in community["operations"]}
     assert sum(row["mounted_input_schema_quality"] == "loose_json_body"
-               for row in rows.values()) == 107
+               for row in rows.values()) <= 84
     assert sum(row["input_schema_quality"] == "loose_json_body"
-               for row in rows.values()) == 88
+               for row in rows.values()) <= 66
     for key, body in overlay["operations"].items():
         method, path = key.split(" ", 1)
         row = rows[(method, path)]
-        assert row["mounted_input_schema_quality"] == "loose_json_body"
-        assert row["input_schema_quality"] == "curated_json_body"
-        assert row["curated_input_fields"] is True
-        assert row["runtime_validated_input_schema"] is False
+        if row["mounted_input_schema_quality"] == "loose_json_body":
+            assert row["input_schema_quality"] == "curated_json_body"
+            assert row["curated_input_fields"] is True
+            assert row["runtime_validated_input_schema"] is False
+        else:
+            assert row["input_schema_quality"] == "typed_json_body"
+            assert row["curated_input_fields"] is False
+            assert row["runtime_validated_input_schema"] is True
         assert body["type"] == "object" and body["additionalProperties"] is True
         assert body["properties"]
     assert not {
@@ -90,4 +94,7 @@ def test_community_curated_request_fields_are_audited_and_never_paid_only():
             documented = private["paths"][path][method.lower()]["requestBody"]["content"][
                 "application/json"
             ]["schema"]
-            assert documented == body, key
+            if rows[(method, path)]["mounted_input_schema_quality"] == "loose_json_body":
+                assert documented == body, key
+            else:
+                assert "$ref" in documented, key

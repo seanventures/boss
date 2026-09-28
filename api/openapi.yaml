@@ -10248,9 +10248,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskStartBody'
   /v1/code-tasks/{run_id}:
     get:
       operationId: get_v1_code_tasks_run_id_1f6fd558
@@ -10306,9 +10304,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskFollowUpBody'
   /v1/code-tasks/step:
     post:
       operationId: post_v1_code_tasks_step_80d0bf5b
@@ -10365,9 +10361,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskSteerBody'
   /v1/code-tasks/{run_id}/live:
     get:
       operationId: get_v1_code_tasks_run_id_live_f53df536
@@ -11432,24 +11426,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - message
-              properties:
-                message:
-                  type: string
-                expected:
-                  type: string
-                anchor:
-                  type: string
-                selected_element:
-                  type: string
-                screenshot_url:
-                  type: string
-                severity:
-                  type: string
-                  default: normal
-              additionalProperties: true
+              $ref: '#/components/schemas/CodeTaskFeedbackBody'
       responses:
         '200':
           description: Clarifying question or confirmation-gated structured proposal
@@ -15967,9 +15944,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/PrdDecomposeBody'
         required: true
   /v1/projects/{project_id}/terraform-drift-reconcile:
     post:
@@ -17369,9 +17344,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WebAppBuildBody'
         required: true
   /v1/webhooks/bitbucket:
     post:
@@ -23579,9 +23552,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ProjectAgentsBody'
       responses:
         '200':
           description: Successful Response
@@ -24548,9 +24519,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/RoleSkillBody'
       responses:
         '201':
           description: Successful Response
@@ -25047,9 +25016,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowCustomStepBody'
       responses:
         '200':
           description: Successful Response
@@ -25130,9 +25097,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowCustomStepUpdateBody'
       responses:
         '200':
           description: Successful Response
@@ -25176,9 +25141,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ProjectBody'
         required: true
       responses:
         '200':
@@ -25217,9 +25180,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkflowApplyBody'
         required: true
       responses:
         '200':
@@ -25379,9 +25340,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkflowCreateBody'
         required: true
       responses:
         '200':
@@ -25412,9 +25371,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkflowForkBody'
         required: true
       responses:
         '200':
@@ -25445,9 +25402,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkflowSaveBody'
         required: true
       responses:
         '200':
@@ -25538,9 +25493,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowRetryStepBody'
       responses:
         '200':
           description: Successful Response
@@ -25582,9 +25535,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowRecheckBody'
       responses:
         '200':
           description: Successful Response
@@ -25633,9 +25584,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowDeployTargetBody'
       responses:
         '200':
           description: Successful Response
@@ -25681,9 +25630,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowRunInputBody'
       responses:
         '200':
           description: Successful Response
@@ -25708,9 +25655,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkflowStartBody'
         required: true
       responses:
         '200':
@@ -29316,9 +29261,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ProjectBody'
         required: true
       responses:
         '200':
@@ -29463,9 +29406,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowScheduleBody'
       responses:
         '201':
           description: Successful Response
@@ -29497,9 +29438,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/WorkflowScheduleEnabledBody'
       responses:
         '200':
           description: Successful Response
@@ -60333,6 +60272,890 @@ components:
       - active
       title: CoordinationWorkItem
 
+    CodeTaskFeedbackBody:
+      properties:
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        expected:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expected
+        anchor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Anchor
+        severity:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Severity
+        selected_element:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Selected Element
+        screenshot_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Screenshot Url
+      additionalProperties: true
+      type: object
+      required:
+      - message
+      title: CodeTaskFeedbackBody
+    CodeTaskFollowUpBody:
+      properties:
+        instructions:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instructions
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        profile:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Profile
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        engine:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Engine
+        review_panel_size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Review Panel Size
+      additionalProperties: true
+      type: object
+      required:
+      - instructions
+      title: CodeTaskFollowUpBody
+    CodeTaskStartBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        task_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        instructions:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instructions
+        acceptance_criteria:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Acceptance Criteria
+        test_commands:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Test Commands
+        owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        base_branch:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Branch
+        workflow_version_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Version Id
+        finalize_ctx:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Finalize Ctx
+        profile:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Profile
+        risk_tier:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Risk Tier
+        model_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Model Config
+        open_pr:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Open Pr
+        repair_retries:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Repair Retries
+        review_panel_size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Review Panel Size
+        simulated:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Simulated
+        official:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Official
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: CodeTaskStartBody
+    CodeTaskSteerBody:
+      properties:
+        guidance:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Guidance
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - guidance
+      - actor
+      title: CodeTaskSteerBody
+    PrdDecomposeBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        prd:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prd
+        directive:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Directive
+        owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        base_branch:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Branch
+        task_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+        profile:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Profile
+        risk_tier:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Risk Tier
+        max_tasks:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Tasks
+        plan_only:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Plan Only
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: PrdDecomposeBody
+    ProjectAgentsBody:
+      properties:
+        app:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App
+        app_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Name
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        action:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Action
+        role_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Role Key
+        role_keys:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Role Keys
+      additionalProperties: true
+      type: object
+      title: ProjectAgentsBody
+    ProjectBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ProjectBody
+    RoleSkillBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        role_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Role Key
+        skill_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skill Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - role_key
+      - skill_id
+      title: RoleSkillBody
+    WebAppBuildBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        directive:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Directive
+        prd:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prd
+        owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        task_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+        review:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Review
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: WebAppBuildBody
+    WorkflowApplyBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        workflow_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+        work_class:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Work Class
+        priority:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Priority
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - workflow_key
+      - work_class
+      title: WorkflowApplyBody
+    WorkflowCreateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      title: WorkflowCreateBody
+    WorkflowCustomStepBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Label
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        binding_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Binding Kind
+        skill_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skill Id
+        mcp_server_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mcp Server Id
+        mcp_tool_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mcp Tool Name
+        inputs:
+          title: Inputs
+        knowledge:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Knowledge
+        produces:
+          title: Produces
+        step_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Step Key
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - label
+      - binding_kind
+      title: WorkflowCustomStepBody
+    WorkflowCustomStepUpdateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Label
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        binding_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Binding Kind
+        skill_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skill Id
+        mcp_server_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mcp Server Id
+        mcp_tool_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mcp Tool Name
+        inputs:
+          title: Inputs
+        knowledge:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Knowledge
+        produces:
+          title: Produces
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: WorkflowCustomStepUpdateBody
+    WorkflowDeployTargetBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        host_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Host Id
+        environment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Environment
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - host_id
+      title: WorkflowDeployTargetBody
+    WorkflowForkBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        workflow_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+        new_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: New Key
+        new_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: New Name
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - workflow_key
+      title: WorkflowForkBody
+    WorkflowRecheckBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        requeue:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Requeue
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: WorkflowRecheckBody
+    WorkflowRetryStepBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        step_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Step Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - step_id
+      title: WorkflowRetryStepBody
+    WorkflowRunInputBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        values:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Values
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - values
+      title: WorkflowRunInputBody
+    WorkflowSaveBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        definition_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Definition Id
+        spec:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Spec
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - definition_id
+      - spec
+      title: WorkflowSaveBody
+    WorkflowScheduleBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        workflow_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        cadence:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cadence
+        minute:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Minute
+        hour:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Hour
+        weekday:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Weekday
+        timezone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Timezone
+        input:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Input
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - workflow_key
+      - name
+      - cadence
+      title: WorkflowScheduleBody
+    WorkflowScheduleEnabledBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: WorkflowScheduleEnabledBody
+    WorkflowStartBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        workflow_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+        work_class:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Work Class
+        input:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Input
+        from_run:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Run
+        from_discovery:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Discovery
+        dedupe_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dedupe Key
+        sample:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Sample
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: WorkflowStartBody
 tags:
 - name: Tasks
   description: Tasks API surface

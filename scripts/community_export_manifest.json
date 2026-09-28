@@ -46,6 +46,7 @@
     "scripts/tests/test_metatron_tui.py",
     "scripts/tests/test_api_validation_redaction.py",
     "scripts/tests/test_mcp_api_parity.py",
+    "scripts/tests/test_typed_request_bodies.py",
     "scripts/tests/test_mcp_access.py",
     "scripts/tests/test_community_examples.py",
     "tools/",
