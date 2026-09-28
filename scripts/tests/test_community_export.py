@@ -486,6 +486,8 @@ def test_goldeneye_community_boundary_is_preserved() -> None:
     }
     dockerfile = (export.ROOT / "Dockerfile.community").read_bytes()
     assert b"COPY packages/goldeneye ./packages/goldeneye" in dockerfile
+    assert b"COPY LICENSE ./LICENSE" in dockerfile
+    assert b"COPY --chown=boss:boss LICENSE ./LICENSE" in dockerfile
 
 
 def test_shared_config_exception_is_exact_and_still_blocks_paid_code() -> None:

@@ -56,7 +56,16 @@ are retained outside the proposed public tree.
   `--enable-gpl` build with libx264 and libx265. The Playwright browser tree
   has a headless-shell notice and ffmpeg LGPL notice; the full Chromium tree
   lacked a general LICENSE/NOTICE in the inspected paths. API copies a Node
-  binary but does not copy the Node license file present in the web image.
+  binary but did not copy the Node license file present in the web image.
+
+## Current source follow-up
+
+The integration source now copies the Node distribution license alongside its
+binary. The Community Dockerfile also copies the reviewed root Apache-2.0
+`LICENSE` into the API/worker and web runtime images. Verify those paths in the
+final built images; source-level checks do not prove an image was rebuilt.
+These additions do not resolve the separate third-party terms and notice
+review below.
 
 Package metadata and notice-path searches do not establish redistribution
 rights, source-offer compliance, or completeness for bundled native binaries.
