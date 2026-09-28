@@ -18,6 +18,7 @@ came from. Scenarios are added here as they are found in production, so a case t
 operator once cannot come back silently.
 """
 
+import ast
 import inspect
 
 import pytest
@@ -495,8 +496,12 @@ def test_set_target_writes_an_http_health_check():
     from engine.tests._source import code_only
 
     main = pathlib.Path("apps/api/app/main.py").read_text(encoding="utf-8")
-    i = main.index("def setup_deployment_for_code_task_endpoint")
-    src = code_only(main[i:main.index("def _project_of_run", i)])
+    endpoint = next(
+        node for node in ast.parse(main).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "setup_deployment_for_code_task_endpoint"
+    )
+    src = code_only(ast.get_source_segment(main, endpoint) or "")
     assert '"kind": "http"' in src or "'kind': 'http'" in src, (
         "Set target still writes health_checks without kind=http"
     )
