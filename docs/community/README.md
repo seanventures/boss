@@ -23,8 +23,8 @@ selected separately.
 
 ## Extend and contribute
 
-Use the [terminal and API guide](TERMINAL_API.md) to automate the same governed
-operations available in the console. The [feedback process](FEEDBACK_LOOP.md)
+Use the [API, terminal, and MCP guide](CONTROL_SURFACES.md) to find and invoke
+governed operations. The [feedback process](FEEDBACK_LOOP.md)
 explains how issues become reviewed changes. See root `CONTRIBUTING.md` before
 sending code or documentation, and root `SECURITY.md` for private vulnerability
 reporting.
