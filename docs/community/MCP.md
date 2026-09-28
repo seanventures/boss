@@ -20,6 +20,8 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 Use `serve-mcp --read-only` if the client should only inspect BOSS. The stock
 Community API image provides the Python module, not a `boss-engine`
 executable. The user running the client needs noninteractive Docker access.
+After a fresh install, sign out and back in before configuring the MCP client
+so the new Docker group membership takes effect.
 
 For a separately configured Python process with `DATABASE_URL`, an HTTP MCP
 server starts read-only. The stock Community Compose file does not publish an
