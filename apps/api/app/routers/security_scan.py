@@ -57,6 +57,31 @@ class SecurityScanGateRequest(BaseModel):
     )
 
 
+def _authorized_stored_run(run_id: str, *, manage: bool) -> dict:
+    """Check the run's stored project before revealing or changing its contents."""
+    from ..main import (
+        current_api_principal,
+        current_transport_authenticated,
+        require_project_actor,
+        require_project_reader,
+    )
+
+    principal = current_api_principal.get()
+    if not current_transport_authenticated.get() or not principal:
+        raise HTTPException(status_code=401, detail="Authenticated project member required.")
+    rec = svc.get_run(run_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"scan run not found: {run_id}")
+    with begin(get_engine(get_settings())) as connection:
+        if manage:
+            require_project_actor(
+                connection, rec["project_id"], principal, "providerops_manage"
+            )
+        else:
+            require_project_reader(connection, rec["project_id"])
+    return rec
+
+
 @router.get("/scanners")
 def list_scanners(include_planned: bool = Query(default=True)) -> dict:
     """Catalog of market-validated OSS scanners (+ Snyk BYO note)."""
@@ -138,17 +163,19 @@ def list_runs(
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str) -> dict:
-    rec = svc.get_run(run_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail=f"scan run not found: {run_id}")
-    return rec
+    return _authorized_stored_run(run_id, manage=False)
 
 
 @router.post("/runs/{run_id}/gate")
 def evaluate_gate(run_id: str, payload: Optional[SecurityScanGateRequest] = None) -> dict:
     """Evaluate go/no-go for a prior run. Critical findings fail closed by default."""
+    rec = _authorized_stored_run(run_id, manage=True)
     body = payload or SecurityScanGateRequest()
     try:
-        return svc.evaluate_gate(run_id, fail_on=body.fail_on)
+        return svc.evaluate_gate(
+            run_id, fail_on=body.fail_on, expected_project_id=rec["project_id"]
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc

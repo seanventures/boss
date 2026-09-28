@@ -21,6 +21,45 @@ def _clear_scan_store():
     sec.reset_store()
 
 
+@pytest.fixture
+def scan_auth(engine, monkeypatch):
+    suffix = uuid4().hex[:10]
+    operator = f"scan_reader_operator_{suffix}"
+    reader = f"scan_reader_{suffix}"
+    foreign = f"scan_read_foreign_{suffix}"
+    operator_key = f"scan-read-key-{suffix}"
+    reader_key = f"scan-read-only-key-{suffix}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", f"{operator_key},{reader_key}")
+    monkeypatch.setattr(
+        api_main.settings, "api_key_principals",
+        f"{operator_key}:{operator},{reader_key}:{reader}",
+    )
+    with engine.begin() as connection:
+        workspace_id = connection.execute(
+            text("SELECT workspace_id FROM projects WHERE id=:id"),
+            {"id": PROJECT_ID},
+        ).scalar_one()
+        connection.execute(
+            text("INSERT INTO projects (id, workspace_id, name, slug) "
+                 "VALUES (:id, :workspace_id, 'Foreign scan history', :id)"),
+            {"id": foreign, "workspace_id": workspace_id},
+        )
+        for member_id, permissions in (
+            (operator, ["providerops_manage"]), (reader, []),
+        ):
+            api_main.members.upsert_member(
+                connection, project_id=PROJECT_ID, member_id=member_id,
+                display_name=member_id, member_type="human", role_keys=[],
+                permissions=permissions, actor="ceo",
+            )
+    return {
+        "operator_headers": {"Authorization": f"Bearer {operator_key}"},
+        "reader_headers": {"Authorization": f"Bearer {reader_key}"},
+        "foreign": foreign,
+    }
+
+
 def test_scanners_catalog_stays_readable_but_execution_is_unavailable(client):
     r = client.get("/v1/security-scan/scanners")
     assert r.status_code == 200, r.text
@@ -127,26 +166,91 @@ def test_run_checks_requested_project_and_actor_then_blocks_every_mode(
     assert sec.list_runs(foreign) == []
 
 
-def test_prior_runs_and_gate_remain_readable(client):
+def test_prior_runs_and_gate_remain_readable(client, scan_auth):
     run = sec.run_scan(
         project_id=PROJECT_ID, actor="test_operator", path="/tmp/fixture",
         scanners=["gitleaks"], simulated=True, engine=None,
     )
     assert run["gate"]["decision"] == "no-go"
 
-    listed = client.get("/v1/security-scan/runs", params={"project_id": PROJECT_ID})
+    headers = scan_auth["operator_headers"]
+    listed = client.get(
+        "/v1/security-scan/runs", params={"project_id": PROJECT_ID},
+        headers=headers,
+    )
     assert listed.status_code == 200, listed.text
     assert listed.json()["items"][0]["id"] == run["id"]
-    latest = client.get("/v1/security-scan/latest", params={"project_id": PROJECT_ID})
+    latest = client.get(
+        "/v1/security-scan/latest", params={"project_id": PROJECT_ID},
+        headers=headers,
+    )
     assert latest.status_code == 200, latest.text
     assert latest.json()["run"]["id"] == run["id"]
-    got = client.get(f"/v1/security-scan/runs/{run['id']}")
+    got = client.get(f"/v1/security-scan/runs/{run['id']}", headers=headers)
     assert got.status_code == 200, got.text
     assert got.json()["findings"]
-    gate = client.post(f"/v1/security-scan/runs/{run['id']}/gate", json={})
+    gate = client.post(
+        f"/v1/security-scan/runs/{run['id']}/gate", json={}, headers=headers,
+    )
     assert gate.status_code == 200, gate.text
     assert gate.json()["gate"]["decision"] == "no-go"
-    assert client.get("/v1/security-scan/runs/secscan_missing").status_code == 404
+    assert client.get(
+        "/v1/security-scan/runs/secscan_missing", headers=headers,
+    ).status_code == 404
+
+
+def test_stored_project_scopes_run_read_and_gate_without_foreign_mutation(
+    client, scan_auth,
+):
+    foreign = sec.run_scan(
+        project_id=scan_auth["foreign"], actor="foreign_operator",
+        path="/tmp/foreign-fixture", scanners=["checkov"],
+        simulated=True, engine=None,
+    )
+    home = sec.run_scan(
+        project_id=PROJECT_ID, actor="test_operator", path="/tmp/home-fixture",
+        scanners=["checkov"], simulated=True, engine=None,
+    )
+    foreign_path = f"/v1/security-scan/runs/{foreign['id']}"
+    home_path = f"/v1/security-scan/runs/{home['id']}"
+    operator_headers = scan_auth["operator_headers"]
+    reader_headers = scan_auth["reader_headers"]
+    foreign_gate_before = sec.get_run(foreign["id"])["gate"]
+    home_gate_before = sec.get_run(home["id"])["gate"]
+
+    assert client.get(foreign_path, headers=operator_headers).status_code == 403
+    assert client.get(home_path, headers=operator_headers).status_code == 200
+    assert client.get(home_path, headers=reader_headers).status_code == 200
+    denied = client.post(
+        f"{foreign_path}/gate", headers=operator_headers,
+        json={"fail_on": ["high"]},
+    )
+    assert denied.status_code == 403, denied.text
+    denied = client.post(
+        f"{home_path}/gate", headers=reader_headers,
+        json={"fail_on": ["high"]},
+    )
+    assert denied.status_code == 403, denied.text
+    assert sec.get_run(foreign["id"])["gate"] == foreign_gate_before
+    assert sec.get_run(home["id"])["gate"] == home_gate_before
+    with pytest.raises(PermissionError, match="project changed"):
+        sec.evaluate_gate(
+            home["id"], fail_on=["high"],
+            expected_project_id=scan_auth["foreign"],
+        )
+    assert sec.get_run(home["id"])["gate"] == home_gate_before
+
+    allowed = client.post(
+        f"{home_path}/gate", headers=operator_headers,
+        json={"fail_on": ["high"]},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["gate"]["decision"] == "no-go"
+    assert sec.get_run(home["id"])["gate"]["decision"] == "no-go"
+    assert sec.get_run(foreign["id"])["gate"] == foreign_gate_before
+
+    assert client.get(foreign_path).status_code == 401
+    assert client.post(f"{foreign_path}/gate", json={}).status_code == 401
 
 
 def test_latest_empty_and_engine_fixture_behavior(client):

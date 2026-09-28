@@ -968,12 +968,15 @@ def evaluate_gate(
     run_id: str,
     *,
     fail_on: Optional[list[str]] = None,
+    expected_project_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Re-evaluate go/no-go for a stored run (default: critical blocks)."""
     with _lock:
         rec = _RUNS.get(run_id)
         if not rec:
             raise KeyError(f"scan run not found: {run_id}")
+        if expected_project_id is not None and rec["project_id"] != expected_project_id:
+            raise PermissionError("Scan run project changed before gate evaluation")
         summary = rec.get("summary") or {}
         sevs = fail_on if fail_on is not None else ["critical"]
         normalized = {_normalize_severity(s) for s in sevs}
@@ -1030,7 +1033,8 @@ def latest_run(project_id: str) -> dict[str, Any]:
             "summary": None,
             "note": (
                 "No scan has been recorded in this process. "
-                "POST /v1/security-scan/run with simulated=true for a fixture."
+                "API scan execution is unavailable until the project workspace "
+                "and preflight receipt boundaries are implemented."
             ),
         }
     rec = runs[0]

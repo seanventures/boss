@@ -21,7 +21,10 @@ capability blocker. The internal simulated adapter remains available for tests;
 it does not make the API run action available.
 
 The console shows prior findings and gate results without offering a run
-control. The scanner catalog and read endpoints remain available:
+control. Run details require a member who can read the run's stored project;
+re-evaluating its gate requires an authenticated member with
+`providerops_manage` in that project. The scanner catalog and read endpoints
+remain available:
 
 | Method | Path | Purpose |
 |---|---|---|
