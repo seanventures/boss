@@ -24,8 +24,9 @@ describe("the strip never claims an empty company", () => {
     // in both cases — the false claim of absence this console has made before.
     const html = renderToStaticMarkup(<ProjectStrip projectId="boss-dogfood" />);
     expect(html).toContain('data-state="loading"');
+    expect(html).toContain("Software projects");
     expect(html).toContain("Loading…");
-    expect(html).not.toContain("No projects yet");
+    expect(html).not.toContain("No software projects yet");
   });
 
   it("has three distinct states, not two", () => {
@@ -34,13 +35,13 @@ describe("the strip never claims an empty company", () => {
 
   it("shows the REASON it failed, not a shrug", () => {
     // "Could not load" sends the operator to the API to discover what this line already knows.
-    expect(SRC).toContain("Could not load projects — {error}");
+    expect(SRC).toContain("Could not load software projects — {error}");
   });
 
   it("distinguishes 'no projects' from 'the filter is hiding them'", () => {
     // An empty strip under a filter reads as "there is nothing", and the operator forgets they
     // narrowed it two minutes ago.
-    expect(SRC).toContain('"No projects yet"');
+    expect(SRC).toContain('"No software projects yet"');
     expect(SRC).toContain("in total`");
   });
 });

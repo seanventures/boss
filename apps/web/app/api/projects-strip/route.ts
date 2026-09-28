@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 
 /**
- * Every project, for the v1 header strip.
+ * Software project lineages, for the v1 header strip. The selected control
+ * project scopes the query; it is not itself a row in this count.
  *
  * Reuses the endpoint v2's shell already calls rather than assembling the same thing from v1's
  * feeds. v1 issues ~82 requests per render and shows nothing until the slowest answers; adding

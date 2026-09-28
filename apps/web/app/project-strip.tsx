@@ -9,7 +9,7 @@ import { searchForProject } from "./url-intent";
 import { appIdentity } from "./app-identity";
 
 /**
- * Every project across BOSS, in the header — the v2 strip, brought to v1.
+ * Software projects built inside the selected control project, in the header.
  *
  * v1 makes you open Factory and scroll a list of 74 cards to learn what is running. The strip
  * answers "what is happening right now" without leaving the area you are in, and clicking one
@@ -27,6 +27,7 @@ type StripProject = {
 
 /** ALL first, because most of the time you want the whole picture; the others narrow it. */
 const FILTERS = ["ALL", "RUNNING", "GATED", "DONE"] as const;
+const STRIP_LABEL = "Software projects";
 type Filter = (typeof FILTERS)[number];
 const FILTER_LABELS: Record<Filter, string> = {
   ALL: "All",
@@ -281,8 +282,8 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
 
   if (state === "loading") {
     return (
-      <nav className="bx-strip" aria-label="Projects" data-state="loading">
-        <span className="bx-strip-label">Projects</span>
+      <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="loading">
+        <span className="bx-strip-label">{STRIP_LABEL}</span>
         <span className="bx-strip-note">Loading…</span>
       </nav>
     );
@@ -290,20 +291,20 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
 
   if (state === "failed") {
     return (
-      <nav className="bx-strip" aria-label="Projects" data-state="failed">
-        <span className="bx-strip-label">Projects</span>
+      <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="failed">
+        <span className="bx-strip-label">{STRIP_LABEL}</span>
         {/* The reason, not a shrug. "Could not load" sends the operator to the API to find out
             what this line already knows. */}
-        <span className="bx-strip-note bx-strip-error">Could not load projects — {error}</span>
+        <span className="bx-strip-note bx-strip-error">Could not load software projects — {error}</span>
       </nav>
     );
   }
 
   return (
-    <nav className="bx-strip" aria-label="Projects" data-state="ready" data-testid="bx-strip" ref={pickerRef}>
+    <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="ready" data-testid="bx-strip" ref={pickerRef}>
       <button type="button" className="bx-project-trigger" aria-expanded={expanded}
               aria-controls="boss-project-picker" onClick={() => setExpanded((open) => !open)}>
-        <span>Projects</span><strong>{total}</strong>
+        <span>{STRIP_LABEL}</span><strong>{total}</strong>
         {counts.GATED + projects.filter((p) => p.status === "STUCK").length > 0 ?
           <span className="bx-project-attention">
             {counts.GATED + projects.filter((p) => p.status === "STUCK").length} need attention
@@ -324,7 +325,7 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
             right — the strip is already the place you look to see whether this is current. */}
         {refreshing ? (
           <span className="bx-strip-syncing" data-testid="bx-strip-syncing"
-                title="Checking for new projects">Syncing</span>
+                title="Checking for new software projects">Syncing</span>
         ) : null}
       </span>
 
@@ -362,7 +363,7 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
         {shown.length === 0 ? (
           <span className="bx-strip-note">
             {projects.length === 0
-              ? "No projects yet"
+              ? "No software projects yet"
               /* Says which filter is hiding them. An empty strip under a filter reads as "there
                  is nothing", and the operator forgets they narrowed it two minutes ago. */
               : query.trim() ? "No projects match your search"
