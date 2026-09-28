@@ -153,6 +153,7 @@
     "docs/product/TRACEABILITY.md",
     "Makefile",
     "install.sh",
+    "scripts/install/reconcile_api_credentials.py",
     "scripts/store_subscription_token.py",
     "api/openapi.yaml",
     "scripts/install/community-compose.yml",

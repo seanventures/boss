@@ -33,14 +33,20 @@ curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
 1. On a fresh Ubuntu 22.04/24.04 or Debian 12/13 VM, installs `git`, `curl`, OpenSSL, Python 3, Docker Engine, Buildx and Compose from the signed Docker apt repository; leaves existing runtimes untouched if they conflict
 2. Prompts for install directory and **BYOK** model key (optional skip)  
 3. Clones or fast-forwards the BOSS repo without deleting a nonempty directory or overwriting tracked local changes
-4. Writes a private `.env` (API key generated, mode 600)  
+4. Writes a private `.env` (separate owner and worker API keys generated, mode 600)
 5. `docker compose` builds and starts **Postgres + API + worker** (+ Mission Control if selected)  
 6. Waits for `/health`, runs DB seed, and fails visibly if seeding or edition verification fails
 7. Verifies Community edition + ProviderOps surface
 
-On rerun, the existing database/API credentials, model keys, secret-store encryption key,
-console login, public URL, and port settings are retained. Use the lifecycle
+On rerun, both API credentials and any operator-added API keys, the database password,
+model keys, secret-store encryption key, console login, public URL, and port settings are retained. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
+
+The owner key (`BOSS_API_KEY`) is bound to the `ceo` member and powers Mission
+Control and local CLI commands. The worker key (`BOSS_WORKER_API_KEY`) is bound
+to the seeded `system` member. Keep it private to the worker container; it can
+claim and settle leased jobs. Existing single-key installs receive a new worker
+key on the next installer rerun or upgrade without rotating the owner key.
 
 If the installer added your account to the Docker group, sign out and back in
 before running the `docker compose` commands in this guide. The current login

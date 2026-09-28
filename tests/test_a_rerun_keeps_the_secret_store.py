@@ -29,6 +29,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 RESTORE = REPO / "scripts" / "install" / "restore_preserved_env.sh"
 GENERATE = REPO / "scripts" / "install" / "gen_infisical_keys.sh"
+RECONCILE = REPO / "scripts" / "install" / "reconcile_api_credentials.py"
 INSTALL = REPO / "install.sh"
 
 OLD_KEY = "0123456789abcdef0123456789abcdef"
@@ -51,6 +52,10 @@ def _val(text: str, key: str) -> str:
         if line.startswith(key + "="):
             return line.split("=", 1)[1]
     raise AssertionError(f"{key} missing from:\n{text}")
+
+
+def _reconcile(path: Path) -> None:
+    subprocess.check_call(["python3", str(RECONCILE), str(path)])
 
 
 def test_a_fresh_encryption_key_does_not_replace_the_one_the_volume_was_encrypted_with(tmp_path):
@@ -143,7 +148,7 @@ def _resolved_compose_env(env_file: Path) -> dict:
         pytest.skip("Docker Compose CLI is unavailable")
     environment = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
     result = subprocess.run(
-        ["docker", "compose", "--env-file", str(env_file),
+        ["docker", "compose", "--profile", "web", "--env-file", str(env_file),
          "-f", str(REPO / "scripts/install/community-compose.yml"),
          "config", "--format", "json"],
         text=True, capture_output=True, env=environment, check=False,
@@ -156,7 +161,8 @@ def _resolved_compose_env(env_file: Path) -> dict:
 
 def test_compose_default_worker_identity_matches_the_installer_key(tmp_path):
     env_file = tmp_path / "fresh.env"
-    _write(env_file, "BOSS_API_KEY=fresh-key\nBOSS_DB_PASSWORD=test-db\n"
+    _write(env_file, "BOSS_API_KEY=fresh-key\nBOSS_WORKER_API_KEY=worker-key\n"
+           "BOSS_DB_PASSWORD=test-db\n"
            "BOSS_CONSOLE_PASSWORD=test-console\n"
            "BOSS_CONSOLE_SESSION_SECRET=test-session\n"
            "INFISICAL_ENCRYPTION_KEY=test-encryption\n"
@@ -164,10 +170,12 @@ def test_compose_default_worker_identity_matches_the_installer_key(tmp_path):
     services = _resolved_compose_env(env_file)
     api = services["api"]["environment"]
     worker = services["worker"]["environment"]
-    assert api["BOSS_API_KEYS"] == "fresh-key"
-    assert api["BOSS_API_KEY_PRINCIPALS"] == "fresh-key:ceo"
-    assert api["BOSS_WORKER_PRINCIPAL"] == "ceo"
-    assert worker["BOSS_API_KEY"] == "fresh-key"
+    assert api["BOSS_API_KEYS"] == "fresh-key,worker-key"
+    assert api["BOSS_API_KEY_PRINCIPALS"] == "fresh-key:ceo,worker-key:system"
+    assert api["BOSS_WORKER_PRINCIPAL"] == "system"
+    assert worker["BOSS_WORKER_API_KEY"] == "worker-key"
+    assert "BOSS_API_KEY" not in worker
+    assert services["web"]["environment"]["BOSS_API_KEY"] == "fresh-key"
 
 
 def test_restored_multi_key_map_reaches_api_after_rerun(tmp_path):
@@ -175,17 +183,77 @@ def test_restored_multi_key_map_reaches_api_after_rerun(tmp_path):
     new = tmp_path / "new.env"
     _write(old, "BOSS_API_KEY=key-a\nBOSS_API_KEYS=key-a,key-b\n"
            "BOSS_API_KEY_PRINCIPALS=key-a:ceo,key-b:auditor\n")
-    _write(new, "BOSS_API_KEY=key-a\nBOSS_API_KEYS=key-a\n"
+    _write(new, "BOSS_API_KEY=key-a\nBOSS_WORKER_API_KEY=key-c\nBOSS_API_KEYS=key-a,key-c\n"
            "BOSS_API_KEY_PRINCIPALS=key-a:ceo\nBOSS_DB_PASSWORD=test-db\n"
            "BOSS_CONSOLE_PASSWORD=test-console\n"
            "BOSS_CONSOLE_SESSION_SECRET=test-session\n"
            "INFISICAL_ENCRYPTION_KEY=test-encryption\n"
            "INFISICAL_AUTH_SECRET=test-auth\n")
     _restore(old, new)
+    _reconcile(new)
     api = _resolved_compose_env(new)["api"]["environment"]
-    assert api["BOSS_API_KEYS"] == "key-a,key-b"
-    assert api["BOSS_API_KEY_PRINCIPALS"] == "key-a:ceo,key-b:auditor"
-    assert api["BOSS_WORKER_PRINCIPAL"] == "ceo"
+    assert set(api["BOSS_API_KEYS"].split(",")) == {"key-a", "key-b", "key-c"}
+    assert set(api["BOSS_API_KEY_PRINCIPALS"].split(",")) == {
+        "key-a:ceo", "key-b:auditor", "key-c:system",
+    }
+    assert api["BOSS_WORKER_PRINCIPAL"] == "system"
+
+
+def test_worker_key_survives_rerun_and_old_multi_key_map_is_merged(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_API_KEY=owner\nBOSS_WORKER_API_KEY=existing-worker\n"
+           "BOSS_API_KEYS=owner,existing-worker,auditor\n"
+           "BOSS_API_KEY_PRINCIPALS=owner:ceo,existing-worker:system,auditor:auditor\n")
+    _write(new, "BOSS_API_KEY=owner\nBOSS_WORKER_API_KEY=new-worker\n"
+           "BOSS_API_KEYS=owner,new-worker\n"
+           "BOSS_API_KEY_PRINCIPALS=owner:ceo,new-worker:system\n")
+    _restore(old, new)
+    _reconcile(new)
+    text = new.read_text()
+    assert _val(text, "BOSS_WORKER_API_KEY") == "existing-worker"
+    assert _val(text, "BOSS_API_KEYS") == "owner,existing-worker,auditor"
+    assert set(_val(text, "BOSS_API_KEY_PRINCIPALS").split(",")) == {
+        "owner:ceo", "existing-worker:system", "auditor:auditor",
+    }
+
+
+def test_reconciliation_rejects_shared_key_without_replacing_env(tmp_path):
+    env_file = tmp_path / ".env"
+    _write(env_file, "BOSS_API_KEY=same\nBOSS_WORKER_API_KEY=same\n"
+           "BOSS_API_KEYS=same\nBOSS_API_KEY_PRINCIPALS=same:ceo\n")
+    before = env_file.read_bytes()
+    result = subprocess.run(
+        ["python3", str(RECONCILE), str(env_file)],
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode != 0
+    assert "same" not in result.stderr
+    assert env_file.read_bytes() == before
+
+
+def test_archive_update_migrates_legacy_single_key_and_is_idempotent(tmp_path):
+    env_file = tmp_path / ".env"
+    _write(env_file, "BOSS_API_KEY=owner\nBOSS_API_KEYS=owner,auditor\n"
+           "BOSS_API_KEY_PRINCIPALS=owner:ceo,auditor:auditor\n"
+           "BOSS_DB_PASSWORD=existing-db\n")
+    for _ in range(2):
+        subprocess.check_call([
+            "python3", str(RECONCILE), "--ensure-worker", str(env_file),
+        ])
+        text = env_file.read_text()
+        worker = _val(text, "BOSS_WORKER_API_KEY")
+        assert worker and worker != "owner"
+        assert _val(text, "BOSS_API_KEYS") == f"owner,auditor,{worker}"
+        assert set(_val(text, "BOSS_API_KEY_PRINCIPALS").split(",")) == {
+            "owner:ceo", "auditor:auditor", f"{worker}:system",
+        }
+        assert _val(text, "BOSS_DB_PASSWORD") == "existing-db"
+        assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+        if _ == 0:
+            first_worker = worker
+        else:
+            assert worker == first_worker
 
 
 def test_the_console_url_stays_unless_this_run_set_one(tmp_path):

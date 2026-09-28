@@ -309,6 +309,13 @@ cmd_update() {
 
   ship_source
 
+  # Archive updates do not run install.sh. Prepare a private copy of .env with
+  # the dedicated worker key, then build against that copy. A failed build
+  # leaves the live credentials unchanged; only a successful build promotes it.
+  local next_env=".env.worker-next.$$"
+  rsh "cd '$DIR' && cp -p .env '$next_env' && chmod 600 '$next_env' && python3 scripts/install/reconcile_api_credentials.py --ensure-worker '$next_env'" \
+    || { rsh "rm -f '$DIR/$next_env'"; die "could not bind separate owner and worker keys on $HOST; previous source remains at $DIR.prev"; }
+
   local services="api worker"
   [[ "$WITH_CONSOLE" -eq 1 ]] && services="api worker web"
   [[ "$ALL_SERVICES"  -eq 1 ]] && services=""
@@ -323,12 +330,16 @@ cmd_update() {
   local profiles=""
   rshq "$REMOTE_DOCKER ps --filter name=boss-community-infisical- -q | grep -q ." \
     && profiles="--profile secrets"
+  local compose_build="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file $next_env $profiles"
   local compose="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file .env $profiles"
 
   say "building — this takes a few minutes"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
-    "cd '$DIR' && $compose build $services" \
-    || die "the build failed on $HOST. Old containers still run; previous source is at $DIR.prev."
+    "cd '$DIR' && $compose_build build $services" \
+    || { rsh "rm -f '$DIR/$next_env'"; die "the build failed on $HOST. Old containers still run; previous source is at $DIR.prev."; }
+
+  rsh "cd '$DIR' && mv '$next_env' .env && chmod 600 .env" \
+    || die "could not promote the worker credentials on $HOST; old containers still run and previous source remains at $DIR.prev"
 
   # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
   # the whole reason these are two steps rather than `up -d --build`.

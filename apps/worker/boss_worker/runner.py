@@ -948,7 +948,9 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             {
                 "project_id": job.project_id,
                 "provider_account_id": job.payload.get("provider_account_id"),
-                "actor": job.payload.get("actor") or "system",
+                # The transport principal is the seeded system member. Keep
+                # the API actor bound to that principal for this worker step.
+                "actor": "system",
             }
         )
         if any(run.get("status") == "failed" for run in result.get("runs") or []):

@@ -443,11 +443,14 @@ else
   ui_ok "Secret store: BOSS's database (no extra containers)"
 fi
 
-# Generate control-plane API key
+# Generate separate owner and worker control-plane API keys. On a rerun the
+# previous values win below, before the temporary .env replaces the live file.
 if need_cmd openssl; then
   BOSS_API_KEY="$(openssl rand -hex 24)"
+  BOSS_WORKER_API_KEY="$(openssl rand -hex 24)"
 else
   BOSS_API_KEY="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  BOSS_WORKER_API_KEY="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 fi
 BOSS_DB_PASSWORD="boss"
 if need_cmd openssl; then
@@ -564,8 +567,10 @@ cat > "$_new_env" <<EOF
 BOSS_EDITION=community
 BOSS_REQUIRE_API_AUTH=true
 BOSS_API_KEY=${BOSS_API_KEY}
-BOSS_API_KEYS=${BOSS_API_KEY}
-BOSS_API_KEY_PRINCIPALS=${BOSS_API_KEY}:ceo
+BOSS_WORKER_API_KEY=${BOSS_WORKER_API_KEY}
+BOSS_API_KEYS=${BOSS_API_KEY},${BOSS_WORKER_API_KEY}
+BOSS_API_KEY_PRINCIPALS=${BOSS_API_KEY}:ceo,${BOSS_WORKER_API_KEY}:system
+BOSS_WORKER_PRINCIPAL=system
 BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
 BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
 BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
@@ -610,6 +615,14 @@ if [ -n "${_ENV_SNAPSHOT:-}" ]; then
   rm -f "$_ENV_SNAPSHOT"
   _ENV_SNAPSHOT=""
   ui_info "Carried existing credentials forward — a re-run must not strand them"
+fi
+if [ ! -f "$INSTALL_DIR/scripts/install/reconcile_api_credentials.py" ]; then
+  rm -f "$_new_env"
+  die "scripts/install/reconcile_api_credentials.py is missing — left the existing $ENV_FILE unchanged"
+fi
+if ! python3 "$INSTALL_DIR/scripts/install/reconcile_api_credentials.py" "$_new_env" </dev/null; then
+  rm -f "$_new_env"
+  die "could not bind separate owner and worker keys — left the existing $ENV_FILE unchanged"
 fi
 mv "$_new_env" "$ENV_FILE"
 chmod 600 "$ENV_FILE"

@@ -119,7 +119,9 @@ curl -sS "${AUTH[@]}" -d "{
 
 When API authentication is enabled, every API key must map to a project member through
 `BOSS_API_KEY_PRINCIPALS`. Worker calls require the principal named by
-`BOSS_WORKER_PRINCIPAL` (default `ceo` for the Community installer).
+`BOSS_WORKER_PRINCIPAL` (`system` for the Community installer). Community
+generates a separate `BOSS_WORKER_API_KEY` for this principal; the owner
+`BOSS_API_KEY` remains bound to `ceo`.
 Investigation execution also requires this worker identity and its
 `workflow_execute` grant in the investigation's stored project.
 Listing investigations requires `audit_export` in the requested project because

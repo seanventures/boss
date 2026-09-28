@@ -244,7 +244,7 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def tick_metatron_watch(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+    def tick_metatron_watch(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Legacy observe-only tick. Prefer tick_metatron_overwatch."""
         response = self._client.post(
             "/v1/metatron/watch",
@@ -253,7 +253,7 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def tick_metatron_overwatch(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+    def tick_metatron_overwatch(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Always-on captain cycle: observe, measure, validate, apply safe, verify."""
         response = self._client.post(
             "/v1/metatron/overwatch",
@@ -262,7 +262,7 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def tick_focused_agents(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+    def tick_focused_agents(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Always-on / hybrid focused agents whose interval elapsed or a wake event arrived."""
         response = self._client.post(
             "/v1/focused-agents/tick-all",
@@ -280,7 +280,7 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def tick_agent_processes(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+    def tick_agent_processes(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Advance waiting/running agent-process handoffs."""
         response = self._client.post(
             "/v1/agent-processes/tick-all",
@@ -289,7 +289,7 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def tick_factory_flow(self, project_id: str, actor: str = "factory_flow") -> dict[str, Any]:
+    def tick_factory_flow(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Observe factory/swarm stalls and record findings. Never edits code."""
         response = self._client.post(
             "/v1/factory/flow/tick",
@@ -312,7 +312,7 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def tick_process_manager(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+    def tick_process_manager(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Always-on Project Manager steward cycle. Fail-closed; never invents scores."""
         response = self._client.post(
             "/v1/process-manager/tick",

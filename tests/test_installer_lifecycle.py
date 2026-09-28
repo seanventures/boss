@@ -20,7 +20,8 @@ def test_compose_forwards_only_operator_github_route(tmp_path: Path) -> None:
         return
     env_file = tmp_path / ".env"
     base = (
-        "BOSS_API_KEY=fixture\nINFISICAL_ENCRYPTION_KEY=fixture\n"
+        "BOSS_API_KEY=fixture\nBOSS_WORKER_API_KEY=worker-fixture\n"
+        "INFISICAL_ENCRYPTION_KEY=fixture\n"
         "INFISICAL_AUTH_SECRET=fixture\nBOSS_CONSOLE_PASSWORD=fixture\n"
         "BOSS_CONSOLE_SESSION_SECRET=fixture\n"
     )
@@ -246,7 +247,10 @@ def test_upgrade_bootstraps_backup_helper_from_target_ref(tmp_path: Path) -> Non
 def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
     upstream = tmp_path / "upstream"
     (upstream / "scripts/install").mkdir(parents=True)
-    for filename in ("community-compose.yml", "restore_preserved_env.sh", "gen_infisical_keys.sh"):
+    for filename in (
+        "community-compose.yml", "restore_preserved_env.sh",
+        "reconcile_api_credentials.py", "gen_infisical_keys.sh",
+    ):
         source = REPO / "scripts/install" / filename
         target = upstream / "scripts/install" / filename
         target.write_bytes(source.read_bytes())
@@ -295,6 +299,7 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
     curl.chmod(0o755)
     test_env = os.environ.copy()
     test_env["PATH"] = f"{bin_dir}:{test_env['PATH']}"
+    previous_worker_key = None
     for _ in range(2):
         result = _run(
             INSTALLER, install, test_env,
@@ -302,6 +307,13 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         lines = env_file.read_text().splitlines()
+        worker_key = next(line.split("=", 1)[1] for line in lines
+                          if line.startswith("BOSS_WORKER_API_KEY="))
+        assert worker_key and worker_key != "existing-api"
+        if previous_worker_key is not None:
+            assert worker_key == previous_worker_key
+        previous_worker_key = worker_key
+        assert f"BOSS_API_KEY_PRINCIPALS=existing-api:ceo,{worker_key}:system" in lines
         for retained in (
             "BOSS_DB_PASSWORD=existing-db", "BOSS_API_KEY=existing-api",
             "BOSS_CONSOLE_PASSWORD=existing-console-password-1234567890",
@@ -319,6 +331,12 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     fresh_lines = (fresh / ".env").read_text().splitlines()
+    fresh_owner = next(line.split("=", 1)[1] for line in fresh_lines
+                       if line.startswith("BOSS_API_KEY="))
+    fresh_worker = next(line.split("=", 1)[1] for line in fresh_lines
+                        if line.startswith("BOSS_WORKER_API_KEY="))
+    assert fresh_owner and fresh_worker and fresh_owner != fresh_worker
+    assert f"BOSS_API_KEY_PRINCIPALS={fresh_owner}:ceo,{fresh_worker}:system" in fresh_lines
     assert "BOSS_GITHUB_OWNER=" in fresh_lines
     assert "BOSS_GITHUB_REPO=" in fresh_lines
     piped = subprocess.run(
@@ -364,3 +382,39 @@ def test_remote_failed_build_retains_previous_source(tmp_path: Path) -> None:
     assert previous.joinpath("prior-source-marker").read_text() == "old source\n"
     assert previous.joinpath(".env").read_text() == "BOSS_API_KEY=remote-private\n"
     assert install.joinpath(".env").read_text() == "BOSS_API_KEY=remote-private\n"
+    assert not list(install.glob(".env.worker-next.*"))
+
+
+def test_remote_successful_update_migrates_legacy_worker_key(tmp_path: Path) -> None:
+    install = tmp_path / "remote-boss"
+    (install / "scripts/install").mkdir(parents=True)
+    (install / ".env").write_text("BOSS_API_KEY=remote-private\n")
+    (install / ".boss-shipped-commit").write_text("old-commit\n")
+    (install / "scripts/install/backup.sh").write_text(
+        "#!/bin/sh\necho /tmp/private-backup\n"
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text("#!/bin/sh\nwhile [ \"$#\" -gt 1 ]; do shift; done\nexec sh -c \"$1\"\n")
+    ssh.chmod(0o755)
+    docker = bin_dir / "docker"
+    docker.write_text("#!/bin/sh\nexit 0\n")
+    docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    result = subprocess.run(
+        ["bash", str(REMOTE), "--host", "proof", "--dir", str(install),
+         "update", "--ref", "HEAD"],
+        env=env, text=True, capture_output=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    values = dict(line.split("=", 1) for line in (install / ".env").read_text().splitlines()
+                  if "=" in line and not line.startswith("#"))
+    worker_key = values["BOSS_WORKER_API_KEY"]
+    assert worker_key and worker_key != values["BOSS_API_KEY"]
+    assert values["BOSS_API_KEY_PRINCIPALS"] == (
+        f"remote-private:ceo,{worker_key}:system"
+    )
+    assert not list(install.glob(".env.worker-next.*"))
+    assert not tmp_path.joinpath("remote-boss.prev").exists()

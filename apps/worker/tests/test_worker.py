@@ -946,7 +946,7 @@ def test_run_worker_cycle_executes_providerops_readonly_sync_job():
         project_id="boss-dogfood",
         task_id=None,
         kind="providerops.sync.readonly",
-        payload={"provider_account_id": "prov_do", "actor": "system"},
+        payload={"provider_account_id": "prov_do", "actor": "ceo"},
         attempt=1,
         max_attempts=3,
         lease_token="lease_token",
