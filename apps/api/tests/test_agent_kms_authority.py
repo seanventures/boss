@@ -170,7 +170,7 @@ def test_kms_rejects_valid_but_unbound_transport_key(
         headers=_auth("low-key"),
         json={"project_id": PROJECT, "agent_id": OWNER, "actor": "ceo", "reveal": True},
     )
-    assert response.status_code == 403, response.text
+    assert response.status_code == 401, response.text
     assert "bound" in response.json()["detail"]
 
 
