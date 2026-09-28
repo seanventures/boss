@@ -632,6 +632,7 @@ from .schemas import (
     LlmCallSummaryGroup,
     LlmCallSummaryResponse,
 )
+from . import request_bodies as open_bodies
 from .request_bodies import (
     AutoDeployBody,
     CodeTaskFeedbackBody,
@@ -4735,7 +4736,8 @@ def list_task_outputs(project_id: str):
 
 
 @app.post("/v1/agent-runs/{run_id}/resume")
-def resume_agent_run_endpoint(run_id: str, payload: dict):
+def resume_agent_run_endpoint(run_id: str, payload: open_bodies.ResumeAgentRunBody):
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     require_worker_principal()
@@ -5138,12 +5140,13 @@ async def receive_plane_webhook(request: Request):
 
 
 @app.post("/v1/integrations/plane/sync")
-def plane_sync_endpoint(payload: dict):
+def plane_sync_endpoint(payload: open_bodies.PlaneSyncBody):
     """Plane status sync-back (Phase 2 #115 / Phase 4 #117): mirror a code-task lifecycle event onto
     its Plane ticket — PATCH the state + comment (PR link, failure, merged→Done). payload:
     {run_id, event}. `started`/`pr_opened`/`completed_no_pr` auto-fire in the pipeline; this drives the
     rest (`code_task.failed`, `code_task.gate_overridden`, `software_factory.pull_request_merged`) and
     backfill. No-op for non-Plane runs."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     run_id = payload.get("run_id")
@@ -5379,8 +5382,9 @@ def list_meeting_roles(project_id: str):
 
 
 @app.post("/v1/meeting-roles", status_code=201)
-def upsert_meeting_role_endpoint(payload: dict):
+def upsert_meeting_role_endpoint(payload: open_bodies.MeetingRoleUpsertBody):
     """Add or update a role-agent for an org's meeting template."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = str(payload.get("project_id") or "").strip()
@@ -5590,10 +5594,11 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
 
 
 @app.post("/v1/meetings/step")
-def run_meeting_step_endpoint(payload: dict):
+def run_meeting_step_endpoint(payload: open_bodies.MeetingStepBody):
     """Worker-invoked: advance a durable meeting by exactly ONE phase. Each step
     persists its result and enqueues the next step, so a crash/restart resumes
     from the last completed phase instead of re-running the whole meeting."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     require_worker_principal()
@@ -5846,8 +5851,9 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
 
 
 @app.post("/v1/qa/benchmark-apps/{benchmark_id}/runs", status_code=201)
-def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
+def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: open_bodies.BenchmarkAppLaunchBody):
     """Launch one pinned QA benchmark through the normal budgeted code-task workflow."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = str((payload or {}).get("project_id") or "").strip()
@@ -6457,8 +6463,9 @@ def list_pipeline_profiles_endpoint(project_id: str):
 
 
 @app.post("/v1/pipeline-profiles", status_code=201)
-def create_pipeline_profile_endpoint(payload: dict):
+def create_pipeline_profile_endpoint(payload: open_bodies.PipelineProfileCreateBody):
     """Create/update a custom profile (enterprise edition only)."""
+    payload = payload.payload()
     from .services import pipeline_profile_service as pps
 
     project_id = payload.get("project_id")
@@ -6484,8 +6491,9 @@ def create_pipeline_profile_endpoint(payload: dict):
 
 
 @app.post("/v1/pipeline-profiles/default")
-def set_pipeline_profile_default_endpoint(payload: dict):
+def set_pipeline_profile_default_endpoint(payload: open_bodies.PipelineProfileDefaultBody):
     """Set the project's default profile (a preset or a custom one)."""
+    payload = payload.payload()
     from .services import pipeline_profile_service as pps
 
     project_id = payload.get("project_id")
@@ -6501,9 +6509,10 @@ def set_pipeline_profile_default_endpoint(payload: dict):
 
 
 @app.post("/v1/code-tasks/step")
-def run_code_task_step_endpoint(payload: dict):
+def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
     """Worker-invoked: run one full code-task attempt. Safe to re-run after a
     crash — the PR receipt dedupe makes re-opening the PR a no-op."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     require_worker_principal()
@@ -6576,8 +6585,9 @@ def _investigation_caller(investigation_id: str, request: Request) -> dict:
 
 
 @app.post("/v1/investigations/{investigation_id}/db")
-def investigation_db_endpoint(investigation_id: str, payload: dict, request: Request):
+def investigation_db_endpoint(investigation_id: str, payload: open_bodies.InvestigationDbBody, request: Request):
     """SQL for an investigation — SELECT always, writes when it was opened to fix something."""
+    payload = payload.payload()
     from boss_engine.services.debug_session import run_db
 
     record = _investigation_caller(investigation_id, request)
@@ -6586,8 +6596,9 @@ def investigation_db_endpoint(investigation_id: str, payload: dict, request: Req
 
 
 @app.post("/v1/investigations/{investigation_id}/host")
-def investigation_host_endpoint(investigation_id: str, payload: dict, request: Request):
+def investigation_host_endpoint(investigation_id: str, payload: open_bodies.InvestigationHostBody, request: Request):
     """A command on a fleet host, with the fleet's own credential resolution."""
+    payload = payload.payload()
     from boss_engine.services.debug_session import run_on_investigation_host
 
     record = _investigation_caller(investigation_id, request)
@@ -6597,8 +6608,9 @@ def investigation_host_endpoint(investigation_id: str, payload: dict, request: R
 
 
 @app.post("/v1/investigations/{investigation_id}/do")
-def investigation_do_endpoint(investigation_id: str, payload: dict, request: Request):
+def investigation_do_endpoint(investigation_id: str, payload: open_bodies.InvestigationOperationBody, request: Request):
     """One of BOSS's own operations, run exactly as a console button runs it."""
+    payload = payload.payload()
     from boss_engine.context import EngineContext
     from boss_engine.services.debug_session import _NOT_FOR_INVESTIGATIONS, run_operation
     from boss_engine.tools import build_default_registry
@@ -6818,7 +6830,7 @@ def project_host_advice_endpoint(project_id: str) -> dict:
 
 
 @app.post("/v1/self/host-stall")
-def record_host_stall_endpoint(payload: dict) -> dict:
+def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     """Record that the MACHINE stopped scheduling BOSS for this long.
 
     Not a health metric — an attribution. On 2026-09-20 a build took 85 minutes that had taken
@@ -6831,6 +6843,7 @@ def record_host_stall_endpoint(payload: dict) -> dict:
     reported here. Stored as an event so any run overlapping it can be asked the only question
     that matters: how much of this was the machine, and how much was us.
     """
+    payload = payload.payload()
     stalled = float(payload.get("stalled_seconds") or 0.0)
     if stalled <= 0:
         return {"recorded": False, "reason": "not a stall"}
@@ -6841,7 +6854,7 @@ def record_host_stall_endpoint(payload: dict) -> dict:
 
 
 @app.post("/v1/code-tasks/{run_id}/redelivered")
-def code_task_redelivered_endpoint(run_id: str, payload: dict) -> dict:
+def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRedeliveredBody) -> dict:
     """Record that an attempt of this run is a REPLAY of interrupted work.
 
     A re-delivery means a previous attempt lost its lease — a deploy, a crash, a missed
@@ -6850,6 +6863,7 @@ def code_task_redelivered_endpoint(run_id: str, payload: dict) -> dict:
     against it and nothing anywhere says the stage was restarted, which is precisely how a
     46-minute build became a forensic exercise.
     """
+    payload = payload.payload()
     require_worker_principal()
     worker_id = str(payload.get("worker_id") or "").strip()
     job_id = str(payload.get("job_id") or "").strip()
@@ -8632,8 +8646,9 @@ def shepherd_overview_endpoint(project_id: str, limit: int = 40):
 
 
 @app.post("/v1/shepherd/propose")
-def shepherd_propose_endpoint(payload: dict):
+def shepherd_propose_endpoint(payload: open_bodies.ShepherdProposeBody):
     """Run one reasoning step against a run. Read-only: proposes, never acts."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import propose
@@ -8641,8 +8656,9 @@ def shepherd_propose_endpoint(payload: dict):
 
 
 @app.post("/v1/shepherd/sweep")
-def shepherd_sweep_endpoint(payload: dict):
+def shepherd_sweep_endpoint(payload: open_bodies.ShepherdSweepBody):
     """Propose for every run that ended without a PR and has no open escalation."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import sweep
@@ -8651,13 +8667,14 @@ def shepherd_sweep_endpoint(payload: dict):
 
 
 @app.post("/v1/shepherd/autopilot")
-def shepherd_autopilot_endpoint(payload: dict):
+def shepherd_autopilot_endpoint(payload: open_bodies.ShepherdAutopilotBody):
     """Propose AND apply every remedy the confirmation gate says needs no human.
 
     `/sweep` and `/propose` only ever wrote proposals — `act()` had no caller anywhere, so the
     shepherd diagnosed failures and never fixed one. This is the loop that closes it. Spend-
     incurring or already-spent remedies still stop at `confirm_needed`, unchanged.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import autopilot
@@ -8667,8 +8684,9 @@ def shepherd_autopilot_endpoint(payload: dict):
 
 
 @app.post("/v1/shepherd/escalations/{escalation_id}/answer")
-def shepherd_answer_endpoint(escalation_id: str, payload: dict):
+def shepherd_answer_endpoint(escalation_id: str, payload: open_bodies.ShepherdAnswerBody):
     """Answer a shepherd's question. The answer is provenance, not just a state change."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as c:
@@ -8897,7 +8915,7 @@ def assert_run_is_deployable(run: dict) -> None:
 
 
 @app.post("/v1/code-tasks/{run_id}/setup-deployment")
-def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
+def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.CodeTaskSetupDeploymentBody):
     """Point an app at a verified host — the missing link between the Factory and the fleet.
 
     Onboarding a host and approving a preview were both reachable, and nothing joined them: an
@@ -8909,6 +8927,7 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
     It does NOT deploy. Creating a destination and shipping to it are different decisions, and
     the second one has its own button.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = str(payload.get("actor") or "").strip()
@@ -9325,8 +9344,9 @@ def preview_logs_endpoint(preview_id: str, stream: bool = True):
 
 
 @app.post("/v1/previews/{preview_id}/feedback")
-def submit_preview_feedback_endpoint(preview_id: str, payload: dict):
+def submit_preview_feedback_endpoint(preview_id: str, payload: open_bodies.PreviewFeedbackBody):
     """Capability-gated capture from the injected preview overlay (proposal only)."""
+    payload = payload.payload()
     from .services.feedback_agent import submit_preview_feedback
     try:
         return submit_preview_feedback(engine, preview_id, payload)
@@ -9445,7 +9465,7 @@ def preview_gate_endpoint(preview_id: str):
 
 
 @app.post("/v1/previews/{preview_id}/approve")
-def approve_preview_endpoint(preview_id: str, payload: dict):
+def approve_preview_endpoint(preview_id: str, payload: open_bodies.PreviewApproveBody):
     """Approve what the preview shows — the single human gate on the path to live.
 
     This does NOT deploy. It approves the run's existing `review_pull_request` decision, which
@@ -9454,6 +9474,7 @@ def approve_preview_endpoint(preview_id: str, payload: dict):
     preview-resolver and test-oracle bugs, so the seam is deliberately an approval and not a
     deploy call.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = str(current_api_principal.get() or payload.get("actor") or "").strip()
@@ -9640,13 +9661,14 @@ def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
 
 
 @app.post("/v1/code-tasks/{run_id}/origin")
-def set_code_task_origin_endpoint(run_id: str, payload: dict):
+def set_code_task_origin_endpoint(run_id: str, payload: open_bodies.CodeTaskOriginBody):
     """Record where a run came from, so the console can show its Research/Spec history.
 
     Origin is written at creation and there was no way to repair it afterwards: a build
     restarted by hand loses the PRD that specified it, and the card then reports "Spec: none"
     about work whose spec is sitting right there in a completed panel.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     kind = str((payload or {}).get("kind") or "").strip()
@@ -9795,12 +9817,13 @@ def verifier_meta_eval_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/verifier-ratchet/capture")
-def verifier_ratchet_capture_endpoint(payload: dict):
+def verifier_ratchet_capture_endpoint(payload: open_bodies.VerifierRatchetCaptureBody):
     """VAG #107: capture a code-task run as a labeled verifier-meta-eval corpus item — the
     growing "ratchet" of human↔gate disagreements. Overrides auto-capture as CLEAN; use this to
     record a gate-PASSED run a human REJECTED as BUGGED (the false-pass the verifier missed).
     payload: {run_id, label: 'bugged'|'clean', bug_class?, reason?, files?: [{path,content}]}.
     Files are taken from the run's preserved diff when present, else supply them here."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     run_id = payload.get("run_id")
@@ -9818,12 +9841,13 @@ def verifier_ratchet_capture_endpoint(payload: dict):
 
 
 @app.post("/v1/mutation-gate")
-def mutation_gate_endpoint(payload: dict):
+def mutation_gate_endpoint(payload: open_bodies.MutationGateBody):
     """VAG #106: mutation-gate the frozen tests. Plants deterministic AST mutations in `target_file`
     and requires the tests to KILL them — a surviving mutant is a bug-class the suite can't catch.
     payload: {files: {path: content}, target_file, test_command?, min_score?, max_mutants?, timeout?,
     require_property_tests?}. Model-free, but it EXECUTES the provided tests, so call it from a
     trusted eval / sandbox context. Returns the mutation score, gate, and the surviving mutants."""
+    payload = payload.payload()
     from .services import mutation_gate as mg
     files = payload.get("files")
     target = payload.get("target_file")
@@ -9903,11 +9927,12 @@ def scaffold_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/visual-gate")
-def visual_gate_endpoint(payload: dict):
+def visual_gate_endpoint(payload: open_bodies.VisualGateBody):
     """APP-4 (#94): judge render evidence against the deterministic visual/UX rubric — renders without
     an error overlay, has real (non-placeholder) content, has visual hierarchy, no mobile overflow.
     payload: {evidence: {html, console_errors?, viewport?, route?, screenshot_ref?}}. Returns
     passed|failed|not_applicable + findings. Model-free; a vision-model judge is the follow-on (APP-6)."""
+    payload = payload.payload()
     from .services import visual_gate as vg
     return vg.evaluate_visual((payload or {}).get("evidence"))
 
@@ -9971,9 +9996,10 @@ def concurrency_load_endpoint(payload: Optional[dict] = None):
 
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
-def start_discovery_endpoint(payload: dict):
+def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
     """Kick off a Discovery run: research a seed (idea/problem/signal) via web search and
     produce a cited dossier + candidate outcomes. Returns run_id; progress polls discovery_runs."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     seed = (payload.get("seed") or payload.get("scope") or "").strip()
@@ -10025,9 +10051,10 @@ def get_discovery_endpoint(run_id: str):
 
 
 @app.post("/v1/discoveries/{run_id}/promote")
-def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
+def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.DiscoveryPromoteBody):
     """Close the loop: turn a chosen candidate outcome into an Initiative + convene a PRD meeting
     seeded with the outcome and the dossier evidence. Returns the meeting task_id."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.discovery_service import load_discovery_run, build_promote_directive
@@ -10285,12 +10312,13 @@ def sandbox_file_endpoint(sandbox_id: str, path: str, actor: str = "operator"):
 
 
 @app.post("/v1/sandboxes/{sandbox_id}/exec")
-def sandbox_exec_endpoint(sandbox_id: str, payload: dict):
+def sandbox_exec_endpoint(sandbox_id: str, payload: open_bodies.SandboxExecBody):
     """Run a command in a sandbox. Allowlisted helpers run freely; a raw shell
     (break_glass=true) requires a reason and emits an elevated audit event.
 
     BOSS_MICROVM_CLAIMS_FROZEN=true → 422 (microVM execution not claimed for GA).
     """
+    payload = payload.payload()
     from .services import sandbox_console
     from .services.sandbox_provider import SandboxPlaneError
 
@@ -10342,8 +10370,9 @@ def sandbox_logs_endpoint(sandbox_id: str):
 
 
 @app.post("/v1/sandboxes/{sandbox_id}/preserve")
-def sandbox_preserve_endpoint(sandbox_id: str, payload: dict):
+def sandbox_preserve_endpoint(sandbox_id: str, payload: open_bodies.SandboxPreserveBody):
     """Refuse host retention until its cost and external effect are governed."""
+    payload = payload.payload()
     actor = current_api_principal.get() or str(payload.get("actor") or "operator").strip()
     with begin(engine) as connection:
         require_sandbox_actor(connection, sandbox_id, actor)
@@ -10878,7 +10907,7 @@ def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
 
 
 @app.post("/v1/agent/wakeups/tick")
-def agent_wakeups_tick(payload: dict) -> dict:
+def agent_wakeups_tick(payload: open_bodies.AgentWakeupsTickBody) -> dict:
     """Wake every monitor and schedule whose time has come.
 
     THE ONLY PATH THAT SPENDS MODEL BUDGET WITHOUT SOMEBODY TYPING, so the limit is low by
@@ -10886,6 +10915,7 @@ def agent_wakeups_tick(payload: dict) -> dict:
     sweep that fails on one loop records it against that loop and carries on: dying halfway
     would leave the rest silently un-run, which looks exactly like them being stopped.
     """
+    payload = payload.payload()
     from boss_engine.services.agent_wakeups import run_due
 
     return run_due(settings, engine,
@@ -10935,8 +10965,9 @@ def list_memory_endpoint(
 
 
 @app.post("/v1/memory/{memory_id}/review")
-def review_memory_endpoint(memory_id: str, payload: dict) -> dict:
+def review_memory_endpoint(memory_id: str, payload: open_bodies.MemoryReviewBody) -> dict:
     """Let a proposed rule bind, or refuse it. The gate that makes lessons safe."""
+    payload = payload.payload()
     from boss_engine.services.agent_memory import MemoryError_, review
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -10954,8 +10985,9 @@ def review_memory_endpoint(memory_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/memory/{memory_id}/forget")
-def forget_memory_endpoint(memory_id: str, payload: dict) -> dict:
+def forget_memory_endpoint(memory_id: str, payload: open_bodies.MemoryForgetBody) -> dict:
     """Retire a memory that is wrong or no longer true. Retired, never deleted."""
+    payload = payload.payload()
     from boss_engine.services.agent_memory import MemoryError_, forget
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -11008,7 +11040,7 @@ def thread_ledger_endpoint(thread_id: str) -> dict:
 
 
 @app.post("/v1/agent/threads/ensure")
-def ensure_agent_thread_endpoint(payload: dict, request: Request) -> dict:
+def ensure_agent_thread_endpoint(payload: open_bodies.AgentThreadEnsureBody, request: Request) -> dict:
     """A thread id BEFORE the first message, so progress can be watched from the first second.
 
     THE PROGRESS INDICATOR WAS DEAD ON EVERY NEW CONVERSATION.
@@ -11027,6 +11059,7 @@ def ensure_agent_thread_endpoint(payload: dict, request: Request) -> dict:
     Creating the thread first is the whole fix: one cheap call, then the poll has a key from
     the moment the operator presses send.
     """
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip()
     if not project_id or not actor:
@@ -12466,8 +12499,9 @@ def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
 
 
 @app.put("/v1/console/v2/org/{agent_id}")
-def put_org_assignment(agent_id: str, payload: dict) -> dict:
+def put_org_assignment(agent_id: str, payload: open_bodies.OrgAssignmentBody) -> dict:
     """Say where an agent sits: who it reports to, and what this team calls it."""
+    payload = payload.payload()
     from boss_engine.services import org_assignments as oa
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -12557,12 +12591,13 @@ def console_v2_autonomy_get(project_id: str) -> dict:
 
 
 @app.post("/v1/console/v2/autonomy")
-def console_v2_autonomy_set(payload: dict = Body(...)) -> dict:
+def console_v2_autonomy_set(payload: open_bodies.AutonomySetBody = Body(...)) -> dict:
     """Change the mode. Requires an actor, always.
 
     An autonomy change with no owner is the one kind this system must never accept: it is the
     act that makes every later act unattributable.
     """
+    payload = payload.payload()
     from boss_engine.services.autonomy import describe, set_policy
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -12589,13 +12624,14 @@ def console_v2_autonomy_set(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/v1/console/v2/autonomy/apply")
-def console_v2_autonomy_apply(payload: dict = Body(...)) -> dict:
+def console_v2_autonomy_apply(payload: open_bodies.AutonomyApplyBody = Body(...)) -> dict:
     """Run the policy over the pending gates, and report the refusals as well as the approvals.
 
     A run that reports only what it approved is unreviewable: the operator cannot tell whether
     the policy is working, too tight, or silently doing nothing because every gate is missing a
     cost.
     """
+    payload = payload.payload()
     from boss_engine.services.autonomy import apply_policy
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -12760,13 +12796,14 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
 
 
 @app.post("/v1/artifacts/{artifact_id}/rebuild")
-def rebuild_change_record(artifact_id: str, payload: dict = Body(default={})) -> dict:
+def rebuild_change_record(artifact_id: str, payload: open_bodies.ArtifactRebuildBody = Body(default_factory=open_bodies.ArtifactRebuildBody)) -> dict:
     """Recompose a change record from the run it came from.
 
     A record renders facts that are still in the database, so a composition fix should reach the
     documents already written rather than only the next one — otherwise "it is fixed now" is
     something the operator has to take on trust while looking at the old dump.
     """
+    payload = payload.payload()
     from boss_engine.services.workflow_capability_runner import rebuild_record
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -14412,13 +14449,14 @@ def list_skill_definitions(project_id: str) -> dict:
 
 
 @app.post("/v1/skill-definitions", status_code=201)
-def save_skill_definition(payload: dict) -> dict:
+def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
     """Author or replace one skill. Idempotent on (project, skill_key).
 
     Validation is deliberately here and not in the console: a skill is attachable from the
     canvas, from an agent and from the workflow agent, and three callers checking the same
     rules is three chances for them to disagree.
     """
+    payload = payload.payload()
     from .services.skill_definitions import SkillDefinitionError, save_skill
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -14454,7 +14492,7 @@ def save_skill_definition(payload: dict) -> dict:
 
 
 @app.put("/v1/channels/{provider}/client")
-def save_channel_oauth_client(provider: str, payload: dict) -> dict:
+def save_channel_oauth_client(provider: str, payload: open_bodies.ChannelOAuthClientBody) -> dict:
     """Store THIS PROJECT's own Google OAuth client.
 
     Per project rather than per installation: a shared client would make the BOSS vendor the
@@ -14464,6 +14502,7 @@ def save_channel_oauth_client(provider: str, payload: dict) -> dict:
     The secret goes to the secret backend. No table holds it, so no agent can query it: an
     agent that can read a credential can also print it into a message explaining an error.
     """
+    payload = payload.payload()
     from .services.channel_oauth import ChannelOAuthError, save_oauth_client
 
     if provider != "youtube":
@@ -14509,13 +14548,14 @@ def channel_oauth_client_status(provider: str, project_id: str) -> dict:
 
 
 @app.post("/v1/channels/{provider}/connect", status_code=201)
-def start_channel_connection(provider: str, payload: dict) -> dict:
+def start_channel_connection(provider: str, payload: open_bodies.ChannelConnectBody) -> dict:
     """Begin an OAuth connection. Returns the URL to send the operator to.
 
     `integration_manage` rather than `workflow_manage`: connecting a channel binds a credential
     that reaches a real audience, which is a different decision from arranging the steps of a
     workflow and should be grantable separately.
     """
+    payload = payload.payload()
     from .services.channel_oauth import ChannelOAuthError, start
 
     if provider != "youtube":
@@ -14841,7 +14881,7 @@ def setup_coding_agents(project_id: str = "") -> dict:
 
 
 @app.post("/v1/setup/coding-agents/credential", status_code=201)
-def setup_store_coding_agent_credential(payload: dict) -> dict:
+def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredentialBody) -> dict:
     """Hand BOSS a subscription's credential and let it choose where that lives.
 
     Removes the step customers were being asked to perform for us. Before this, a subscription
@@ -14851,6 +14891,7 @@ def setup_store_coding_agent_credential(payload: dict) -> dict:
     best store this installation has, down to Postgres when it has nothing else, so the honest
     interface is "give it to BOSS" and the rest is an implementation detail.
     """
+    payload = payload.payload()
     from .services.setup_service import (
         SecretFallbackNotAccepted,
         SetupError,
@@ -14936,12 +14977,13 @@ def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
 
 
 @app.post("/v1/setup/coding-agents/connect", status_code=201)
-def setup_connect_coding_agent(payload: dict) -> dict:
+def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody) -> dict:
     """Import an existing subscription. Community records eligible CLIs without live proof.
 
     A live proof turn is available only where model cost is governed; otherwise the first
     governed job tests the recorded connection and reports any authentication failure.
     """
+    payload = payload.payload()
     from .services.setup_service import SetupError, connect_coding_agent
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -14963,12 +15005,13 @@ def setup_connect_coding_agent(payload: dict) -> dict:
 
 
 @app.post("/v1/setup/model", status_code=201)
-def setup_model_endpoint(payload: dict) -> dict:
+def setup_model_endpoint(payload: open_bodies.ModelSetupBody) -> dict:
     """Save a model key; paid editions also probe it before storing.
 
     Community stores it as unverified because a live one-token completion needs a governed
     budget reservation, leased job, and cost receipt that this setup route does not create.
     """
+    payload = payload.payload()
     from .services.secret_backends import default_secret_backend
     from .services.setup_service import (
         PROVIDERS, SetupError, live_model_probe_allowed, model_key_details, verify_model_key,
@@ -17938,8 +17981,9 @@ def get_elastic_status(project_id: str) -> dict:
 
 
 @app.post("/v1/elastic/capacity", status_code=201)
-def request_elastic_capacity(payload: dict) -> dict:
+def request_elastic_capacity(payload: open_bodies.ElasticCapacityBody) -> dict:
     """Agents/projects request elastic worker capacity against a pool."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     if not project_id:
@@ -17975,8 +18019,9 @@ def request_elastic_capacity(payload: dict) -> dict:
 
 
 @app.post("/v1/elastic/pools/{worker_pool_id}/reconcile")
-def reconcile_elastic_pool(worker_pool_id: str, payload: dict) -> dict:
+def reconcile_elastic_pool(worker_pool_id: str, payload: open_bodies.ElasticReconcileBody) -> dict:
     """Materialize desired pool capacity (local/container now; cloud via ChangeSet)."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     if not project_id:
@@ -18024,7 +18069,8 @@ def list_elastic_instances(
 
 
 @app.post("/v1/elastic/instances/{instance_id}/heartbeat")
-def heartbeat_elastic_instance(instance_id: str, payload: dict) -> dict:
+def heartbeat_elastic_instance(instance_id: str, payload: open_bodies.ElasticHeartbeatBody) -> dict:
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "worker").strip()
     if not project_id:
@@ -18047,7 +18093,8 @@ def heartbeat_elastic_instance(instance_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/elastic/instances/{instance_id}/terminate")
-def terminate_elastic_instance(instance_id: str, payload: dict) -> dict:
+def terminate_elastic_instance(instance_id: str, payload: open_bodies.ElasticTerminateBody) -> dict:
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     if not project_id:
@@ -18339,8 +18386,9 @@ def list_goldeneye_nodes(project_id: str) -> dict[str, Any]:
 
 
 @app.post("/v1/goldeneye/nodes", status_code=201)
-def register_goldeneye_node(payload: dict) -> dict[str, Any]:
+def register_goldeneye_node(payload: open_bodies.GoldeneyeNodeBody) -> dict[str, Any]:
     """Register or update a bare-metal Goldeneye node."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     name = str(payload.get("name") or "").strip()
@@ -18379,7 +18427,8 @@ def register_goldeneye_node(payload: dict) -> dict[str, Any]:
 
 
 @app.post("/v1/goldeneye/nodes/{node_id}/heartbeat")
-def heartbeat_goldeneye_node(node_id: str, payload: dict) -> dict[str, Any]:
+def heartbeat_goldeneye_node(node_id: str, payload: open_bodies.GoldeneyeHeartbeatBody) -> dict[str, Any]:
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -18411,8 +18460,9 @@ def list_goldeneye_package_installs(
 
 
 @app.post("/v1/goldeneye/packages/install", status_code=201)
-def install_goldeneye_package(payload: dict) -> dict[str, Any]:
+def install_goldeneye_package(payload: open_bodies.GoldeneyePackageInstallBody) -> dict[str, Any]:
     """Plan/simulate (or gate real) package install on a node."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     package_id = str(payload.get("package_id") or "").strip()
@@ -18449,8 +18499,9 @@ def list_goldeneye_apps(project_id: str) -> dict[str, Any]:
 
 
 @app.post("/v1/goldeneye/apps/deploy", status_code=201)
-def deploy_goldeneye_app(payload: dict) -> dict[str, Any]:
+def deploy_goldeneye_app(payload: open_bodies.GoldeneyeAppDeployBody) -> dict[str, Any]:
     """Deploy (or simulate) an app onto a Goldeneye node."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     name = str(payload.get("name") or "").strip()
@@ -18478,7 +18529,8 @@ def deploy_goldeneye_app(payload: dict) -> dict[str, Any]:
 
 
 @app.post("/v1/goldeneye/apps/{name}/rollback")
-def rollback_goldeneye_app(name: str, payload: dict) -> dict[str, Any]:
+def rollback_goldeneye_app(name: str, payload: open_bodies.GoldeneyeAppRollbackBody) -> dict[str, Any]:
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     if not project_id:
@@ -21204,8 +21256,9 @@ def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
 
 
 @app.post("/v1/email/config")
-def set_email_config(payload: dict) -> dict:
+def set_email_config(payload: open_bodies.EmailConfigBody) -> dict:
     """Configure SMTP. The password goes to the secret backend, not into the row."""
+    payload = payload.payload()
     from boss_engine.services import email_config
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -21425,12 +21478,13 @@ def delete_workflow_schedule(schedule_id: str, project_id: str,
 
 
 @app.post("/v1/delivery-workflows/schedules/tick")
-def tick_workflow_schedules(payload: dict) -> dict:
+def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> dict:
     """Start whatever is due. Called by the worker on its ordinary poll.
 
     Idempotent by construction: the dedupe key is the SCHEDULED moment, so a tick that runs
     twice — two workers, or one retried after a crash — produces one run.
     """
+    payload = payload.payload()
     from boss_engine.services import workflow_schedules as schedules
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -22924,13 +22978,14 @@ def list_delivery_workflows(project_id: str, include_retired: bool = False) -> d
 
 
 @app.post("/v1/delivery-workflows/run-capabilities")
-def run_delivery_capabilities(payload: dict) -> dict:
+def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) -> dict:
     """Advance every product workflow that has work ready.
 
     Called by the worker on its loop. Exposed as an endpoint rather than run inside the worker
     process for the same reason every other sweep is: one place owns the logic, and it can be
     driven by hand while something is being diagnosed.
     """
+    payload = payload.payload()
     from boss_engine.context import EngineContext
     from boss_engine.services import workflow_capability_runner
 
@@ -23660,8 +23715,9 @@ def list_work_trackers(project_id: str) -> dict[str, Any]:
 
 
 @app.post("/v1/work-trackers/connect")
-def connect_work_tracker(payload: dict) -> dict[str, Any]:
+def connect_work_tracker(payload: open_bodies.WorkTrackerConnectBody) -> dict[str, Any]:
     """Connect/configure a tracker (Jira, Linear, GitHub Issues, Azure DevOps, Plane)."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     provider_key = str(payload.get("provider_key") or "").strip().lower()
     actor = str(payload.get("actor") or "ceo").strip()
@@ -23690,8 +23746,9 @@ def connect_work_tracker(payload: dict) -> dict[str, Any]:
 
 
 @app.post("/v1/work-trackers/set-default")
-def set_default_work_tracker(payload: dict) -> dict[str, Any]:
+def set_default_work_tracker(payload: open_bodies.WorkTrackerDefaultBody) -> dict[str, Any]:
     """Select the project default work tracker (Plane remains seed default)."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     provider_key = str(payload.get("provider_key") or "").strip().lower()
     actor = str(payload.get("actor") or "ceo").strip()
@@ -23713,8 +23770,9 @@ def set_default_work_tracker(payload: dict) -> dict[str, Any]:
 
 
 @app.post("/v1/work-trackers/test")
-def test_work_tracker(payload: dict) -> dict[str, Any]:
+def test_work_tracker(payload: open_bodies.WorkTrackerTestBody) -> dict[str, Any]:
     """Test connectivity for a configured tracker without creating issues."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     provider_key = str(payload.get("provider_key") or "").strip().lower()
     actor = str(payload.get("actor") or "ceo").strip()

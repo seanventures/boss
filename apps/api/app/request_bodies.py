@@ -486,3 +486,512 @@ class ProjectSettingBody(OpenProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": ["project_id"]})
 
     value: SkipValidation[str | int | None] = None
+
+
+# Remaining Community operations retain their handler validation and pass-through inputs.
+
+class ResumeAgentRunBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['worker_id', 'job_id', 'lease_token']})
+
+    worker_id: SkipValidation[str | None] = None
+    job_id: SkipValidation[str | None] = None
+    lease_token: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+
+class PlaneSyncBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['run_id', 'event']})
+
+    run_id: SkipValidation[str | None] = None
+    event: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class MeetingRoleUpsertBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'title', 'lens']})
+
+    project_id: SkipValidation[str | None] = None
+    title: SkipValidation[str | None] = None
+    lens: SkipValidation[str | None] = None
+    key: SkipValidation[str | None] = None
+    risk_tier: SkipValidation[int | None] = None
+    is_default: SkipValidation[bool | None] = None
+    enabled: SkipValidation[bool | None] = None
+
+class MeetingStepBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['run_id']})
+
+    run_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class BenchmarkAppLaunchBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    simulated: SkipValidation[bool | None] = None
+    official: SkipValidation[bool | None] = None
+    engine: SkipValidation[str | None] = None
+    route: SkipValidation[str | None] = None
+    open_pr: SkipValidation[bool | None] = None
+    force: SkipValidation[bool | None] = None
+    task_id: SkipValidation[str | None] = None
+    owner: SkipValidation[str | None] = None
+    repo: SkipValidation[str | None] = None
+    base_branch: SkipValidation[str | None] = None
+    profile: SkipValidation[str | None] = None
+    risk_tier: SkipValidation[int | None] = None
+    repair_retries: SkipValidation[int | None] = None
+
+class PipelineProfileCreateBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'name']})
+
+    project_id: SkipValidation[str | None] = None
+    name: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    label: SkipValidation[str | None] = None
+    tier_floor: SkipValidation[int | None] = None
+    tier_cap: SkipValidation[int | None] = None
+    model: SkipValidation[dict[str, Any] | None] = None
+    model_routing: SkipValidation[dict[str, Any] | None] = None
+    caching: SkipValidation[bool | None] = None
+    parallel_checks: SkipValidation[bool | None] = None
+
+class PipelineProfileDefaultBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'name']})
+
+    project_id: SkipValidation[str | None] = None
+    name: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class CodeTaskStepBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['run_id']})
+
+    run_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    fencing_token: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+
+class InvestigationDbBody(OpenRequestBody):
+    sql: SkipValidation[str | None] = None
+
+class InvestigationHostBody(OpenRequestBody):
+    host: SkipValidation[str | None] = None
+    command: SkipValidation[str | None] = None
+
+class InvestigationOperationBody(OpenRequestBody):
+    list: SkipValidation[bool | None] = None
+    tool: SkipValidation[str | None] = None
+    args: SkipValidation[dict[str, Any] | None] = None
+
+class HostStallBody(OpenRequestBody):
+    stalled_seconds: SkipValidation[float | None] = None
+
+class CodeTaskRedeliveredBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['worker_id', 'job_id', 'lease_token', 'attempt']})
+
+    worker_id: SkipValidation[str | None] = None
+    job_id: SkipValidation[str | None] = None
+    lease_token: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    attempt: SkipValidation[int | None] = None
+
+class ShepherdProposeBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['run_id']})
+
+    run_id: SkipValidation[str | None] = None
+
+class ShepherdSweepBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    limit: SkipValidation[int | None] = None
+
+class ShepherdAutopilotBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    limit: SkipValidation[int | None] = None
+    actor: SkipValidation[str | None] = None
+
+class ShepherdAnswerBody(OpenRequestBody):
+    answer: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class CodeTaskSetupDeploymentBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['actor', 'host_id', 'app_name']})
+
+    actor: SkipValidation[str | None] = None
+    host_id: SkipValidation[str | None] = None
+    app_name: SkipValidation[str | None] = None
+    repo: SkipValidation[str | None] = None
+    environment: SkipValidation[str | None] = None
+    app_port: SkipValidation[int | str | None] = None
+    app_entry: SkipValidation[str | None] = None
+    repo_owner: SkipValidation[str | None] = None
+    auto_deploy: SkipValidation[bool | None] = None
+
+class PreviewFeedbackBody(OpenRequestBody):
+    message: SkipValidation[str | None] = None
+    expected: SkipValidation[str | None] = None
+    anchor: SkipValidation[str | None] = None
+    severity: SkipValidation[str | None] = None
+    selected_element: SkipValidation[str | None] = None
+    screenshot_url: SkipValidation[str | None] = None
+
+class PreviewApproveBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['actor']})
+
+    actor: SkipValidation[str | None] = None
+    note: SkipValidation[str | None] = None
+
+class CodeTaskOriginBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['kind', 'actor']})
+
+    kind: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    meeting_run_id: SkipValidation[str | None] = None
+    task_id: SkipValidation[str | None] = None
+    discovery_run_id: SkipValidation[str | None] = None
+
+class VerifierRatchetCaptureBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['run_id', 'label']})
+
+    run_id: SkipValidation[str | None] = None
+    label: SkipValidation[str | None] = None
+    source: SkipValidation[str | None] = None
+    bug_class: SkipValidation[str | None] = None
+    files: SkipValidation[list[dict[str, Any]] | None] = None
+    reason: SkipValidation[str | None] = None
+
+class MutationGateBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['files', 'target_file']})
+
+    files: SkipValidation[dict[str, str] | None] = None
+    target_file: SkipValidation[str | None] = None
+    test_command: SkipValidation[list[str] | None] = None
+    min_score: SkipValidation[float | None] = None
+    max_mutants: SkipValidation[int | None] = None
+    timeout: SkipValidation[float | None] = None
+    require_property_tests: SkipValidation[bool | None] = None
+
+class VisualGateBody(OpenRequestBody):
+    evidence: SkipValidation[dict[str, Any] | None] = None
+
+class DiscoveryStartBody(OpenRequestBody):
+    seed: SkipValidation[str | None] = None
+    scope: SkipValidation[str | None] = None
+    title: SkipValidation[str | None] = None
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    context: SkipValidation[str | None] = None
+
+class DiscoveryPromoteBody(OpenRequestBody):
+    outcome_index: SkipValidation[int | None] = None
+    actor: SkipValidation[str | None] = None
+
+class SandboxExecBody(OpenRequestBody):
+    actor: SkipValidation[str | None] = None
+    command: SkipValidation[str | None] = None
+    break_glass: SkipValidation[bool | None] = None
+    reason: SkipValidation[str | None] = None
+
+class SandboxPreserveBody(OpenRequestBody):
+    actor: SkipValidation[str | None] = None
+
+class AgentWakeupsTickBody(OpenRequestBody):
+    limit: SkipValidation[int | None] = None
+    project_id: SkipValidation[str | None] = None
+
+class MemoryReviewBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    decision: SkipValidation[str | None] = None
+
+class MemoryForgetBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class AgentThreadEnsureBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    surface: SkipValidation[str | None] = None
+    external_ref: SkipValidation[str | None] = None
+
+class OrgAssignmentBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    reports_to: SkipValidation[str | None] = None
+    display_name: SkipValidation[str | None] = None
+    sort: SkipValidation[int | None] = None
+    actor: SkipValidation[str | None] = None
+
+class AutonomySetBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    mode: SkipValidation[str | None] = None
+    threshold_usd: SkipValidation[float | str | None] = None
+    max_risk_tier: SkipValidation[int | None] = None
+
+class AutonomyApplyBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    limit: SkipValidation[int | None] = None
+
+class ArtifactRebuildBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+
+class SkillDefinitionSaveBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    skill_key: SkipValidation[str | None] = None
+    label: SkipValidation[str | None] = None
+    behaviour_kind: SkipValidation[str | None] = None
+    summary: SkipValidation[str | None] = None
+    knowledge: SkipValidation[str | None] = None
+    inputs: SkipValidation[list[Any] | None] = None
+    produces: SkipValidation[list[Any] | None] = None
+    config: SkipValidation[dict[str, Any] | None] = None
+    risk_tier: SkipValidation[int | None] = None
+    trusted: SkipValidation[bool | None] = None
+    enabled: SkipValidation[bool | None] = None
+
+class ChannelOAuthClientBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    client_id: SkipValidation[str | None] = None
+    client_secret: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    redirect_uri: SkipValidation[str | None] = None
+
+class ChannelConnectBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    connection_key: SkipValidation[str | None] = None
+
+class CodingAgentCredentialBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    provider: SkipValidation[str | None] = None
+    credential: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    accept_database_fallback: SkipValidation[bool | None] = None
+
+class CodingAgentConnectBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    provider: SkipValidation[str | None] = None
+    prove: SkipValidation[bool | None] = None
+
+class ModelSetupBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    provider: SkipValidation[str | None] = None
+    api_key: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    base_url: SkipValidation[str | None] = None
+    model: SkipValidation[str | None] = None
+
+class ElasticCapacityBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'desired_workers']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    desired_workers: SkipValidation[int | None] = None
+    pool_key: SkipValidation[str | None] = None
+    worker_pool_id: SkipValidation[str | None] = None
+    kind: SkipValidation[str | None] = None
+    provider_account_id: SkipValidation[str | None] = None
+    capabilities: SkipValidation[list[str] | None] = None
+    auto_reconcile: SkipValidation[bool | None] = None
+    cloud_spillover_enabled: SkipValidation[bool | None] = None
+    reason: SkipValidation[str | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class ElasticReconcileBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    cloud_spillover_enabled: SkipValidation[bool | None] = None
+    reason: SkipValidation[str | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class ElasticHeartbeatBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    status: SkipValidation[str | None] = None
+    endpoint: SkipValidation[str | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class ElasticTerminateBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    reason: SkipValidation[str | None] = None
+    destroy_provider_resource: SkipValidation[bool | None] = None
+
+class GoldeneyeNodeBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'name']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    name: SkipValidation[str | None] = None
+    roles: SkipValidation[list[str] | None] = None
+    public_ip: SkipValidation[str | None] = None
+    tailnet_ip: SkipValidation[str | None] = None
+    ssh_host: SkipValidation[str | None] = None
+    ssh_user: SkipValidation[str | None] = None
+    ssh_port: SkipValidation[int | str | None] = None
+    kit_version: SkipValidation[str | None] = None
+    site_config: SkipValidation[dict[str, Any] | None] = None
+    labels: SkipValidation[dict[str, Any] | None] = None
+    display_name: SkipValidation[str | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class GoldeneyeHeartbeatBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    status: SkipValidation[str | None] = None
+    kit_version: SkipValidation[str | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class GoldeneyePackageInstallBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'package_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    package_id: SkipValidation[str | None] = None
+    node_id: SkipValidation[str | None] = None
+    node_name: SkipValidation[str | None] = None
+    force: SkipValidation[bool | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class GoldeneyeAppDeployBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'name']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    name: SkipValidation[str | None] = None
+    node_id: SkipValidation[str | None] = None
+    node_name: SkipValidation[str | None] = None
+    image_ref: SkipValidation[str | None] = None
+    image: SkipValidation[str | None] = None
+    compose_ref: SkipValidation[str | None] = None
+    compose: SkipValidation[str | None] = None
+    domain: SkipValidation[str | None] = None
+    metadata: SkipValidation[dict[str, Any] | None] = None
+
+class GoldeneyeAppRollbackBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class EmailConfigBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    host: SkipValidation[str | None] = None
+    from_address: SkipValidation[str | None] = None
+    port: SkipValidation[int | str | None] = None
+    username: SkipValidation[str | None] = None
+    password: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    use_tls: SkipValidation[bool | None] = None
+    use_ssl: SkipValidation[bool | None] = None
+    from_name: SkipValidation[str | None] = None
+
+class WorkflowSchedulesTickBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class DeliveryCapabilitiesRunBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    worker_id: SkipValidation[str | None] = None
+
+class WorkTrackerConnectBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider_key']})
+
+    project_id: SkipValidation[str | None] = None
+    provider_key: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    configuration: SkipValidation[dict[str, Any] | None] = None
+    set_as_default: SkipValidation[bool | None] = None
+    test: SkipValidation[bool | None] = None
+    api_token: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+
+class WorkTrackerDefaultBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider_key']})
+
+    project_id: SkipValidation[str | None] = None
+    provider_key: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class WorkTrackerTestBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider_key']})
+
+    project_id: SkipValidation[str | None] = None
+    provider_key: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+class CaptainPlaybookCompileBody(OpenRequestBody):
+    text: SkipValidation[str | None] = None
+    instructions: SkipValidation[str | None] = None
+    name: SkipValidation[str | None] = None
+
+class CloudEasyConnectBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    method: SkipValidation[str | None] = None
+    return_url: SkipValidation[str | None] = None
+
+class CloudEasyCompleteBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    code: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    state: SkipValidation[str | None] = None
+
+class CloudEasyCompleteByStateBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    session_id: SkipValidation[str | None] = None
+    code: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    state: SkipValidation[str | None] = None
+
+class CloudUnlinkBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    reason: SkipValidation[str | None] = None

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from boss_engine.services.captain_coordination import roster
 
+from .. import request_bodies as open_bodies
 from ..config import get_settings
 from ..db import begin, get_engine
 
@@ -109,7 +110,8 @@ def list_playbooks(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/captain/playbooks/compile")
-def compile_playbook_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
+def compile_playbook_endpoint(payload: open_bodies.CaptainPlaybookCompileBody) -> dict[str, Any]:
+    payload = payload.payload()
     from boss_engine.services.captain_playbook import compile_playbook
 
     text = str((payload or {}).get("text") or (payload or {}).get("instructions") or "")

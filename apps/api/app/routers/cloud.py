@@ -16,6 +16,7 @@ from boss_engine.services.community_edition import (
     CloudConnectSyncError,
 )
 
+from .. import request_bodies as open_bodies
 from ..db import begin
 
 
@@ -62,13 +63,14 @@ def register_community_cloud_routes(
             return cloud_product.managed_workers_status(connection, project_id)
 
     @app.post("/v1/cloud/easy-connect", status_code=201)
-    def start_cloud_easy_connect(payload: dict) -> dict:
+    def start_cloud_easy_connect(payload: open_bodies.CloudEasyConnectBody) -> dict:
         """Start Easy Connect from self-hosted Community (or any edition) to BOSS Cloud.
 
         Community remains fully independent when Cloud is unconfigured. Browser or device
         methods never accept raw Cloud passwords in this control plane — hosted Account
         Connect completes auth and returns an org link.
         """
+        payload = payload.payload()
         project_id = str(payload.get("project_id") or "").strip()
         method = str(payload.get("method") or "browser").strip().lower()
         actor = str(payload.get("actor") or "ceo").strip()
@@ -112,8 +114,9 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/v1/cloud/easy-connect/{session_id}/complete")
-    def complete_cloud_easy_connect(session_id: str, payload: dict) -> dict:
+    def complete_cloud_easy_connect(session_id: str, payload: open_bodies.CloudEasyCompleteBody) -> dict:
         """Complete browser Easy Connect after hosted Account Connect returns code/state."""
+        payload = payload.payload()
         project_id = str(payload.get("project_id") or "").strip()
         actor = str(payload.get("actor") or "ceo").strip()
         code = payload.get("code")
@@ -142,8 +145,9 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/v1/cloud/easy-connect/complete")
-    def complete_cloud_easy_connect_by_state(payload: dict) -> dict:
+    def complete_cloud_easy_connect_by_state(payload: open_bodies.CloudEasyCompleteByStateBody) -> dict:
         """Complete browser Easy Connect using code+state from the hosted redirect callback."""
+        payload = payload.payload()
         project_id = str(payload.get("project_id") or "").strip()
         actor = str(payload.get("actor") or "ceo").strip()
         code = payload.get("code")
@@ -173,8 +177,9 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/v1/cloud/unlink")
-    def unlink_cloud(payload: dict) -> dict:
+    def unlink_cloud(payload: open_bodies.CloudUnlinkBody) -> dict:
         """Disconnect this project from BOSS Cloud; Community stays fully usable."""
+        payload = payload.payload()
         project_id = str(payload.get("project_id") or "").strip()
         actor = str(payload.get("actor") or "ceo").strip()
         reason = payload.get("reason")

@@ -311,9 +311,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CloudEasyConnectBody'
         required: true
       responses:
         '201':
@@ -387,9 +385,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CloudEasyCompleteBody'
       responses:
         '200':
           description: Successful Response
@@ -415,9 +411,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CloudEasyCompleteByStateBody'
         required: true
       responses:
         '200':
@@ -443,9 +437,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CloudUnlinkBody'
         required: true
       responses:
         '200':
@@ -1973,9 +1965,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ResumeAgentRunBody'
       responses:
         '200':
           description: Successful Response
@@ -2387,9 +2377,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/PlaneSyncBody'
         required: true
       responses:
         '200':
@@ -2658,9 +2646,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/MeetingRoleUpsertBody'
       responses:
         '201':
           description: Successful Response
@@ -2781,9 +2767,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/MeetingStepBody'
         required: true
       responses:
         '200':
@@ -2993,9 +2977,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/BenchmarkAppLaunchBody'
       responses:
         '201':
           description: Successful Response
@@ -3413,9 +3395,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/PipelineProfileCreateBody'
       responses:
         '201':
           description: Successful Response
@@ -3437,9 +3417,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/PipelineProfileDefaultBody'
         required: true
       responses:
         '200':
@@ -3464,9 +3442,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskStepBody'
         required: true
       responses:
         '200':
@@ -3528,9 +3504,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/InvestigationDbBody'
       responses:
         '200':
           description: Successful Response
@@ -3560,9 +3534,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/InvestigationHostBody'
       responses:
         '200':
           description: Successful Response
@@ -3592,9 +3564,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/InvestigationOperationBody'
       responses:
         '200':
           description: Successful Response
@@ -3951,9 +3921,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/HostStallBody'
         required: true
       responses:
         '200':
@@ -3998,9 +3966,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskRedeliveredBody'
       responses:
         '200':
           description: Successful Response
@@ -5548,9 +5514,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ShepherdProposeBody'
         required: true
       responses:
         '200':
@@ -5573,9 +5537,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ShepherdSweepBody'
         required: true
       responses:
         '200':
@@ -5605,9 +5567,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ShepherdAutopilotBody'
         required: true
       responses:
         '200':
@@ -5638,9 +5598,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ShepherdAnswerBody'
       responses:
         '200':
           description: Successful Response
@@ -5882,9 +5840,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskSetupDeploymentBody'
       responses:
         '200':
           description: Successful Response
@@ -6066,9 +6022,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/PreviewFeedbackBody'
       responses:
         '200':
           description: Successful Response
@@ -6521,9 +6475,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/PreviewApproveBody'
       responses:
         '200':
           description: Successful Response
@@ -6633,9 +6585,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/CodeTaskOriginBody'
       responses:
         '200':
           description: Successful Response
@@ -6755,9 +6705,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/VerifierRatchetCaptureBody'
         required: true
       responses:
         '200':
@@ -6788,9 +6736,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/MutationGateBody'
         required: true
       responses:
         '200':
@@ -6920,9 +6866,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/VisualGateBody'
         required: true
       responses:
         '200':
@@ -7041,9 +6985,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DiscoveryStartBody'
       responses:
         '200':
           description: Successful Response
@@ -7100,9 +7042,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DiscoveryPromoteBody'
       responses:
         '200':
           description: Successful Response
@@ -7261,9 +7201,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/SandboxExecBody'
       responses:
         '200':
           description: Successful Response
@@ -7341,9 +7279,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/SandboxPreserveBody'
       responses:
         '200':
           description: Successful Response
@@ -7768,9 +7704,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/AgentWakeupsTickBody'
         required: true
       responses:
         '200':
@@ -7888,9 +7822,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/MemoryReviewBody'
       responses:
         '200':
           description: Successful Response
@@ -7923,9 +7855,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/MemoryForgetBody'
       responses:
         '200':
           description: Successful Response
@@ -7993,9 +7923,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/AgentThreadEnsureBody'
         required: true
       responses:
         '200':
@@ -9810,9 +9738,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/OrgAssignmentBody'
       responses:
         '200':
           description: Successful Response
@@ -9960,9 +9886,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/AutonomySetBody'
       responses:
         '200':
           description: Successful Response
@@ -9994,9 +9918,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/AutonomyApplyBody'
         required: true
       responses:
         '200':
@@ -10281,10 +10203,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              default: {}
-              title: Payload
+              $ref: '#/components/schemas/ArtifactRebuildBody'
       responses:
         '200':
           description: Successful Response
@@ -12437,9 +12356,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/SkillDefinitionSaveBody'
       responses:
         '201':
           description: Successful Response
@@ -12521,9 +12438,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ChannelOAuthClientBody'
       responses:
         '200':
           description: Successful Response
@@ -12563,9 +12478,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ChannelConnectBody'
       responses:
         '201':
           description: Successful Response
@@ -12972,9 +12885,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CodingAgentCredentialBody'
         required: true
       responses:
         '201':
@@ -13006,9 +12917,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CodingAgentConnectBody'
         required: true
       responses:
         '201':
@@ -13039,9 +12948,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ModelSetupBody'
         required: true
       responses:
         '201':
@@ -16146,9 +16053,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ElasticCapacityBody'
         required: true
       responses:
         '201':
@@ -16182,9 +16087,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ElasticReconcileBody'
       responses:
         '200':
           description: Successful Response
@@ -16272,9 +16175,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ElasticHeartbeatBody'
       responses:
         '200':
           description: Successful Response
@@ -16307,9 +16208,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ElasticTerminateBody'
       responses:
         '200':
           description: Successful Response
@@ -16660,9 +16559,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/GoldeneyeNodeBody'
       responses:
         '201':
           description: Successful Response
@@ -16694,9 +16591,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/GoldeneyeHeartbeatBody'
       responses:
         '200':
           description: Successful Response
@@ -16755,9 +16650,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/GoldeneyePackageInstallBody'
         required: true
       responses:
         '201':
@@ -16809,9 +16702,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/GoldeneyeAppDeployBody'
         required: true
       responses:
         '201':
@@ -16844,9 +16735,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/GoldeneyeAppRollbackBody'
       responses:
         '200':
           description: Successful Response
@@ -20440,9 +20329,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/DeliveryCapabilitiesRunBody'
         required: true
       responses:
         '200':
@@ -21378,9 +21265,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkTrackerConnectBody'
         required: true
       responses:
         '200':
@@ -21406,9 +21291,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkTrackerDefaultBody'
         required: true
       responses:
         '200':
@@ -21434,9 +21317,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkTrackerTestBody'
         required: true
       responses:
         '200':
@@ -28906,9 +28787,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/CaptainPlaybookCompileBody'
         required: true
       responses:
         '200':
@@ -30075,9 +29954,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/EmailConfigBody'
       responses:
         '200':
           description: Successful Response
@@ -30262,9 +30139,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/WorkflowSchedulesTickBody'
         required: true
       responses:
         '200':
@@ -31902,6 +31777,34 @@ components:
       required:
       - project_id
       title: AgentTestRunRequest
+    AgentThreadEnsureBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        surface:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Surface
+        external_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: External Ref
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - actor
+      title: AgentThreadEnsureBody
     AgentVersionCreateRequest:
       properties:
         project_id:
@@ -31966,6 +31869,21 @@ components:
       - project_id
       - role_key
       title: AgentVersionCreateRequest
+    AgentWakeupsTickBody:
+      properties:
+        limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+      additionalProperties: true
+      type: object
+      title: AgentWakeupsTickBody
     AnomalyScanRequest:
       properties:
         project_id:
@@ -32088,6 +32006,18 @@ components:
       - project_id
       - items
       title: ArtifactListResponse
+    ArtifactRebuildBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ArtifactRebuildBody
     ArtifactSummary:
       properties:
         id:
@@ -32437,6 +32367,23 @@ components:
       required:
       - actor
       title: AutoDeployBody
+    AutonomyApplyBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: AutonomyApplyBody
     AutonomyChangeSummary:
       properties:
         id:
@@ -32599,6 +32546,40 @@ components:
       - max_allowed_risk_tier
       title: AutonomyScoreResponse
       description: G1 — current earned-autonomy score for a role (read-only).
+    AutonomySetBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mode
+        threshold_usd:
+          anyOf:
+          - type: number
+          - type: string
+          - type: 'null'
+          title: Threshold Usd
+        max_risk_tier:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Risk Tier
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - actor
+      title: AutonomySetBody
     AwsMetalClassifyRequest:
       properties:
         instance_type:
@@ -32646,6 +32627,88 @@ components:
       type: object
       title: AwsMetalTypesResponse
       description: Advisory AWS EC2 bare-metal instance type shortlist.
+    BenchmarkAppLaunchBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        simulated:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Simulated
+        official:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Official
+        engine:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Engine
+        route:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Route
+        open_pr:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Open Pr
+        force:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Force
+        task_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+        owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        base_branch:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Branch
+        profile:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Profile
+        risk_tier:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Risk Tier
+        repair_retries:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Repair Retries
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: BenchmarkAppLaunchBody
     BlueprintRequest:
       properties:
         project_id:
@@ -33987,6 +34050,26 @@ components:
       - created_by
       - created_at
       title: CapacityReceiptSummary
+    CaptainPlaybookCompileBody:
+      properties:
+        text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Text
+        instructions:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instructions
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+      additionalProperties: true
+      type: object
+      title: CaptainPlaybookCompileBody
     CaseEvaluateRequest:
       properties:
         project_id:
@@ -34522,6 +34605,61 @@ components:
       - created_at
       - updated_at
       title: ChangeSetSummary
+    ChannelConnectBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        connection_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Connection Key
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ChannelConnectBody
+    ChannelOAuthClientBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        client_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Client Id
+        client_secret:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Client Secret
+          writeOnly: true
+        redirect_uri:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Redirect Uri
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ChannelOAuthClientBody
     ChaosRunRequest:
       properties:
         project_id:
@@ -34593,6 +34731,116 @@ components:
       - project_id
       - dedupe_key
       title: ClaimEvaluateRequest
+    CloudEasyCompleteBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code
+          writeOnly: true
+        state:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: State
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: CloudEasyCompleteBody
+    CloudEasyCompleteByStateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        session_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Id
+        code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code
+          writeOnly: true
+        state:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: State
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: CloudEasyCompleteByStateBody
+    CloudEasyConnectBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        method:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Method
+        return_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Return Url
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: CloudEasyConnectBody
+    CloudUnlinkBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: CloudUnlinkBody
     CodeTaskFeedbackBody:
       properties:
         message:
@@ -34667,6 +34915,125 @@ components:
       required:
       - instructions
       title: CodeTaskFollowUpBody
+    CodeTaskOriginBody:
+      properties:
+        kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kind
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        meeting_run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Meeting Run Id
+        task_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+        discovery_run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Discovery Run Id
+      additionalProperties: true
+      type: object
+      required:
+      - kind
+      - actor
+      title: CodeTaskOriginBody
+    CodeTaskRedeliveredBody:
+      properties:
+        worker_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Worker Id
+        job_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Job Id
+        lease_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lease Token
+          writeOnly: true
+        attempt:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Attempt
+      additionalProperties: true
+      type: object
+      required:
+      - worker_id
+      - job_id
+      - lease_token
+      - attempt
+      title: CodeTaskRedeliveredBody
+    CodeTaskSetupDeploymentBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        host_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Host Id
+        app_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Name
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        environment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Environment
+        app_port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: App Port
+        app_entry:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Entry
+        repo_owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo Owner
+        auto_deploy:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Auto Deploy
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      - host_id
+      - app_name
+      title: CodeTaskSetupDeploymentBody
     CodeTaskStartBody:
       properties:
         project_id:
@@ -34798,6 +35165,91 @@ components:
       - guidance
       - actor
       title: CodeTaskSteerBody
+    CodeTaskStepBody:
+      properties:
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        fencing_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fencing Token
+          writeOnly: true
+      additionalProperties: true
+      type: object
+      required:
+      - run_id
+      title: CodeTaskStepBody
+    CodingAgentConnectBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+        prove:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Prove
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider
+      title: CodingAgentConnectBody
+    CodingAgentCredentialBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+        credential:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Credential
+          writeOnly: true
+        accept_database_fallback:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Accept Database Fallback
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider
+      title: CodingAgentCredentialBody
     CommandProposeRequest:
       properties:
         project_id:
@@ -36398,6 +36850,23 @@ components:
       - agent_key
       - display_name
       title: DeliveryBotIdentityUpsertRequest
+    DeliveryCapabilitiesRunBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        worker_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Worker Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: DeliveryCapabilitiesRunBody
     DeliveryPresenceEventCreateRequest:
       properties:
         project_id:
@@ -38085,6 +38554,56 @@ components:
       required:
       - ui_bearing
       title: DesignPromptResponse
+    DiscoveryPromoteBody:
+      properties:
+        outcome_index:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Outcome Index
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      title: DiscoveryPromoteBody
+    DiscoveryStartBody:
+      properties:
+        seed:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Seed
+        scope:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        context:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Context
+      additionalProperties: true
+      type: object
+      title: DiscoveryStartBody
     DocsUpdateExecuteRequest:
       properties:
         project_id:
@@ -38362,6 +38881,229 @@ components:
       - commercial_capabilities
       - source_pack
       title: EditionStatusResponse
+    ElasticCapacityBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        desired_workers:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Desired Workers
+        pool_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Key
+        worker_pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Worker Pool Id
+        kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kind
+        provider_account_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Account Id
+        capabilities:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Capabilities
+        auto_reconcile:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Auto Reconcile
+        cloud_spillover_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Cloud Spillover Enabled
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - desired_workers
+      title: ElasticCapacityBody
+    ElasticHeartbeatBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        endpoint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Endpoint
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ElasticHeartbeatBody
+    ElasticReconcileBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        cloud_spillover_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Cloud Spillover Enabled
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ElasticReconcileBody
+    ElasticTerminateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        destroy_provider_resource:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Destroy Provider Resource
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ElasticTerminateBody
+    EmailConfigBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        host:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Host
+        from_address:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Address
+        port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Port
+        username:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Username
+        password:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Password
+          writeOnly: true
+        use_tls:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Tls
+        use_ssl:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Ssl
+        from_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Name
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: EmailConfigBody
     EmailTestRequest:
       properties:
         project_id:
@@ -43555,6 +44297,243 @@ components:
       - project_id
       - title
       title: GoalCreateRequest
+    GoldeneyeAppDeployBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        node_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Node Id
+        node_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Node Name
+        image_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Image Ref
+        image:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Image
+        compose_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Compose Ref
+        compose:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Compose
+        domain:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Domain
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      title: GoldeneyeAppDeployBody
+    GoldeneyeAppRollbackBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: GoldeneyeAppRollbackBody
+    GoldeneyeHeartbeatBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        kit_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kit Version
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: GoldeneyeHeartbeatBody
+    GoldeneyeNodeBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        roles:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Roles
+        public_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Public Ip
+        tailnet_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tailnet Ip
+        ssh_host:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh Host
+        ssh_user:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh User
+        ssh_port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Ssh Port
+        kit_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kit Version
+        site_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Site Config
+        labels:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Labels
+        display_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Display Name
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      title: GoldeneyeNodeBody
+    GoldeneyePackageInstallBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        package_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Package Id
+        node_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Node Id
+        node_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Node Name
+        force:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Force
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - package_id
+      title: GoldeneyePackageInstallBody
     GrantRequest:
       properties:
         project_id:
@@ -43784,6 +44763,16 @@ components:
       - project_id
       - actor
       title: HeartbeatRequest
+    HostStallBody:
+      properties:
+        stalled_seconds:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Stalled Seconds
+      additionalProperties: true
+      type: object
+      title: HostStallBody
     IacDetectRequest:
       properties:
         files:
@@ -45103,6 +46092,52 @@ components:
       required:
       - reply
       title: IntentRouteResponse
+    InvestigationDbBody:
+      properties:
+        sql:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sql
+      additionalProperties: true
+      type: object
+      title: InvestigationDbBody
+    InvestigationHostBody:
+      properties:
+        host:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Host
+        command:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Command
+      additionalProperties: true
+      type: object
+      title: InvestigationHostBody
+    InvestigationOperationBody:
+      properties:
+        list:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: List
+        tool:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tool
+        args:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Args
+      additionalProperties: true
+      type: object
+      title: InvestigationOperationBody
     JobCompletionContract:
       properties:
         required_result_fields:
@@ -47053,6 +48088,50 @@ components:
       - task_id
       - job_id
       title: MeetingProposeResponse
+    MeetingRoleUpsertBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        lens:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lens
+        key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Key
+        risk_tier:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Risk Tier
+        is_default:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Is Default
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - title
+      - lens
+      title: MeetingRoleUpsertBody
     MeetingRunRequest:
       properties:
         actor:
@@ -47128,6 +48207,23 @@ components:
       - transcript
       - minutes
       title: MeetingRunRequest
+    MeetingStepBody:
+      properties:
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - run_id
+      title: MeetingStepBody
     MeetingSummary:
       properties:
         id:
@@ -47305,6 +48401,47 @@ components:
       - speaker
       - message
       title: MeetingTranscriptEntry
+    MemoryForgetBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - actor
+      title: MemoryForgetBody
+    MemoryReviewBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        decision:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Decision
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - actor
+      title: MemoryReviewBody
     MessageIn:
       properties:
         role:
@@ -48616,6 +49753,45 @@ components:
       - policy_result
       - created_at
       title: ModelRouteDecisionSummary
+    ModelSetupBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+        api_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Key
+          writeOnly: true
+        base_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Url
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider
+      title: ModelSetupBody
     ModuleRequest:
       properties:
         project_id:
@@ -48694,6 +49870,53 @@ components:
       type: object
       title: MultiCloudSkillDescribeRequest
       description: Describe multi-cloud skill(s) from the product catalog + Resource Plane registry.
+    MutationGateBody:
+      properties:
+        files:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Files
+        target_file:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target File
+        test_command:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Test Command
+        min_score:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Min Score
+        max_mutants:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Mutants
+        timeout:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Timeout
+        require_property_tests:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Require Property Tests
+      additionalProperties: true
+      type: object
+      required:
+      - files
+      - target_file
+      title: MutationGateBody
     ObservabilityStackDeployBody:
       properties:
         project_id:
@@ -49210,6 +50433,38 @@ components:
       - project_id
       title: OrchestratorNextMoveExecuteRequest
       description: Worker-only execution boundary for agent.orchestrator.next_move jobs.
+    OrgAssignmentBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        reports_to:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reports To
+        display_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Display Name
+        sort:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Sort
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: OrgAssignmentBody
     OrgMemberListResponse:
       properties:
         org_id:
@@ -50137,6 +51392,89 @@ components:
       required:
       - default_provider
       title: PipelineAdapterCatalogResponse
+    PipelineProfileCreateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Label
+        tier_floor:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tier Floor
+        tier_cap:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tier Cap
+        model:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Model
+        model_routing:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Model Routing
+        caching:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Caching
+        parallel_checks:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Parallel Checks
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      title: PipelineProfileCreateBody
+    PipelineProfileDefaultBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      title: PipelineProfileDefaultBody
     PlanCreateRequest:
       properties:
         project_id:
@@ -50275,6 +51613,29 @@ components:
       - created_at
       - updated_at
       title: PlanSummary
+    PlaneSyncBody:
+      properties:
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        event:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Event
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - run_id
+      - event
+      title: PlaneSyncBody
     PlatformStandardsApplyRequest:
       properties:
         instructions:
@@ -50770,6 +52131,58 @@ components:
       required:
       - project_id
       title: PrdDecomposeBody
+    PreviewApproveBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Note
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      title: PreviewApproveBody
+    PreviewFeedbackBody:
+      properties:
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        expected:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expected
+        anchor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Anchor
+        severity:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Severity
+        selected_element:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Selected Element
+        screenshot_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Screenshot Url
+      additionalProperties: true
+      type: object
+      title: PreviewFeedbackBody
     PreviewFixtureRequest:
       properties:
         project_id:
@@ -54369,6 +55782,31 @@ components:
       - external_id
       - name
       title: ResourceTopologyNodeSummary
+    ResumeAgentRunBody:
+      properties:
+        worker_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Worker Id
+        job_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Job Id
+        lease_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lease Token
+          writeOnly: true
+      additionalProperties: true
+      type: object
+      required:
+      - worker_id
+      - job_id
+      - lease_token
+      title: ResumeAgentRunBody
     RevokeGrantRequest:
       properties:
         project_id:
@@ -55590,6 +57028,41 @@ components:
       required:
       - status
       title: SandboxDeploymentResponse
+    SandboxExecBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        command:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Command
+        break_glass:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Break Glass
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+      additionalProperties: true
+      type: object
+      title: SandboxExecBody
+    SandboxPreserveBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      title: SandboxPreserveBody
     ScalePlanListResponse:
       properties:
         project_id:
@@ -56375,6 +57848,72 @@ components:
       - project_id
       - message
       title: SessionTurnRequest
+    ShepherdAnswerBody:
+      properties:
+        answer:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Answer
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      title: ShepherdAnswerBody
+    ShepherdAutopilotBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ShepherdAutopilotBody
+    ShepherdProposeBody:
+      properties:
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+      additionalProperties: true
+      type: object
+      required:
+      - run_id
+      title: ShepherdProposeBody
+    ShepherdSweepBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ShepherdSweepBody
     SimulateRequest:
       properties:
         owner:
@@ -56451,6 +57990,81 @@ components:
       required:
       - project_id
       title: SimulatedMeetingRunRequest
+    SkillDefinitionSaveBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        skill_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skill Key
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Label
+        behaviour_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Behaviour Kind
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        knowledge:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Knowledge
+        inputs:
+          anyOf:
+          - items: {}
+            type: array
+          - type: 'null'
+          title: Inputs
+        produces:
+          anyOf:
+          - items: {}
+            type: array
+          - type: 'null'
+          title: Produces
+        config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Config
+        risk_tier:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Risk Tier
+        trusted:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Trusted
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: SkillDefinitionSaveBody
     SkillInvokeRequest:
       properties:
         project_id:
@@ -58083,6 +59697,47 @@ components:
       type: object
       title: VerifierDebateTurn
       description: Scripted debate turn for pure (no-model) debate runs.
+    VerifierRatchetCaptureBody:
+      properties:
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Label
+        source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source
+        bug_class:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bug Class
+        files:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Files
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+      additionalProperties: true
+      type: object
+      required:
+      - run_id
+      - label
+      title: VerifierRatchetCaptureBody
     VerifyRequest:
       properties:
         owner:
@@ -58107,6 +59762,17 @@ components:
           default: true
       type: object
       title: VerifyRequest
+    VisualGateBody:
+      properties:
+        evidence:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Evidence
+      additionalProperties: true
+      type: object
+      title: VisualGateBody
     WatchRequest:
       properties:
         project_id:
@@ -58754,6 +60420,74 @@ components:
       - project_id
       - work_item_id
       title: WorkTrackerBindingUpsertRequest
+    WorkTrackerConnectBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        provider_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Key
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        configuration:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Configuration
+        set_as_default:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Set As Default
+        test:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Test
+        api_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Token
+          writeOnly: true
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider_key
+      title: WorkTrackerConnectBody
+    WorkTrackerDefaultBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        provider_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Key
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider_key
+      title: WorkTrackerDefaultBody
     WorkTrackerSyncExecuteRequest:
       properties:
         project_id:
@@ -58779,6 +60513,29 @@ components:
       - lease_token
       - created_by_job_id
       title: WorkTrackerSyncExecuteRequest
+    WorkTrackerTestBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        provider_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Key
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider_key
+      title: WorkTrackerTestBody
     WorkerCompleteRequest:
       properties:
         worker_id:
@@ -60516,6 +62273,23 @@ components:
       required:
       - project_id
       title: WorkflowScheduleEnabledBody
+    WorkflowSchedulesTickBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: WorkflowSchedulesTickBody
     WorkflowStartBody:
       properties:
         project_id:

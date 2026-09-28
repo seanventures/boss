@@ -25,11 +25,42 @@ def mounted_rows(edition: str) -> list[dict]:
     os.environ["BOSS_EDITION"] = edition
     sys.path[:0] = [str(ROOT / "apps/api"), str(ROOT / "engine")]
     from app.main import app
+    from app.request_bodies import OpenRequestBody
     from boss_engine.mcp.api_surface import ApiSurface
+    from fastapi.routing import APIRoute
+    from pydantic import SkipValidation
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         surface = ApiSurface(app.openapi(), edition=edition)
+    route_lookup = {
+        (method.upper(), route.path): route
+        for route in app.routes if isinstance(route, APIRoute)
+        for method in route.methods
+    }
+
+    def body_type_enforcement(method: str, path: str, quality: str) -> str:
+        """Separate field discoverability from Pydantic's actual type checks."""
+        if quality == "parameters_only":
+            return "no_json_body"
+        if quality == "loose_json_body":
+            return "unstructured"
+        route = route_lookup[(method, path)]
+        model = route.body_field.type_ if route.body_field else None
+        if isinstance(model, type) and issubclass(model, OpenRequestBody):
+            fields = model.model_fields.values()
+            if fields and all(
+                any(isinstance(marker, SkipValidation) for marker in field.metadata)
+                for field in fields
+            ):
+                return "pass_through_documented"
+            if any(
+                any(isinstance(marker, SkipValidation) for marker in field.metadata)
+                for field in model.model_fields.values()
+            ):
+                return "mixed_pydantic_fields"
+        return "pydantic_fields"
+
     rows = []
     for op in surface.operations.values():
         schema_quality = surface.input_schema_quality(op)
@@ -52,6 +83,9 @@ def mounted_rows(edition: str) -> list[dict]:
             ),
             "input_schema_quality": schema_quality,
             "mounted_input_schema_quality": mounted_quality,
+            "request_body_type_enforcement": body_type_enforcement(
+                op.method, op.path, mounted_quality
+            ),
             "curated_input_fields": schema_quality == "curated_json_body",
             "typed_input_schema": status != "excluded" and schema_quality != "loose_json_body",
             "runtime_validated_input_schema": status != "excluded" and mounted_quality != "loose_json_body",
@@ -93,6 +127,11 @@ def build_matrix() -> dict:
         "version": 1,
         "source": "mounted FastAPI app.openapi() per edition",
         "canonical_key": "method + path",
+        "request_body_type_enforcement_note": (
+            "pass_through_documented fields appear in OpenAPI but SkipValidation "
+            "preserves the handler's existing input coercion and error statuses; "
+            "runtime_validated_input_schema is a legacy schema-presence flag"
+        ),
         "invocation": "MCP operation alias through explicit principal-bound API key; API enforces permissions, edition, budget, approval, lease, and receipt policy",
         "community_operation_count": len(community),
         "enterprise_operation_count": len(enterprise),
@@ -110,6 +149,11 @@ def community_matrix(rows: list[dict]) -> dict:
         "version": 1,
         "source": "mounted Community FastAPI app.openapi()",
         "canonical_key": "method + path",
+        "request_body_type_enforcement_note": (
+            "pass_through_documented fields appear in OpenAPI but SkipValidation "
+            "preserves the handler's existing input coercion and error statuses; "
+            "runtime_validated_input_schema is a legacy schema-presence flag"
+        ),
         "edition": "community",
         "operation_count": len(rows),
         "counts": dict(sorted(counts.items())),
