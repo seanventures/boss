@@ -30,7 +30,7 @@ Authenticate each provider on the VM under the runtime user after installation. 
 
 Start in **Command Center** to submit a goal. Use **Approvals** for decisions and **Activity log** for receipts and failures. **Agent work** shows recent activity by role. **Team structure** holds planned roles and actual handoffs; changing the plan does not route tasks. **Agent Studio** holds definitions you can test and run. Installing a template does not start work or control a device.
 
-The console, [terminal and API](docs/community/TERMINAL_API.md), and MCP client use the same server-side permissions and audit trail. You can inspect or automate a task through any of them.
+The console and [terminal](docs/community/TERMINAL_API.md) use the authenticated HTTP API. [MCP](docs/community/MCP.md) exposes a project-scoped set of governed engine tools with its own transport access controls; its available actions differ from the HTTP API.
 
 For a guided start, [five example workflows](examples/README.md) show agents
 researching, preparing content, and handing external actions to a person for
