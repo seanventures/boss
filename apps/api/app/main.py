@@ -11408,6 +11408,7 @@ def get_job(job_id: str) -> JobSummary:
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Job not found")
+        require_project_reader(connection, row["project_id"])
         return job_summary_from_row(row)
 
 
@@ -11428,6 +11429,7 @@ def get_task(task_id: str) -> TaskSummary:
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
+        require_project_reader(connection, row["project_id"])
         return task_summary_from_row(row)
 
 
@@ -12265,6 +12267,7 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        require_project_reader(connection, row["project_id"])
         return artifact_detail_from_row(row)
 
 
@@ -12303,11 +12306,12 @@ def get_artifact_pdf(artifact_id: str) -> Response:
 
     with begin(engine) as connection:
         row = connection.execute(
-            text("SELECT title, content FROM artifacts WHERE id = :a"),
+            text("SELECT project_id, title, content FROM artifacts WHERE id = :a"),
             {"a": artifact_id},
         ).mappings().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Artifact not found")
+        if not row:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        require_project_reader(connection, row["project_id"])
     content = row["content"] if isinstance(row["content"], dict) else {}
     markdown = str(content.get("markdown") or "").strip()
     if not markdown:
@@ -20468,6 +20472,7 @@ def get_receipt(dedupe_key: str) -> ReceiptResponse:
         )
         if not receipt:
             raise HTTPException(status_code=404, detail="Receipt not found")
+        require_project_reader(connection, receipt["project_id"])
         return receipt_response_from_row(receipt)
 
 
