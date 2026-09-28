@@ -485,7 +485,7 @@ Branch `ai/codex/p0-native-coding-agent`. Plane epic **BOSS-406**.
 multi-turn tool-calling loop. **One `run_role` call is one agent session, not one completion** —
 which matters because the governed pipeline calls `run_role` once per step.
 
-New: [`engine/boss_engine/services/code_agent_tools.py`](../../engine/boss_engine/services/code_agent_tools.py)
+New: `engine/boss_engine/services/code_agent_tools.py` in the source checkout.
 
 | Tool | Available in review steps? |
 |---|---|

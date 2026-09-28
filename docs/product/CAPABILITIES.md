@@ -1,7 +1,7 @@
 # What BOSS does, in detail
 
 Capability-by-capability detail on the governed runtime. This is the long form; the
-[README](../../README.md) has the summary and
+[documentation home](../index.md) has the summary and
 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) has what is shipped versus planned.
 
 ## Budget-governor behavior
