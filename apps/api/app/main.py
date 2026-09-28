@@ -21322,6 +21322,32 @@ def _delivery_workflow_actor(payload: Optional[dict] = None, actor: Optional[str
     return str(current_api_principal.get() or claimed or "executive_console").strip()
 
 
+def _authorize_delivery_target_input(
+    connection, project_id: str, actor: str, run_input: dict,
+) -> None:
+    """Bind any selected host target to this project before saving or starting work."""
+    if "target_id" not in run_input and "environment" not in run_input:
+        return
+    require_project_actor(connection, project_id, actor, "providerops_manage")
+    if "target_id" not in run_input:
+        return
+    target_id = str(run_input.get("target_id") or "").strip()
+    if not target_id:
+        raise HTTPException(status_code=422, detail="target_id must be nonempty")
+    target = connection.execute(
+        text("SELECT environment FROM deployment_targets "
+             "WHERE id=:id AND project_id=:project_id"),
+        {"id": target_id, "project_id": project_id},
+    ).mappings().first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="deployment target not found")
+    environment = str(run_input.get("environment") or "").strip()
+    if environment and environment != target["environment"]:
+        raise HTTPException(
+            status_code=422, detail="environment does not match deployment target",
+        )
+
+
 @app.post("/v1/delivery-workflows/custom-steps")
 def create_delivery_custom_step(payload: dict) -> dict:
     """Define a step. The risk tier is NOT accepted from the caller — it is resolved from
@@ -22439,21 +22465,16 @@ def set_delivery_run_input(run_id: str, payload: dict) -> dict:
     with begin(engine) as connection:
         actor = _delivery_workflow_actor(payload)
         require_project_actor(connection, project_id, actor, "workflow_execute")
+        current_input = connection.execute(
+            text("SELECT input FROM workflow_runs WHERE id=:r AND project_id=:p"),
+            {"r": run_id, "p": project_id},
+        ).scalar_one_or_none()
+        if current_input is None:
+            raise HTTPException(status_code=404, detail="run not found")
         if "target_id" in clean or "environment" in clean:
-            require_project_actor(connection, project_id, actor, "providerops_manage")
-        if "target_id" in clean:
-            target = connection.execute(
-                text("SELECT environment FROM deployment_targets "
-                     "WHERE id=:id AND project_id=:project_id"),
-                {"id": clean["target_id"], "project_id": project_id},
-            ).mappings().first()
-            if target is None:
-                raise HTTPException(status_code=404, detail="deployment target not found")
-            if "environment" in clean and clean["environment"] != target["environment"]:
-                raise HTTPException(
-                    status_code=422,
-                    detail="environment does not match deployment target",
-                )
+            _authorize_delivery_target_input(
+                connection, project_id, actor, {**current_input, **clean},
+            )
         updated = connection.execute(
             text("UPDATE workflow_runs SET input = COALESCE(input,'{}'::jsonb) "
                  "|| CAST(:v AS JSONB), updated_at=now() "
@@ -22596,6 +22617,7 @@ def start_delivery_workflow(payload: dict) -> dict:
         run_input = {**chosen, **run_input}
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
+        _authorize_delivery_target_input(connection, project_id, actor, run_input)
         version_id = None
         if workflow_key:
             # THE VERSION THAT RUNS. version DESC is the abandoned spec after a revert:

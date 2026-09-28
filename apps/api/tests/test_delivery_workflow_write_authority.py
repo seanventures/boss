@@ -117,6 +117,7 @@ def test_delivery_input_rejects_foreign_target(client, engine, monkeypatch):
     home = "boss-dogfood"
     foreign = f"target_foreign_{suffix}"
     target_id = f"target_foreign_{suffix}"
+    home_target_id = f"target_home_{suffix}"
     key = f"ceo-key-{suffix}"
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
     monkeypatch.setattr(api_main.settings, "api_keys", key)
@@ -139,6 +140,14 @@ def test_delivery_input_rejects_foreign_target(client, engine, monkeypatch):
                  "'test', 'test', 'test')"),
             {"id": target_id, "project_id": foreign},
         )
+        connection.execute(
+            text("INSERT INTO deployment_targets "
+                 "(id, project_id, app_name, repo, environment, target_kind, "
+                 "target_ref, created_by) VALUES "
+                 "(:id, :project_id, 'home-app', 'home/repo', 'staging', "
+                 "'test', 'test', 'test')"),
+            {"id": home_target_id, "project_id": home},
+        )
     try:
         response = client.post(
             "/v1/delivery-workflows/runs/missing/input",
@@ -147,10 +156,22 @@ def test_delivery_input_rejects_foreign_target(client, engine, monkeypatch):
         )
         assert response.status_code == 404, response.text
         assert foreign not in response.text
+        for candidate, expected in (
+            ({"target_id": target_id}, 404),
+            ({"target_id": home_target_id, "environment": "production"}, 422),
+        ):
+            denied = client.post(
+                "/v1/delivery-workflows/start",
+                json={"project_id": home, "work_class": "project.new",
+                      "input": candidate},
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            assert denied.status_code == expected, denied.text
     finally:
         with engine.begin() as connection:
             connection.execute(
-                text("DELETE FROM deployment_targets WHERE id = :id"), {"id": target_id}
+                text("DELETE FROM deployment_targets WHERE id IN (:foreign, :home)"),
+                {"foreign": target_id, "home": home_target_id},
             )
             connection.execute(text("DELETE FROM events WHERE project_id = :id"), {"id": foreign})
             connection.execute(text("DELETE FROM projects WHERE id = :id"), {"id": foreign})

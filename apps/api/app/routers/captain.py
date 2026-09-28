@@ -26,12 +26,14 @@ def _service():
     return CaptainCoordinationService(get_settings())
 
 
-def _require_captain_actor(connection, project_id: str, claimed_actor: str) -> str:
+def _require_captain_actor(
+    connection, project_id: str, claimed_actor: str, permission: str,
+) -> str:
     """Bind a captain write to the caller's active project membership."""
     from apps.api.app.main import current_api_principal, require_project_actor
 
     actor = current_api_principal.get() or claimed_actor
-    require_project_actor(connection, project_id, actor, "agent_chat")
+    require_project_actor(connection, project_id, actor, permission)
     return actor
 
 
@@ -55,7 +57,9 @@ def captain_coordinate(payload: CoordinateRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
     with begin(get_engine()) as connection:
-        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
+        actor = _require_captain_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute",
+        )
         return _service().coordinate(
             connection, payload.project_id, actor=actor,
         )
@@ -138,7 +142,9 @@ def save_playbook(payload: PlaybookSaveRequest) -> dict[str, Any]:
     if not body.get("playbook_key"):
         raise HTTPException(status_code=422, detail="playbook_key or from_text is required")
     with begin(get_engine()) as connection:
-        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
+        actor = _require_captain_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage",
+        )
         return _playbooks().save(
             connection, project_id=payload.project_id, actor=actor, **body,
         )
@@ -149,7 +155,13 @@ def start_playbook(playbook_key: str, payload: PlaybookStartRequest) -> dict[str
     if not payload.project_id.strip() or not payload.prd.strip():
         raise HTTPException(status_code=422, detail="project_id and prd are required")
     with begin(get_engine()) as connection:
-        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
+        actor = _require_captain_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute",
+        )
+        if payload.auto_build:
+            _require_captain_actor(
+                connection, payload.project_id, actor, "task_create",
+            )
         try:
             return _playbooks().start(
                 connection,
@@ -169,7 +181,9 @@ def loop_playbook(playbook_key: str, payload: PlaybookLoopRequest) -> dict[str, 
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
     with begin(get_engine()) as connection:
-        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
+        actor = _require_captain_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute",
+        )
         return _playbooks().loop_once(
             connection,
             project_id=payload.project_id,

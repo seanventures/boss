@@ -14,19 +14,29 @@ HOME = "boss-dogfood"
 
 def test_captain_writes_use_bound_project_member(client, engine, monkeypatch):
     suffix = uuid4().hex[:8]
-    reader = f"captain_reader_{suffix}"
+    reader = f"captain_chat_only_{suffix}"
+    executor = f"captain_executor_{suffix}"
     reader_key = f"captain-reader-key-{suffix}"
+    executor_key = f"captain-executor-key-{suffix}"
     ceo_key = f"captain-ceo-key-{suffix}"
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
-    monkeypatch.setattr(api_main.settings, "api_keys", f"{reader_key},{ceo_key}")
     monkeypatch.setattr(
-        api_main.settings, "api_key_principals", f"{reader_key}:{reader},{ceo_key}:ceo",
+        api_main.settings, "api_keys", f"{reader_key},{executor_key},{ceo_key}",
+    )
+    monkeypatch.setattr(
+        api_main.settings, "api_key_principals",
+        f"{reader_key}:{reader},{executor_key}:{executor},{ceo_key}:ceo",
     )
     with engine.begin() as connection:
         api_main.members.upsert_member(
             connection, project_id=HOME, member_id=reader,
-            display_name="Captain reader", member_type="human", role_keys=[],
-            permissions=[], actor="ceo",
+            display_name="Captain chat only", member_type="human", role_keys=[],
+            permissions=["agent_chat"], actor="ceo",
+        )
+        api_main.members.upsert_member(
+            connection, project_id=HOME, member_id=executor,
+            display_name="Captain executor", member_type="human", role_keys=[],
+            permissions=["workflow_execute"], actor="ceo",
         )
 
     effects = []
@@ -69,6 +79,14 @@ def test_captain_writes_use_bound_project_member(client, engine, monkeypatch):
     for path, body in requests:
         denied = client.post(path, json=body, headers=reader_headers)
         assert denied.status_code == 403, (path, denied.text)
+    assert effects == []
+
+    denied_build = client.post(
+        "/v1/captain/playbooks/test/start",
+        json={"project_id": HOME, "prd": "Build safely", "auto_build": True},
+        headers={"Authorization": f"Bearer {executor_key}"},
+    )
+    assert denied_build.status_code == 403, denied_build.text
     assert effects == []
 
     allowed = client.post(
