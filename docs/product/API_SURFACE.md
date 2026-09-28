@@ -56,8 +56,8 @@ The authoritative coverage key is **HTTP method plus path**. Live
 multi-method preview routes. The generated Community contract uses the same
 IDs. The private curated contract retains existing published IDs and fills
 previously unnamed operations; clients reconciling editions should compare
-method and path. As of the 0.14.0 contract, Community mounts 981 operations
-and Enterprise mounts 1,022. TUI and MCP discovery can use this inventory,
+method and path. As of the 0.14.0 contract, Community mounts 982 operations
+and Enterprise mounts 1,023. TUI and MCP discovery can use this inventory,
 while the API remains the authority for authentication, project scope, edition
 gates, approval, budget, and receipts.
 

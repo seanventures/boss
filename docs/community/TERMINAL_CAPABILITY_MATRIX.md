@@ -17,17 +17,17 @@ method-and-path operation ID and JSON `path`, `query`, and `body` arguments.
 from OpenAPI. Both invocation paths use the same API key, project scope, and
 server enforcement as direct HTTP clients.
 
-The BOSS-416 static Community contract contains **981** HTTP operations:
-**968** operator `/v1/` operations, each with a unique stable operation ID and
+The BOSS-416 static Community contract contains **982** HTTP operations:
+**969** operator `/v1/` operations, each with a unique stable operation ID and
 a JSON/path/query shape addressable by `/op`; **13** health, SAML, and SCIM
 protocol routes remain outside the authenticated `/v1/` operator command.
 In the published Community repository, this contract is `api/openapi.yaml`;
 private source keeps the same Community snapshot at
 `api/openapi.community.yaml`.
-The static private contract has **1,022** operations: **1,009** `/v1/`
-operations, of which **1,007** are `/op` addressable. The two remaining `/v1/`
+The static private contract has **1,023** operations: **1,010** `/v1/`
+operations, of which **1,008** are `/op` addressable. The two remaining `/v1/`
 routes are inbound webhook receivers that require request-signature headers
-and are not operator actions. All **1,022** static private operations have a
+and are not operator actions. All **1,023** static private operations have a
 unique `operationId`. That private contract is `api/openapi.yaml` only in the
 private source repository. The TUI's stable method-and-path alias remains
 available even if a live server uses a different runtime ID.
@@ -47,12 +47,12 @@ available even if a live server uses a different runtime ID.
 | Cloud | 20 | Edition status and configured cloud connections |
 | Meta | 19 | Capability catalog and API coverage |
 | Auth | 18 | Sessions, members and API keys |
-| Console | 16 | Executive console read models |
+| Console | 17 | Executive console and coordination read models |
 | Workspace | 12 | Organizations, projects and departments |
 | Goldeneye | 11 | Goldeneye service integration |
 | Setup | 9 | Bootstrap and first-run setup |
 | Identity | 5 | Identity provider catalog and configuration |
-| **Total** | **968** | All mounted `/v1/` operations are searchable by method/path/summary |
+| **Total** | **969** | All mounted `/v1/` operations are searchable by method/path/summary |
 
 The table classifies the static Community contract with the BOSS-416 API
 catalog taxonomy. Live domain counts may differ by image and edition; `/ops`
@@ -80,7 +80,7 @@ through their status, receipt, and event endpoints.
 
 ## Verification and limits
 
-- `scripts/tests/test_metatron_tui.py` checks all 981 Community snapshot
+- `scripts/tests/test_metatron_tui.py` checks all 982 Community snapshot
   operations and verifies every `/v1/` operation has a unique, addressable
   terminal alias. It checks project selection, parameter validation, duplicate
   FastAPI IDs, server-authenticated requests, and catalog-only route reporting.
