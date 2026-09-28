@@ -30,6 +30,7 @@ type EnvCheck = {
   default_branch?: string; private?: boolean;
   base_url?: string; model?: string; key_last4?: string;
   models_available?: number; model_listed?: boolean; note?: string;
+  verification_state?: string;
 };
 /** A model source this project has already saved — newest first in `Status.model_saved`. */
 type SavedModel = {
@@ -192,8 +193,8 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
  * it still works. That operator was shown two empty forms, which reads as "nothing is connected"
  * about a BOSS that has been opening pull requests for weeks.
  *
- * Every line here is CHECKED, not merely read. "Connected" that means "an environment variable
- * is not empty" is the status that stays green while the first build dies at push time.
+ * Repository access is checked. In Community, environment model keys are reported as
+ * unverified without contacting the provider.
  */
 function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) {
   const github = env?.github;
@@ -212,7 +213,10 @@ function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) 
                 and reported the env pair even when the project had a repository connected —
                 so a working connection was invisible and a shipped default was shown failing
                 beside it. */}
-            {github?.source === "connected"
+            {model?.verification_state === "unverified"
+              ? <>This install has a model key, but Community has not sent it to the provider.
+                  Repository access is shown separately below.</>
+              : github?.source === "connected"
               ? <>The repository this project is connected to, and the model endpoint for this
                   install. Checked just now against GitHub — not read from a variable and
                   assumed.</>
@@ -249,7 +253,8 @@ function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) 
             <dt>
               Model
               <span className={`cap-badge ${model.ok ? "tone-green" : "tone-amber"}`}>
-                {model.ok ? "Answering" : "Check failed"}
+                {model.verification_state === "unverified" ? "Unverified"
+                  : model.ok ? "Answering" : "Check failed"}
               </span>
             </dt>
             <dd>

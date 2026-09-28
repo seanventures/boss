@@ -76,3 +76,38 @@ def test_paid_setup_retains_live_probe_before_storage(client, engine, monkeypatc
                  "WHERE project_id='boss-dogfood' AND source_id='setup-openai'")
         ).scalar_one()
     assert metadata["verification_state"] == "verified"
+
+
+def test_community_setup_status_marks_environment_key_unverified_without_network(
+    client, monkeypatch,
+):
+    monkeypatch.setattr(api_main.settings, "boss_edition", "community")
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", "ceo-key")
+    monkeypatch.setattr(api_main.settings, "api_key_principals", "ceo-key:ceo")
+    monkeypatch.setattr(api_main.settings, "openai_api_key", "test-key-1234")
+    monkeypatch.setattr(api_main.settings, "openai_base_url", "https://example.invalid/v1")
+    monkeypatch.setattr(api_main.settings, "chat_model", "test-model")
+    monkeypatch.setattr(
+        setup_service, "check_github_for_project",
+        lambda *_args: {"configured": False, "ok": False},
+    )
+    network_calls = []
+
+    def forbidden_network(*_args, **_kwargs):
+        network_calls.append("provider")
+        raise AssertionError("Community status sent a provider request")
+
+    monkeypatch.setattr(setup_service, "_probe", forbidden_network)
+    response = client.get(
+        "/v1/setup/status", headers={"Authorization": "Bearer ceo-key"},
+        params={"project_id": "boss-dogfood"},
+    )
+
+    assert response.status_code == 200, response.text
+    model = response.json()["environment"]["model"]
+    assert model["configured"] is True
+    assert model["verification_state"] == "unverified"
+    assert model["ok"] is False
+    assert "error" not in model
+    assert network_calls == []

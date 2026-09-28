@@ -117,6 +117,51 @@ def test_direct_model_probe_has_no_network_in_unmetered_editions(monkeypatch, ed
     assert calls == []
 
 
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", ""])
+def test_environment_model_status_never_probes_in_unmetered_editions(monkeypatch, edition):
+    from boss_engine.services import setup_service
+
+    calls = []
+    monkeypatch.setattr(setup_service, "_probe", lambda *args, **kwargs: calls.append(args))
+    settings = SimpleNamespace(
+        boss_edition=edition, openai_api_key="test-key-1234",
+        openai_base_url="https://example.invalid/v1", chat_model="test-model",
+    )
+
+    result = setup_service.check_model(settings)
+
+    assert result["configured"] is True
+    assert result["verification_state"] == "unverified"
+    assert result["ok"] is False
+    assert result["key_last4"] == "1234"
+    assert "error" not in result
+    assert calls == []
+
+
+def test_paid_environment_model_status_retains_models_check(monkeypatch):
+    from boss_engine.services import setup_service
+
+    calls = []
+
+    def fake_probe(url, headers):
+        calls.append((url, headers))
+        return {"ok": True, "body": {"data": [{"id": "test-model"}]}}
+
+    monkeypatch.setattr(setup_service, "_probe", fake_probe)
+    settings = SimpleNamespace(
+        boss_edition="enterprise_self_hosted", openai_api_key="test-key",
+        openai_base_url="https://example.invalid/v1", chat_model="test-model",
+    )
+
+    result = setup_service.check_model(settings)
+
+    assert result["ok"] is True
+    assert result["model_listed"] is True
+    assert calls == [
+        ("https://example.invalid/v1/models", {"Authorization": "Bearer test-key"}),
+    ]
+
+
 def test_the_api_refuses_to_store_a_key_it_could_not_prove():
     """A source recorded as configured against a key that does not work is worse than no source:
     the first real evidence arrives an hour later when a build fails."""

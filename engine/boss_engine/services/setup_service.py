@@ -793,11 +793,11 @@ def check_github(settings: Settings) -> dict[str, Any]:
 
 
 def check_model(settings: Settings) -> dict[str, Any]:
-    """Which model endpoint this install uses, and whether it answers.
+    """Which model endpoint this install uses, with live checks only where allowed.
 
-    Deliberately `GET /models` and not a completion: it is free, it is the same credential, and
-    it proves reachability plus authentication. It cannot prove the chosen model will answer —
-    that is what the wizard's one-token completion is for when a key is first added.
+    Paid editions use `GET /models` to check reachability and authentication. Community and
+    unknown editions report an environment key as configured but unverified, with no provider
+    request. Even a successful `/models` response cannot prove a completion will work.
     """
     key = str(getattr(settings, "openai_api_key", "") or "").strip()
     base = (str(getattr(settings, "openai_base_url", "") or "").strip()
@@ -814,6 +814,11 @@ def check_model(settings: Settings) -> dict[str, Any]:
     if not key:
         out["ok"] = False
         out["error"] = "OPENAI_API_KEY is not set."
+        return out
+    if not live_model_probe_allowed(settings):
+        out["ok"] = False
+        out["verification_state"] = "unverified"
+        out["note"] = "The key is configured; Community has not contacted the model provider."
         return out
     probe = _probe(f"{base.rstrip('/')}/models", {"Authorization": f"Bearer {key}"})
     if not probe["ok"]:
