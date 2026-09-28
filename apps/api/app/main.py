@@ -24,6 +24,10 @@ from uuid import uuid4
 from sqlalchemy.exc import ProgrammingError
 
 from boss_engine.ports import configure_engine_ports
+from boss_engine.services.coordination_read_model import (
+    CoordinationSnapshot,
+    build_coordination_snapshot,
+)
 
 from .bootstrap import seed
 from .bootstrap_ports import build_ports
@@ -12504,6 +12508,28 @@ def in_flight_endpoint(project_id: str, limit: int = 8) -> dict:
 
     with engine.begin() as connection:
         return {"items": in_flight(connection, project_id, limit=limit)}
+
+
+@app.get(
+    "/v1/coordination",
+    response_model=CoordinationSnapshot,
+)
+def coordination_snapshot_endpoint(project_id: str) -> CoordinationSnapshot:
+    """Current role assignments and recent work for one authorized project.
+
+    Source parity: the Command Center combines GET /v1/roles, the first 50
+    GET /v1/tasks, and six GET /v1/metrics/in-flight items. The same canonical
+    task lifecycle determines labels and activity in every client.
+    """
+    from boss_engine.services.self_observability import in_flight
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+    roles = list_roles(project_id).items
+    tasks = list_tasks(project_id=project_id, limit=50).items
+    with begin(engine) as connection:
+        recent_work = in_flight(connection, project_id, limit=6)
+    return build_coordination_snapshot(roles, tasks, recent_work)
 
 
 @app.get("/v1/self/diagnostics")

@@ -81,6 +81,7 @@ Always pass a real project-scoped actor on writes (seed creates `ceo`, `system`,
 | **governance** | `/v1/assurance/*`, `/integration-registry`, `/break-glass` | [ASSURANCE_GOVERNANCE.md](ASSURANCE_GOVERNANCE.md) |
 | **models** | `/v1/model-gateway/*` | [AGENTS_AND_SKILLS.md](AGENTS_AND_SKILLS.md) |
 | **ops** | `/v1/reliability`, `/dashboard`, `/qa`, `/diag` | OpenAPI + ROUTE_INDEX |
+| **console** | `/v1/console/*`, `/v1/coordination` | OpenAPI + ROUTE_INDEX |
 | **meta** | `/v1/meta/*`, `/v1/capabilities`, `/health` | this file |
 
 Starting or advancing a code task with `POST /v1/code-tasks`,
@@ -101,6 +102,25 @@ The capability sweep requires the configured worker principal; the runner claims
 each ready step with a lease before execution.
 
 Live domain grouping is also returned by the catalog endpoint (source of truth for agents).
+
+---
+
+## Live coordination
+
+`GET /v1/coordination?project_id=<project>` returns the Command Center's
+`roster`, `inFlight`, and `observedAt` snapshot. Authenticated callers must be
+active project or organization members. The roster uses `/v1/roles` and the
+first 50 `/v1/tasks` in their canonical order; recent work uses the first six
+`/v1/metrics/in-flight` items. Task `derived_status` takes precedence when
+displaying current state, including when a recent-work metric is stale. The
+Web console's `/api/coordination` polling route relays this API response. Its
+initial server render still derives the view from feeds already loaded for
+other panels, avoiding a duplicate first-render database read.
+
+```bash
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/coordination?project_id=$PROJECT" | jq '{roster, inFlight, observedAt}'
+```
 
 ---
 

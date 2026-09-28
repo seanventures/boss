@@ -24,7 +24,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
     "console": {
         "title": "Executive console",
         "description": "Dashboard and console read models for operators.",
-        "prefixes": ["/v1/console"],
+        "prefixes": ["/v1/console", "/v1/coordination"],
     },
     "meta": {
         "title": "Meta & discovery",
