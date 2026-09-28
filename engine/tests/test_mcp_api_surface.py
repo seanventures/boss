@@ -232,8 +232,9 @@ def test_curated_fields_never_replace_an_updated_mounted_schema():
 def test_policy_and_read_only_denials_do_not_send_http_request():
     surface, seen = _surface()
     assert surface.invoke(operation_alias("DELETE", "/v1/tasks/{task_id}"),
-                          project_id="alpha", path={"task_id": "t1"})["error"] == (
-        "operator_only_unavailable"
+                          project_id="alpha", path={"task_id": "t1"},
+                          read_only=True)["error"] == (
+        "read_only"
     )
     assert surface.invoke(operation_alias("POST", "/v1/worker/poll"),
                           project_id="alpha")["error"] == "excluded"
@@ -377,6 +378,56 @@ def test_preapproved_changeset_apply_and_workflow_mapping_are_api_policy_callabl
         assert scoped.availability(op) == "callable"
 
 
+def test_soft_task_archive_and_safe_migration_rollback_use_api_policy_with_session_scope():
+    schema = {"paths": {
+        "/v1/tasks/{task_id}": {"delete": {"parameters": [
+            {"in": "path", "name": "task_id", "required": True,
+             "schema": {"type": "string"}},
+            {"in": "query", "name": "project_id", "required": True,
+             "schema": {"type": "string"}},
+            {"in": "query", "name": "actor", "required": True,
+             "schema": {"type": "string"}},
+        ]}},
+        "/v1/workflow-runs/{run_id}/migrations/rollback": {"post": {
+            "parameters": [{"in": "path", "name": "run_id", "required": True,
+                            "schema": {"type": "string"}}],
+            "requestBody": {"required": True, "content": {"application/json": {
+                "schema": {"$ref": "#/components/schemas/WorkflowMigrationRollbackRequest"},
+            }}},
+        }},
+    }, "components": {"schemas": {"WorkflowMigrationRollbackRequest": {
+        "type": "object", "required": ["project_id", "actor", "migration_id"],
+        "properties": {"project_id": {"type": "string"}, "actor": {"type": "string"},
+                       "migration_id": {"type": "string"}},
+    }}}}
+    seen = []
+    client = httpx.Client(base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(
+        lambda request: (seen.append(request), httpx.Response(200, json={"ok": True}))[1]
+    ))
+    surface = ApiSurface(schema, client=client, principal="mcp-operator",
+                         pinned_project_id="alpha")
+    archive = operation_alias("DELETE", "/v1/tasks/{task_id}")
+    rollback = operation_alias("POST", "/v1/workflow-runs/{run_id}/migrations/rollback")
+    for alias in (archive, rollback):
+        op = surface.operations[alias]
+        assert surface.availability(op) == "callable"
+        assert surface.availability(op, read_only=True) == "read_only"
+        assert surface.invoke(alias, project_id="beta")["error"] == "project_is_session_bound"
+    assert surface.invoke(archive, project_id="alpha", path={"task_id": "t1"})["ok"]
+    assert seen[-1].url.path == "/v1/tasks/t1"
+    assert dict(seen[-1].url.params) == {"project_id": "alpha", "actor": "mcp-operator"}
+    assert surface.invoke(rollback, project_id="alpha", path={"run_id": "r1"},
+                          body={"migration_id": "m1"})["ok"]
+    assert json.loads(seen[-1].content) == {
+        "migration_id": "m1", "project_id": "alpha", "actor": "mcp-operator",
+    }
+    assert surface.invoke(rollback, project_id="alpha", path={"run_id": "r1"},
+                          body={"migration_id": "m1", "project_id": "beta"})["error"] == (
+        "project_is_session_bound"
+    )
+    assert len(seen) == 2
+
+
 def test_mcp_server_keeps_engine_registry_small_and_read_only_hides_api_write():
     surface, seen = _surface()
     ctx = type("Context", (), {"durable_workspace_configured": True})()
@@ -503,10 +554,17 @@ def test_connect_requires_bound_explicit_api_key_and_rejects_insecure_remote_ori
         raise AssertionError("cleartext remote API origin accepted")
 
 
-def test_multi_project_principal_is_pinned_to_selected_accessible_project():
+def test_multi_project_principal_cannot_dispatch_even_an_id_only_route():
+    seen = []
+    schema = {**SCHEMA, "paths": {**SCHEMA["paths"],
+                              "/v1/discoveries/{run_id}/promote": {"post": {"parameters": [
+                                  {"name": "run_id", "in": "path", "required": True,
+                                   "schema": {"type": "string"}},
+                              ]}}}}
     def send(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
         if request.url.path == "/openapi.json":
-            return httpx.Response(200, json=SCHEMA)
+            return httpx.Response(200, json=schema)
         if request.url.path == "/v1/auth/session":
             return httpx.Response(200, json={
                 "auth_required": True, "transport_authenticated": True,
@@ -520,14 +578,68 @@ def test_multi_project_principal_is_pinned_to_selected_accessible_project():
     client = httpx.Client(base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(send))
     surface = ApiSurface.connect("http://127.0.0.1:8000", api_key="explicit", client=client,
                                  project_id="alpha")
-    op = surface.operations[operation_alias("GET", "/v1/tasks")]
-    assert surface.availability(op) == "callable"
-    assert surface.invoke(op.alias, project_id="alpha")["ok"] is False  # mock 404
-    assert surface.invoke(op.alias, project_id="beta")["error"] == "project_is_session_bound"
+    op = surface.operations[operation_alias("POST", "/v1/discoveries/{run_id}/promote")]
+    assert surface.availability(op) == "exclusive_project_membership_required"
+    assert surface.invoke(op.alias, project_id="alpha", path={"run_id": "run-1"})["error"] == (
+        "exclusive_project_membership_required"
+    )
+    assert surface.invoke(op.alias, project_id="beta", path={"run_id": "run-1"})["error"] == (
+        "project_is_session_bound"
+    )
+    assert "/v1/discoveries/run-1/promote" not in seen
+    ctx = type("Context", (), {"durable_workspace_configured": True})()
+    server = MCPServer(ctx, project_id="alpha", registry=ToolRegistry(), api_surface=surface)
+    assert {tool["name"] for tool in server._tools()} == {
+        "api_find_operations", "api_describe_operation", "api_read_operation",
+        "api_write_operation",
+    }
     other = ApiSurface.connect("http://127.0.0.1:8000", api_key="explicit", client=client,
                                project_id="gamma")
     assert other.availability(op) == "project_membership_unverified"
-    assert other.invoke(op.alias, project_id="gamma")["error"] == "project_membership_unverified"
+    assert other.invoke(op.alias, project_id="gamma", path={"run_id": "run-1"})["error"] == (
+        "project_membership_unverified"
+    )
+
+
+def test_long_lived_session_rechecks_project_membership_and_principal_before_id_only_call():
+    seen = []
+    scope = {"principal": "mcp_operator", "projects": ["alpha"]}
+
+    def send(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/openapi.json":
+            return httpx.Response(200, json=SCHEMA)
+        if request.url.path == "/v1/auth/session":
+            return httpx.Response(200, json={
+                "auth_required": True, "transport_authenticated": True,
+                "actor_binding_required": True, "auth_method": "api_key",
+                "principal_member_id": scope["principal"],
+            })
+        if request.url.path == "/v1/projects":
+            return httpx.Response(200, json={
+                "items": [{"id": project} for project in scope["projects"]],
+            })
+        if request.url.path == "/v1/tasks/t1":
+            return httpx.Response(200, json={"id": "t1"})
+        return httpx.Response(404)
+
+    client = httpx.Client(base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(send))
+    surface = ApiSurface.connect("http://127.0.0.1:8000", api_key="dedicated", client=client,
+                                 project_id="alpha")
+    alias = operation_alias("GET", "/v1/tasks/{task_id}")
+    assert surface.invoke(alias, project_id="alpha", path={"task_id": "t1"})["ok"] is True
+    assert seen.count("/v1/tasks/t1") == 1
+
+    scope["projects"] = ["alpha", "beta"]
+    assert surface.invoke(alias, project_id="alpha", path={"task_id": "t1"})["error"] == (
+        "exclusive_project_membership_required"
+    )
+    scope["projects"] = ["alpha"]
+    scope["principal"] = "different_member"
+    assert surface.invoke(alias, project_id="alpha", path={"task_id": "t1"})["error"] == (
+        "api_principal_changed"
+    )
+    assert seen.count("/v1/tasks/t1") == 1
 
 
 def test_ambient_owner_principal_cannot_authorize_api_bridge():

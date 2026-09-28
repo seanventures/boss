@@ -98,3 +98,24 @@ def test_community_curated_request_fields_are_audited_and_never_paid_only():
                 assert documented == body, key
             else:
                 assert "$ref" in documented, key
+
+
+def test_operator_boundary_allows_only_audited_soft_archive_and_state_rollback():
+    community = json.loads(COMMUNITY_MATRIX.read_text())
+    rows = {(row["method"], row["path"]): row for row in community["operations"]}
+    allowed = {
+        ("DELETE", "/v1/tasks/{task_id}"),
+        ("POST", "/v1/workflow-runs/{run_id}/migrations/rollback"),
+    }
+    for key in allowed:
+        row = rows[key]
+        assert row["mcp_status"] == "api_policy_gated"
+        assert row["typed_input_schema"] is True
+    for key in {
+        ("POST", "/v1/decisions/{decision_id}/approve"),
+        ("POST", "/v1/delivery/deploy"),
+        ("POST", "/v1/members"),
+    }:
+        assert rows[key]["mcp_status"] == "operator_only_unavailable"
+    assert sum(row["mcp_status"] == "operator_only_unavailable"
+               for row in community["operations"]) == 75

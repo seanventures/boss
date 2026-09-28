@@ -51,6 +51,7 @@ def test_setup_preserves_existing_keys_and_creates_dedicated_member(monkeypatch,
         "owner-key": "ceo", "worker-key": "system", "existing-key": "reader",
         key: "mcp_operator",
     }
+    assert values["BOSS_MCP_PROJECT_ID"] == "alpha"
     assert os.stat(path).st_mode & 0o777 == 0o600
     assert requests[-1][-1]["permissions"] == list(mcp_access.DEFAULT_PERMISSIONS)
     assert all(entry[1] == "owner-key" for entry in requests)
@@ -60,6 +61,7 @@ def test_setup_preserves_existing_keys_and_creates_dedicated_member(monkeypatch,
     monkeypatch.setattr(mcp_access, "_request", lambda origin, key, method, route, body=None: (
         (200, {"items": [{"id": "alpha"}]}) if route == "/v1/projects" else
         (200, {"status": "active", "member_type": "system", "role_keys": ["mcp_operator"]})
+        if "project_id=alpha" in route else (404, {})
     ))
     mcp_access.configure(path, "alpha")
     assert _values(path.read_text().splitlines())["BOSS_MCP_API_KEY"] == key
@@ -91,6 +93,45 @@ def test_setup_never_rebinds_a_preexisting_unbound_api_key(monkeypatch, tmp_path
     assert path.read_bytes() == before
 
 
+def test_setup_rejects_a_second_project_before_changing_member_or_env(monkeypatch, tmp_path):
+    path = _env(tmp_path)
+    created = []
+
+    def fake_request(origin, key, method, route, body=None):
+        if route == "/v1/projects":
+            return 200, {"items": [{"id": "alpha"}, {"id": "beta"}]}
+        if method == "GET":
+            return 404, {}
+        created.append((route, body))
+        return 201, {}
+
+    monkeypatch.setattr(mcp_access, "_request", fake_request)
+    mcp_access.configure(path, "alpha")
+    before = path.read_bytes()
+    with pytest.raises(mcp_access.MCPSetupError, match="another project"):
+        mcp_access.configure(path, "beta")
+    assert path.read_bytes() == before
+    assert len(created) == 1
+
+
+def test_setup_rejects_preexisting_cross_project_member(monkeypatch, tmp_path):
+    path = _env(tmp_path)
+    before = path.read_bytes()
+
+    def fake_request(origin, key, method, route, body=None):
+        if route == "/v1/projects":
+            return 200, {"items": [{"id": "alpha"}, {"id": "beta"}]}
+        if method == "GET":
+            return 200, {"status": "active", "member_type": "system",
+                         "role_keys": ["mcp_operator"]}
+        pytest.fail("Cross-project member must not be mutated")
+
+    monkeypatch.setattr(mcp_access, "_request", fake_request)
+    with pytest.raises(mcp_access.MCPSetupError, match="another project"):
+        mcp_access.configure(path, "alpha")
+    assert path.read_bytes() == before
+
+
 def test_make_setup_rerun_reuses_key_and_skips_api_restart(monkeypatch, tmp_path):
     path = _env(tmp_path)
     present = False
@@ -117,12 +158,12 @@ def test_make_setup_rerun_reuses_key_and_skips_api_restart(monkeypatch, tmp_path
 
 def test_mcp_stdio_command_forwards_only_separate_key_in_environment(monkeypatch, tmp_path):
     path = _env(tmp_path)
-    with pytest.raises(mcp_access.MCPSetupError, match="unbound"):
+    with pytest.raises(mcp_access.MCPSetupError, match="not pinned"):
         mcp_access.launch(path, "alpha")
     path.write_text(path.read_text().replace(
         "existing-key:reader\n",
         "existing-key:reader,dedicated-secret:mcp_operator\n",
-    ) + "BOSS_MCP_API_KEY=dedicated-secret\n")
+    ) + "BOSS_MCP_API_KEY=dedicated-secret\nBOSS_MCP_PROJECT_ID=alpha\n")
     monkeypatch.setattr(mcp_access.shutil, "which", lambda name: "/usr/bin/docker")
     monkeypatch.setattr(mcp_access.subprocess, "run", lambda *args, **kwargs: type(
         "Result", (), {"returncode": 0}
@@ -138,13 +179,15 @@ def test_mcp_stdio_command_forwards_only_separate_key_in_environment(monkeypatch
     assert captured["args"][-5:] == [
         "--project", "alpha", "serve-mcp", "--api-url", "http://127.0.0.1:8000",
     ]
+    with pytest.raises(mcp_access.MCPSetupError, match="not pinned"):
+        mcp_access.launch(path, "beta")
 
 
 def test_mcp_stdio_uses_sudo_only_when_key_preservation_is_verified(monkeypatch, tmp_path):
     path = _env(tmp_path)
     path.write_text(path.read_text().replace(
         "existing-key:reader\n", "existing-key:reader,dedicated-secret:mcp_operator\n",
-    ) + "BOSS_MCP_API_KEY=dedicated-secret\n")
+    ) + "BOSS_MCP_API_KEY=dedicated-secret\nBOSS_MCP_PROJECT_ID=alpha\n")
     monkeypatch.setattr(mcp_access.shutil, "which", lambda name: f"/usr/bin/{name}")
     def fake_run(args, **kwargs):
         if args == ["docker", "info"]:
@@ -177,7 +220,7 @@ def test_installer_rerun_preserves_dedicated_mcp_key_and_bindings(tmp_path):
         "existing-key:reader\n", "existing-key:reader,mcp-key:mcp_operator\n",
     ).replace(
         "existing-key\n", "existing-key,mcp-key\n",
-    ) + "BOSS_MCP_API_KEY=mcp-key\n")
+    ) + "BOSS_MCP_API_KEY=mcp-key\nBOSS_MCP_PROJECT_ID=alpha\n")
     new = tmp_path / "new.env"
     new.write_text(
         "BOSS_API_KEY=owner-key\nBOSS_WORKER_API_KEY=new-worker\n"
@@ -191,5 +234,6 @@ def test_installer_rerun_preserves_dedicated_mcp_key_and_bindings(tmp_path):
     assert result.returncode == 0, result.stderr
     values = _values(new.read_text().splitlines())
     assert values["BOSS_MCP_API_KEY"] == "mcp-key"
+    assert values["BOSS_MCP_PROJECT_ID"] == "alpha"
     assert "mcp-key" in values["BOSS_API_KEYS"].split(",")
     assert _principal_map(values["BOSS_API_KEY_PRINCIPALS"])["mcp-key"] == "mcp_operator"

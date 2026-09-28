@@ -74,6 +74,12 @@ _OPERATOR_ONLY_EXACT = frozenset({
 _GOVERNED_EFFECT_ALLOWLIST = frozenset({
     ("POST", "/v1/changesets/{changeset_id}/apply"),
     ("POST", "/v1/delivery-workflows/apply"),
+    # This DELETE is a project-scoped soft archive: the task and child records
+    # remain, and the API requires task_create and emits task.archived.
+    ("DELETE", "/v1/tasks/{task_id}"),
+    # Only a paused run can roll back, and executed new-version steps block it.
+    # The API requires workflow_manage and records the migration event.
+    ("POST", "/v1/workflow-runs/{run_id}/migrations/rollback"),
 })
 _OPERATOR_ONLY_PATTERNS = (
     r"^/v1/decisions/\{[^/]+\}/(approve|reject|revise|delegate|execute)$",
@@ -133,11 +139,11 @@ def exclusion_reason(method: str, path: str) -> str | None:
 
 
 def needs_operator_confirmation(method: str, path: str) -> bool:
+    if (method, path) in _GOVERNED_EFFECT_ALLOWLIST:
+        return False
     if method == "DELETE":
         return True
     if method not in _WRITE_METHODS:
-        return False
-    if (method, path) in _GOVERNED_EFFECT_ALLOWLIST:
         return False
     if path in _OPERATOR_ONLY_EXACT:
         return True
@@ -241,6 +247,7 @@ class ApiSurface:
         edition: str = "unknown",
         scope_reason: str | None = None,
         pinned_project_id: str | None = None,
+        revalidate_scope: bool = False,
     ) -> None:
         self.schema = schema
         self.client = client
@@ -248,6 +255,7 @@ class ApiSurface:
         self.edition = edition
         self.scope_reason = scope_reason
         self.pinned_project_id = pinned_project_id
+        self.revalidate_scope = revalidate_scope
         self.curated_request_bodies = _curated_request_bodies()
         self.operations: dict[str, ApiOperation] = {}
         for path, methods in (schema.get("paths") or {}).items():
@@ -300,39 +308,7 @@ class ApiSurface:
         principal = None
         scope_reason = None
         if api_key:
-            auth = session.get("/v1/auth/session")
-            try:
-                state = auth.json() if auth.is_success else {}
-            except ValueError:
-                state = {}
-            if not (
-                state.get("auth_required") is True
-                and state.get("transport_authenticated") is True
-                and state.get("actor_binding_required") is True
-                and state.get("auth_method") == "api_key"
-                and isinstance(state.get("principal_member_id"), str)
-                and state["principal_member_id"].strip()
-            ):
-                scope_reason = "api_principal_binding_unverified"
-            else:
-                candidate = state["principal_member_id"].strip()
-                projects = session.get("/v1/projects")
-                try:
-                    listing = projects.json() if projects.is_success else {}
-                    accessible = {
-                        item.get("id") for item in (listing.get("items") or [])
-                        if isinstance(item, dict)
-                    }
-                except (ValueError, AttributeError, TypeError):
-                    accessible = set()
-                # The API principal may access several projects, but this MCP
-                # session is pinned to one explicitly selected project.
-                if candidate in {"ceo", "system", "executive_console"}:
-                    scope_reason = "dedicated_mcp_principal_required"
-                elif project_id in accessible:
-                    principal = candidate
-                else:
-                    scope_reason = "project_membership_unverified"
+            principal, scope_reason = _verify_api_scope(session, project_id)
         edition = "unknown"
         try:
             status = session.get("/v1/edition", params={"project_id": project_id})
@@ -342,7 +318,7 @@ class ApiSurface:
             pass
         return cls(schema, client=session, principal=principal,
                    edition=edition, scope_reason=scope_reason,
-                   pinned_project_id=project_id)
+                   pinned_project_id=project_id, revalidate_scope=bool(api_key))
 
     def availability(self, operation: ApiOperation, *, read_only: bool = False) -> str:
         if operation.excluded_reason:
@@ -474,6 +450,16 @@ class ApiSurface:
             return {"ok": False, "error": availability,
                     "reason": self.describe_brief(op, read_only=read_only)["reason"],
                     "operation": alias}
+        if self.revalidate_scope:
+            assert self.client is not None and self.principal is not None
+            try:
+                current_principal, scope_reason = _verify_api_scope(self.client, project_id)
+            except httpx.HTTPError:
+                current_principal, scope_reason = None, "api_principal_binding_unverified"
+            if scope_reason or current_principal != self.principal:
+                return {"ok": False,
+                        "error": scope_reason or "api_principal_changed",
+                        "operation": alias}
         if not isinstance(path or {}, dict) or not isinstance(query or {}, dict):
             return {"ok": False, "error": "path_and_query_must_be_objects"}
         assert self.client is not None and self.principal is not None
@@ -541,6 +527,43 @@ class ApiSurface:
         payload = _redact_payload(payload, markers, secret_context=secret_context)
         return {"ok": response.is_success, "status": response.status_code,
                 "operation": alias, "result": payload}
+
+
+def _verify_api_scope(session: httpx.Client, project_id: str) -> tuple[str | None, str | None]:
+    """Check live key identity and exclusive project membership before dispatch."""
+    auth = session.get("/v1/auth/session")
+    try:
+        state = auth.json() if auth.is_success else {}
+    except ValueError:
+        state = {}
+    if not isinstance(state, dict) or not (
+        state.get("auth_required") is True
+        and state.get("transport_authenticated") is True
+        and state.get("actor_binding_required") is True
+        and state.get("auth_method") == "api_key"
+        and isinstance(state.get("principal_member_id"), str)
+        and state["principal_member_id"].strip()
+    ):
+        return None, "api_principal_binding_unverified"
+    candidate = state["principal_member_id"].strip()
+    if candidate in {"ceo", "system", "executive_console"}:
+        return None, "dedicated_mcp_principal_required"
+    projects = session.get("/v1/projects")
+    try:
+        listing = projects.json() if projects.is_success else {}
+        items = listing.get("items") if isinstance(listing, dict) else None
+        accessible = {item["id"] for item in items
+                      if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    except (ValueError, TypeError):
+        accessible = set()
+    if project_id not in accessible:
+        return None, "project_membership_unverified"
+    if accessible != {project_id}:
+        # ID-only API routes cannot be pinned by injecting project_id, so the
+        # credential must remain exclusive even after a long-lived MCP session
+        # has started.
+        return None, "exclusive_project_membership_required"
+    return candidate, None
 
 
 def _valid_scalar(value: Any, schema: dict | None) -> bool:

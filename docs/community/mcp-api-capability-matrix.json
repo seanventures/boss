@@ -5,9 +5,9 @@
   "edition": "community",
   "operation_count": 982,
   "counts": {
-    "api_policy_gated": 851,
+    "api_policy_gated": 853,
     "excluded": 54,
-    "operator_only_unavailable": 77
+    "operator_only_unavailable": 75
   },
   "operations": [
     {
@@ -14874,14 +14874,14 @@
       "alias": "delete_v1_tasks_task_id_799b3042",
       "domain": "core",
       "summary": "Archive Task Endpoint",
-      "mcp_status": "operator_only_unavailable",
-      "reason": "trusted_operator_confirmation_unavailable",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
       "input_schema_quality": "parameters_only",
       "mounted_input_schema_quality": "parameters_only",
       "curated_input_fields": false,
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
-      "domain_scoped_direct_tool": false,
+      "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },
@@ -16489,14 +16489,14 @@
       "alias": "post_v1_workflow_runs_run_id_migrations_rollback_7a81c3eb",
       "domain": "delivery",
       "summary": "Rollback Workflow Migration",
-      "mcp_status": "operator_only_unavailable",
-      "reason": "trusted_operator_confirmation_unavailable",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
       "input_schema_quality": "typed_json_body",
       "mounted_input_schema_quality": "typed_json_body",
       "curated_input_fields": false,
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
-      "domain_scoped_direct_tool": false,
+      "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },

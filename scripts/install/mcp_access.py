@@ -47,7 +47,7 @@ class MCPSetupError(Exception):
 def _read_env(path: Path) -> tuple[list[str], dict[str, str]]:
     lines = path.read_text(encoding="utf-8").splitlines()
     values = _values(lines)
-    for name in ("BOSS_API_KEY", "BOSS_MCP_API_KEY", "BOSS_API_KEYS",
+    for name in ("BOSS_API_KEY", "BOSS_MCP_API_KEY", "BOSS_MCP_PROJECT_ID", "BOSS_API_KEYS",
                  "BOSS_API_KEY_PRINCIPALS"):
         found = [line.split("=", 1)[1] for line in lines if line.startswith(f"{name}=")]
         if len(set(found)) > 1:
@@ -94,6 +94,11 @@ def _request(origin: str, key: str, method: str, path: str, body: dict | None = 
 def configure(env_path: Path, project_id: str, permissions: list[str] | None = None) -> bool:
     lines, values = _read_env(env_path)
     before = list(lines)
+    configured_project = values.get("BOSS_MCP_PROJECT_ID", "")
+    if configured_project and configured_project != project_id:
+        raise MCPSetupError(
+            "This installed MCP key is bound to another project; use a separate principal and key"
+        )
     owner = values.get("BOSS_API_KEY", "")
     worker = values.get("BOSS_WORKER_API_KEY", "")
     if not owner or not worker:
@@ -116,13 +121,27 @@ def configure(env_path: Path, project_id: str, permissions: list[str] | None = N
     status, listing = _request(origin, owner, "GET", "/v1/projects")
     if status != 200 or not isinstance(listing.get("items"), list):
         raise MCPSetupError("Owner API key could not list projects")
-    if project_id not in {item.get("id") for item in listing["items"] if isinstance(item, dict)}:
+    project_ids = {
+        item.get("id") for item in listing["items"]
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if project_id not in project_ids:
         raise MCPSetupError("Selected project is not available to the installer owner")
 
-    member_path = f"/v1/members/{quote(PRINCIPAL)}?project_id={quote(project_id)}"
-    status, member = _request(origin, owner, "GET", member_path)
-    if status not in {200, 404}:
-        raise MCPSetupError(f"MCP member lookup failed with HTTP {status}")
+    member: dict = {}
+    status = 404
+    for visible_project in sorted(project_ids):
+        member_path = f"/v1/members/{quote(PRINCIPAL)}?project_id={quote(visible_project)}"
+        found_status, found_member = _request(origin, owner, "GET", member_path)
+        if found_status not in {200, 404}:
+            raise MCPSetupError(f"MCP member lookup failed with HTTP {found_status}")
+        if found_status == 200 and visible_project != project_id:
+            raise MCPSetupError(
+                "The dedicated MCP member already belongs to another project; "
+                "use a separate principal and key"
+            )
+        if visible_project == project_id:
+            status, member = found_status, found_member
     if status == 200 and member.get("status") != "active":
         raise MCPSetupError("Existing MCP member is not active")
     if status == 200 and (member.get("member_type") != "system" or
@@ -150,6 +169,7 @@ def configure(env_path: Path, project_id: str, permissions: list[str] | None = N
     bindings[key] = PRINCIPAL
     for name, value in (
         ("BOSS_MCP_API_KEY", key),
+        ("BOSS_MCP_PROJECT_ID", project_id),
         ("BOSS_API_KEYS", ",".join(keys)),
         ("BOSS_API_KEY_PRINCIPALS", ",".join(f"{token}:{principal}" for token, principal in bindings.items())),
     ):
@@ -172,6 +192,8 @@ def configure(env_path: Path, project_id: str, permissions: list[str] | None = N
 
 def launch(env_path: Path, project_id: str) -> None:
     _, values = _read_env(env_path)
+    if values.get("BOSS_MCP_PROJECT_ID") != project_id:
+        raise MCPSetupError("MCP key is not pinned to this project; run make mcp-setup")
     key = values.get("BOSS_MCP_API_KEY", "")
     bindings = _principal_map(values.get("BOSS_API_KEY_PRINCIPALS", ""))
     if not key or bindings.get(key) != PRINCIPAL:

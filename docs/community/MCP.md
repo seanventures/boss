@@ -26,9 +26,12 @@ through the environment; Docker's command line contains only the variable
 name. It requires direct Docker access, so sign out and back in after
 installation if Docker group membership is not active yet.
 
-For another project, use `BOSS_PROJECT_ID=project-id make mcp-setup` and
-`BOSS_PROJECT_ID=project-id make mcp`. Setup reuses the same dedicated key and
-adds the member to that project. For a different permission set, run:
+To choose a different project **before the first setup**, use
+`BOSS_PROJECT_ID=project-id make mcp-setup` and then
+`BOSS_PROJECT_ID=project-id make mcp`. One installed `.env` MCP key and member
+belong to one project. Setup refuses to add that member to a second project,
+and the launcher refuses a different project ID. For a different permission
+set on the selected project, run:
 
 ```bash
 python3 scripts/install/mcp_access.py setup --restart-api --project project-id \
@@ -37,8 +40,9 @@ python3 scripts/install/mcp_access.py setup --restart-api --project project-id \
 
 An explicit permission list replaces that member's grants. The authenticated
 API still enforces each operation's policy and approval gates. The launcher
-fails if the key is missing or unbound, or if the member cannot see the
-selected project.
+fails if the key is missing or unbound, or if the member can see any project
+other than the selected one. Use a separate principal, key, and MCP process
+for another project; do not add one MCP principal to several projects.
 
 The Community installer already starts Postgres and seeds the default project.
 The legacy engine-only command below remains available for locally trusted
@@ -136,9 +140,11 @@ Discovery works without an API credential in a manually started catalog-only
 session; invocation remains unavailable
 until a separately configured, dedicated API credential is supplied as
 `BOSS_MCP_API_KEY`. The key must already be configured in the API's key/principal
-map and its principal must be able to see the pinned session project in
-`GET /v1/projects`. A multi-project operator selects the project when starting
-each MCP session; calls cannot switch projects through arguments.
+map and `GET /v1/projects` must return **exactly** the pinned session project
+for that principal when the session starts and before each call. A multi-project
+operator needs one dedicated principal and key per project. Calls cannot switch
+projects through arguments, including
+operations that accept only a resource ID and no `project_id` field.
 The bridge verifies `/v1/auth/session` reports authenticated API-key transport
 and an actual bound principal. It never reads the API container's ambient
 `BOSS_API_KEY`, and an HTTP MCP bearer token alone grants no API authority.
@@ -187,7 +193,7 @@ operations:
 
 | Mounted edition | API policy eligible | Operator-only unavailable | Excluded from MCP |
 |---|---:|---:|---:|
-| Community | 851 | 77 | 54 |
+| Community | 853 | 75 | 54 |
 | Paid-only additions | 39 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
@@ -196,7 +202,10 @@ member has permission, that an edition includes the feature, or that an
 approval has been granted. Applying an already approved Resource Plane
 ChangeSet is callable because the API checks approval, active budget
 reservation, and resource receipts. Workflow mapping updates are callable
-through `workflow_manage`. The **77 Community and two paid-only operator
+through `workflow_manage`. A task can be soft-archived with `task_create` and
+an audit event; a paused workflow migration can be rolled back only before
+its new steps execute, with `workflow_manage` and an audit event. The
+**75 Community and two paid-only operator
 actions are unavailable through MCP today**: there is no trusted per-action
 human confirmation channel. They include decision approvals, member and
 budget authority changes, deploy/apply actions, destructive deletes, and host
@@ -208,15 +217,15 @@ and KMS lease/resolve routes that can return raw secret material. Customer
 secret-management routes remain
 available through API permission checks with redacted results.
 
-The mounted OpenAPI schema has **107 Community routes with a loose JSON body**
-and no property-level typing (94 otherwise callable, 13 operator-only). MCP
-adds audited, descriptive field maps for 19 of those routes (17 otherwise
+The mounted OpenAPI schema has **84 Community routes with a loose JSON body**
+and no property-level typing (71 otherwise callable, 13 operator-only). MCP
+adds audited, descriptive field maps for 18 of those routes (16 otherwise
 callable, two operator-only), including required fields for elastic capacity,
 provider usage, Goldeneye nodes, work trackers, and Cloud linking. These maps
 come from existing curated request documentation checked against Community
 handlers; they do not change API validation or authorization. The matrix labels
 them `curated_json_body` and keeps the mounted schema quality separately.
-**88 Community routes remain loose** in MCP discovery. The API request schemas
+**66 Community routes remain loose** in MCP discovery. The API request schemas
 still need tightening for runtime-validated typing. The public Community export
 can verify its mounted subset with
 `python scripts/audit_mcp_api_parity.py --check-community`.
