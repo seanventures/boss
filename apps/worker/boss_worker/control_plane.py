@@ -137,7 +137,10 @@ class ControlPlaneClient:
 
     def resume_agent_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = payload["run_id"]
-        response = self._client.post(f"/v1/agent-runs/{run_id}/resume", json={})
+        response = self._client.post(
+            f"/v1/agent-runs/{run_id}/resume",
+            json={key: payload[key] for key in ("worker_id", "job_id", "lease_token")},
+        )
         response.raise_for_status()
         return response.json()
 

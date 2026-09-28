@@ -818,7 +818,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             raise RuntimeError(error)
         return result
     if job.kind == "agent.resume":
-        result = client.resume_agent_run({"run_id": job.payload["run_id"]})
+        result = client.resume_agent_run({
+            "run_id": job.payload["run_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+        })
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Agent resume job failed.")
         return result

@@ -4657,10 +4657,32 @@ def list_task_outputs(project_id: str):
 
 
 @app.post("/v1/agent-runs/{run_id}/resume")
-def resume_agent_run_endpoint(run_id: str):
+def resume_agent_run_endpoint(run_id: str, payload: dict):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    require_worker_principal()
+    worker_id = str(payload.get("worker_id") or "").strip()
+    job_id = str(payload.get("job_id") or "").strip()
+    lease_token = str(payload.get("lease_token") or "").strip()
+    if not worker_id or not job_id or not lease_token:
+        raise HTTPException(status_code=422, detail="active agent resume lease required")
     with begin(engine) as connection:
+        project_id = connection.execute(
+            text("SELECT project_id FROM agent_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar_one_or_none()
+        if project_id is None:
+            raise HTTPException(status_code=404, detail="agent run not found")
+        try:
+            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if (
+            lease["kind"] != "agent.resume"
+            or lease["project_id"] != project_id
+            or (lease.get("payload") or {}).get("run_id") != run_id
+        ):
+            raise HTTPException(status_code=409, detail="lease does not match agent run")
         return software_factory.resume_plan_run(connection, run_id)
 
 

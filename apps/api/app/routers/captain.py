@@ -26,6 +26,15 @@ def _service():
     return CaptainCoordinationService(get_settings())
 
 
+def _require_captain_actor(connection, project_id: str, claimed_actor: str) -> str:
+    """Bind a captain write to the caller's active project membership."""
+    from apps.api.app.main import current_api_principal, require_project_actor
+
+    actor = current_api_principal.get() or claimed_actor
+    require_project_actor(connection, project_id, actor, "agent_chat")
+    return actor
+
+
 @router.get("/v1/captain/roster")
 def captain_roster() -> dict[str, Any]:
     """Catalog of agents the captain may staff. Not a scorecard."""
@@ -46,8 +55,9 @@ def captain_coordinate(payload: CoordinateRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
     with begin(get_engine()) as connection:
+        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
         return _service().coordinate(
-            connection, payload.project_id, actor=payload.actor or "engineering_captain",
+            connection, payload.project_id, actor=actor,
         )
 
 
@@ -128,8 +138,9 @@ def save_playbook(payload: PlaybookSaveRequest) -> dict[str, Any]:
     if not body.get("playbook_key"):
         raise HTTPException(status_code=422, detail="playbook_key or from_text is required")
     with begin(get_engine()) as connection:
+        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
         return _playbooks().save(
-            connection, project_id=payload.project_id, actor=payload.actor, **body,
+            connection, project_id=payload.project_id, actor=actor, **body,
         )
 
 
@@ -138,11 +149,12 @@ def start_playbook(playbook_key: str, payload: PlaybookStartRequest) -> dict[str
     if not payload.project_id.strip() or not payload.prd.strip():
         raise HTTPException(status_code=422, detail="project_id and prd are required")
     with begin(get_engine()) as connection:
+        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
         try:
             return _playbooks().start(
                 connection,
                 project_id=payload.project_id,
-                actor=payload.actor,
+                actor=actor,
                 playbook_key=playbook_key,
                 prd=payload.prd,
                 attach_run_id=payload.attach_run_id,
@@ -157,9 +169,10 @@ def loop_playbook(playbook_key: str, payload: PlaybookLoopRequest) -> dict[str, 
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
     with begin(get_engine()) as connection:
+        actor = _require_captain_actor(connection, payload.project_id, payload.actor)
         return _playbooks().loop_once(
             connection,
             project_id=payload.project_id,
-            actor=payload.actor,
+            actor=actor,
             playbook_key=playbook_key,
         )

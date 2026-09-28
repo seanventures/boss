@@ -198,8 +198,10 @@ def prune_activity_retention(payload: Optional[dict] = None) -> dict[str, Any]:
     an operator debugging a customer build needs. Deletes ROWS from the transcript table only —
     never files, and never the audit stream.
     """
+    from apps.api.app.main import require_worker_principal
     from boss_engine.services.activity_retention import prune, retention_days
 
+    require_worker_principal()
     requested = None
     if isinstance(payload, dict) and payload.get("days") is not None:
         try:
