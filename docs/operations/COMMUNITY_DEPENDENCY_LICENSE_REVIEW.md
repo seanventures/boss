@@ -1,6 +1,7 @@
 # Community dependency and notice review — BOSS-300 / BOSS-293
 
-**Status (2026-09-28): frozen-image inventory complete; PF-1 and PF-4 remain open.**
+**Status (2026-09-28): frozen-image inventory and interim source review complete;
+PF-1 and PF-4 remain open.**
 The source checkout and interim x86 Linux candidates were inspected. Frozen
 source `1a8102a2` has a zero-blocker 1,845-file export and passed first install
 on a pristine x86 VM. These findings are review inputs, not third-party notice
@@ -132,6 +133,59 @@ metadata alone does not settle its bundled native dependencies.
 
 Package metadata and notice-path searches do not establish redistribution
 rights, source-offer compliance, or completeness for bundled native binaries.
+
+## Interim GA source export (`2744f7d0`; final image review pending)
+
+The quarantined source candidate at `/tmp/boss-community-preflight-2744f7d0`
+records source commit `2744f7d0bcd716a9b81b836310fad16cab8fea71` and
+`mechanically_complete: true`, `blocker_count: 0`,
+`ready_for_publication: false`. Its six license-named files are the root
+`LICENSE`, `engine/LICENSE`, and one each in `packages/api-client`,
+`packages/create-boss`, `packages/goldeneye`, and `packages/specpack`. The root
+Apache text has SHA-256
+`fe847534e6d3ab7e0155d31ae5604d30b4e57030bb7c2c1167356ddba54ed8bd`;
+the Goldeneye kit's 875-byte `LICENSE` is a short Apache notice and full-text
+link (SHA-256
+`dab750002b8b619f8968f58a59b8ff99c1a212a5aea0d57adfa0553b994995ba`).
+No `NOTICE` or `THIRD-PARTY-NOTICES` file was present in that source export.
+This is a source-tree observation, not a finding that any particular dependency
+requires a consolidated notice file or that the built images lack their own
+license texts.
+
+The candidate Dockerfile still assembles the API/worker runtime from Debian
+`ffmpeg` and `libavfilter-extra`, `psycopg[binary]==3.2.9`, Playwright Chromium
+matched to `playwright==1.60.0`, and globally installed Claude Code `2.1.197`
+and Codex `0.158.0`. The web image installs the frozen pnpm lock, which includes
+`caniuse-lite@1.0.30001793` and `@img/sharp-libvips` `1.2.4`. The source export
+does not contain the downloaded wheels, npm packages, Debian files or browser
+binaries. Therefore it cannot establish their exact final-image notice paths or
+the redistribution disposition. The Goldeneye kit in the source export has
+install scripts that reference third-party container images (for example
+Traefik `v3.3`, Keycloak `26.0`, and MinIO `latest`); those image layers are not
+bundled in this source candidate and need separate inventory if distributed as
+part of a later kit artifact.
+
+Version-matched installed package files provide narrower, authoritative text
+evidence:
+
+| Package | Observed bundled text | Limit of this evidence |
+|---|---|---|
+| `caniuse-lite@1.0.30001793` | The local pnpm package's `LICENSE` is the CC-BY-4.0 text, SHA-256 `fd3a263fe19ed8faa9068b43abaebafc02c77897b0c6fc09abc04bb592e5f16e`. Its `package.json` declares `CC-BY-4.0`, matching the frozen x86 web inventory. | This resolves the versioned license-text identity in the inspected checkout. Verify the file and any required attribution in the final web image and shipped notice set. |
+| `psycopg-binary==3.2.9` | The local macOS wheel has `psycopg_binary-3.2.9.dist-info/licenses/LICENSE.txt`, SHA-256 `e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118`, containing LGPLv3 text. Its wheel `RECORD` lists 11 bundled `.dylibs` including `libpq`, OpenSSL and Kerberos-related libraries. The frozen x86 API/worker inventory confirms the same package version and LGPL metadata. | The macOS wheel is not the Linux wheel in the release image. Its single Psycopg license file does not establish the notices or source duties for every bundled Linux native library. |
+
+The earlier frozen x86 inventory already resolves the blank
+`qrcode-terminal` metadata field to an Apache-2.0 `LICENSE` file in the
+inspected Node image. It does not clear the final rebuilt image or other npm
+packages. No new conclusion about license compatibility follows from the
+versioned text checks above.
+
+The remaining counsel and release-image decisions are concrete: Claude Code
+CLI redistribution terms; GPL-enabled Debian ffmpeg and related source duties;
+LGPL and bundled-library materials for the Linux `psycopg-binary` wheel and
+Linux sharp/libvips packages; `caniuse-lite` attribution; the full Playwright
+Chromium notice set; and global Codex CLI native/dependency notices. The final
+image inventory must also confirm Node and `qrcode-terminal` license paths and
+separately cover the optional Redis/Infisical profile if that profile ships.
 
 ## Required disposition before PF-1/PF-4 can close
 
