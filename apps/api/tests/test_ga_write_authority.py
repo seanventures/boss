@@ -3,7 +3,12 @@
 from uuid import uuid4
 
 import pytest
-from boss_engine.services import code_task_service, prd_decomposition, secrets_service
+from boss_engine.services import (
+    code_task_service,
+    meeting_service,
+    prd_decomposition,
+    secrets_service,
+)
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
@@ -558,6 +563,7 @@ def test_code_task_step_uses_stored_project_for_execution_authority(
         return {"status": "running", "run_id": run_id}
 
     monkeypatch.setattr(code_task_service, "run_code_task", fake_run)
+    monkeypatch.setattr(api_main.settings, "worker_principal", "ga_runner")
     path = "/v1/code-tasks/step"
     assert client.post(
         path, headers=_auth("coo-key"),
@@ -568,14 +574,173 @@ def test_code_task_step_uses_stored_project_for_execution_authority(
         json={"run_id": local_run, "actor": "ceo"},
     ).status_code == 403
     assert client.post(
+        path, headers=_auth("ceo-key"), json={"run_id": local_run},
+    ).status_code == 403
+    assert client.post(
         path, headers=_auth("runner-key"),
         json={"run_id": foreign_run, "actor": "ga_runner", "project_id": PROJECT},
     ).status_code == 403
     assert calls == []
 
     allowed = client.post(
-        path, headers=_auth("ceo-key"),
+        path, headers=_auth("runner-key"),
         json={"run_id": local_run, "fencing_token": "lease-demo"},
     )
     assert allowed.status_code == 200, allowed.text
     assert calls == [(local_run, "lease-demo")]
+
+
+def test_prd_meeting_and_step_require_stored_project_execution_grant(
+    client, engine, scoped_operator, monkeypatch,
+):
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_operator",
+            display_name="GA build operator", member_type="human", role_keys=[],
+            permissions=["workflow_execute"], actor="ceo",
+        )
+
+    calls = []
+    monkeypatch.setattr(
+        api_main.intake, "create_task",
+        lambda *_args, **_kwargs: calls.append("task") or {"task_id": "task_ga_prd"},
+    )
+    monkeypatch.setattr(
+        api_main.budget, "reserve",
+        lambda *_args, **_kwargs: calls.append("budget") or
+        {"status": "reserved", "reservation_id": "bres_ga_prd"},
+    )
+    monkeypatch.setattr(
+        meeting_service, "start_meeting_run",
+        lambda *_args, **_kwargs: calls.append("meeting") or "mrun_ga_prd",
+    )
+    monkeypatch.setattr(
+        api_main.jobs, "create_job",
+        lambda *_args, **_kwargs: calls.append("job") or {"id": "job_ga_prd"},
+    )
+
+    path = "/v1/meetings/prd"
+    body = {"project_id": PROJECT, "directive": "Draft a GA plan", "actor": "coo"}
+    assert client.post(path, headers=_auth("coo-key"), json=body).status_code == 403
+    assert client.post(
+        path, headers=_auth("coo-key"), json={**body, "actor": "ceo"},
+    ).status_code == 403
+    assert client.post(
+        path, headers=_auth("operator-key"),
+        json={**body, "project_id": scoped_operator, "actor": "ga_operator"},
+    ).status_code == 403
+    assert calls == []
+
+    allowed = client.post(
+        path, headers=_auth("operator-key"), json={**body, "actor": "ga_operator"},
+    )
+    assert allowed.status_code == 201, allowed.text
+    assert calls == ["task", "budget", "meeting", "job"]
+
+    local_run = f"mrun_ga_local_{uuid4().hex[:8]}"
+    foreign_run = f"mrun_ga_foreign_{uuid4().hex[:8]}"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO meeting_runs (id, project_id, directive) "
+                "VALUES (:local, :project, 'Local meeting'), "
+                "(:foreign, :other, 'Foreign meeting')"
+            ),
+            {
+                "local": local_run,
+                "project": PROJECT,
+                "foreign": foreign_run,
+                "other": scoped_operator,
+            },
+        )
+    step_calls = []
+    monkeypatch.setattr(
+        meeting_service, "advance_meeting_run",
+        lambda _engine, _settings, _jobs, run_id:
+        step_calls.append(run_id) or {"status": "running"},
+    )
+    monkeypatch.setattr(api_main.settings, "worker_principal", "ga_operator")
+    step_path = "/v1/meetings/step"
+    assert client.post(
+        step_path, headers=_auth("coo-key"),
+        json={"run_id": local_run, "actor": "coo"},
+    ).status_code == 403
+    assert client.post(
+        step_path, headers=_auth("ceo-key"), json={"run_id": local_run},
+    ).status_code == 403
+    assert client.post(
+        step_path, headers=_auth("operator-key"),
+        json={"run_id": foreign_run, "actor": "ga_operator", "project_id": PROJECT},
+    ).status_code == 403
+    assert step_calls == []
+    assert client.post(
+        step_path, headers=_auth("operator-key"),
+        json={"run_id": local_run, "actor": "ga_operator"},
+    ).status_code == 200
+    assert step_calls == [local_run]
+
+
+def test_docs_update_enqueue_and_execute_require_github_grant(
+    client, engine, scoped_operator, monkeypatch,
+):
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_operator",
+            display_name="GA docs operator", member_type="human", role_keys=[],
+            permissions=["github_manage"], actor="ceo",
+        )
+
+    calls = []
+
+    def fake_enqueue(_connection, **kwargs):
+        calls.append(("enqueue", kwargs["project_id"], kwargs["actor"]))
+        return {
+            "id": "job_ga_docs", "project_id": kwargs["project_id"],
+            "kind": "docs.update", "status": "queued", "priority": 10,
+            "max_attempts": 3, "attempt": 0, "run_after": "2026-09-28T00:00:00Z",
+        }
+
+    def fake_execute(_connection, **kwargs):
+        calls.append(("execute", kwargs["project_id"]))
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(api_main.docs_updates, "enqueue", fake_enqueue)
+    monkeypatch.setattr(api_main.docs_updates, "run_update", fake_execute)
+    monkeypatch.setattr(api_main.settings, "worker_principal", "ga_operator")
+    body = {
+        "project_id": PROJECT, "event_id": "evt_ga_docs", "event_type": "code_task.pr_opened",
+        "entity_type": "code_task_run", "entity_id": "crun_ga_docs", "actor": "coo",
+    }
+    for path in ("/v1/docs/update", "/v1/docs/update/execute"):
+        assert client.post(
+            path, headers=_auth("coo-key"), json=body,
+        ).status_code == 403
+        assert client.post(
+            path, headers=_auth("coo-key"), json={**body, "actor": "ceo"},
+        ).status_code == 403
+        assert client.post(
+            path, headers=_auth("operator-key"),
+            json={**body, "project_id": scoped_operator, "actor": "ga_operator"},
+        ).status_code == 403
+    assert calls == []
+
+    assert client.post(
+        "/v1/docs/update/execute", headers=_auth("ceo-key"),
+        json={**body, "actor": "ceo"},
+    ).status_code == 403
+    assert calls == []
+
+    authorized_body = {**body, "actor": "ga_operator"}
+    queued = client.post(
+        "/v1/docs/update", headers=_auth("operator-key"), json=authorized_body,
+    )
+    assert queued.status_code == 201, queued.text
+    executed = client.post(
+        "/v1/docs/update/execute", headers=_auth("operator-key"),
+        json={**authorized_body, "created_by_job_id": queued.json()["id"]},
+    )
+    assert executed.status_code == 200, executed.text
+    assert calls == [
+        ("enqueue", PROJECT, "ga_operator"),
+        ("execute", PROJECT),
+    ]

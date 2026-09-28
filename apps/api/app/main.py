@@ -5012,6 +5012,9 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
         # Attach to an existing task if one was supplied, else create one.
         if payload.task_id:
             exists = connection.execute(
@@ -5293,8 +5296,22 @@ def run_meeting_step_endpoint(payload: dict):
     from the last completed phase instead of re-running the whole meeting."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    require_worker_principal()
+    run_id = str(payload.get("run_id") or "").strip()
+    if not run_id:
+        raise HTTPException(status_code=422, detail="run_id is required.")
+    with begin(engine) as connection:
+        run = connection.execute(
+            text("SELECT project_id FROM meeting_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if run:
+            actor = str(payload.get("actor") or current_api_principal.get() or "system")
+            require_project_actor(
+                connection, run["project_id"], actor, "workflow_execute"
+            )
     from .services.meeting_service import advance_meeting_run
-    return advance_meeting_run(engine, settings, jobs, payload["run_id"])
+    return advance_meeting_run(engine, settings, jobs, run_id)
 
 
 @app.post("/v1/code-tasks")
@@ -6177,6 +6194,7 @@ def run_code_task_step_endpoint(payload: dict):
     crash — the PR receipt dedupe makes re-opening the PR a no-op."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    require_worker_principal()
     run_id = str(payload.get("run_id") or "").strip()
     if not run_id:
         raise HTTPException(status_code=422, detail="run_id is required.")
@@ -18580,6 +18598,11 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
 def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
     """Manually enqueue the same bounded job used by completion-event triggers."""
     with begin(engine) as connection:
+        actor = (
+            payload.actor if payload.actor != "manual"
+            else current_api_principal.get() or "system"
+        )
+        require_project_actor(connection, payload.project_id, actor, "github_manage")
         try:
             result = docs_updates.enqueue(
                 connection,
@@ -18590,7 +18613,7 @@ def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
                 entity_id=payload.entity_id,
                 task_id=payload.task_id,
                 data_boundary=payload.data_boundary,
-                actor=payload.actor,
+                actor=actor,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -18600,7 +18623,13 @@ def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
 @app.post("/v1/docs/update/execute")
 def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
     """Worker-only execution boundary for a leased ``docs.update`` job."""
+    require_worker_principal()
     with begin(engine) as connection:
+        actor = (
+            payload.actor if payload.actor != "manual"
+            else current_api_principal.get() or "system"
+        )
+        require_project_actor(connection, payload.project_id, actor, "github_manage")
         try:
             return docs_updates.run_update(
                 connection,

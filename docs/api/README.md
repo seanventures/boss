@@ -88,6 +88,11 @@ Starting or advancing a code task with `POST /v1/code-tasks`,
 requires `workflow_execute` in the target project. The step route resolves the
 project from the stored run; callers cannot supply a different project to gain
 access. This also applies to simulated runs and plan-only decomposition.
+PRD meetings and their worker steps use the same `workflow_execute` grant.
+Worker step routes also require the configured worker principal when transport
+authentication is on. Manual documentation update enqueue and execution require
+`github_manage` in the specified project before they can create a GitHub pull
+request; execution additionally requires the configured worker principal.
 
 Live domain grouping is also returned by the catalog endpoint (source of truth for agents).
 
