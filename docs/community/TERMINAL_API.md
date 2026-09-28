@@ -33,7 +33,16 @@ receipts, and audit records. The terminal does not create a separate execution
 path. Fetch `/openapi.json` from the running API for its current route schema.
 Terminal, API, and MCP route parity is tracked as BOSS-416.
 
-For direct engine tooling, `boss-engine tools`, `boss-engine call`, and
-`boss-engine code -o json|stream-json` remain available. `boss-engine
-serve-mcp` exposes the engine tool layer to agent clients over stdio; its
-optional HTTP transport is read-only by default.
+For direct engine tooling in the stock Community install, run the Python
+module inside the API container. For example, from the install directory:
+
+```sh
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  exec -T api python -m boss_engine --project boss-dogfood tools
+```
+
+Use the same `python -m boss_engine` entry point for `call`, `code`, and
+`serve-mcp`. The Community API image does not install a `boss-engine`
+executable. If your user needs sudo for Docker, use a working Docker
+permission path for these commands. [MCP.md](MCP.md) shows the stdio command;
+its optional HTTP transport is read-only by default.

@@ -1,26 +1,34 @@
 # Drive BOSS Community with MCP
 
 The Community engine exposes its typed tool registry through MCP. The same
-registry powers the native engine agent and `boss-engine call`. The MCP server
+registry powers the native engine agent and `python -m boss_engine call`. The MCP server
 is an agent interface to the engine; the HTTP control plane remains the complete
 API for BOSS administration and integrations.
 
 ## Start a client
 
-Bootstrap Postgres first (`boss-engine bootstrap`), then configure an MCP client
-to launch `boss-engine serve-mcp` over stdio. Set `DATABASE_URL` in that
-process's environment and choose the project with the global `--project`
-option or `BOSS_PROJECT_ID`. Stdio supports governed write tools by default.
+The Community installer already starts Postgres and seeds the default project.
+From the install directory, configure an MCP client to launch this command
+over stdio. The API container already has `DATABASE_URL`; `--project` fixes
+the session project. Stdio supports governed write tools by default.
 
 ```bash
-boss-engine --project boss-dogfood serve-mcp
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  exec -T api python -m boss_engine --project boss-dogfood serve-mcp
 ```
 
-An HTTP server starts read-only. A non-loopback bind also requires
-`BOSS_MCP_HTTP_TOKEN`, because read tools can expose project data:
+Use `serve-mcp --read-only` if the client should only inspect BOSS. The stock
+Community API image provides the Python module, not a `boss-engine`
+executable. The user running the client needs noninteractive Docker access.
+
+For a separately configured Python process with `DATABASE_URL`, an HTTP MCP
+server starts read-only. The stock Community Compose file does not publish an
+MCP HTTP port, so this is a separate operator-managed listener. A non-loopback
+bind also requires `BOSS_MCP_HTTP_TOKEN`, because read tools can expose project
+data:
 
 ```bash
-boss-engine --project boss-dogfood serve-mcp --http --host 127.0.0.1
+python -m boss_engine --project boss-dogfood serve-mcp --http --host 127.0.0.1
 ```
 
 For a local HTTP agent that must create or steer work, set a private token and
@@ -30,7 +38,7 @@ machine.
 
 ```bash
 export BOSS_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
-boss-engine --project boss-dogfood serve-mcp --http --allow-writes --host 127.0.0.1
+python -m boss_engine --project boss-dogfood serve-mcp --http --allow-writes --host 127.0.0.1
 ```
 
 HTTP clients send `Authorization: Bearer <BOSS_MCP_HTTP_TOKEN>` to `/mcp` and
@@ -61,7 +69,7 @@ high-risk actions follow their existing explicit approval path.
 
 ## Scope and parity
 
-MCP and `boss-engine call` use the engine registry, so their tool names and
+MCP and `python -m boss_engine call` use the engine registry, so their tool names and
 argument schemas match. The HTTP control plane has many more routes than the
 engine registry, including setup, identity, provider administration, billing,
 and edition-specific operations. Do not treat MCP `tools/list` as a complete
