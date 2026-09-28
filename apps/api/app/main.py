@@ -9948,6 +9948,13 @@ def require_sandbox_reader(connection, sandbox_id: str) -> str:
     return project_id
 
 
+def require_sandbox_actor(connection, sandbox_id: str, actor: str) -> str:
+    """Authorize a host effect against the sandbox's stored project, not its URL ID."""
+    project_id = require_sandbox_reader(connection, sandbox_id)
+    require_project_actor(connection, project_id, actor, "providerops_manage")
+    return project_id
+
+
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():
     """The connected micro-VM host + the inspectable (retained) VMs. A failed or
@@ -10073,13 +10080,17 @@ def sandbox_exec_endpoint(sandbox_id: str, payload: dict):
     from .services import sandbox_console
     from .services.sandbox_provider import SandboxPlaneError
 
+    actor = current_api_principal.get() or str(payload.get("actor") or "operator").strip()
     try:
         with begin(engine) as c:
+            require_sandbox_actor(c, sandbox_id, actor)
             return sandbox_console.exec_command(
                 c, settings, sandbox_id, payload.get("command", ""),
                 break_glass=bool(payload.get("break_glass")),
-                reason=payload.get("reason"), actor=payload.get("actor", "operator"),
+                reason=payload.get("reason"), actor=actor,
             )
+    except HTTPException:
+        raise
     except SandboxPlaneError as e:
         _raise_sandbox_plane(e)
     except ValueError as e:
@@ -10118,39 +10129,38 @@ def sandbox_logs_endpoint(sandbox_id: str):
 
 @app.post("/v1/sandboxes/{sandbox_id}/preserve")
 def sandbox_preserve_endpoint(sandbox_id: str, payload: dict):
-    """Hold a retained micro-VM longer for investigation (extends the reaper window)."""
-    from .services import sandbox_console
-    from .services.sandbox_provider import SandboxPlaneError
-
-    try:
-        with begin(engine) as c:
-            return sandbox_console.hold(
-                c, settings, sandbox_id, hours=int(payload.get("hours", 2)),
-                actor=payload.get("actor", "operator"),
-            )
-    except SandboxPlaneError as e:
-        _raise_sandbox_plane(e)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(
-            status_code=503,
-            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
-        ) from e
+    """Refuse host retention until its cost and external effect are governed."""
+    actor = current_api_principal.get() or str(payload.get("actor") or "operator").strip()
+    with begin(engine) as connection:
+        require_sandbox_actor(connection, sandbox_id, actor)
+    # The host hold API has no idempotency key. A receipt created only after calling it
+    # cannot distinguish a timed-out success from a failed request; retrying can extend
+    # retention twice and charge unreserved infrastructure time. Keep this closed until
+    # the host accepts a stable request key and the API reserves budget and receipts it.
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Sandbox preservation is disabled until budget reservation, host "
+            "idempotency, and a durable receipt are enforced."
+        ),
+    )
 
 
 @app.delete("/v1/sandboxes/{sandbox_id}")
 def sandbox_destroy_endpoint(sandbox_id: str):
-    from .services import sandbox_console
-    from .services.sandbox_provider import SandboxPlaneError
-
-    try:
-        return sandbox_console.destroy(settings, sandbox_id)
-    except SandboxPlaneError as e:
-        _raise_sandbox_plane(e)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(
-            status_code=503,
-            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
-        ) from e
+    actor = current_api_principal.get() or "operator"
+    with begin(engine) as connection:
+        require_sandbox_actor(connection, sandbox_id, actor)
+    # Releasing a retained VM discards its rootfs. There is no decision-bound
+    # rollback/receipt path for that effect, so an actor with permission must
+    # still be refused before the host receives a DELETE.
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Sandbox deletion is disabled until an approved decision, rollback "
+            "plan, and durable receipt are enforced."
+        ),
+    )
 
 
 # Curated catalog of the named service-level approval gates (the ~38 in-code

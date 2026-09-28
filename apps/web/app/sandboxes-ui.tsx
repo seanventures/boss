@@ -20,9 +20,6 @@ async function apiExec(id: string, command: string, breakGlass: boolean, reason?
   });
   return r.json();
 }
-async function apiDestroy(id: string): Promise<void> {
-  await fetch(`/api/sandboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
-}
 async function apiStats(id: string): Promise<SandboxStats> {
   const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/stats`);
   return r.json();
@@ -36,14 +33,6 @@ async function apiHelpers(): Promise<HelperCatalog> {
   const r = await fetch(`/api/sandboxes/helpers`);
   return r.json();
 }
-async function apiPreserve(id: string, reason: string): Promise<SandboxSummary> {
-  const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/preserve`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reason }),
-  });
-  return r.json();
-}
-
 function statusTone(s: string): string {
   if (s === "idle") return "green";
   if (s === "failed") return "pink";
@@ -211,15 +200,11 @@ function LogsPanel({ sandboxId }: { sandboxId: string }) {
   );
 }
 
-function SandboxDetail({ sb, onBack, onDestroyed }: {
-  sb: SandboxSummary; onBack: () => void; onDestroyed: () => void;
+function SandboxDetail({ sb, onBack }: {
+  sb: SandboxSummary; onBack: () => void;
 }) {
   const [tree, setTree] = useState<string[]>([]);
   const [file, setFile] = useState<string | null>(null);
-  const [status, setStatus] = useState(sb.status);
-  const [preserved, setPreserved] = useState(!!sb.preserved);
-  const [showPreserve, setShowPreserve] = useState(false);
-  const [reason, setReason] = useState("");
   const ds = sb.meta?.diff_summary;
 
   useEffect(() => {
@@ -227,14 +212,6 @@ function SandboxDetail({ sb, onBack, onDestroyed }: {
     apiTree(sb.sandbox_id).then((r) => live && setTree(r.tree ?? [])).catch(() => {});
     return () => { live = false; };
   }, [sb.sandbox_id]);
-
-  const doPreserve = async () => {
-    if (!reason.trim()) return;
-    const r = await apiPreserve(sb.sandbox_id, reason);
-    setStatus(r.status ?? "quarantined");
-    setPreserved(true);
-    setShowPreserve(false);
-  };
 
   return (
     <div className="sbx-detail">
@@ -245,20 +222,14 @@ function SandboxDetail({ sb, onBack, onDestroyed }: {
           <p className="detail"><code>{sb.sandbox_id}</code> · {sb.tenant_id} · {sb.repo}</p>
         </div>
         <div className="sbx-detail-actions">
-          <span className={`cap-badge tone-${statusTone(status)}`}>{status}</span>
-          <button className="cap-btn" title="Extend the retention window on this VM"
-            onClick={async () => { await apiPreserve(sb.sandbox_id, "hold"); setStatus("held +2h"); }}>
-            ⏱ Hold 2h more
-          </button>
-          <button className="cap-btn" onClick={async () => { await apiDestroy(sb.sandbox_id); onDestroyed(); }}>
-            Release
-          </button>
+          <span className={`cap-badge tone-${statusTone(sb.status)}`}>{sb.status}</span>
         </div>
       </div>
 
       <p className="detail" style={{ marginTop: -4 }}>
         Retained micro‑VM rootfs of a failed/incomplete task (read‑only, auto‑reaped ~2h). Browse the
-        working tree, read files, and check the logs to find the root cause.
+        working tree, read files, and check the logs to find the root cause. Manual hold and release
+        are unavailable while their approval and audit controls are completed.
       </p>
 
       <div className="sbx-meta">
@@ -339,7 +310,7 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
 
   const active = selected ? sandboxes.find((s) => s.sandbox_id === selected) : null;
   if (active) {
-    return <SandboxDetail sb={active} onBack={() => setSelected(null)} onDestroyed={() => setSelected(null)} />;
+    return <SandboxDetail sb={active} onBack={() => setSelected(null)} />;
   }
 
   return (
