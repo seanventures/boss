@@ -4,16 +4,7 @@ One-line Community setup for a supported Linux VM.
 
 ## One-liner
 
-> **Public launch pending:** `seanventures/boss` is the intended public home, but the
-> repository and raw installer URL are not available yet. Until publication, invited
-> contributors can run the installer from their authorized checkout:
->
-> ```bash
-> cd /path/to/authorized/boss
-> ./install.sh --dir "$PWD"
-> ```
-
-After the public repository is live, the command will be:
+From the public Community repository, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
@@ -265,8 +256,7 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 ./scripts/install/upgrade.sh --dir "$PWD" --no-web          # if originally installed without web
 ```
 
-Once `seanventures/boss` is public, a default `~/boss` install can use the
-one-line upgrade below (the URL is not available publicly yet):
+A default `~/boss` install can use the one-line upgrade below:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/scripts/install/upgrade.sh | bash

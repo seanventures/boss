@@ -105,8 +105,9 @@ HOW_TO_FIND_THE_KEY = """no API key.
 
   Where to find it, depending on where BOSS is running:
 
-  ON THE SERVER — run this there:
-      grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2-
+  ON THE SERVER — run this from the default install directory:
+      cd ~/boss && source ./boss-community.env.sh
+      export BOSS_API="$BOSS_API_URL" BOSS_PROJECT="$BOSS_PROJECT_ID"
 
   FROM YOUR LAPTOP, with BOSS on a server — start the SSH tunnel in another
   terminal, then print the three export lines and paste them into this one:
@@ -114,10 +115,11 @@ HOW_TO_FIND_THE_KEY = """no API key.
       scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
 
   BOSS ON THIS MACHINE:
-      grep '^BOSS_API_KEY=' .env | cut -d= -f2-
+      source ./boss-community.env.sh
+      export BOSS_API="$BOSS_API_URL" BOSS_PROJECT="$BOSS_PROJECT_ID"
 
-  Export it in BOSS_API_KEY. Avoid --key on the command line because arguments
-  can appear in process listings.
+  The generated shell file exports BOSS_API_KEY. Avoid --key on the command
+  line because arguments can appear in process listings.
 
   The key is a secret. `env` prints it to your terminal, so do not paste that output
   into a chat or a ticket."""

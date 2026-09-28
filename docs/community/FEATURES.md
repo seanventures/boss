@@ -14,7 +14,6 @@ This is the Community feature checklist. A status here describes the implementat
 | Job leases, heartbeat, fencing | ✅ |
 | Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
 | Event / audit feed | ✅ |
-| Go event + webhook dispatcher (S3) | ◐ Optional Enterprise sidecar in `services/webhook-dispatcher`. Python event SoR + leased `webhook.outbound.deliver` stay canonical. Unset URL → honest `not_configured`. Default dry-run, no live mount, **not GA.** |
 | Global activity log | ◐ Searchable/sortable Mission Control area (status, kind, actor, stuck banner). **Not GA.** |
 | Decision inbox (approve / reject / escalate) | ✅ Hold `reason` + `default_action` on the card; GET `/v1/decisions/{id}`. **Not GA.** |
 | Receipts with unique dedupe keys | ✅ |
@@ -42,7 +41,7 @@ checks apply to terminal requests as they do to other API clients.
 | Feature | Status |
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
-| SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: bound usable ref wins; env is last-resort only when no ref is bound. Unresolvable bound refs do not fall back. Live `local_vault` bind `sref_6b00a2d6a9424abba8a0` on tag `3af9c64` (BOSS-369 Done). **Not GA.** |
+| SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: bound usable ref wins; env is last-resort only when no ref is bound. Unresolvable bound refs do not fall back. **Not GA.** |
 | Official QA /reports v1.1 | ◐ Honesty helper + inspect gate + Mission Control scorecard island. Missing UI/UX stays `not_scored`. Never invent scores. Live official POSTs may still be in flight. **Not GA.** |
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
@@ -95,7 +94,7 @@ checks apply to terminal requests as they do to other API clients.
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
 | Focused always-on agents | ◐ Builder + duty loop in code (`/v1/focused-agents`). Worker ticks due always-on/hybrid agents every 60s; Wake now for on-demand. Same validate-then-apply gates as captain. **Not GA** until live dogfood. |
-| Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch on shared tag `3f1d2cf`. Worker every 60s: observe → measure → validate → apply-safe → verify. Live dogfood: first tick applied a preview restart (`app_preview.started` 17:32:16Z, verify ok). Decisions/DLQ stay human. **Not public GA.** |
+| Metatron captain (persistent session / goals / watch) | ◐ Worker overwatch follows observe → measure → validate → apply-safe → verify. Decisions and deadletters stay human. **Not public GA.** |
 | AI SRE kernel (awesome-ai-sre map) | ◐ Capability ledger at `GET /v1/ai-sre/capabilities` + Mission Control island. MCP adds list/diagnose/capabilities/verify/page. Observe-only worker tick at `POST /v1/ai-sre/overwatch` (scan / diagnose / dry-run page). Runbooks at `/v1/ai-sre/runbooks` (validate + Decision hold; `page_oncall` dry-run only). Noise view `GET /v1/ai-sre/noise` (clustered vs raw, no invented %). Ask `POST /v1/ai-sre/ask` returns a query plan only. Evidence-only incident postmortem at `POST/GET /v1/reliability/incidents/{id}/postmortem` (existing evidence only; never invents RCA; does not auto-resolve). Deterministic `GET /v1/ai-sre/bench` (InvestigationEngine fixtures). Never remediates, never auto-applies Decisions, never merges PRs. **Not public GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
@@ -105,12 +104,6 @@ checks apply to terminal requests as they do to other API clients.
 | Self-improvement automation routes | ✦ Enterprise mount |
 
 Metatron captain: one-shot `POST /v1/metatron/query` plus `/v1/metatron/session|goals|watch|drive|overwatch`. Worker overwatch is always on. Every action (chat, goal, drive, apply) runs `validate_action` / `validate_move` first. Decisions and deadletters never auto-apply. BOSS self-change opens a PR — never a silent write. **Not GA** until live dogfood of a validated apply on the shared tag.
-
-## Scale (optional, not Community GA)
-
-| Feature | Status |
-|---|---|
-| Go tenant gateway (S2) | ◐ Library + binary in `go/tenant-gateway/`. Tenant/project routing, auth header pass-through, fail-closed unknown tenant, `/health`. **Not mounted.** Production edge remains Traefik. Engine runs without it. Not a Community GA claim. **Not GA.** |
 
 ## Open-core boundary
 

@@ -3,10 +3,12 @@
 Workflows built from skills BOSS already ships, using only the public API — the same calls the
 console makes when you click through the builder.
 
-**None of this is part of BOSS.** Nothing here installs, and nothing runs on a fresh install.
-Each example creates data in *your* project, which you can change, rename or delete. What BOSS
-ships is the **capability** each one assembles: the skills, the roles, and the tools in the
-images. The example is one way to wire them together; yours will differ, which is the point.
+These examples ship as optional setup scripts. None is installed or runs on a
+fresh install. Running a setup script creates definitions in *your* project,
+which you can change, rename or delete. Actual runs still need the model and
+connected services listed for each example, and external actions wait for the
+required approval. The scripts assemble skills, roles, and tools that BOSS
+ships; yours can use a different arrangement.
 
 Every example has the same shape:
 
@@ -21,8 +23,9 @@ examples/<name>/
 Every command below needs `BOSS_API_KEY`. It is generated when BOSS is installed and written to
 the install's `.env` — it is not shown again, so this is how to get it back.
 
-**BOSS on a server, and you are on your laptop** — start an SSH tunnel in a
-separate terminal. The installer binds the API to the VM's loopback address.
+**BOSS on a server, and you are on your laptop** — if you also have a checkout
+of this repository on the laptop, start an SSH tunnel in a separate terminal.
+The installer binds the API to the VM's loopback address.
 
 ```bash
 scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key tunnel
@@ -43,13 +46,18 @@ export BOSS_PROJECT=boss-dogfood
 Paste those lines into your shell while the tunnel is open. `env` prints a
 secret, so keep its output out of tickets and shared logs.
 
-**On the server itself:**
+**On the server itself (the simplest path after a one-line install):**
 
 ```bash
-export BOSS_API_KEY="$(sed -n 's/^BOSS_API_KEY=//p' /opt/boss/.env)"
+cd ~/boss
+source ./boss-community.env.sh
+export BOSS_API="$BOSS_API_URL" BOSS_PROJECT="$BOSS_PROJECT_ID"
 ```
 
-**BOSS on this machine:**
+The generated shell file is private and supplies the API key without printing
+it. If you installed to another directory, change to that directory first.
+
+**BOSS on this machine from a checkout without the installer shell file:**
 
 ```bash
 export BOSS_API_KEY="$(sed -n 's/^BOSS_API_KEY=//p' .env)"

@@ -9,9 +9,7 @@ the control plane and leaves model work visibly unavailable.
 
 ## Install
 
-`seanventures/boss` is the intended public source. **Its raw installer URL is
-not available until the repository is published.** At release, the one-line
-command will be:
+Install from the Community repository:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
