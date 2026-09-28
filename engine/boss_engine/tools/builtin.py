@@ -1450,7 +1450,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         with ctx.begin() as c:
             return JobLeaseService(ctx.settings).cancel_queued_job(
                 c, str(args["job_id"]), reason=str(args["reason"]),
-                actor=actor, force=bool(args.get("force")))
+                actor=actor, force=bool(args.get("force")),
+                project_id=project_id)
 
     @reg.tool(
         "write_db",
@@ -3408,9 +3409,10 @@ def _json_safe(obj: Any) -> Any:
 
 _WRITE_KEYWORDS = re.compile(
     r"\b(insert|update|delete|drop|alter|create|grant|revoke|truncate|copy|"
-    r"merge|call|do|vacuum|analyze|reindex|comment|lock)\b",
+    r"merge|call|do|vacuum|analyze|reindex|comment|lock|into)\b",
     re.IGNORECASE,
 )
+_SECRET_TABLES = re.compile(r"\b(secret_refs|secret_material)\b", re.IGNORECASE)
 
 
 #: Tables named in a statement: FROM x, JOIN y, INTO z. Deliberately loose — this drives a
@@ -3481,6 +3483,8 @@ def _is_read_only(sql: str) -> tuple[bool, str]:
         return False, "only SELECT / WITH queries are allowed"
     if _WRITE_KEYWORDS.search(sql):
         return False, "write/DDL keyword detected"
+    if _SECRET_TABLES.search(sql):
+        return False, "secret catalog tables are not queryable"
     return True, ""
 
 

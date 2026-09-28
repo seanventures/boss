@@ -23,6 +23,7 @@ the result with a real connection. That is the honest shape of this problem.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import uuid
 from typing import Any, Optional
@@ -209,7 +210,6 @@ def generate_host_key(connection, settings: Settings, *, host_id: str,
         {"s": minted.get("id") or minted.get("secret_ref_id"), "pub": public, "i": host_id})
     user = (host.get("ssh_user") or "root").strip()
     address = host["address"]
-    port = int(host.get("ssh_port") or 22)
     return {
         "host_id": host_id,
         "public_key": public,
@@ -526,12 +526,14 @@ def retire_host(connection, settings: Settings, *, host_id: str,
                 # tracked and retire silently left behind. Every key BOSS issues is
                 # commented `boss@<host name>`; that marker is what identifies ours.
                 marker = f"boss@{host['name']}"
+                # End-anchored: ` boss@prod` must not match ` boss@production`.
+                marker_re = re.escape(f" {marker}") + r"$"
                 script = (
                     'set -e; '
                     f'if [ -f {ak} ]; then '
                     f'  cp {ak} {ak}.boss-retire.bak; '
                     f'  grep -vxF {shlex.quote(public)} {ak}.boss-retire.bak '
-                    f'    | grep -v {shlex.quote(" " + marker)} > {ak} || true; '
+                    f'    | grep -vE {shlex.quote(marker_re)} > {ak} || true; '
                     f'  chmod 600 {ak}; echo KEY_REVOKED; '
                     'else echo NO_AUTHORIZED_KEYS; fi')
                 res = _ssh(key, address, user, port, script, timeout=30)
@@ -827,10 +829,19 @@ def attach_target(connection, *, target_id: str, host_id: str) -> dict[str, Any]
         raise ValueError(f"no such deployment host: {host_id}")
     if host.get("status") == "retired":
         raise ValueError(f"host {host['name']} is retired; nothing may be scheduled on it")
+    target = connection.execute(
+        sql("SELECT id, project_id FROM deployment_targets WHERE id = :t"),
+        {"t": target_id},
+    ).mappings().first()
+    if not target:
+        raise ValueError(f"no such deployment target: {target_id}")
+    if target["project_id"] != host.get("project_id"):
+        raise ValueError(
+            "host and target belong to different projects; attach refused")
 
     connection.execute(
-        sql("UPDATE deployment_targets SET host_id = :h, target_ref = :ref, updated_at = now() "
-            "WHERE id = :t"),
+        sql("UPDATE deployment_targets SET host_id = :h, target_ref = :ref, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = :t"),
         {"h": host_id, "ref": target_ref_for(host), "t": target_id})
     return {"target_id": target_id, "host_id": host_id,
             "target_ref": target_ref_for(host), "host_name": host["name"],

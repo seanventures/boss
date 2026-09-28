@@ -129,8 +129,11 @@ def run_in_workspace(workspace: Path, command: str, cwd: Optional[str] = None) -
     target = workspace
     if cwd:
         candidate = (workspace / cwd).resolve()
-        # Confine to the workspace: `cd ../../etc` is not a diagnosis.
-        if not str(candidate).startswith(str(workspace.resolve())):
+        # Confine to the workspace. startswith is a prefix check: `/tmp/ws-evil`
+        # looks like it is inside `/tmp/ws`. relative_to raises on a sibling.
+        try:
+            candidate.relative_to(workspace.resolve())
+        except ValueError:
             return {"error": "cwd must stay inside the workspace", "exit_code": None}
         target = candidate
     if not target.is_dir():

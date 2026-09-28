@@ -163,6 +163,7 @@ def enqueue_job(
         return {
             "id": None, "project_id": project_id, "task_id": task_id,
             "kind": kind, "status": "skipped", "created": False,
+            "dedupe_key": None,
             "skipped_reason": _skip,
         }
 
@@ -434,13 +435,15 @@ class JobLeaseService:
         )
         # Preserve the public return shape used before enqueue_job was
         # extracted.  Dispatcher-only metadata belongs on the free function.
-        job.pop("dedupe_key")
-        job.pop("created")
+        # The skip path (stopped run) has these keys too; popping without a
+        # default crashed the completing meeting.step after an operator cancel.
+        job.pop("dedupe_key", None)
+        job.pop("created", None)
         return job
 
     def cancel_queued_job(
         self, connection: Connection, job_id: str, *, reason: str, actor: str = "operator",
-        force: bool = False,
+        force: bool = False, project_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Cancel a job that has not started. Never touches one that is running.
 
@@ -457,10 +460,12 @@ class JobLeaseService:
         waiting indefinitely, and the caller says so in `reason`.
         """
         row = connection.execute(
-            text("SELECT id, status, kind, payload FROM jobs WHERE id = :id"),
+            text("SELECT id, status, kind, payload, project_id FROM jobs WHERE id = :id"),
             {"id": job_id}).mappings().first()
         if not row:
             return {"ok": False, "error": "no such job"}
+        if project_id and row["project_id"] != project_id:
+            return {"ok": False, "error": "no such job in this project"}
         if row["status"] in ("succeeded", "cancelled", "deadlettered"):
             return {"ok": True, "job_id": job_id, "status": row["status"],
                     "note": "already terminal"}

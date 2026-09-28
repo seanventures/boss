@@ -155,3 +155,99 @@ def test_error_no_longer_sends_the_operator_to_a_panel_that_cannot_help(client, 
     _orphan_target(engine, seeded["app_name"])
     response = _setup(client, seeded)
     assert "Hosts panel" not in response.text
+
+
+def test_setup_deployment_refuses_a_host_from_another_project(client, engine, seeded):
+    """Set target must not bind another project's VM (or inherit its SSH key).
+
+    The endpoint authorizes the actor on the code-task's project, then used to attach
+    whatever host_id was supplied. A host from project B can then be scheduled from
+    project A; deploy resolves the victim host's key_secret_ref and SSHes in.
+    """
+    victim_project = f"proj_victim_{_uid()}"
+    victim_host = f"dh_{_uid()}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO projects (id, workspace_id, name, slug) "
+            "VALUES (:id, 'ws_boss', 'Victim fleet', :id) ON CONFLICT (id) DO NOTHING"),
+            {"id": victim_project})
+        c.execute(text(
+            "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, "
+            "status) VALUES (:i, :p, :n, '198.51.100.10', 'root', 22, 'verified')"),
+            {"i": victim_host, "p": victim_project, "n": f"victim-{_uid()}"})
+
+    response = _setup(client, seeded, host_id=victim_host)
+
+    assert response.status_code in (403, 404, 422), response.text
+    detail = str(response.json().get("detail") or response.text).lower()
+    assert "project" in detail or response.status_code == 404
+
+    with engine.begin() as c:
+        bound = c.execute(
+            text("SELECT id FROM deployment_targets WHERE host_id = :h"),
+            {"h": victim_host}).first()
+        created = c.execute(
+            text("SELECT id FROM deployment_targets WHERE project_id = :p AND app_name = :a"),
+            {"p": PROJECT_ID, "a": seeded["app_name"]}).first()
+    assert bound is None, "victim host must not be attached to any target"
+    assert created is None, "setup-deployment must not create a target for a foreign host"
+
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM deployment_hosts WHERE id = :i"), {"i": victim_host})
+        c.execute(text("DELETE FROM projects WHERE id = :i"), {"i": victim_project})
+
+
+def test_attach_refuses_a_host_from_another_project(client, engine, seeded):
+    """The Hosts-panel attach path has the same tenant fence."""
+    target_id = _orphan_target(engine, seeded["app_name"])
+    victim_project = f"proj_victim_{_uid()}"
+    victim_host = f"dh_{_uid()}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO projects (id, workspace_id, name, slug) "
+            "VALUES (:id, 'ws_boss', 'Victim fleet', :id) ON CONFLICT (id) DO NOTHING"),
+            {"id": victim_project})
+        c.execute(text(
+            "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, "
+            "status) VALUES (:i, :p, :n, '198.51.100.11', 'root', 22, 'verified')"),
+            {"i": victim_host, "p": victim_project, "n": f"victim-attach-{_uid()}"})
+
+    response = client.post(
+        f"/v1/deployment-hosts/{victim_host}/attach",
+        json={"target_id": target_id, "actor": ACTOR},
+    )
+
+    assert response.status_code in (403, 404, 422), response.text
+    from boss_engine.services.deployment_fleet import attach_target
+
+    with engine.begin() as c, pytest.raises(ValueError, match="different projects"):
+        attach_target(c, target_id=target_id, host_id=victim_host)
+    with engine.begin() as c:
+        row = c.execute(text("SELECT host_id FROM deployment_targets WHERE id = :i"),
+                        {"i": target_id}).mappings().first()
+    assert row["host_id"] is None, "orphan target must stay unbound"
+
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM deployment_hosts WHERE id = :i"), {"i": victim_host})
+        c.execute(text("DELETE FROM projects WHERE id = :i"), {"i": victim_project})
+
+
+def test_retiring_a_target_requires_an_authorized_actor(client, engine, seeded):
+    target_id = _orphan_target(engine, seeded["app_name"])
+    path = f"/v1/deployment-targets/{target_id}"
+
+    missing = client.delete(path)
+    assert missing.status_code == 422, missing.text
+    unauthorized = client.delete(path, params={"actor": "unknown-member"})
+    assert unauthorized.status_code == 403, unauthorized.text
+    with engine.begin() as c:
+        status = c.execute(text("SELECT status FROM deployment_targets WHERE id = :i"),
+                           {"i": target_id}).scalar_one()
+    assert status == "active"
+
+    retired = client.delete(path, params={"actor": ACTOR})
+    assert retired.status_code == 200, retired.text
+    with engine.begin() as c:
+        status = c.execute(text("SELECT status FROM deployment_targets WHERE id = :i"),
+                           {"i": target_id}).scalar_one()
+    assert status == "retired"

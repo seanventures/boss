@@ -3463,7 +3463,8 @@ export async function verifyDeploymentHostAction(
   const id = String(formData.get("host_id") ?? "").trim();
   if (!id) return { ok: false, error: "missing host_id" };
   const res = await postJsonReturn(
-    `/v1/deployment-hosts/${encodeURIComponent(id)}/verify`, {},
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/verify`,
+    { actor: getActor(formData) },
   );
   revalidatePath("/");
   return res;
@@ -3505,7 +3506,7 @@ export async function attachTargetToHostAction(
   if (!hostId || !targetId) return { ok: false, error: "host_id and target_id are required" };
   const res = await postJsonReturn(
     `/v1/deployment-hosts/${encodeURIComponent(hostId)}/attach`,
-    { target_id: targetId },
+    { target_id: targetId, actor: getActor(formData) },
   );
   revalidatePath("/");
   return res;

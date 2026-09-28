@@ -1174,10 +1174,13 @@ async function appDeployOp(body: Record<string, unknown>): Promise<{ ok: boolean
   }
 }
 
-async function retireTarget(targetId: string): Promise<{ ok: boolean; error?: string }> {
+async function retireTarget(targetId: string, actor: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(`/api/deployment-targets?target_id=${encodeURIComponent(targetId)}`,
-                          { method: "DELETE", cache: "no-store" });
+    const r = await fetch(
+      `/api/deployment-targets?target_id=${encodeURIComponent(targetId)}`
+        + `&actor=${encodeURIComponent(actor)}`,
+      { method: "DELETE", cache: "no-store" },
+    );
     const d = await r.json().catch(() => ({}));
     return r.ok ? { ok: true } : { ok: false, error: d?.error ?? `HTTP ${r.status}` };
   } catch (e) {
@@ -1320,7 +1323,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                       e.stopPropagation();
                       if (!targetId) return;
                       setRetrying(true); setNote(null);
-                      const r = await retireTarget(targetId);
+                      const r = await retireTarget(targetId, actor);
                       setNote(r.ok ? "target retired — pick a new one below" : (r.error ?? "could not retire"));
                       setRetrying(false);
                       await reload();
@@ -1391,7 +1394,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                     const tid = latest.deployment_target_id;
                     if (!tid) return;
                     setRetrying(true); setNote(null);
-                    const r = await retireTarget(String(tid));
+                    const r = await retireTarget(String(tid), actor);
                     setNote(r.ok ? "target retired — set a new one to deploy again"
                                  : (r.error ?? "could not retire"));
                     setRetrying(false);

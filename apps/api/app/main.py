@@ -6755,7 +6755,7 @@ def update_deployment_target_endpoint(target_id: str, payload: dict):
 
 
 @app.delete("/v1/deployment-targets/{target_id}", status_code=200)
-def retire_deployment_target_endpoint(target_id: str):
+def retire_deployment_target_endpoint(target_id: str, actor: str):
     """Retire a target. Deliberately a status change, not a delete.
 
     Deployment runs reference it, and health samples reference it. Removing the row would erase
@@ -6764,7 +6764,16 @@ def retire_deployment_target_endpoint(target_id: str):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = (actor or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM deployment_targets WHERE id=:i"),
+            {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        require_project_actor(connection, row["project_id"], actor, "providerops_manage")
         result = connection.execute(
             text("UPDATE deployment_targets SET status='retired', updated_at=now() "
                  "WHERE id=:i"), {"i": target_id})
@@ -7333,7 +7342,9 @@ def delivery_deploy_endpoint(payload: dict):
     target_id = payload.get("target_id")
     if not target_id:
         raise HTTPException(status_code=422, detail="target_id is required")
-    actor = str(payload.get("actor") or "operator")
+    actor = str(payload.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
 
     with begin(engine) as connection:
         target = connection.execute(
@@ -7341,6 +7352,8 @@ def delivery_deploy_endpoint(payload: dict):
             {"i": target_id}).mappings().first()
         if not target:
             raise HTTPException(status_code=404, detail="no such deployment target")
+        require_project_actor(
+            connection, target["project_id"], actor, "providerops_manage")
         if target["status"] != "active":
             raise HTTPException(status_code=409,
                                 detail=f"target is {target['status']}, not active")
@@ -7459,6 +7472,9 @@ def update_deployment_host_endpoint(host_id: str, payload: dict):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.deployment_fleet import get_host, install_command_for
 
+    actor = str(payload.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     fields = {
         "address": "address", "ssh_user": "ssh_user", "ssh_port": "ssh_port",
         "arch": "arch", "notes": "notes", "admin_identity_file": "admin_identity_file",
@@ -7474,8 +7490,10 @@ def update_deployment_host_endpoint(host_id: str, payload: dict):
                             detail=f"nothing to update; accepted fields: {', '.join(fields)}")
 
     with begin(engine) as connection:
-        if not get_host(connection, host_id):
+        host = get_host(connection, host_id)
+        if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
         connection.execute(
             text(f"UPDATE deployment_hosts SET {', '.join(sets)}, updated_at = now() "
                  f"WHERE id = :i"), params)
@@ -7668,11 +7686,16 @@ def verify_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     from boss_engine.services.deployment_fleet import get_host, verify_host
 
     with begin(engine) as connection:
-        if not get_host(connection, host_id):
+        host = get_host(connection, host_id)
+        if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
         return verify_host(connection, settings, host_id=host_id)
 
 
@@ -7716,11 +7739,18 @@ def attach_target_to_host_endpoint(host_id: str, payload: dict):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     target_id = str(payload.get("target_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
     if not target_id:
         raise HTTPException(status_code=422, detail="target_id is required")
-    from boss_engine.services.deployment_fleet import attach_target
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from boss_engine.services.deployment_fleet import attach_target, get_host
 
     with begin(engine) as connection:
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
         try:
             return attach_target(connection, target_id=target_id, host_id=host_id)
         except ValueError as exc:
@@ -7737,11 +7767,15 @@ def backfill_deployment_hosts_endpoint(payload: dict):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
     if not project_id:
         raise HTTPException(status_code=422, detail="project_id is required")
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     from boss_engine.services.deployment_fleet import backfill_hosts_from_targets
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "task_create")
         return backfill_hosts_from_targets(connection, project_id=project_id)
 
 
@@ -8349,6 +8383,11 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
         host = get_host(connection, host_id)
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
+        if host.get("project_id") != run["project_id"]:
+            # Binding a foreign host would also grant this project use of its SSH key.
+            raise HTTPException(
+                status_code=422,
+                detail="host belongs to a different project; setup-deployment refused")
         if host.get("status") != "verified":
             # A target pointed at an unproven host fails at deploy time, long after the
             # decision was made and somewhere less obvious than here.
@@ -8492,7 +8531,8 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
         "repo": repo,
         "environment": environment,
         "target_kind": "ssh",
-        "health_checks": [{"scheme": scheme, "path": "/", "expect_status": 200}],
+        "health_checks": [{"kind": "http", "scheme": scheme, "path": "/",
+                           "expect": 200, "expect_status": 200}],
         # Replaced immediately by `attach_target`, which derives it from the host record so the
         # address has exactly one writable home.
         "target_ref": f"{host.get('ssh_user') or 'root'}@{host['address']}",
@@ -9011,11 +9051,20 @@ def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     body = payload or {}
+    actor = str(body.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     with begin(engine) as c:
+        row = c.execute(
+            text("SELECT project_id FROM jobs WHERE id = :i"), {"i": job_id}
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such job")
+        require_project_actor(c, row["project_id"], actor, "task_create")
         result = jobs.cancel_queued_job(
             c, job_id, reason=str(body.get("reason") or "cancelled by operator"),
-            actor=str(body.get("actor") or "operator"),
-            force=bool(body.get("force")))
+            actor=actor, force=bool(body.get("force")),
+            project_id=row["project_id"])
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result.get("error") or "cannot cancel")
     return result
@@ -11422,7 +11471,7 @@ def refresh_health_snapshot(
         return health_snapshot_summary_from_row(row)
 
 
-@app.post("/v1/deployments")
+@app.post("/v1/delivery/first-deploy")
 def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
     """Deploy a successful build to an existing target — the FIRST deployment.
 
@@ -11431,20 +11480,29 @@ def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
     behind it: redeploy re-ships an existing deployment_run, and an app that never shipped has
     none. Refuses a build that did not succeed and a target that does not exist, and reports
     which environments DO exist so the caller can offer a real choice.
+
+    Lives under /v1/delivery/ so it cannot shadow POST /v1/deployments (the target registry).
+    FastAPI first-match meant an onboarding payload without run_id returned 400, and a payload
+    that also had run_id would *deploy* instead of creating a destination.
     """
     from boss_engine.services.delivery_pipeline import deploy_build
 
     project_id = str(payload.get("project_id") or "").strip()
     run_id = str(payload.get("run_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
     if not project_id or not run_id:
         raise HTTPException(status_code=400, detail="project_id and run_id are required.")
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
     result = deploy_build(
         engine, settings,
         project_id=project_id,
         run_id=run_id,
         environment=str(payload.get("environment") or "staging"),
         target_id=(str(payload["target_id"]) if payload.get("target_id") else None),
-        actor=str(payload.get("actor") or "operator"),
+        actor=actor,
     )
     return result
 
@@ -18512,6 +18570,11 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        if result.get("status") == "skipped":
+            raise HTTPException(
+                status_code=409,
+                detail=result.get("skipped_reason") or "run already stopped",
+            )
         if payload.reservation_id:
             budget.attach_job(
                 connection,

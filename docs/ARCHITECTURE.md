@@ -108,6 +108,7 @@ For delegated org-wide RBAC, `POST /v1/org-members` creates an org-level member 
 - `POST /v1/resource-janitor/run`
 - `GET /v1/deployments`
 - `POST /v1/deployments`
+- `POST /v1/delivery/first-deploy` (ship a successful build to an existing target)
 - `GET /v1/deployment-runs`
 - `POST /v1/deployment-runs`
 - `POST /v1/deployment-runs/{deployment_run_id}/health-check`

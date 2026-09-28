@@ -383,12 +383,15 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
 # --------------------------------------------------------------------------------------- #
 
 
-def _run_repo_and_branch(connection: Connection, run_id: str) -> Optional[dict]:
+def _run_repo_and_branch(
+    connection: Connection, run_id: str, project_id: str,
+) -> Optional[dict]:
     """Where this run's code lives. The branch rule matches work_branch_for: a retry or
     follow-up shares the ROOT's branch, so the shell lands in the app, not in an empty one."""
     row = connection.execute(
-        text("SELECT id, spec, finalize_ctx FROM code_task_runs WHERE id = :i"),
-        {"i": run_id},
+        text("SELECT id, spec, finalize_ctx FROM code_task_runs "
+             "WHERE id = :i AND project_id = :p"),
+        {"i": run_id, "p": project_id},
     ).mappings().first()
     if not row:
         return None
@@ -413,10 +416,12 @@ def _run_repo_and_branch(connection: Connection, run_id: str) -> Optional[dict]:
     }
 
 
-def _open_workspace(connection: Connection, settings: Settings, run_id: str, force: bool = False):
+def _open_workspace(
+    connection: Connection, settings: Settings, run_id: str, project_id: str, force: bool = False,
+):
     from .agent_shell import ensure_workspace
 
-    target = _run_repo_and_branch(connection, run_id)
+    target = _run_repo_and_branch(connection, run_id, project_id)
     if not target or not target.get("owner") or not target.get("repo"):
         return None, f"no repo recorded for run {run_id}"
     from .repo_host import clone_url_for
@@ -448,7 +453,7 @@ def _tool_run_shell(connection: Connection, project_id: str, settings: Settings,
     command = str(args.get("command") or "").strip()
     if not run_id:
         return {"error": "run_id is required — the shell opens in that app's code"}
-    workspace, problem = _open_workspace(connection, settings, run_id)
+    workspace, problem = _open_workspace(connection, settings, run_id, project_id)
     if problem or workspace is None:
         return {"error": problem or "could not open a workspace"}
     result = run_in_workspace(workspace, command, cwd=args.get("cwd"))
@@ -476,8 +481,9 @@ def _tool_run_shell(connection: Connection, project_id: str, settings: Settings,
 
 _MUTATING_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke",
-    "copy", "call", "vacuum", "refresh", "comment", "reindex", "lock",
+    "copy", "call", "vacuum", "refresh", "comment", "reindex", "lock", "into",
 )
+_SECRET_TABLES = ("secret_refs", "secret_material")
 _QUERY_ROW_CAP = 200
 
 
@@ -499,6 +505,9 @@ def _query_rejection(sql: str) -> Optional[str]:
     for word in _MUTATING_KEYWORDS:
         if re.search(rf"\b{word}\b", lowered):
             return f"read-only: {word.upper()} is not allowed"
+    for table in _SECRET_TABLES:
+        if re.search(rf"\b{table}\b", lowered):
+            return f"table {table} is not queryable"
     return None
 
 

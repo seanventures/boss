@@ -48,13 +48,19 @@ export async function GET(req: Request) {
 
 
 export async function DELETE(req: Request) {
-  const targetId = new URL(req.url).searchParams.get("target_id")?.trim();
+  const url = new URL(req.url);
+  const targetId = url.searchParams.get("target_id")?.trim();
+  const actor = url.searchParams.get("actor")?.trim();
   if (!targetId) {
     return NextResponse.json({ error: "missing target_id" }, { status: 400 });
   }
+  if (!actor) {
+    return NextResponse.json({ error: "actor is required" }, { status: 422 });
+  }
   try {
     const r = await fetch(
-      `${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`,
+      `${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`
+        + `?actor=${encodeURIComponent(actor)}`,
       { method: "DELETE", headers: authHeaders({}), cache: "no-store" },
     );
     const data = await r.json().catch(() => ({}));

@@ -38,6 +38,16 @@ from .core import emit_event
 AUTO_DEPLOY_ENVIRONMENTS = frozenset({"staging", "dev", "preview"})
 
 
+def fanout_entry_status(outcome: Optional[dict[str, Any]]) -> str:
+    """Report the actual result of a merge-triggered deployment."""
+    status = str((outcome or {}).get("status") or "")
+    if status in {"succeeded", "executed", "healthy"}:
+        return "executed"
+    if status in {"failed", "blocked", "not_found", "rolled_back"}:
+        return status
+    return "execute_failed"
+
+
 def _globs_of(target: dict) -> list[str]:
     """`path_globs` as a list, whatever the driver handed back (JSONB or TEXT)."""
     raw = target.get("path_globs") or []
@@ -119,6 +129,17 @@ def target_for(connection, project_id: str, repo: str, environment: str) -> Opti
     return found[0] if found else None
 
 
+def pick_deploy_target(candidates: list[dict], app_name: str) -> Optional[dict]:
+    """Return the unique target with this app's identity, never a repo-only match."""
+    from .naming import identity_key
+
+    want = identity_key(app_name)
+    if not want:
+        return None
+    named = [t for t in candidates if identity_key(str(t.get("app_name") or "")) == want]
+    return named[0] if len(named) == 1 else None
+
+
 def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                  environment: str = "staging", target_id: Optional[str] = None,
                  actor: str = "operator") -> dict[str, Any]:
@@ -198,9 +219,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                 return bool(wanted) and identity_key(str(t.get("app_name") or "")) == wanted
 
             named = [t for t in candidates if _matches(t)]
-            if len(named) == 1:
-                target = named[0]
-            elif named:
+            target = pick_deploy_target(candidates, app_name)
+            if target is None and named:
                 return {
                     "status": "failed",
                     "reason": (
@@ -212,7 +232,7 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                          "domains": t.get("domains")} for t in named
                     ],
                 }
-            elif candidates and wanted:
+            elif target is None and candidates and wanted:
                 # NOT AMBIGUOUS. MISSING.
                 #
                 # This branch used to say "N targets share repo 'boss-sandbox', pass target_id"
@@ -248,9 +268,7 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                          "domains": t.get("domains")} for t in candidates
                     ],
                 }
-            elif len(candidates) == 1:
-                target = candidates[0]
-            elif candidates:
+            elif target is None and candidates:
                 return {
                     "status": "failed",
                     "reason": (
@@ -263,8 +281,6 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                          "domains": t.get("domains")} for t in candidates
                     ],
                 }
-            else:
-                target = None
 
         if not target:
             existing = [
@@ -458,8 +474,15 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
         try:
             outcome = execute_deployment(engine, settings, entry["deployment_run_id"],
                                          actor=actor)
-            entry["status"] = "executed"
+            entry["status"] = fanout_entry_status(outcome)
             entry["deployment"] = outcome
+            if entry["status"] != "executed":
+                entry["error"] = (
+                    (outcome or {}).get("error")
+                    or (outcome or {}).get("detail")
+                    or (outcome or {}).get("reason")
+                    or f"deployment returned {(outcome or {}).get('status')!r}"
+                )
         except Exception as exc:  # noqa: BLE001
             # Still never raises: the PR has merged, and a delivery failure must not be
             # reported as a failure of work that already shipped. One app failing must also

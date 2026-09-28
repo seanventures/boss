@@ -48,7 +48,7 @@ const OPS: Record<string, (b: Record<string, unknown>) => { path: string; body: 
     },
   }),
   deploy: (b) => ({
-    path: "/v1/deployments",
+    path: "/v1/delivery/first-deploy",
     body: {
       project_id: b.project_id,
       run_id: b.run_id,

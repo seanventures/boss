@@ -112,7 +112,7 @@ def main() -> int:
     code, existing = call("GET", f"/v1/deployment-targets?project_id={PROJECT}")
     for t in (existing.get("items") or []):
         if t.get("app_name") == "e2e-probe":
-            call("DELETE", f"/v1/deployment-targets/{t['id']}")
+            call("DELETE", f"/v1/deployment-targets/{t['id']}?actor={ACTOR}")
             _purge(t["id"])
 
     # The app name is deliberately typed with surrounding whitespace. An operator pasting a name
@@ -242,7 +242,6 @@ def main() -> int:
     # option failed, including re-picking the one already in force. One call could never have
     # caught it; the second call is the test.
     print("== Default workflow picker ==")
-    original = ""
     code, body = call("GET", f"/v1/delivery-workflows?view=installed&project_id={PROJECT}")
     keys = [w.get("workflow_key") for w in (body.get("items") or [])]
     check("installed workflows listed", code, (200,), body)
@@ -251,7 +250,6 @@ def main() -> int:
                           {"project_id": PROJECT, "workflow_key": "research_led_discovery",
                            "work_class": "project.new", "actor": ACTOR})
         check("apply over an occupied slot replaces it", code, (200,), body)
-        original = str(body.get("in_force") or "")
         # Twice with the SAME key: idempotent, not a conflict. The picker fires on every change
         # event, including one that lands back where it started.
         code, body = call("POST", "/v1/delivery-workflows/apply",
@@ -284,7 +282,7 @@ def main() -> int:
     check("teardown confirmed (or refused with a reason)", code, (200, 409), body)
     code, body = call("PATCH", f"/v1/deployment-targets/{tid}", {"status": "active"})
     check("restore (reactivate)", code, (200,), body)
-    code, body = call("DELETE", f"/v1/deployment-targets/{tid}")
+    code, body = call("DELETE", f"/v1/deployment-targets/{tid}?actor={ACTOR}")
     check("retire probe target", code, (200,), body)
 
     print()

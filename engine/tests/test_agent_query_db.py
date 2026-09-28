@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from boss_engine.services.agent_loop import _query_rejection, _tool_query_db
+from boss_engine.tools.builtin import _is_read_only
 
 
 @pytest.mark.parametrize("sql", [
@@ -118,3 +119,34 @@ def test_a_broken_query_returns_its_error_instead_of_raising():
     connection = _Connection(boom=RuntimeError('column "nope" does not exist'))
     out = _tool_query_db(connection, "p1", None, {"sql": "SELECT nope FROM jobs"})
     assert "nope" in out["error"]
+
+
+def test_select_into_is_a_write_and_is_refused():
+    """SELECT INTO creates a table. The write-keyword list omitted INTO, so a 'read' tool
+    could persist another tenant's rows (or dump secret_refs) into a new relation."""
+    assert _query_rejection("SELECT * INTO stolen FROM secret_refs") is not None
+    connection = _Connection()
+    out = _tool_query_db(connection, "p1", None, {"sql": "SELECT * INTO stolen FROM jobs"})
+    assert "error" in out
+    assert connection.executed == []
+
+
+def test_secret_tables_are_not_queryable():
+    """The discuss path is a language model choosing SQL. Catalog tables that store
+    credential material must not be readable even as SELECT."""
+    for sql in (
+        "SELECT * FROM secret_refs",
+        "SELECT ciphertext FROM secret_material",
+        "WITH s AS (SELECT * FROM secret_refs) SELECT * FROM s",
+    ):
+        assert _query_rejection(sql) is not None, sql
+
+
+def test_builtin_query_db_refuses_into_and_secret_catalogs():
+    """The MCP/default registry has its own guard. Both must refuse the same writes."""
+    ok, why = _is_read_only("SELECT * INTO stolen FROM secret_refs")
+    assert ok is False and why
+    ok, why = _is_read_only("SELECT * FROM secret_material")
+    assert ok is False and why
+    ok, _ = _is_read_only("SELECT id, status FROM jobs LIMIT 5")
+    assert ok is True

@@ -14025,6 +14025,11 @@ paths:
         required: true
         schema:
           type: string
+      - name: actor
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Deployment target retired
@@ -31551,6 +31556,52 @@ paths:
                 additionalProperties: true
                 type: object
                 title: Response Tick Workflow Schedules V1 Delivery Workflows Schedules Tick Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery/first-deploy:
+    post:
+      summary: Create Deployment Endpoint
+      description: 'Deploy a successful build to an existing target — the FIRST deployment.
+
+
+        BOSS could create hosts and targets and could redeploy, but nothing could perform a
+
+        deployment that had never happened. "Deploy this app" therefore had no executable action
+
+        behind it: redeploy re-ships an existing deployment_run, and an app that never shipped has
+
+        none. Refuses a build that did not succeed and a target that does not exist, and reports
+
+        which environments DO exist so the caller can offer a real choice.
+
+
+        Lives under /v1/delivery/ so it cannot shadow POST /v1/deployments (the target registry).
+
+        FastAPI first-match meant an onboarding payload without run_id returned 400, and a payload
+
+        that also had run_id would *deploy* instead of creating a destination.'
+      operationId: post_v1_delivery_first_deploy_b007a7a7
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Create Deployment Endpoint V1 Delivery First Deploy Post
         '422':
           description: Validation Error
           content:

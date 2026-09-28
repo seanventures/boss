@@ -89,6 +89,34 @@ def test_the_child_gets_no_credentials(workspace, monkeypatch):
     assert "sk-realkeyvalue1234567" not in out["stdout"]
 
 
+def test_the_child_does_not_inherit_the_control_plane_dsn(workspace, monkeypatch):
+    """DATABASE_URL matches none of TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL.
+
+    A denylist that misses the control-plane DSN lets the discuss shell dump every tenant's
+    secret_refs with `psql` or a one-line Python client.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql://boss:boss@localhost:5432/boss")
+    monkeypatch.setenv("BOSS_API_KEY", "not-a-token-name-but-still-a-secret")
+    out = run_in_workspace(workspace, "env")
+    assert "DATABASE_URL" not in out["stdout"]
+    assert "postgresql://boss" not in out["stdout"]
+    assert "BOSS_API_KEY" not in out["stdout"]
+
+
+def test_cwd_cannot_walk_into_a_sibling_via_path_prefix(workspace):
+    """`startswith` treats `/tmp/ws-evil` as inside `/tmp/ws`.
+
+    Ask BOSS for cwd=`<workspace-name>-sibling` (or any prefix-sharing neighbor) and the
+    shell leaves the throwaway checkout.
+    """
+    sibling = workspace.parent / (workspace.name + "-evil")
+    sibling.mkdir()
+    (sibling / "stolen.txt").write_text("secret")
+    out = run_in_workspace(workspace, "cat stolen.txt", cwd="../" + sibling.name)
+    assert out.get("error") == "cwd must stay inside the workspace"
+    assert out.get("exit_code") is None
+
+
 # ------------------------------------------------------------------------- results ----
 
 def test_a_failing_command_is_a_result_not_an_error(workspace):
@@ -177,3 +205,15 @@ def test_a_hostile_run_id_cannot_escape_the_workspace_root():
     escaped = workspace_for("../../etc/passwd").resolve()
     assert str(escaped).startswith(str(agent_shell.WORKSPACE_ROOT.resolve()))
     assert "/etc/passwd" not in str(escaped)
+
+
+def test_workspace_lookup_is_fenced_to_the_calling_project():
+    """run_id is a global primary key. Without AND project_id, project A opens project B's
+    checkout (using the process GitHub token) and shells into it."""
+    import inspect
+
+    from boss_engine.services import agent_loop
+
+    src = inspect.getsource(agent_loop._run_repo_and_branch)
+    assert "project_id" in src
+    assert "AND project_id" in src.replace("\n", " ")

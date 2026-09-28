@@ -109,3 +109,46 @@ def test_the_guard_runs_before_the_insert():
     import inspect
     src = inspect.getsource(enqueue_job)
     assert src.index("stopped_run_reason(") < src.index("INSERT INTO jobs")
+
+
+def test_create_job_does_not_crash_when_the_run_already_stopped(conn):
+    """The cancel race goes through JobLeaseService.create_job, not enqueue_job.
+
+    advance_meeting_run persists a phase then calls create_job for the next step. create_job
+    pops `dedupe_key` from the enqueue result. The skip path omitted that key, so the exact
+    race this guard exists to stop — operator cancels while a phase is in flight — raised
+    KeyError and failed the completing job instead of quietly refusing the successor.
+    """
+    from boss_engine.services.jobs import JobLeaseService
+
+    conn.execute(sa.text("INSERT INTO meeting_runs VALUES ('m1', 'cancelled')"))
+    svc = JobLeaseService.__new__(JobLeaseService)
+    out = svc.create_job(
+        conn, "p1", "meeting.step", {"run_id": "m1"}, data_boundary="internal",
+    )
+    assert out["status"] == "skipped"
+    assert out["id"] is None
+    assert conn.execute(sa.text("SELECT count(*) FROM jobs")).scalar() == 0
+
+
+def test_cancel_refuses_a_job_from_another_project(conn):
+    """Ask BOSS pins project_id, but cancel_queued_job looked up jobs by id only.
+
+    Combined with unscoped query_db, a discuss session in project A can list job ids from
+    project B and force-cancel them — including running work.
+    """
+    from boss_engine.services.jobs import JobLeaseService
+
+    conn.execute(sa.text(
+        "INSERT INTO jobs (id, project_id, kind, status, payload) "
+        "VALUES ('job_victim', 'other', 'code.task', 'queued', '{}')"))
+    svc = JobLeaseService.__new__(JobLeaseService)
+    out = svc.cancel_queued_job(
+        conn, "job_victim", reason="stop it", actor="attacker", project_id="p1",
+    )
+    assert out["ok"] is False
+    assert "project" in (out.get("error") or "")
+    status = conn.execute(
+        sa.text("SELECT status FROM jobs WHERE id = 'job_victim'")
+    ).scalar()
+    assert status == "queued"

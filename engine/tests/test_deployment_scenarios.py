@@ -208,6 +208,84 @@ def test_an_explicit_target_id_is_always_honoured():
     )
 
 
+def test_deploy_build_reads_the_stored_app_name():
+    """The 8af4142e fix matched on finalize_ctx.app_name, then never selected that column.
+
+    Resolution fell through to the run title. A Living Colors build titled
+    'Port Invoice-Chaser auth' uniquely matched the Invoice-Chaser target and
+    shipped the wrong app — the exact failure the refusal was written to stop.
+    """
+    from boss_engine.services import delivery_pipeline
+    src = inspect.getsource(delivery_pipeline.deploy_build)
+    select = src[src.index("SELECT id, project_id"): src.index("if not run:")]
+    assert "finalize_ctx" in select, "app_name resolution cannot see finalize_ctx"
+
+
+def test_the_only_target_in_the_repo_is_not_assumed_to_be_this_app():
+    """First-deploy of Living Colors, when Invoice-Chaser is the only staging target.
+
+    8af4142e refused when several targets shared a repo. It still took
+    `elif len(candidates) == 1: target = candidates[0]` when the name did not
+    match. Every app in this project shares one repo, so a second app's first
+    deploy is exactly one candidate — the first app — and that shipped Living
+    Colors onto Invoice-Chaser's port and reported success.
+    """
+    from boss_engine.services.delivery_pipeline import pick_deploy_target
+
+    only = [{"id": "deptgt_invoice", "app_name": "Invoice-Chaser"}]
+    assert pick_deploy_target(only, "Living Colors") is None
+    assert pick_deploy_target(only, "Port Invoice-Chaser auth") is None
+
+
+def test_a_substring_is_not_a_unique_target_match():
+    """`name in app_name` uniquely matched 'Colors' against 'Living Colors'."""
+    from boss_engine.services.delivery_pipeline import pick_deploy_target
+
+    assert pick_deploy_target(
+        [{"id": "deptgt_colors", "app_name": "Colors"}],
+        "Living Colors",
+    ) is None
+
+
+def test_an_exact_app_name_is_the_target():
+    from boss_engine.services.delivery_pipeline import pick_deploy_target
+
+    picked = pick_deploy_target(
+        [
+            {"id": "deptgt_invoice", "app_name": "Invoice-Chaser"},
+            {"id": "deptgt_colors", "app_name": "Living Colors"},
+        ],
+        "Living Colors",
+    )
+    assert picked is not None
+    assert picked["id"] == "deptgt_colors"
+
+
+def test_hyphen_and_space_are_the_same_app_name():
+    """Card display name 'Living Colors'; target stored as 'living-colors'."""
+    from boss_engine.services.delivery_pipeline import pick_deploy_target
+
+    picked = pick_deploy_target(
+        [{"id": "deptgt_lc", "app_name": "living-colors"}],
+        "Living Colors",
+    )
+    assert picked is not None
+    assert picked["id"] == "deptgt_lc"
+
+
+def test_deploy_build_selects_finalize_ctx_and_does_not_guess_the_only_target():
+    """finalize_ctx.app_name is the stored identity; a lone candidate is not a match."""
+    from boss_engine.services import delivery_pipeline
+    from engine.tests._source import code_only
+
+    select = inspect.getsource(delivery_pipeline.deploy_build)
+    select = select[select.index("SELECT id, project_id"): select.index("if not run:")]
+    assert "finalize_ctx" in select, "app_name resolution cannot see finalize_ctx"
+    code = code_only(delivery_pipeline.deploy_build)
+    assert "len(candidates) == 1" not in code, "still shipping to the only target in the repo"
+    assert "pick_deploy_target" in code
+
+
 # --------------------------------------------------------------------------- #
 # Binding a target must be undoable
 # --------------------------------------------------------------------------- #
@@ -276,7 +354,8 @@ def test_no_card_button_waits_on_a_route_re_render():
     the REPLY: a Server Action re-renders the current route to respond, setupDeploymentAction
     also called revalidatePath("/"), and code_tasks has a measured TTFB of ~115s. Two full page
     renders for a one-row write."""
-    import pathlib, re
+    import pathlib
+    import re
     ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
     code = re.sub(r"/\*.*?\*/", "", ui, flags=re.S)
     code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
@@ -291,7 +370,8 @@ def test_no_route_handler_invents_an_actor():
     defaulted actor to "operator" when the caller sent none — and the card never sends one.
     Claiming a principal you are not is impersonation even by accident, and the API is right to
     refuse it. Omitting the field attributes the action to whoever is authenticated."""
-    import pathlib, re
+    import pathlib
+    import re
     for name in ("app-deploy", "builds", "discoveries"):
         f = pathlib.Path(f"apps/web/app/api/{name}/route.ts")
         if not f.exists():
@@ -309,7 +389,7 @@ def test_the_deploy_controls_send_the_operator_s_own_actor():
 
     Verified against the live API: actor=operator is refused, actor=executive_console is
     accepted."""
-    import pathlib, re
+    import pathlib
     ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
     for fn in ("function SetupDeployment(", "function DeploymentLine("):
         i = ui.index(fn)
@@ -318,3 +398,105 @@ def test_the_deploy_controls_send_the_operator_s_own_actor():
     for op in ('op: "set-target"', 'op: "deploy"', 'op: "retry"'):
         i = ui.index(op)
         assert "actor" in ui[i - 120:i + 260], f"{op} is sent without an actor"
+    assert "retireTarget(targetId, actor)" in ui
+    assert "retireTarget(String(tid), actor)" in ui
+
+
+def test_console_first_deploy_does_not_hit_the_target_registry():
+    """The card's Deploy now button posted to POST /v1/deployments.
+
+    That path is the target registry. After first-deploy moved off it, posting
+    there either 400s (no app_name) or creates a destination instead of shipping.
+    """
+    import pathlib
+    route = pathlib.Path("apps/web/app/api/app-deploy/route.ts").read_text(encoding="utf-8")
+    assert '"/v1/delivery/first-deploy"' in route
+    deploy = route[route.index("deploy:"): route.index("retry:")]
+    assert "/v1/deployments" not in deploy
+
+
+# --------------------------------------------------------------------------- #
+# Health gate must actually probe — a skipped check is not a pass
+# --------------------------------------------------------------------------- #
+def _observe(target):
+    from boss_engine.config import Settings
+    from boss_engine.services.deployment_connectors import SSHContainerConnector
+    return SSHContainerConnector().observe(target, Settings())
+
+
+def test_observe_probes_the_health_check_set_target_writes():
+    """Set target stored {scheme, path, expect_status} with no kind.
+
+    observe() required kind=='http', skipped the only check, and returned healthy=True.
+    Every first-deploy from the card then reported success without asking the public URL —
+    the exact 'succeeded when it did not' outcome this pipeline exists to prevent.
+
+    Trigger: bind a host on the app card, click Deploy now. apply() may pass a localhost
+    curl; observe() never fired; the row said succeeded.
+    """
+    from unittest.mock import MagicMock, patch
+
+    target = {
+        "domains": ["203.0.113.10:3010"],
+        "health_checks": [{"scheme": "http", "path": "/", "expect_status": 200}],
+        "target_ref": "root@203.0.113.10",
+        "app_name": "Living Colors",
+        "repo": "boss-sandbox",
+    }
+    resp = MagicMock()
+    resp.status = 200
+    opener = MagicMock()
+    opener.return_value.__enter__.return_value = resp
+    with patch("urllib.request.urlopen", opener):
+        result = _observe(target)
+    assert opener.called, "observe skipped the Set-target check (missing kind=http)"
+    assert result.get("healthy") is True
+    assert not any(c.get("skipped") for c in result.get("checks") or [])
+
+
+def test_observe_does_not_succeed_when_the_public_url_is_down():
+    """The complement: a probe that fails must fail the deployment, not skip-and-pass."""
+    from unittest.mock import patch
+
+    target = {
+        "domains": ["203.0.113.10:3010"],
+        "health_checks": [{"scheme": "http", "path": "/", "expect_status": 200}],
+        "target_ref": "root@203.0.113.10",
+        "app_name": "Living Colors",
+        "repo": "boss-sandbox",
+    }
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        result = _observe(target)
+    assert result.get("healthy") is False, (
+        f"a down public URL was treated as healthy: {result}"
+    )
+
+
+def test_observe_does_not_succeed_when_every_check_is_skipped():
+    """An unsupported check must not default to a healthy deployment."""
+    from unittest.mock import patch
+
+    target = {
+        "domains": ["example.test"],
+        "health_checks": [{"kind": "unknown"}],
+    }
+    with patch("urllib.request.urlopen") as opener:
+        result = _observe(target)
+    assert not opener.called
+    assert result.get("healthy") is not True, (
+        f"skipped-only checks reported healthy: {result}"
+    )
+
+
+def test_set_target_writes_an_http_health_check():
+    """The producer must write the shape observe() already understood, so a future
+    reader does not have to infer kind from path/scheme again."""
+    import pathlib
+    from engine.tests._source import code_only
+
+    main = pathlib.Path("apps/api/app/main.py").read_text(encoding="utf-8")
+    i = main.index("def setup_deployment_for_code_task_endpoint")
+    src = code_only(main[i:main.index("def _project_of_run", i)])
+    assert '"kind": "http"' in src or "'kind': 'http'" in src, (
+        "Set target still writes health_checks without kind=http"
+    )
