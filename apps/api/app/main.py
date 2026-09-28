@@ -19633,6 +19633,10 @@ def create_pull_request_proposal(
     payload: PullRequestProposalRequest,
 ) -> PullRequestProposalResponse:
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "github_manage",
+        )
         try:
             result = software_factory.propose_pull_request(
                 connection,
@@ -19718,18 +19722,25 @@ def propose_ci_config(
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
 def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResponse:
     with begin(engine) as connection:
-        result = software_factory.merge_pull_request(
-            connection,
-            payload.project_id,
-            None,
-            payload.decision_id,
-            payload.dedupe_key,
-            payload.pull_request_number,
-            payload.pull_request_url,
-            payload.title,
-            payload.branch_name,
-            payload.created_by_job_id,
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "github_manage",
         )
+        try:
+            result = software_factory.merge_pull_request(
+                connection,
+                payload.project_id,
+                None,
+                payload.decision_id,
+                payload.dedupe_key,
+                payload.pull_request_number,
+                payload.pull_request_url,
+                payload.title,
+                payload.branch_name,
+                payload.created_by_job_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return PullRequestMergeResponse(**result)
 
 
@@ -19740,19 +19751,26 @@ def create_sandbox_deployment(
     payload: SandboxDeploymentRequest,
 ) -> SandboxDeploymentResponse:
     with begin(engine) as connection:
-        result = software_factory.create_deployment(
-            connection,
-            payload.project_id,
-            None,
-            payload.decision_id,
-            payload.dedupe_key,
-            payload.merged_sha,
-            payload.pull_request_url,
-            payload.title,
-            payload.branch_name,
-            payload.environment,
-            payload.created_by_job_id,
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "github_manage",
         )
+        try:
+            result = software_factory.create_deployment(
+                connection,
+                payload.project_id,
+                None,
+                payload.decision_id,
+                payload.dedupe_key,
+                payload.merged_sha,
+                payload.pull_request_url,
+                payload.title,
+                payload.branch_name,
+                payload.environment,
+                payload.created_by_job_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return SandboxDeploymentResponse(**result)
 
 
@@ -19809,6 +19827,10 @@ def request_infra_provision_review(
 @app.post("/v1/infra/droplets", response_model=InfraProvisionResponse)
 def create_infra_droplet(payload: InfraProvisionRequest) -> InfraProvisionResponse:
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "infra_provision",
+        )
         try:
             result = infrastructure.create_droplet(
                 connection,
@@ -19961,6 +19983,10 @@ def queue_pull_request_proposal(
     payload: PullRequestProposalJobRequest,
 ) -> JobSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "github_manage",
+        )
         result = jobs.create_job(
             connection,
             project_id=payload.project_id,
@@ -19995,6 +20021,10 @@ def queue_pull_request_merge(
     payload: PullRequestMergeJobRequest,
 ) -> JobSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "github_manage",
+        )
         result = jobs.create_job(
             connection,
             project_id=payload.project_id,
@@ -20022,6 +20052,10 @@ def queue_pull_request_merge(
 )
 def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, current_api_principal.get() or "ceo",
+            "github_manage",
+        )
         result = jobs.create_job(
             connection,
             project_id=payload.project_id,

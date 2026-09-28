@@ -35,6 +35,81 @@ def _auth(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
+def test_factory_and_infra_effect_routes_require_project_grants(
+    client, engine, scoped_operator, monkeypatch,
+):
+    calls = []
+
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_operator",
+            display_name="Scoped GA operator", member_type="human", role_keys=[],
+            permissions=["github_manage", "infra_provision"], actor="ceo",
+        )
+
+    def fake_effect(*args, **kwargs):
+        calls.append("effect")
+        return {"status": "blocked"}
+
+    def fake_job(_connection, **kwargs):
+        calls.append("job")
+        return {
+            "id": f"job_ga_{len(calls)}", "project_id": kwargs["project_id"],
+            "kind": kwargs["kind"], "status": "queued",
+            "priority": kwargs["priority"], "max_attempts": kwargs["max_attempts"],
+            "attempt": 0, "run_after": "2026-01-01T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(api_main.software_factory, "propose_pull_request", fake_effect)
+    monkeypatch.setattr(api_main.software_factory, "merge_pull_request", fake_effect)
+    monkeypatch.setattr(api_main.software_factory, "create_deployment", fake_effect)
+    monkeypatch.setattr(api_main.infrastructure, "create_droplet", fake_effect)
+    monkeypatch.setattr(api_main.jobs, "create_job", fake_job)
+    monkeypatch.setattr(api_main.budget, "attach_job", lambda *_args: None)
+
+    proposal = {
+        "project_id": PROJECT, "reservation_id": "res_ga", "dedupe_key": "ga_proposal",
+        "title": "Guarded PR", "branch_name": "boss/guarded-pr", "summary": "Review",
+        "files": [{"path": "README.md", "content": "safe"}],
+    }
+    merge = {
+        "project_id": PROJECT, "decision_id": "dec_ga", "dedupe_key": "ga_merge",
+        "pull_request_number": 42,
+        "pull_request_url": "https://github.com/example/boss/pull/42", "title": "Guarded merge",
+    }
+    deploy = {
+        "project_id": PROJECT, "decision_id": "dec_ga", "dedupe_key": "ga_deploy",
+        "merged_sha": "abc123", "pull_request_url": merge["pull_request_url"],
+        "title": "Guarded deploy", "environment": "staging",
+    }
+    droplet = {
+        "project_id": PROJECT, "decision_id": "dec_ga", "reservation_id": "res_ga",
+        "dedupe_key": "ga_droplet", "title": "Guarded droplet",
+        "region": "nyc1", "size": "s-1vcpu-1gb", "ttl_minutes": 60,
+    }
+    cases = [
+        ("/v1/software-factory/proposals", proposal),
+        ("/v1/software-factory/proposals/queue", proposal),
+        ("/v1/software-factory/merges", merge),
+        ("/v1/software-factory/merges/queue", merge),
+        ("/v1/software-factory/deployments", deploy),
+        ("/v1/software-factory/deployments/queue", deploy),
+        ("/v1/infra/droplets", droplet),
+    ]
+    for path, body in cases:
+        assert client.post(path, headers=_auth("coo-key"), json=body).status_code == 403
+        assert client.post(
+            path, headers=_auth("operator-key"),
+            json={**body, "project_id": scoped_operator},
+        ).status_code == 403
+    assert calls == []
+
+    for path, body in cases:
+        accepted = client.post(path, headers=_auth("operator-key"), json=body)
+        assert accepted.status_code in {200, 201}, (path, accepted.text)
+    assert calls == ["effect", "job", "effect", "job", "effect", "job", "effect"]
+
+
 @pytest.fixture
 def scoped_operator(engine, authenticated_keys):
     other_project = f"ga-other-{uuid4().hex[:8]}"
