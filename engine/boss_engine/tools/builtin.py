@@ -126,9 +126,15 @@ def _inspect_host_command(raw_value: object) -> tuple[str | None, str | None]:
     return shlex.join(words), None
 
 
+def _community_restricted(settings: Any) -> bool:
+    """Unknown editions get the conservative Community read boundary."""
+    edition = str(getattr(settings, "boss_edition", "community") or "community")
+    return edition.strip().lower() not in _PAID_EFFECT_EDITIONS
+
+
 def _community_raw_sql_disabled(settings: Any) -> bool:
     """Raw SQL has no tenant fence or domain policy and is unsafe in Community."""
-    return str(getattr(settings, "boss_edition", "community")).strip().lower() not in _PAID_EFFECT_EDITIONS
+    return _community_restricted(settings)
 
 
 # ===========================================================================
@@ -3686,6 +3692,23 @@ def _github_token_for(ctx: Any, project_id: str) -> str:
         return ""
 
 
+def _project_repository_bound(ctx: Any, project_id: str, repo: str) -> bool:
+    """Only a current project binding can authorize an explicit repository read."""
+    if repo.count("/") != 1:
+        return False
+    try:
+        with ctx.begin() as connection:
+            row = connection.execute(
+                _text("SELECT id FROM github_repository_bindings "
+                      "WHERE project_id = :p AND lower(full_name) = lower(:repo) "
+                      "AND status = 'active' LIMIT 1"),
+                {"p": project_id, "repo": repo},
+            ).first()
+        return row is not None
+    except Exception:  # noqa: BLE001 — no binding proof means no repository read
+        return False
+
+
 def _repo_root(settings: Any, repo: str,
                ref: _Optional[str] = None,
                token: str = "") -> tuple[_Optional[str], _Optional[str]]:
@@ -3847,7 +3870,12 @@ def _resolve_source(ctx: Any, args: dict, *, project_id: str) -> tuple[
         if err:
             return "", None, err
         return repo or "boss", (args.get("ref") or ref or None), None
-    return (args.get("repo") or "boss"), (args.get("ref") or None), None
+    repo = str(args.get("repo") or "boss").strip()
+    if (_community_restricted(ctx.settings)
+            and repo not in {"boss", "self", "platform"}
+            and not _project_repository_bound(ctx, project_id, repo)):
+        return "", None, "repository unavailable in this project"
+    return repo, (args.get("ref") or None), None
 
 
 def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
@@ -5904,8 +5932,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "read_logs",
         "Recent log lines from a BOSS service (api | worker | web), newest last, "
-        "optionally filtered by a regex. The answer to 'what actually happened' when "
-        "the database only records the outcome.",
+        "optionally filtered by a regex. Community reads only this project's captured "
+        "database logs, never shared service log files.",
         _obj({"service": {"type": "string", "enum": ["api", "worker", "web"]},
               "pattern": {"type": "string", "description": "optional regex filter"},
               "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}),
@@ -5913,6 +5941,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     def read_logs(ctx, *, project_id, actor, args):
         service = (args.get("service") or "api").lower()
         limit = int(args.get("limit") or 120)
+        restricted = _community_restricted(ctx.settings)
         rx = None
         if args.get("pattern"):
             try:
@@ -5922,7 +5951,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
         # Docker keeps container stdout on disk; a local run writes .local-logs/.
         # Try both rather than assuming one deployment shape.
-        candidates = [
+        candidates = [] if restricted else [
             _os.environ.get(f"BOSS_{service.upper()}_LOG"),
             _os.path.join(_SOURCE_ROOT, ".local-logs", f"{service}.log"),
             f"/var/log/boss/{service}.log",
@@ -5954,7 +5983,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                    "FROM app_logs WHERE (:svc = '' OR service = :svc) ")
             params: dict = {"svc": "" if service in ("", "all") else service,
                             "lim": max(1, min(limit, 500))}
-            if args.get("project_id") or project_id:
+            if restricted:
+                sql += "AND project_id = :pid "
+                params["pid"] = project_id
+            elif args.get("project_id") or project_id:
                 sql += "AND (project_id IS NULL OR project_id = :pid) "
                 params["pid"] = args.get("project_id") or project_id
             sql += "ORDER BY created_at DESC LIMIT :lim"
@@ -6102,12 +6134,13 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         import re as _re
         import urllib.request as _ureq
 
-        pid = args.get("project_id") or project_id
+        pid = project_id
         raw = str(args.get("pull_request") or "").strip()
         if not raw:
             return {"ok": False, "error": "pull_request is required (number, url, or crun_ id)"}
 
         repo_full = str(args.get("repo") or "").strip()
+        run_repo = ""
         number = ""
 
         if raw.startswith("crun_"):
@@ -6123,8 +6156,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 return {"ok": False, "error": f"{raw} has not opened a pull request",
                         "note": "a task with no PR has nothing to read"}
             number = str(row.get("pull_request_number") or "")
-            if not repo_full and row.get("owner") and row.get("repo"):
-                repo_full = f"{row['owner']}/{row['repo']}"
+            if row.get("owner") and row.get("repo"):
+                run_repo = f"{row['owner']}/{row['repo']}"
+                repo_full = run_repo
             if not number and row.get("pull_request_url"):
                 raw = str(row["pull_request_url"])
 
@@ -6145,7 +6179,15 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if "/" not in repo_full:
             return {"ok": False, "error": "repo is required as owner/repo"}
 
-        token = getattr(ctx.settings, "github_token", "") or ""
+        if _community_restricted(ctx.settings):
+            # A run ID proves the project's own recorded repository. Raw PR numbers/URLs
+            # require a current binding; neither caller text nor a broad install token is
+            # authority to inspect an arbitrary private repository.
+            if not run_repo and not _project_repository_bound(ctx, pid, repo_full):
+                return {"ok": False, "error": "repository unavailable in this project"}
+            token = _github_token_for(ctx, pid)
+        else:
+            token = getattr(ctx.settings, "github_token", "") or ""
 
         def get(path: str):
             req = _ureq.Request(
@@ -6291,7 +6333,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "http_probe",
         "GET a URL and report status, timing and a body excerpt. Answers 'is the app "
         "actually up RIGHT NOW' — health samples say what was true when last sampled, "
-        "which is not the same question.",
+        "which is not the same question. Unavailable in Community until URLs can be "
+        "bound to the current project and a network policy.",
         _obj({"url": {"type": "string"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10}},
              ["url"]),
@@ -6301,6 +6344,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         import urllib.error as _uerr
         import urllib.request as _ureq
 
+        if _community_restricted(ctx.settings):
+            return {"ok": False, "error": "Community URL probes require a project-bound "
+                    "destination and a network policy; use recorded deployment health."}
         url = (args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
@@ -6635,8 +6681,8 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
 
     Every read tool, plus the operational writes in ``_DISCUSS_OPERATIONS_TOOLS``.
     ``project_id`` is stripped from schemas/args so the model cannot override the authorised
-    project. Community also excludes unrestricted SQL reads and writes; direct invocations
-    are separately rejected by the handlers.
+    project. Community excludes unrestricted SQL and arbitrary URL probes; direct
+    invocations are separately rejected by the handlers.
     """
     source = build_default_registry()
     reg = ToolRegistry()
@@ -6647,8 +6693,9 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     for spec in admitted:
         if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
             continue
-        if (edition is not None and edition.strip().lower() not in _PAID_EFFECT_EDITIONS
-                and spec.name in {"query_db", "write_db", "generate_image"}):
+        if (edition is not None
+                and edition.strip().lower() not in _PAID_EFFECT_EDITIONS
+                and spec.name in {"query_db", "write_db", "generate_image", "http_probe"}):
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
         properties.pop("project_id", None)

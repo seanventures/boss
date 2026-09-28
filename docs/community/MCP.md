@@ -67,6 +67,11 @@ refuses new Discovery research until its model calls use durable job leases,
 budget reservations, and reconciled receipts. The API's Discovery start and
 deepen routes return 503 for authorized callers while this release gate is open.
 
+Community source tools accept a run ID from the session project or an active
+repository binding in that project. Pull request reads use the same boundary.
+`read_logs` returns only project-tagged captured logs. Arbitrary URL probes are
+unavailable until destinations can be verified against a project network policy.
+
 The session project is fixed at server startup. MCP ignores any
 `project_id` supplied in a tool call and removes internal
 `_operator_confirmed` and `_writes_allowed` fields. Destructive and
