@@ -4059,12 +4059,7 @@ paths:
   /v1/delivery/deployments/{deployment_run_id}/execute:
     post:
       summary: Delivery Execute Endpoint
-      description: 'Tell BOSS to carry out a planned deployment: plan -> apply -> observe.
-
-
-        The operator supplies the destination and a credential reference; BOSS does the work. This
-
-        endpoint is the trigger, not the doer — nothing here knows which connector will run.'
+      description: Refuse direct connector execution until it has a governed receipt path.
       operationId: post_v1_delivery_deployments_deployment_run_id_execute_f80564b4
       parameters:
       - name: deployment_run_id
@@ -4851,7 +4846,7 @@ paths:
   /v1/delivery/deploy:
     post:
       summary: Delivery Deploy Endpoint
-      description: 'Deploy a target at a chosen ref, without waiting for a merge.
+      description: 'Plan a governed deployment of a target at a chosen ref.
 
 
         The manual half of the trigger story: automatic on merge, this for everything else
@@ -5398,14 +5393,12 @@ paths:
   /v1/delivery/deployments/{deployment_run_id}/redeploy:
     post:
       summary: Delivery Redeploy Endpoint
-      description: 'Ship the same target again as a NEW deployment run.
+      description: 'Plan the same target again as a NEW deployment run.
 
 
-        Separate from /execute on purpose. /execute retries THIS run; /redeploy records a new one, so
+        A new run keeps the previous attempt''s history intact. The returned ChangeSet must pass
 
-        "what is running and since when" stays answerable instead of being overwritten by its own
-
-        replacement.'
+        Resource Plane approval and apply before any provider effect.'
       operationId: post_v1_delivery_deployments_deployment_run_id_redeploy_58b24d2a
       parameters:
       - name: deployment_run_id
