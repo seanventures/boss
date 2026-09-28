@@ -3,11 +3,10 @@
 from uuid import uuid4
 
 import pytest
+from boss_engine.services import code_task_service, prd_decomposition, secrets_service
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
-from boss_engine.services import code_task_service, prd_decomposition, secrets_service
-
 
 PROJECT = "boss-dogfood"
 

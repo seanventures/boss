@@ -11,11 +11,7 @@ Prefix: /v1/worker-autoscaling
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from typing import Any
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
@@ -25,6 +21,10 @@ from boss_engine.services.worker_autoscaling import (
     WorkerAutoscalingService,
     is_missing_relation,
 )
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 router = APIRouter(
     prefix="/v1/worker-autoscaling",
@@ -41,12 +41,25 @@ def _service() -> WorkerAutoscalingService:
     )
 
 
-def _authorize(connection, project_id: str, actor: str, permission: str) -> str:
+def _authorize(
+    connection, project_id: str, actor: str, permission: str, *,
+    allow_missing: bool = False,
+) -> str:
     # The HTTP principal, when present, is the authority and the audit actor.
     # Keep the explicit actor for local, unauthenticated development calls.
     from apps.api.app.main import current_api_principal, require_project_actor
 
     checked_actor = current_api_principal.get() or actor
+    # Preserve the existing honest empty-state response for a project that has
+    # never existed; there is no project data to reveal. Mutations fail closed.
+    project_exists = connection.execute(
+        text("SELECT 1 FROM projects WHERE id = :project_id"),
+        {"project_id": project_id},
+    ).first()
+    if not project_exists:
+        if allow_missing:
+            return checked_actor
+        raise HTTPException(status_code=404, detail="Project not found.")
     require_project_actor(connection, project_id, checked_actor, permission)
     return checked_actor
 
@@ -62,25 +75,25 @@ class PolicyUpsertRequest(BaseModel):
     cooldown_seconds: int = Field(default=30, ge=0)
     max_queue_depth_per_worker: int = Field(default=5, ge=1)
     kind: str = "local"
-    provider_account_id: Optional[str] = None
+    provider_account_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvaluateRequest(BaseModel):
     project_id: str
     actor: str = "system"
-    pool_key: Optional[str] = None
+    pool_key: str | None = None
     persist_history: bool = True
 
 
 class ApplyRequest(BaseModel):
     project_id: str
     actor: str = "system"
-    pool_key: Optional[str] = None
+    pool_key: str | None = None
     force: bool = False
     auto_reconcile: bool = True
     cloud_spillover_enabled: bool = False
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 @router.get("/policies")
@@ -88,7 +101,10 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(connection, project_id, "executive_console", "providerops_manage")
+            _authorize(
+                connection, project_id, "executive_console", "providerops_manage",
+                allow_missing=True,
+            )
             ready = svc.ensure_tables(connection)
             items = svc.list_policies(connection, project_id)
             return {
@@ -179,7 +195,10 @@ def status(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(connection, project_id, "executive_console", "providerops_manage")
+            _authorize(
+                connection, project_id, "executive_console", "providerops_manage",
+                allow_missing=True,
+            )
             svc.ensure_tables(connection)
             return svc.status(connection, project_id)
     except ProgrammingError as error:
@@ -210,13 +229,16 @@ def status(project_id: str = Query(...)) -> dict[str, Any]:
 @router.get("/history")
 def history(
     project_id: str = Query(...),
-    pool_key: Optional[str] = None,
+    pool_key: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(connection, project_id, "executive_console", "providerops_manage")
+            _authorize(
+                connection, project_id, "executive_console", "providerops_manage",
+                allow_missing=True,
+            )
             svc.ensure_tables(connection)
             items = svc.history(
                 connection, project_id, pool_key=pool_key, limit=limit
