@@ -33,17 +33,23 @@ def test_deploy_is_async_but_has_no_await_spec():
 
 @pytest.mark.parametrize("key", ASYNC_KEYS)
 def test_the_guard_never_indexes_a_missing_await_spec(key):
-    """Every async capability, not just the one that happened to be reported."""
+    """Every async capability without an await spec can settle without a KeyError."""
     if key in runner._AWAIT_KINDS:
         return
-    # The error-message branch must be unreachable for a capability with no spec.
-    import inspect
+    # The guard now lives in _settle_started_work, called by execute_step. Exercise the
+    # behavior so moving that guard again cannot make this test inspect the wrong function.
+    assert runner._settle_started_work(
+        CAPABILITIES[key], key, {"status": "accepted", "tool": "test_tool"},
+    ) == {"status": "accepted", "tool": "test_tool"}
 
-    source = inspect.getsource(runner.execute_step)
-    guard = source[source.index("if (capability.is_async"):]
-    assert "key in _AWAIT_KINDS" in guard[:400], (
-        f"{key} is async with no await spec; indexing _AWAIT_KINDS[key] raises KeyError"
+
+@pytest.mark.parametrize("key", sorted(runner._AWAIT_KINDS))
+def test_an_awaitable_step_without_a_handle_fails_with_a_reason(key):
+    result = runner._settle_started_work(
+        CAPABILITIES[key], key, {"status": "accepted", "tool": "test_tool"},
     )
+    assert result["status"] == "failed"
+    assert "returned no id to wait on" in result["error"]
 
 
 def test_every_await_kind_names_a_real_capability():
