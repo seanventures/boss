@@ -174,6 +174,9 @@ endpoints above; its approval, reservation, rollback, and receipt checks govern 
 provider effect. Direct SSH/container deployment currently returns HTTP 409 with a
 recorded blocked run and decision in every edition. Retrying through
 `/v1/delivery/deployments/{id}/execute` cannot bypass this gate.
+`POST /v1/delivery/first-deploy` and merge-triggered provider deployment also
+return a planned ChangeSet without starting a connector. A direct-host first
+deployment returns HTTP 409 after recording the same blocked run and decision.
 
 ```bash
 curl -sS -H "Authorization: Bearer $BOSS_KEY" \

@@ -142,8 +142,9 @@ def pick_deploy_target(candidates: list[dict], app_name: str) -> Optional[dict]:
 
 def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                  environment: str = "staging", target_id: Optional[str] = None,
-                 actor: str = "operator") -> dict[str, Any]:
-    """Deploy a finished build to a target, on request. The first deployment, not a re-ship.
+                 actor: str = "operator", expected_cost_usd_micros: int = 0,
+                 reservation_id: Optional[str] = None) -> dict[str, Any]:
+    """Plan a finished build's first deployment through Resource Plane.
 
     BOSS could create hosts and targets and could REDEPLOY, and had no way to perform a
     deployment that had never happened. So "deploy Living Colors to live" had no executable
@@ -154,8 +155,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     Deliberately narrow:
       * the build must have SUCCEEDED — deploying a failed build is never what was meant;
       * the target must already exist and be active, so this cannot invent infrastructure;
-      * it reuses plan_deployment_run and execute_deployment, so budget reservation, health
-        checks and rollback behave exactly as they do on the merge path.
+      * it reuses plan_deployment_run, so approval, budget, and rollback are
+        recorded before a provider effect can be applied.
     """
     from ..db import begin
 
@@ -309,8 +310,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
             commit_ref=None,
             release_packet={"source": "operator_deploy", "code_task_run_id": run_id,
                             "requested_by": actor},
-            expected_cost_usd_micros=0,
-            reservation_id=None,
+            expected_cost_usd_micros=expected_cost_usd_micros,
+            reservation_id=reservation_id,
             actor=actor,
         )
         deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
@@ -323,21 +324,23 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                   {"i": deployment_run_id})
         emit_event(c, project_id, "delivery.requested", actor, "code_task_run", run_id,
                    {"deployment_run_id": deployment_run_id, "target": target["id"],
-                    "environment": target["environment"]})
+                    "environment": target["environment"],
+                    "changeset_id": planned.get("changeset_id")})
 
-    result = execute_deployment(engine, settings, deployment_run_id, actor=actor)
-    return {"status": str(result.get("status") or "unknown"),
-            "deployment_run_id": deployment_run_id,
-            "target_id": target["id"],
-            "app_name": target.get("app_name"),
+    if not planned.get("changeset_id"):
+        return {"status": "blocked", "deployment_run_id": deployment_run_id,
+                "reason": "Deployment has no governed ChangeSet."}
+    return {"status": "planned", "deployment_run_id": deployment_run_id,
+            "target_id": target["id"], "app_name": target.get("app_name"),
             "environment": target["environment"],
-            "detail": result}
+            "changeset_id": planned["changeset_id"],
+            "next_action": "approve_and_apply_changeset"}
 
 
 def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_id: str,
                            repo: str, commit_ref: Optional[str], decision_id: Optional[str],
                            actor: str = "delivery") -> dict[str, Any]:
-    """Called when a merge decision completes. Starts a staging deployment if one is configured.
+    """Called when a merge completes. Plans a staging deployment if configured.
 
     Returns a dict describing what happened, always — `skipped` is a first-class outcome and
     the common one. Never raises: this runs after a PR has already merged, and an exception
@@ -450,6 +453,7 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                 emit_event(c, project_id, "delivery.deployment_planned", actor,
                            "code_task_run", run_id,
                            {"deployment_run_id": deployment_run_id,
+                            "changeset_id": planned.get("changeset_id"),
                             "environment": target["environment"], "target": target["id"],
                             "app_name": target.get("app_name"), "commit_ref": commit_ref})
                 c.execute(sql("UPDATE deployment_runs SET trigger = 'merge' WHERE id = :i"),
@@ -458,7 +462,10 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                                      "environment": target["environment"],
                                      "target_id": target["id"],
                                      "app_name": target.get("app_name"),
-                                     "deployment_run_id": deployment_run_id})
+                                     "deployment_run_id": deployment_run_id,
+                                     "changeset_id": planned.get("changeset_id"),
+                                     **({"next_action": "approve_and_apply_changeset"}
+                                        if planned.get("changeset_id") else {})})
 
     except Exception as exc:  # noqa: BLE001
         # A delivery failure must never un-merge a PR or fail a completed code task.
@@ -471,16 +478,17 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
         return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:300],
                 "deployments": planned_runs}
 
-    # Execute OUTSIDE the transaction above, and outside the merge's own transaction: a deploy
-    # takes minutes, does network I/O, and must not hold a database lock or be rolled back by
-    # something unrelated finishing badly. Until this existed, a merge planned a deployment and
-    # nothing ever ran it — the row simply sat there, which is why every deployment so far was
-    # started by hand. That is the whole of the missing "continuous".
+    # A provider-backed plan must be approved and applied through Resource Plane.
+    # Calling the connector here would report a bogus blocked execution and bypass
+    # the review step. Legacy non-provider targets keep their existing guarded
+    # execution outcome.
     #
     # Sequential, not concurrent: two apps on ONE host would otherwise race for ports and for
     # the same docker daemon. Fan-out is about not dropping an app, not about speed.
     for entry in planned_runs:
         if entry.get("status") != "planned" or not entry.get("deployment_run_id"):
+            continue
+        if entry.get("changeset_id"):
             continue
         try:
             outcome = execute_deployment(engine, settings, entry["deployment_run_id"],

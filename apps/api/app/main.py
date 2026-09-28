@@ -12159,7 +12159,7 @@ def refresh_health_snapshot(
 
 @app.post("/v1/delivery/first-deploy")
 def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
-    """Deploy a successful build to an existing target — the FIRST deployment.
+    """Plan a successful build's first deployment to an existing target.
 
     BOSS could create hosts and targets and could redeploy, but nothing could perform a
     deployment that had never happened. "Deploy this app" therefore had no executable action
@@ -12180,6 +12180,16 @@ def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
         raise HTTPException(status_code=400, detail="project_id and run_id are required.")
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
+    try:
+        expected_cost = int(payload.get("expected_cost_usd_micros") or 0)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be an integer"
+        ) from error
+    if expected_cost < 0:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be non-negative"
+        )
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "providerops_manage")
     result = deploy_build(
@@ -12189,7 +12199,14 @@ def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
         environment=str(payload.get("environment") or "staging"),
         target_id=(str(payload["target_id"]) if payload.get("target_id") else None),
         actor=actor,
+        expected_cost_usd_micros=expected_cost,
+        reservation_id=str(payload.get("reservation_id") or "").strip() or None,
     )
+    if result.get("status") == "blocked":
+        raise HTTPException(
+            status_code=409,
+            detail=result.get("reason") or "Deployment policy blocked this run.",
+        )
     return result
 
 

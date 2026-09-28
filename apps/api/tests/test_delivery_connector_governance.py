@@ -311,6 +311,133 @@ def test_redeploy_host_target_records_new_blocked_run_without_worker(
     assert event and started == []
 
 
+def test_first_deploy_and_merge_plan_provider_changesets_without_connector(
+    client, engine, monkeypatch
+):
+    suffix = uuid4().hex[:10]
+    headers = _auth(monkeypatch, suffix)
+    monkeypatch.setattr(api_main.settings, "boss_edition", "enterprise_self_hosted")
+    code_run_id = f"crun_guard_{suffix}"
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO code_task_runs "
+                 "(id, project_id, title, status, phase, spec) "
+                 "VALUES (:id, :project, 'Guarded provider build', 'completed', "
+                 "'done', '{\"repo\":\"example/app\"}'::jsonb)"),
+            {"id": code_run_id, "project": PROJECT},
+        )
+    provider = client.post(
+        "/v1/providers", headers=headers,
+        json={"project_id": PROJECT, "provider": "digitalocean",
+              "account_label": f"first-{suffix}",
+              "scopes": ["read", "write", "deploy"],
+              "read_only": False, "deploy_capable": True,
+              "destructive_actions_disabled": False, "actor": "ceo"},
+    )
+    assert provider.status_code == 201, provider.text
+    target = client.post(
+        "/v1/deployments", headers=headers,
+        json={"project_id": PROJECT, "app_name": f"first-{suffix}",
+              "repo": "example/app", "environment": "staging",
+              "provider_account_id": provider.json()["id"],
+              "target_kind": "digitalocean_app", "target_ref": "app-123",
+              "rollback_points": [{"ref": "previous-app-spec"}], "actor": "ceo"},
+    )
+    assert target.status_code == 201, target.text
+    target_id = target.json()["id"]
+    policy = client.post(
+        "/v1/deployment-environment-policies", headers=headers,
+        json={"project_id": PROJECT, "environment": "staging",
+              "runtime_mode": "staging_allowed",
+              "allowed_target_kinds": ["digitalocean_app"],
+              "requires_change_set": True, "requires_budget_reservation": False,
+              "requires_approval": True, "requires_health_check": False,
+              "requires_rollback_plan": True, "actor": "ceo"},
+    )
+    assert policy.status_code == 201, policy.text
+
+    def no_connector(*_args, **_kwargs):
+        raise AssertionError("provider ChangeSet must not run a direct connector")
+
+    monkeypatch.setattr(delivery_pipeline, "execute_deployment", no_connector)
+    first = client.post(
+        "/v1/delivery/first-deploy", headers=headers,
+        json={"project_id": PROJECT, "run_id": code_run_id,
+              "target_id": target_id, "actor": "ceo"},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "planned"
+    assert first.json()["changeset_id"]
+    assert first.json()["next_action"] == "approve_and_apply_changeset"
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE deployment_targets SET status = 'active', auto_deploy = true "
+                 "WHERE id = :id"), {"id": target_id},
+        )
+    merged = delivery_pipeline.on_pull_request_merged(
+        engine, api_main.settings, project_id=PROJECT, run_id=code_run_id,
+        repo="example/app", commit_ref="abc123", decision_id=None, actor="ceo",
+    )
+    assert merged["status"] == "planned", merged
+    assert merged["deployments"][0]["changeset_id"]
+    assert merged["deployments"][0]["next_action"] == "approve_and_apply_changeset"
+    with engine.begin() as connection:
+        planned_rows = connection.execute(
+            text("SELECT status, changeset_id FROM deployment_runs "
+                 "WHERE deployment_target_id = :target ORDER BY created_at"),
+            {"target": target_id},
+        ).mappings().all()
+        false_blocked = connection.execute(
+            text("SELECT COUNT(*) FROM events WHERE event_type = "
+                 "'deployment_run.execute_blocked' AND project_id = :project"),
+            {"project": PROJECT},
+        ).scalar_one()
+    assert len(planned_rows) == 2
+    assert all(row["status"] == "created" and row["changeset_id"]
+               for row in planned_rows)
+    assert false_blocked == 0
+
+
+def test_first_deploy_direct_host_returns_409_with_audited_block(
+    client, engine, monkeypatch
+):
+    suffix = uuid4().hex[:10]
+    headers = _auth(monkeypatch, suffix)
+    monkeypatch.setattr(api_main.settings, "boss_edition", "enterprise_self_hosted")
+    target_id = _target(engine, suffix)
+    code_run_id = f"crun_guard_{suffix}"
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO code_task_runs "
+                 "(id, project_id, title, status, phase, spec) "
+                 "VALUES (:id, :project, 'Guarded host build', 'completed', "
+                 "'done', '{\"repo\":\"example/app\"}'::jsonb)"),
+            {"id": code_run_id, "project": PROJECT},
+        )
+
+    denied = client.post(
+        "/v1/delivery/first-deploy", headers=headers,
+        json={"project_id": PROJECT, "run_id": code_run_id,
+              "target_id": target_id, "actor": "ceo"},
+    )
+    assert denied.status_code == 409, denied.text
+    assert "Direct host deployment" in denied.text
+    with engine.begin() as connection:
+        run = connection.execute(
+            text("SELECT status, decision_id, changeset_id FROM deployment_runs "
+                 "WHERE deployment_target_id = :target"),
+            {"target": target_id},
+        ).mappings().one()
+        blocked_event = connection.execute(
+            text("SELECT id FROM events WHERE event_type = 'deployment_run.blocked' "
+                 "AND entity_id = :id"),
+            {"id": run["decision_id"]},
+        ).first()
+    assert run["status"] == "failed" and run["decision_id"]
+    assert run["changeset_id"] is None and blocked_event
+
+
 def test_linked_changeset_prerequisites_do_not_authorize_unreceipted_connector(
     engine, monkeypatch
 ):
