@@ -63,9 +63,32 @@ from typing import Any, Optional
 from sqlalchemy import text as sql
 
 from ..config import Settings
-from .core import emit_event
+from .core import create_blocking_decision, emit_event
 
 _log = logging.getLogger(__name__)
+
+COMMUNITY_INVESTIGATION_BLOCK_REASON = (
+    "Live investigations are unavailable in Community until model calls use durable "
+    "worker leases, budget reservations, and reconciled receipts. Host and database "
+    "writes also require governed effect records."
+)
+_QUALIFIED_INVESTIGATION_EDITIONS = frozenset({
+    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
+})
+
+
+class InvestigationExecutionBlocked(ValueError):
+    """An investigation would start ungoverned model or host effects in Community."""
+
+
+def _community_investigations_paused(settings: Settings) -> bool:
+    # Unknown spellings do not silently acquire an unbudgeted model or host shell.
+    return str(settings.boss_edition).strip().lower() not in _QUALIFIED_INVESTIGATION_EDITIONS
+
+
+def require_investigation_runtime(settings: Settings) -> None:
+    if _community_investigations_paused(settings):
+        raise InvestigationExecutionBlocked(COMMUNITY_INVESTIGATION_BLOCK_REASON)
 
 #: Read commands an investigation may run on a host without an operator's say-so.
 #:
@@ -404,16 +427,20 @@ def run_on_investigation_host(*, host: str, command: str, project_id: str,
     the ones every deployment already uses, so an investigation cannot reach a machine BOSS is
     not already trusted on, and rotating a key rotates it here too.
     """
+    from ..config import get_settings
+
+    settings = get_settings()
+    if _community_investigations_paused(settings):
+        return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
+
     allowed, why = host_command_allowed(command, allow_write=allow_write)
     if not allowed:
         return {"ok": False, "error": why}
 
-    from ..config import get_settings
     from ..db import begin, get_engine
     from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
     from .secret_backends import resolve_target_secret
 
-    settings = get_settings()
     ephemeral = None
     with begin(get_engine(settings)) as c:
         row = c.execute(
@@ -606,9 +633,15 @@ can apply it in one step. Do not spend turns on commands that will be refused.""
 # --------------------------------------------------------------------------- #
 def open_investigation(connection, *, project_id: str, question: str, actor: str,
                        thread_id: Optional[str] = None, run_id: Optional[str] = None,
-                       allow_fix: bool = False) -> dict[str, Any]:
+                       allow_fix: bool = False,
+                       settings: Optional[Settings] = None) -> dict[str, Any]:
     """Record the intent and queue the work. Returns immediately — this takes minutes."""
+    from ..config import get_settings
     from .jobs import enqueue_job
+
+    # This direct service boundary also covers the engine tool and future callers. Refuse
+    # before touching a row or queueing a job; a read-only investigation still pays a CLI.
+    require_investigation_runtime(settings or get_settings())
 
     # AN INVESTIGATION THE CONTAINER OUTLIVED IS NOT STILL RUNNING.
     #
@@ -775,9 +808,60 @@ def _post_to_thread(connection, thread_id: str, investigation_id: str,
                      investigation_id, thread_id, exc)
 
 
+def block_community_investigation(
+    connection, settings: Settings, investigation_id: str,
+) -> Optional[dict[str, Any]]:
+    """Retire a legacy queued run before it can reach the model or a host.
+
+    A running row might already have spent money before an upgrade. It needs an operator
+    decision to reconcile that uncertain spend; replaying it would compound the problem.
+    """
+    if not _community_investigations_paused(settings):
+        return None
+    row = connection.execute(
+        sql("SELECT id, project_id, status FROM investigations WHERE id = :i FOR UPDATE"),
+        {"i": investigation_id},
+    ).mappings().first()
+    if row is None:
+        return {"ok": False, "error": f"no such investigation: {investigation_id}"}
+    if row["status"] not in ("queued", "running"):
+        return {"ok": True, "status": row["status"], "already_done": True}
+
+    was_running = row["status"] == "running"
+    connection.execute(
+        sql("UPDATE investigations SET status = 'failed', error = :reason, "
+            "token = NULL, finished_at = now(), updated_at = now() WHERE id = :i"),
+        {"i": investigation_id, "reason": COMMUNITY_INVESTIGATION_BLOCK_REASON},
+    )
+    if was_running:
+        create_blocking_decision(
+            connection, row["project_id"], None,
+            f"Reconcile interrupted investigation {investigation_id}",
+            {"action": "review_model_spend_and_host_effects_before_retry"},
+            {"investigation_id": investigation_id, "recorded_usage": "unknown"},
+            "investigation_unverified_effects", default_action="hold",
+        )
+    emit_event(
+        connection, row["project_id"], "investigation.blocked", "boss",
+        "investigation", investigation_id,
+        {"reason": "community_investigation_governance_gate",
+         "effect_reconciliation_required": was_running},
+    )
+    return {"ok": False, "status": "blocked", "investigation_id": investigation_id,
+            "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
+
+
 def run_investigation(engine, settings: Settings, *, investigation_id: str) -> dict[str, Any]:
     """Do the work. Runs on the API container, which is where the Claude CLI lives."""
     from ..db import begin
+
+    # Defense in depth for direct service callers, including any worker path other than HTTP.
+    # This must run before importing or invoking the paid CLI or provisioning a sandbox.
+    with begin(engine) as c:
+        blocked = block_community_investigation(c, settings, investigation_id)
+    if blocked is not None:
+        return blocked
+
     from .code_agent import ClaudeCodeAgent
     from .sandbox import EphemeralSandbox
 
@@ -946,9 +1030,20 @@ def authorise(connection, investigation_id: str, token: str) -> dict[str, Any]:
 
 def run_db(connection, record: dict, statement: str) -> dict[str, Any]:
     """SQL for an investigation, on BOSS's connection rather than the sandbox's."""
-    allowed, why = sql_is_allowed(statement, allow_write=bool(record["allow_fix"]))
+    from ..config import get_settings
+
+    community = _community_investigations_paused(get_settings())
+    allowed, why = sql_is_allowed(
+        statement, allow_write=bool(record["allow_fix"]) and not community
+    )
     if not allowed:
+        if community and record["allow_fix"]:
+            return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
         return {"ok": False, "error": why}
+    if community:
+        # SQL shaped like a SELECT can call a database function. A read-only transaction
+        # makes PostgreSQL enforce the boundary beyond our parser for legacy tokens.
+        connection.execute(sql("SET TRANSACTION READ ONLY"))
     body = statement.strip().rstrip(";")
     result = connection.execute(sql(body))
     if result.returns_rows:
@@ -1010,6 +1105,10 @@ def run_operation(ctx, record: dict, tool: str, args: dict) -> dict[str, Any]:
                 "error": f"{tool!r} requires its own operator click; describe the action "
                          "and let the operator run it from the console.",
                 "available": available}
+    from ..config import get_settings
+
+    if _community_investigations_paused(getattr(ctx, "settings", None) or get_settings()):
+        return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
     return registry.invoke(
         spec.name, ctx, project_id=str(record["project_id"]), actor=str(record["actor"]),
         args=args or {})

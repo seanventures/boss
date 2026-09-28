@@ -6454,6 +6454,10 @@ def run_investigation_endpoint(investigation_id: str):
     require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.debug_session import (
+        block_community_investigation, run_investigation,
+    )
+
     with begin(engine) as connection:
         project_id = connection.execute(
             text("SELECT project_id FROM investigations WHERE id = :investigation_id"),
@@ -6463,7 +6467,9 @@ def run_investigation_endpoint(investigation_id: str):
             return {"ok": False, "error": f"no such investigation: {investigation_id}"}
         actor = current_api_principal.get() or "system"
         require_project_actor(connection, project_id, actor, "workflow_execute")
-    from boss_engine.services.debug_session import run_investigation
+        blocked = block_community_investigation(connection, settings, investigation_id)
+        if blocked is not None:
+            return blocked
 
     return run_investigation(engine, settings, investigation_id=investigation_id)
 

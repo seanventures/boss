@@ -21,6 +21,7 @@ def test_investigation_run_requires_worker_and_stored_project_grant(
     worker = "ga_investigation_worker"
     low = "ga_investigation_viewer"
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "boss_edition", "enterprise")
     monkeypatch.setattr(
         api_main.settings, "api_keys", "invest-worker-key,invest-low-key,invest-ceo-key"
     )

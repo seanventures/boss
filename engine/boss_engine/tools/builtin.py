@@ -3936,7 +3936,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 c, project_id=project_id, question=str(args.get("question") or ""),
                 actor=actor, thread_id=args.get("_thread_id"),
                 run_id=(str(args["run_id"]) if args.get("run_id") else None),
-                allow_fix=wants_fix)
+                allow_fix=wants_fix, settings=getattr(ctx, "settings", None))
 
     @reg.tool(
         "factory_briefing",
