@@ -108,7 +108,8 @@ def _github(path: str, token: str) -> Any:
         return json.loads(resp.read().decode() or "[]")
 
 
-def repo_refs(connection, settings: Settings, owner: str, repo: str) -> dict[str, Any]:
+def repo_refs(connection, settings: Settings, owner: str, repo: str, *,
+              project_id: str) -> dict[str, Any]:
     """Branches you can deploy, and the default one.
 
     Asks GitHub, because only the host knows what exists. On failure it falls back to refs BOSS
@@ -150,15 +151,21 @@ def repo_refs(connection, settings: Settings, owner: str, repo: str) -> dict[str
     # GitHub is unavailable.
     known = connection.execute(
         sql("SELECT DISTINCT commit_ref FROM deployment_runs "
-            "WHERE commit_ref IS NOT NULL AND status = 'succeeded' "
-            "ORDER BY commit_ref LIMIT 20")).mappings().all()
+            "WHERE project_id = :p AND repo IN (:repo, :full_repo) "
+            "AND commit_ref IS NOT NULL AND status = 'succeeded' "
+            "ORDER BY commit_ref LIMIT 20"),
+        {"p": project_id, "repo": repo, "full_repo": f"{owner}/{repo}"},
+    ).mappings().all()
     deployed = [r["commit_ref"] for r in known if r["commit_ref"]]
 
     if not branches:
         task_branches = connection.execute(
             sql("SELECT DISTINCT finalize_ctx->>'work_branch' AS b FROM code_task_runs "
-                "WHERE finalize_ctx->>'work_branch' IS NOT NULL "
-                "ORDER BY 1 DESC LIMIT 25")).mappings().all()
+                "WHERE project_id = :p AND spec->>'repo' = :repo "
+                "AND finalize_ctx->>'work_branch' IS NOT NULL "
+                "ORDER BY 1 DESC LIMIT 25"),
+            {"p": project_id, "repo": repo},
+        ).mappings().all()
         branches = [{"name": r["b"], "sha": ""} for r in task_branches if r["b"]]
         # The default branch is almost certainly still the right first choice.
         if not any(b["name"] == default_branch for b in branches):

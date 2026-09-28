@@ -2790,7 +2790,8 @@ export async function listDeploymentsAction(limit = 10): Promise<any> {
 /** Runnable apps in a repo — so `app entry` is picked, not guessed. */
 export async function listRepoAppsAction(owner: string, repo: string, ref = ""): Promise<any> {
   return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/apps`
-             + (ref ? `?ref=${encodeURIComponent(ref)}` : ""));
+             + `?project_id=${encodeURIComponent(PROJECT_ID)}`
+             + (ref ? `&ref=${encodeURIComponent(ref)}` : ""));
 }
 
 /** Repositories BOSS has built in or deployed from. */
@@ -2800,7 +2801,8 @@ export async function listReposAction(): Promise<any> {
 
 /** Branches available for a repo, default first, with what BOSS already shipped from it. */
 export async function listRefsAction(owner: string, repo: string): Promise<any> {
-  return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/refs`);
+  return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/refs`
+             + `?project_id=${encodeURIComponent(PROJECT_ID)}`);
 }
 
 /** What BOSS will clone unless the target says otherwise — owner, repo, and the full URL. */
