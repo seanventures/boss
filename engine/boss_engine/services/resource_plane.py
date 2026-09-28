@@ -2412,14 +2412,17 @@ class ResourcePlaneService:
             return self._get_deployment_run(connection, project_id, deployment_run_id)
 
         rollback_plan = self._deployment_rollback_plan(target)
-        if (
-            str(getattr(self.settings, "boss_edition", "community")).strip().lower()
-            in {"community", "oss", "local"}
-            and str(target["target_kind"]).strip().lower() in {"ssh", "container"}
-        ):
-            # These connectors currently produce no Resource Plane operation, so a
-            # runnable deployment would have no approved ChangeSet or expected
-            # ResourceReceipt. Record the refusal before acquiring a surface or building.
+        target_kind = str(target["target_kind"]).strip().lower().replace("-", "_")
+        if target_kind in {"ssh", "container"}:
+            # These implemented connectors currently produce no Resource Plane
+            # operation in any edition. A runnable connector deployment would
+            # bypass ChangeSet approval and could not create a ResourceReceipt.
+            # Refuse before acquiring a surface, worker, or host connection.
+            community_host = (
+                str(getattr(self.settings, "boss_edition", "community")).strip().lower()
+                in {"community", "oss", "local"}
+            )
+            label = "Community host" if community_host else "Direct host"
             return self._record_blocked_deployment_run(
                 connection,
                 project_id=project_id,
@@ -2428,7 +2431,7 @@ class ResourcePlaneService:
                 release_packet=release_packet or {},
                 rollback_plan=rollback_plan,
                 actor=actor,
-                title="Community host deployment requires a governed ChangeSet",
+                title=f"{label} deployment requires a governed ChangeSet",
                 recommendation={
                     "action": "implement_governed_host_deployment",
                     "deployment_target_id": deployment_target_id,
@@ -2437,12 +2440,18 @@ class ResourcePlaneService:
                 },
                 evidence={"target_kind": target["target_kind"],
                           "environment": target["environment"]},
-                reason_code="community_host_deployment_unavailable",
+                reason_code=(
+                    "community_host_deployment_unavailable"
+                    if community_host else "direct_host_deployment_ungoverned"
+                ),
                 failure_reason=(
-                    "Community host deployment is disabled until a policy-guarded "
+                    f"{label} deployment is disabled until a policy-guarded "
                     "ChangeSet, budget reservation, approval, and ResourceReceipt exist."
                 ),
-                event_reason="community_host_deployment_unavailable",
+                event_reason=(
+                    "community_host_deployment_unavailable"
+                    if community_host else "direct_host_deployment_ungoverned"
+                ),
             )
         rollout_policy = self._deployment_rollout_policy_for_target(
             connection,

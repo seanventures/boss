@@ -4,6 +4,13 @@
 **Written:** 2026-08-08
 **Supersedes the delivery area described in** `CICD_DEPLOYMENT_PLAN.md`
 
+**Current safety gate (2026-09-28):** The asynchronous SSH/container execution described below
+is disabled in every edition until connector effects run through approved ChangeSets,
+BudgetReservations when spend is expected, rollback plans, and ResourceReceipts. The historical
+browser verification predates this gate. Provider-backed manual deploys now return a planned
+run plus `changeset_id` for ProviderOps approval and apply; the console must show that state
+instead of treating the response as a running deployment.
+
 ---
 
 ## 1. Why the current console fails

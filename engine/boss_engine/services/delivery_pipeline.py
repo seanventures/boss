@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import sql
-from .core import emit_event
+from .core import create_blocking_decision, emit_event
 
 # Environments a merge may deploy to WITHOUT a human. Everything else needs a promotion
 # decision. Deliberately a set rather than a flag: adding "production" here should be a
@@ -517,8 +517,9 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
 
 def redeploy(engine, settings: Settings, deployment_run_id: str, *,
              commit_ref: Optional[str] = None, actor: str = "operator",
-             execute: bool = True) -> dict[str, Any]:
-    """Ship the same target again, as a NEW deployment_run.
+             execute: bool = True, expected_cost_usd_micros: int = 0,
+             reservation_id: Optional[str] = None) -> dict[str, Any]:
+    """Plan the same target again, as a NEW deployment_run.
 
     Deliberately not a re-execution of the existing row. An operator asking "what is running and
     since when" is asking about a history, and rewriting one row in place destroys exactly that:
@@ -548,8 +549,8 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
             deployment_target_id=prior["deployment_target_id"],
             commit_ref=commit_ref or prior["commit_ref"],
             release_packet=packet,
-            expected_cost_usd_micros=0,
-            reservation_id=None,
+            expected_cost_usd_micros=expected_cost_usd_micros,
+            reservation_id=reservation_id,
             actor=actor,
         )
         new_id = planned.get("deployment_run_id") or planned.get("id")
@@ -567,13 +568,13 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
                    {"redeploy_of": deployment_run_id,
                     "commit_ref": commit_ref or prior["commit_ref"]})
 
-    # `execute=False` plans the run and hands back its id so the CALLER can run it in the
-    # background. Deploy was made asynchronous and redeploy was not, which left one of the two
-    # buttons blocking its HTTP request for a minute with nothing to show — the exact problem
-    # the async change existed to remove. A rule applied on one path is not a rule.
+    # The API uses `execute=False` so approval and Resource Plane apply can
+    # complete the new ChangeSet. Direct connector execution below remains
+    # guarded for legacy callers.
     if not execute:
         return {"status": "planned", "deployment_run_id": new_id,
-                "redeploy_of": deployment_run_id}
+                "redeploy_of": deployment_run_id,
+                "changeset_id": planned.get("changeset_id")}
     return {"deployment_run_id": new_id,
             **execute_deployment(engine, settings, new_id, actor=actor)}
 
@@ -729,6 +730,112 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
 # --------------------------------------------------------------------------- #
 # Execution — BOSS places the artifact, observes it, and rolls back on its own
 # --------------------------------------------------------------------------- #
+def block_ungoverned_connector_execution(
+    connection, run: dict, settings: Settings, *, actor: str
+) -> dict[str, Any]:
+    """Deny direct connector effects until they use the Resource Plane receipt path.
+
+    A ChangeSet approval alone is not an effect envelope. The SSH connector is
+    currently called outside `apply_changeset`, so it cannot produce the
+    ResourceReceipt and budget settlement that method owns. This guard runs
+    before even connector preflight, which can contact a host.
+    """
+    run = dict(run)
+    run_id = run["id"]
+    project_id = run["project_id"]
+    if run["status"] in {"failed", "blocked", "succeeded", "rolled_back"}:
+        return {"status": "blocked", "deployment_run_id": run_id,
+                "reason": f"Deployment run is already {run['status']}."}
+
+    changeset_id = run.get("changeset_id")
+    reason_code = "deployment_missing_changeset"
+    reason = "Deployment run has no ChangeSet; direct connector execution is blocked."
+    changeset = None
+    if changeset_id:
+        changeset = connection.execute(
+            sql("SELECT id, project_id, status, rollback_plan, reservation_id, "
+                "expected_cost_usd_micros, expected_receipts FROM changesets "
+                "WHERE id = :id AND project_id = :project_id"),
+            {"id": changeset_id, "project_id": project_id},
+        ).mappings().first()
+        if not changeset:
+            reason_code = "deployment_changeset_scope_mismatch"
+            reason = "Deployment ChangeSet does not belong to this project."
+        elif changeset["status"] != "approved":
+            reason_code = "deployment_changeset_not_approved"
+            reason = "Deployment ChangeSet must be approved before execution."
+        elif not run.get("rollback_plan") or not changeset["rollback_plan"]:
+            reason_code = "deployment_missing_rollback_plan"
+            reason = "Deployment run and ChangeSet both require a rollback plan."
+        elif int(changeset["expected_cost_usd_micros"] or 0) > 0:
+            from .budget import BudgetGovernor
+
+            try:
+                reservation = (
+                    BudgetGovernor(settings).assert_active_reservation(
+                        connection, project_id, changeset["reservation_id"]
+                    )
+                    if changeset["reservation_id"] else None
+                )
+            except ValueError:
+                # A rejected reservation is a policy denial, not an unhandled
+                # connector error. Preserve the audited blocked attempt below.
+                reservation = None
+            if (
+                not reservation
+                or int(reservation["amount_usd_micros"])
+                < int(changeset["expected_cost_usd_micros"])
+            ):
+                reason_code = "deployment_missing_budget_reservation"
+                reason = "Deployment ChangeSet requires an active, sufficient BudgetReservation."
+        if reason_code == "deployment_missing_changeset":
+            if not changeset["expected_receipts"] or not run.get("release_receipt_ids"):
+                reason_code = "deployment_missing_expected_receipts"
+                reason = "Deployment ChangeSet must declare expected ResourceReceipts."
+            else:
+                # Expected receipt keys are plans, not durable receipts. The
+                # connector must be wrapped by apply_changeset or an equivalent
+                # audited adapter before it can touch a provider.
+                reason_code = "deployment_connector_receipt_boundary_missing"
+                reason = (
+                    "Direct connector execution has no ResourceReceipt boundary; "
+                    "apply the approved ChangeSet through ProviderOps."
+                )
+
+    # A historical run with no ChangeSet can never be repaired by retrying it;
+    # leave a durable refusal and decision. A linked ChangeSet may still be
+    # approved/applied through ProviderOps, so keep its planned run intact.
+    if not changeset_id:
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            None,
+            "Direct deployment connector lacks governance",
+            {"action": "plan_governed_changeset", "deployment_run_id": run_id},
+            {"deployment_run_id": run_id, "reason": reason_code},
+            reason_code,
+            risk_tier=3 if run.get("environment") == "production" else 2,
+        )
+        connection.execute(
+            sql("UPDATE deployment_runs SET status = 'blocked', decision_id = :decision_id, "
+                "failure_reason = :reason, finished_at = now(), updated_at = now() "
+                "WHERE id = :id AND project_id = :project_id"),
+            {"id": run_id, "project_id": project_id,
+             "decision_id": decision_id, "reason": reason},
+        )
+    emit_event(
+        connection,
+        project_id,
+        "deployment_run.execute_blocked",
+        actor,
+        "deployment_run",
+        run_id,
+        {"reason": reason_code, "changeset_id": changeset_id},
+    )
+    return {"status": "blocked", "deployment_run_id": run_id,
+            "reason": reason, "reason_code": reason_code}
+
+
 def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
                        actor: str = "delivery") -> dict[str, Any]:
     """Run a planned deployment through its connector: plan -> apply -> observe.
@@ -771,6 +878,12 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
             return {"status": "not_found", "reason": "deployment_target missing",
                     "deployment_run_id": deployment_run_id}
         target = dict(trow)
+        # The connector path below does not yet participate in ChangeSet apply,
+        # ResourceReceipt creation, or budget settlement. Keep this guard in the
+        # service as well as HTTP, so merge/redeploy/background calls cannot
+        # bypass it. Unsupported target kinds have no connector and fail preflight.
+        if connector_for(target) is not None or row.get("changeset_id"):
+            return block_ungoverned_connector_execution(c, row, settings, actor=actor)
         project_id = row["project_id"]
         run_id = (row["release_packet"] or {}).get("code_task_run_id") or ""
 

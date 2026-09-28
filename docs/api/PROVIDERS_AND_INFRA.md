@@ -167,6 +167,14 @@ curl -sS "${AUTH[@]}" -d "{\"project_id\": \"$PROJECT\", \"actor\": \"ceo\"}" \
 
 Real provision also requires env gates such as `BOSS_INFRA_REAL_PROVISION_ALLOWED=true`. Successful actuation emits **ResourceReceipts** and often **CostEvents**.
 
+For a provider-backed deployment, `POST /v1/delivery/deploy` returns a planned
+`deployment_run_id` and `changeset_id`. Send `expected_cost_usd_micros` and an active
+`reservation_id` when spend is expected. Approve and apply that ChangeSet using the
+endpoints above; its approval, reservation, rollback, and receipt checks govern the
+provider effect. Direct SSH/container deployment currently returns HTTP 409 with a
+recorded blocked run and decision in every edition. Retrying through
+`/v1/delivery/deployments/{id}/execute` cannot bypass this gate.
+
 ```bash
 curl -sS -H "Authorization: Bearer $BOSS_KEY" \
   "$BOSS_API/v1/resource-receipts?project_id=$PROJECT" | jq .

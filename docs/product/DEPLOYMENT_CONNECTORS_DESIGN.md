@@ -19,6 +19,12 @@ expected ResourceReceipt for those kinds. A policy-guarded release workflow is r
 restore this capability; Community GA must describe it as unavailable until then.
 The planner records a blocked deployment run and decision before build or host access, and the
 connector independently refuses execution if an older run reaches it.
+**Current all-edition gate (2026-09-28):** Enterprise SSH/container planning now makes the same
+audited refusal. The direct delivery connector path has no ResourceReceipt recorder or budget
+settlement, so an approved ChangeSet by itself does not authorize a connector call. Manual
+provider-backed deployment returns a planned run and `changeset_id`; operators approve and
+apply that ChangeSet through ProviderOps. Direct execute/redeploy never starts a connector
+worker while this gate is active. Local target planning and health checks are unaffected.
 The older code-task SSH endpoint still provides a read-only dry run; Community actuation is
 blocked there and at the shared `deploy_ssh` helper before any host call.
 

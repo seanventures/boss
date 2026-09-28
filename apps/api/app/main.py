@@ -6886,20 +6886,18 @@ def code_task_activity_endpoint(run_id: str):
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
 def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
-    """Tell BOSS to carry out a planned deployment: plan -> apply -> observe.
-
-    The operator supplies the destination and a credential reference; BOSS does the work. This
-    endpoint is the trigger, not the doer — nothing here knows which connector will run.
-    """
+    """Refuse direct connector execution until it has a governed receipt path."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
     actor = str(p.get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
+    from .services.delivery_pipeline import block_ungoverned_connector_execution
+
     with begin(engine) as connection:
         run_row = connection.execute(
-            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            text("SELECT * FROM deployment_runs WHERE id = :i"),
             {"i": deployment_run_id},
         ).mappings().first()
         if not run_row:
@@ -6910,7 +6908,10 @@ def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = 
         require_project_actor(
             connection, run_row["project_id"], actor, "providerops_manage"
         )
-    return _start_deployment_in_background(deployment_run_id, actor, trigger="retry")
+        blocked = block_ungoverned_connector_execution(
+            connection, run_row, settings, actor=actor
+        )
+    raise HTTPException(status_code=409, detail=blocked["reason"])
 
 
 # --------------------------------------------------------------------------- #
@@ -7712,7 +7713,7 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
 
 @app.post("/v1/delivery/deploy")
 def delivery_deploy_endpoint(payload: dict):
-    """Deploy a target at a chosen ref, without waiting for a merge.
+    """Plan a governed deployment of a target at a chosen ref.
 
     The manual half of the trigger story: automatic on merge, this for everything else
     (shipping a hotfix, re-shipping after a host fix, deploying a target that was onboarded
@@ -7720,7 +7721,6 @@ def delivery_deploy_endpoint(payload: dict):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.delivery_pipeline import execute_deployment
     from .services.resource_plane import ResourcePlaneService
 
     target_id = payload.get("target_id")
@@ -7729,6 +7729,17 @@ def delivery_deploy_endpoint(payload: dict):
     actor = str(payload.get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
+    try:
+        expected_cost = int(payload.get("expected_cost_usd_micros") or 0)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be an integer"
+        ) from error
+    if expected_cost < 0:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be non-negative"
+        )
+    reservation_id = str(payload.get("reservation_id") or "").strip() or None
 
     with begin(engine) as connection:
         target = connection.execute(
@@ -7738,7 +7749,16 @@ def delivery_deploy_endpoint(payload: dict):
             raise HTTPException(status_code=404, detail="no such deployment target")
         require_project_actor(
             connection, target["project_id"], actor, "providerops_manage")
-        if target["status"] != "active":
+        # A newly registered cloud target is still `created`. It must be able
+        # to plan its first governed ChangeSet before any deployment exists.
+        provider_target = (
+            bool(target["provider_account_id"])
+            and str(target["target_kind"]).lower().replace("-", "_")
+            not in {"local", "local_process", "local_runner", "ssh", "container"}
+        )
+        if target["status"] != "active" and not (
+            target["status"] == "created" and provider_target
+        ):
             raise HTTPException(status_code=409,
                                 detail=f"target is {target['status']}, not active")
 
@@ -7788,7 +7808,8 @@ def delivery_deploy_endpoint(payload: dict):
             release_packet={"source": "manual_deploy", "repo": target["repo"],
                             "requested_by": actor,
                             **({"code_task_run_id": source_run} if source_run else {})},
-            expected_cost_usd_micros=0, reservation_id=None, actor=actor)
+            expected_cost_usd_micros=expected_cost,
+            reservation_id=reservation_id, actor=actor)
         run_id = planned.get("deployment_run_id") or planned.get("id")
         connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
                            {"i": run_id})
@@ -7801,14 +7822,17 @@ def delivery_deploy_endpoint(payload: dict):
             detail=planned.get("failure_reason") or "Deployment policy blocked this run.",
         )
     if payload.get("plan_only"):
-        return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual"}
+        return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual",
+                "changeset_id": planned.get("changeset_id")}
 
-    # `wait=true` keeps the blocking behaviour for scripts and tests that want one call.
-    if payload.get("wait"):
-        return {"deployment_run_id": run_id,
-                **execute_deployment(engine, settings, run_id, actor=actor)}
-
-    return _start_deployment_in_background(run_id, actor, trigger="manual")
+    # Provider-backed runs now stop at the reviewable ChangeSet. Its existing
+    # apply endpoint owns approval, reservation, provider receipts, and settlement.
+    # A direct connector launch here would bypass all four.
+    if planned.get("changeset_id"):
+        return {"deployment_run_id": run_id, "status": "planned",
+                "trigger": "manual", "changeset_id": planned["changeset_id"],
+                "next_action": "approve_and_apply_changeset"}
+    raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
 
 
 # ── Fleet: hosts as first-class objects ──────────────────────────────────────
@@ -8321,11 +8345,10 @@ def get_deployment_run_endpoint(deployment_run_id: str):
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
 def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
-    """Ship the same target again as a NEW deployment run.
+    """Plan the same target again as a NEW deployment run.
 
-    Separate from /execute on purpose. /execute retries THIS run; /redeploy records a new one, so
-    "what is running and since when" stays answerable instead of being overwritten by its own
-    replacement.
+    A new run keeps the previous attempt's history intact. The returned ChangeSet must pass
+    Resource Plane approval and apply before any provider effect.
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
@@ -8333,6 +8356,17 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
     actor = str(p.get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
+    try:
+        expected_cost = int(p.get("expected_cost_usd_micros") or 0)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be an integer"
+        ) from error
+    if expected_cost < 0:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be non-negative"
+        )
+    reservation_id = str(p.get("reservation_id") or "").strip() or None
     with begin(engine) as connection:
         run_row = connection.execute(
             text("SELECT project_id FROM deployment_runs WHERE id = :i"),
@@ -8345,22 +8379,24 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
             connection, run_row["project_id"], actor, "providerops_manage"
         )
     from .services.delivery_pipeline import redeploy
-    actor = str(p.get("actor") or "operator")
-    # Planned here, executed off-request — same contract as Deploy, so the console watches one
-    # kind of thing however the deployment was started.
+    # Planning creates a new run and ChangeSet; direct connector execution is disabled.
     result = redeploy(engine, settings, deployment_run_id,
                       commit_ref=(p.get("commit_ref") or None),
-                      actor=actor, execute=bool(p.get("wait")))
+                      actor=actor, execute=False,
+                      expected_cost_usd_micros=expected_cost,
+                      reservation_id=reservation_id)
     # A missing deployment is a 404, not a 200 carrying the word "not_found". A caller that
     # checks the status code — which is most of them — would otherwise read a typo'd id as a
     # successful redeploy.
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail=result.get("reason")
                             or f"no deployment run {deployment_run_id}")
-    if p.get("wait"):
-        return result
-    return _start_deployment_in_background(result["deployment_run_id"], actor,
-                                           trigger="redeploy")
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=result.get("reason")
+                            or "Deployment policy blocked this run.")
+    if not result.get("changeset_id"):
+        raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
+    return {**result, "next_action": "approve_and_apply_changeset"}
 
 
 @app.post("/v1/deployments/{deployment_run_id}/promote")
