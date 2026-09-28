@@ -77,6 +77,7 @@ def test_bootstrap_uses_accessible_docker(
     compose_calls = calls.read_text().splitlines()
     assert len(compose_calls) == 1
     assert compose_calls[0].startswith("1 compose" if expected_mode == "sudo" else "direct compose")
+    assert " compose --profile secrets -f " in compose_calls[0]
 
 
 def test_existing_token_does_not_require_docker_access(tmp_path: Path) -> None:

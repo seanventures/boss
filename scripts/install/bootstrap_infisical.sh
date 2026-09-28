@@ -94,7 +94,7 @@ echo "bootstrapping ..." >&2
 # "this instance was already bootstrapped", which sent the operator to the web UI to fix a
 # problem that was one argument away.
 BOOT_ERR="$(mktemp)"
-BOOT="$(docker_compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T "$SERVICE" \
+BOOT="$(docker_compose --profile secrets -f "$COMPOSE" --env-file "$ENV_FILE" exec -T "$SERVICE" \
   infisical bootstrap \
     --domain "http://127.0.0.1:8080" \
     --email "$ADMIN_EMAIL" \
