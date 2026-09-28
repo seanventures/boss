@@ -43,6 +43,7 @@
     "scripts/seed_demo.py",
     "scripts/wait_for_postgres.py",
     "scripts/tests/test_metatron_tui.py",
+    "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
     "examples/",
