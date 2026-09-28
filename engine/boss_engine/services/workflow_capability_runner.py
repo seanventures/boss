@@ -1241,9 +1241,15 @@ def execute_step(
     if binding.get("typed_decision"):
         from . import typed_decisions
 
+        from . import project_settings
+
         state = _resolve_inputs(binding.get("inputs") or {}, context).get("state")
+        settings = getattr(ctx, "settings", None)
+        if connection is not None and settings is not None:
+            # The project's own choice of decision model, set in the console.
+            settings = project_settings.applied(connection, project_id, settings)
         try:
-            return typed_decisions.run_step(getattr(ctx, "settings", None), binding, state)
+            return typed_decisions.run_step(settings, binding, state)
         except Exception as error:  # noqa: BLE001 — the step records the sentence
             raise CapabilityExecutionError(f"typed decision failed: {error}") from error
 

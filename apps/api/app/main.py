@@ -15280,6 +15280,48 @@ def setup_store_coding_agent_credential(payload: dict) -> dict:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.get("/v1/setup/decision-model")
+def setup_decision_model_status(project_id: str) -> dict:
+    """Which model answers this project's typed decisions, and whether a Jev key is held.
+    Read like /v1/setup/status: it names whether a key exists, never the key."""
+    from .services.setup_service import decision_model_status
+
+    with begin() as connection:
+        return decision_model_status(connection, get_settings(), project_id)
+
+
+@app.post("/v1/setup/decision-model/key", status_code=201)
+def setup_store_decision_key(payload: dict) -> dict:
+    """Hand BOSS a TypeSafe key. It is proved with one tiny decision before it is stored, and
+    storing it switches this project's decisions to Jev (Claude still answers when Jev is
+    unsure). Optional: BOSS decides on the Claude subscription without it."""
+    from .services.setup_service import (
+        SecretFallbackNotAccepted,
+        SetupError,
+        store_decision_key,
+    )
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "setup")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin() as connection:
+        require_project_actor(connection, project_id, actor, "entitlement_manage")
+        try:
+            return store_decision_key(
+                connection, get_settings(), project_id, str(payload.get("api_key") or ""),
+                actor=actor, accept_database_fallback=bool(payload.get("accept_database_fallback")))
+        except SecretFallbackNotAccepted as exc:
+            raise HTTPException(status_code=409, detail={
+                "error": "secret_store_fallback_not_accepted",
+                "message": str(exc),
+                "backend": exc.backend,
+                "resend_with": {"accept_database_fallback": True},
+            }) from exc
+        except SetupError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/v1/setup/coding-agents/connect", status_code=201)
 def setup_connect_coding_agent(payload: dict) -> dict:
     """Import a subscription the operator already has, after proving it answers.

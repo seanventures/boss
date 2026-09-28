@@ -23,6 +23,10 @@ export async function GET(req: Request) {
     // for: a subscription is an OAuth session the CLI holds, so detection is most of it.
     // project_id travels because the recorded connection is per project — without it the
     // answer is live detection only, which is what made a saved connection look undone.
+    // Which model answers this project's typed decisions, and whether a Jev key is held —
+    // never the key itself.
+    : view === "decision-model"
+    ? `/v1/setup/decision-model?project_id=${encodeURIComponent(projectId)}`
     : view === "coding-agents"
     ? `/v1/setup/coding-agents?project_id=${encodeURIComponent(projectId)}`
     : `/v1/setup/status?project_id=${encodeURIComponent(projectId)}`;
@@ -59,11 +63,13 @@ export async function POST(req: Request) {
              // chooses the store, so the operator hands the value over once here instead of
              // editing an env file on the API container and restarting it.
              : step === "coding-agent-credential" ? "/v1/setup/coding-agents/credential"
+             // An optional TypeSafe (Jev) key for typed decisions. Proved, then stored by BOSS.
+             : step === "decision-key" ? "/v1/setup/decision-model/key"
              : "";
   if (!path) {
     return NextResponse.json(
-      { error: "step must be 'github', 'model', 'coding-agent' or "
-               + "'coding-agent-credential'" }, { status: 400 });
+      { error: "step must be 'github', 'model', 'coding-agent', "
+               + "'coding-agent-credential' or 'decision-key'" }, { status: 400 });
   }
   try {
     const r = await fetch(`${API_URL}${path}`, {

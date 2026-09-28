@@ -845,6 +845,7 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
       <AskBoss about={`connecting ${chosen?.label ?? provider} as the model BOSS builds with`}
                problem={result && !result.ok ? result.text : null} />
       <RoleModels projectId={projectId} actor={actor} />
+      <DecisionModel projectId={projectId} actor={actor} />
     </article>
   );
 }
@@ -966,6 +967,106 @@ function RoleModels({ projectId, actor }: { projectId: string; actor: string }) 
         </div>
       </div>
       <SettingsKnobs projectId={projectId} actor={actor} only="choice" />
+    </article>
+  );
+}
+
+
+type DecisionStatus = {
+  backend: string; effective_backend: string; claude_model: string;
+  typesafe_key: boolean; typesafe_model: string; key_url: string;
+};
+
+/**
+ * Who answers the multiple-choice questions — a workflow's typed_decision step picking a branch.
+ *
+ * Claude by default, on the subscription already connected above. TypeSafe's Jev is OPTIONAL
+ * and billed to the operator's own TypeSafe account, so it is offered, never assumed: the card
+ * says which one is actually deciding, because "typesafe" chosen with no key still means Claude.
+ */
+function DecisionModel({ projectId, actor }: { projectId: string; actor: string }) {
+  const [status, setStatus] = useState<DecisionStatus | null>(null);
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [acceptFallback, setAcceptFallback] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (r.ok) setStatus((await r.json()) as DecisionStatus);
+    } catch { setStatus(null); }
+  }, [projectId]);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = useCallback(async () => {
+    if (busy || !key.trim()) return;
+    setBusy(true); setResult(null);
+    const r = await call<Record<string, unknown>>({
+      step: "decision-key",
+      payload: { project_id: projectId, actor, api_key: key.trim(),
+                 accept_database_fallback: acceptFallback },
+    });
+    setBusy(false);
+    if (!r.ok && r.decision?.error === "secret_store_fallback_not_accepted") {
+      setAcceptFallback(true);
+      setResult({ ok: false, text: `${r.error} Press Save again to store it in the database `
+                                   + `deliberately.` });
+      return;
+    }
+    if (r.ok) setKey("");   // gone from the form the moment BOSS holds it
+    setResult(r.ok
+      ? { ok: true, text: `Connected. Jev answered a test decision in `
+                          + `${String(r.data?.latency_ms ?? "?")} ms. Workflow decisions on this `
+                          + `project now go to Jev, and to Claude when Jev is unsure.` }
+      : { ok: false, text: r.error ?? "could not save the key" });
+    await load();
+  }, [busy, key, acceptFallback, projectId, actor, load]);
+
+  const deciding = status?.effective_backend === "typesafe"
+    ? `TypeSafe Jev (${status.typesafe_model}), with Claude as the second opinion`
+    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} on your subscription`;
+
+  return (
+    <article className="stack-card" data-testid="setup-decision-model">
+      <div className="section-head">
+        <div>
+          <h2 className="eyebrow">Decision model</h2>
+          <p className="detail">
+            Answers the multiple-choice questions in workflows — which branch to take, which
+            team gets a ticket. Now deciding: <strong>{status ? deciding : "…"}</strong>.
+            {status?.backend === "typesafe" && !status.typesafe_key
+              ? " TypeSafe is selected but no key is saved, so Claude is deciding." : ""}
+          </p>
+          <p className="detail">
+            Optional: <a href={status?.key_url ?? "https://console.typesafe.ai"} target="_blank"
+            rel="noreferrer">TypeSafe&apos;s Jev</a> answers in well under a second for a
+            fraction of a cent, billed to your own TypeSafe account. BOSS proves the key with
+            one tiny decision before saving it.
+          </p>
+        </div>
+      </div>
+      <div className="setup-form">
+        <label className="setup-field">
+          <span>
+            TypeSafe API key{status?.typesafe_key ? " — one is already saved; pasting replaces it" : ""}
+          </span>
+          <input type="password" value={key} autoComplete="off" spellCheck={false}
+                 data-testid="setup-decision-key" placeholder="ts_…"
+                 onChange={(e) => setKey(e.target.value)} />
+        </label>
+        <button type="button" className="cap-btn primary" disabled={busy || !key.trim()}
+                data-testid="setup-decision-key-submit" onClick={() => void save()}>
+          {busy ? "Checking…" : "Save key"}
+        </button>
+      </div>
+      {result ? (
+        <p className={result.ok ? "setup-ok" : "setup-bad"} data-testid="setup-decision-result">
+          {result.text}
+        </p>
+      ) : null}
     </article>
   );
 }
