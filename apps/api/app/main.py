@@ -8323,10 +8323,14 @@ def get_deployment_run_endpoint(deployment_run_id: str):
 
     done = list(row["steps"] or [])
     seen = {s.get("step") for s in done}
-    # Show the steps still to come, greyed out. A list that grows one row at a time cannot tell
-    # an operator how much is left.
-    upcoming = [s for s in planned_steps() if s["step"] not in seen]
-    terminal = row["status"] in ("succeeded", "failed", "blocked", "rolled_back")
+    # Connector steps belong only to an actively executing connector run. A
+    # `created` run is awaiting ChangeSet approval/apply, and a `deployed` run
+    # has already completed its Resource Plane provider effect. Neither has a
+    # background connector worker to poll.
+    running = row["status"] in {"running", "building", "deploying"}
+    upcoming = (
+        [s for s in planned_steps() if s["step"] not in seen] if running else []
+    )
 
     return {
         "deployment_run_id": row["id"], "status": row["status"],
@@ -8338,8 +8342,8 @@ def get_deployment_run_endpoint(deployment_run_id: str):
         "duration_ms": row["duration_ms"],
         "url": (row["domains"] or [None])[0],
         "health": row["health_check_results"],
-        "steps": done + ([] if terminal else upcoming),
-        "running": not terminal,
+        "steps": done + upcoming,
+        "running": running,
     }
 
 

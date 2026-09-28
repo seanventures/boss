@@ -241,6 +241,41 @@ def test_historical_direct_run_blocks_before_connector_preflight(
     assert started == []
 
 
+def test_planned_deployment_detail_does_not_claim_connector_is_running(
+    client, engine, monkeypatch
+):
+    suffix = uuid4().hex[:10]
+    target_id = _target(engine, suffix)
+    run_id = _run(engine, target_id, suffix)
+    headers = _auth(monkeypatch, suffix)
+
+    planned = client.get(f"/v1/delivery/deployments/{run_id}", headers=headers)
+    assert planned.status_code == 200, planned.text
+    assert planned.json()["status"] == "created"
+    assert planned.json()["running"] is False
+    assert planned.json()["steps"] == []
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE deployment_runs SET status = 'running' WHERE id = :id"),
+            {"id": run_id},
+        )
+    executing = client.get(f"/v1/delivery/deployments/{run_id}", headers=headers)
+    assert executing.status_code == 200, executing.text
+    assert executing.json()["running"] is True
+    assert executing.json()["steps"]
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE deployment_runs SET status = 'deployed' WHERE id = :id"),
+            {"id": run_id},
+        )
+    deployed = client.get(f"/v1/delivery/deployments/{run_id}", headers=headers)
+    assert deployed.status_code == 200, deployed.text
+    assert deployed.json()["running"] is False
+    assert deployed.json()["steps"] == []
+
+
 def test_redeploy_host_target_records_new_blocked_run_without_worker(
     client, engine, monkeypatch
 ):
