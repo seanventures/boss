@@ -213,6 +213,12 @@ SSH, or host state changes. Other editions also require the outward SSH switch.
 Fleet listings require project reader access, including when a caller supplies a different
 project ID.
 
+The agent's `inspect_host` tool remains available for single, supported read commands such as
+`docker ps`, `docker logs --tail 50 app`, `df -h`, and `ss -tulnp`. It parses the complete command
+and quotes each argument before SSH. Shell chaining, pipes, substitutions, redirection, and
+control characters are refused before BOSS opens a host credential or SSH session. Piped log
+filters remain unavailable on this tool; use `docker logs --tail N app` for a bounded log read.
+
 Two failure modes worth encoding in `preflight`, both hit on the Hetzner fleet this week and both
 of which present as "key auth is broken" when it is not:
 

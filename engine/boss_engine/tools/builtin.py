@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os as _os
 import re
+import shlex
 import subprocess as _subprocess
 import uuid as _uuid
 from typing import Any, Optional as _Optional
@@ -38,6 +39,91 @@ _LIMIT = {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}
 _PAID_EFFECT_EDITIONS = frozenset({
     "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
 })
+
+
+_INSPECT_HOST_VERBS = (
+    "docker ps", "docker logs", "docker inspect", "docker stats --no-stream",
+    "docker images", "df", "free", "uptime", "uname", "ls", "cat /etc/os-release",
+    "systemctl status", "journalctl", "ss -", "netstat", "ps aux", "whoami",
+)
+_INSPECT_HOST_SHELL_META = frozenset("&;|<>`$\\")
+_JOURNALCTL_FLAGS = frozenset({
+    "-b", "--boot", "-k", "--dmesg", "-q", "--quiet", "-r", "--reverse",
+    "-x", "--catalog", "--no-pager", "--utc",
+})
+_JOURNALCTL_VALUE_FLAGS = frozenset({
+    "-u", "--unit", "-n", "--lines", "-p", "--priority", "-o", "--output",
+    "--since", "--until",
+})
+
+
+def _inspect_host_command(raw_value: object) -> tuple[str | None, str | None]:
+    """Return one shell-safe read command, or a reason before any credential/SSH access.
+
+    SSH transports a *single string* interpreted by a remote shell. A permitted prefix such
+    as ``ls`` does not make ``ls & touch /tmp/x`` safe. Reject shell syntax before tokenizing,
+    verify the complete verb and its read-only options, then quote every token for that shell.
+    """
+    if not isinstance(raw_value, str):
+        return None, "a read-only command is required"
+    if any(ord(ch) < 32 or ord(ch) == 127 or ch in _INSPECT_HOST_SHELL_META
+           for ch in raw_value):
+        return None, "shell metacharacters and control characters are not permitted"
+    try:
+        words = shlex.split(raw_value.strip(), posix=True)
+    except ValueError:
+        return None, "unbalanced command quoting is not permitted"
+    if not words:
+        return None, "a read-only command is required"
+
+    verb = words[0]
+    if verb == "docker":
+        allowed = len(words) >= 2 and words[1] in {"ps", "logs", "inspect", "images"}
+        allowed = allowed or (len(words) >= 3 and words[1:3] == ["stats", "--no-stream"])
+    elif verb == "cat":
+        allowed = words == ["cat", "/etc/os-release"]
+    elif verb == "systemctl":
+        allowed = (len(words) >= 2 and words[1] == "status"
+                   and all(re.fullmatch(r"[A-Za-z0-9_.@:-]+", unit)
+                           for unit in words[2:]))
+    elif verb == "journalctl":
+        allowed = True
+        index = 1
+        while index < len(words):
+            option = words[index]
+            if option in _JOURNALCTL_FLAGS:
+                index += 1
+            elif option in _JOURNALCTL_VALUE_FLAGS and index + 1 < len(words):
+                value = words[index + 1]
+                if not value or value.startswith("-"):
+                    allowed = False
+                    break
+                index += 2
+            elif any(option.startswith(flag + "=") and option[len(flag) + 1:]
+                     for flag in _JOURNALCTL_VALUE_FLAGS if flag.startswith("--")):
+                index += 1
+            else:
+                allowed = False
+                break
+    elif verb == "ss":
+        # `ss -K`/`ss --kill` terminates sockets; only listing switches belong here.
+        allowed = len(words) >= 2 and all(
+            re.fullmatch(r"-[tulnpaHs46]+", option)
+            or option in {"--tcp", "--udp", "--listening", "--numeric",
+                          "--processes", "--all", "--summary", "--no-header"}
+            for option in words[1:]
+        )
+    elif verb == "ps":
+        allowed = words == ["ps", "aux"]
+    elif verb in {"df", "free", "uptime", "uname", "ls", "netstat", "whoami"}:
+        allowed = True
+    else:
+        allowed = False
+    if not allowed:
+        return None, "only read-only commands are allowed here: " + ", ".join(
+            _INSPECT_HOST_VERBS
+        )
+    return shlex.join(words), None
 
 
 def _community_raw_sql_disabled(settings: Any) -> bool:
@@ -5948,20 +6034,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
              ["host", "command"]),
     )
     def inspect_host(ctx, *, project_id, actor, args):
-        # An allow-list, not a deny-list. A deny-list on shell input is a promise nobody
-        # can keep: `docker` alone can start, stop and delete. Naming the safe verbs is
-        # the only version of this that stays true as the tool is used in ways nobody
-        # anticipated.
-        raw = (args.get("command") or "").strip()
-        allowed = ("docker ps", "docker logs", "docker inspect", "docker stats --no-stream",
-                   "docker images", "df", "free", "uptime", "uname", "ls", "cat /etc/os-release",
-                   "systemctl status", "journalctl", "ss -", "netstat", "ps aux", "whoami")
-        if not any(raw.startswith(a) for a in allowed):
-            return {"ok": False,
-                    "error": f"only read-only commands are allowed here: {', '.join(allowed)}",
+        command, error = _inspect_host_command(args.get("command"))
+        if error:
+            return {"ok": False, "error": error,
                     "note": "this tool inspects; it never changes a host."}
-        if any(ch in raw for ch in (";", "&&", "||", "|", "`", "$(", ">", "\n", "\r")):
-            return {"ok": False, "error": "shell chaining/redirection is not permitted"}
 
         from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,
                                                _ssh_key_file)
@@ -5989,11 +6065,11 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 return {"ok": False, "error": f"no usable credential for this host: {exc}"[:200]}
         try:
             res = _ssh(key, host["address"], (host.get("ssh_user") or "root"),
-                       int(host.get("ssh_port") or 22), raw, timeout=45)
+                       int(host.get("ssh_port") or 22), command, timeout=45)
         finally:
             if ephemeral:
                 _discard_key_file(ephemeral)
-        return {"host": host["name"], "command": raw, "exit_code": res.returncode,
+        return {"host": host["name"], "command": command, "exit_code": res.returncode,
                 "stdout": (res.stdout or "")[-6000:], "stderr": (res.stderr or "")[-2000:]}
 
     @reg.tool(
