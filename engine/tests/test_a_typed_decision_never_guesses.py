@@ -122,10 +122,10 @@ def test_no_key_is_a_clear_error():
 # --- The workflow step --------------------------------------------------------------------- #
 from boss_engine.services import typed_decisions  # noqa: E402
 from boss_engine.services.workflow_capability_runner import (  # noqa: E402
-    CapabilityExecutionError, execute_step,
+    SettledCapabilityError, _resolve_inputs, execute_step,
 )
 from boss_engine.services.workflows import (  # noqa: E402
-    WorkflowValidationError, validate_workflow_spec,
+    WorkflowValidationError, _hold_new_typed_decision_work, validate_workflow_spec,
 )
 
 
@@ -147,9 +147,11 @@ def _spec(step):
         {"id": "a", "kind": "task"}, {"id": "b", "kind": "task"}]}
 
 
-def test_a_decision_step_publishes_and_needs_no_approval():
-    step = validate_workflow_spec(_spec(_route_step()))["steps"][0]
-    assert step["approval"]["mode"] == "auto"
+def test_a_new_decision_step_cannot_publish_while_model_spend_is_ungoverned():
+    import pytest
+    normalized = validate_workflow_spec(_spec(_route_step()))
+    with pytest.raises(WorkflowValidationError, match="BOSS-451"):
+        _hold_new_typed_decision_work(normalized)
 
 
 def test_a_decision_step_with_one_option_does_not_publish():
@@ -167,28 +169,43 @@ class _Answers:
         return DecisionBatch({"decision": Decision(self.answer, self.confidence)}, "fake", "m", 1)
 
 
-def _run(monkeypatch, decider, ticket="My card was charged twice"):
-    monkeypatch.setattr(typed_decisions, "make_decider", lambda settings: decider)
-    return execute_step(None, SimpleNamespace(settings=object()), project_id="p", actor="a",
-                        step=validate_workflow_spec(_spec(_route_step()))["steps"][0],
-                        context={"input": {"ticket": ticket}, "steps": {}})
+def _out(decider, ticket="My card was charged twice"):
+    binding = _route_step()["binding"]
+    context = {"input": {"ticket": ticket}, "steps": {}}
+    state = _resolve_inputs(binding["inputs"], context)["state"]
+    question = Question("decision", binding["typed_decision"]["question"],
+                        binding["typed_decision"]["options"])
+    return typed_decisions._step_output(
+        binding["typed_decision"], decider.decide(state, [question]),
+    )
 
 
-def test_the_step_answers_from_its_wired_state(monkeypatch):
+def test_a_settled_answer_formats_from_its_wired_state():
     decider = _Answers("billing", 0.93)
-    out = _run(monkeypatch, decider)
+    out = _out(decider)
     assert out["answer"] == "billing" and out["confident"] and "charged twice" in decider.context
 
 
-def test_an_unsure_answer_says_so_instead_of_failing(monkeypatch):
-    out = _run(monkeypatch, _Answers("billing", 0.5))
+def test_an_unsure_settled_answer_says_so_instead_of_failing():
+    out = _out(_Answers("billing", 0.5))
     assert out["answer"] == "billing" and out["confident"] is False
 
 
-def test_no_answer_fails_the_step(monkeypatch):
+def test_no_settled_answer_cannot_choose_a_branch():
     import pytest
-    with pytest.raises(CapabilityExecutionError, match="no usable answer"):
-        _run(monkeypatch, _Answers(None, None))
+    with pytest.raises(RuntimeError, match="no usable answer"):
+        _out(_Answers(None, None))
+
+
+def test_existing_published_decision_step_fails_closed_before_any_model_call(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(typed_decisions, "make_decider", lambda settings: pytest.fail(
+        "Production workflow tried to construct a model backend"))
+    with pytest.raises(SettledCapabilityError, match="BOSS-451"):
+        execute_step(object(), SimpleNamespace(settings=None), project_id="p", actor="a",
+                     step=_route_step(),
+                     context={"input": {"ticket": "My card was charged twice"}, "steps": {}})
 
 
 # --- The worker has no claude binary -------------------------------------------------------- #

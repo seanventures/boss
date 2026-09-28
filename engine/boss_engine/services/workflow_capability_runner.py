@@ -1278,6 +1278,10 @@ def execute_step(
             settings = project_settings.applied(connection, project_id, settings)
         try:
             return typed_decisions.run_step(settings, binding, state)
+        except typed_decisions.TypedDecisionGovernanceHold as error:
+            # A release safety hold is settled, not a transient provider fault.
+            # fail_step records it on the step and emits its normal audit event.
+            raise SettledCapabilityError(str(error)) from error
         except Exception as error:  # noqa: BLE001 — the step records the sentence
             raise CapabilityExecutionError(f"typed decision failed: {error}") from error
 

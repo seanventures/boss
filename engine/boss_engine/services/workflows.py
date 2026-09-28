@@ -29,7 +29,7 @@ from .workflow_capabilities import (
     validate_step as capability_problems,
     validate_captain,
 )
-from .typed_decisions import step_problems as typed_decision_problems
+from .typed_decisions import GOVERNANCE_HOLD, step_problems as typed_decision_problems
 
 logger = logging.getLogger(__name__)
 
@@ -918,6 +918,13 @@ def list_definition_details(
     return definitions
 
 
+def _hold_new_typed_decision_work(spec: dict[str, Any]) -> None:
+    """Reject new runs while allowing already-running steps to fail with evidence."""
+    for step in spec.get("steps", []):
+        if (step.get("binding") or {}).get("typed_decision"):
+            raise WorkflowValidationError(f"step '{step['id']}': {GOVERNANCE_HOLD}")
+
+
 def publish_version(
     connection: Connection,
     *,
@@ -934,6 +941,7 @@ def publish_version(
     if not definition:
         raise WorkflowNotFoundError("Workflow definition not found.")
     normalized = validate_workflow_spec(spec)
+    _hold_new_typed_decision_work(normalized)
 
     # Custom steps are checked HERE as well as at start_run, and only these. Their risk tier
     # comes from the skill or MCP server they bind, so this is the first moment the real tier
@@ -1450,6 +1458,7 @@ def start_run(
         workflow_version_id = resolution["selected"]["workflow_version_id"]
     version = _version_row(connection, project_id, str(workflow_version_id))
     spec = validate_workflow_spec(_json(version["spec"], {}))
+    _hold_new_typed_decision_work(spec)
     version_namespace = connection.execute(
         text(
             "SELECT COALESCE(d.namespace, 'system') FROM workflow_definitions d "

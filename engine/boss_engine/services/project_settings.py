@@ -152,21 +152,20 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "the API key from this install's environment when one is set.",
         "kind": "choice", "choices": "chat_engines",
     },
-    # WHO ANSWERS THE MULTIPLE-CHOICE QUESTIONS — a workflow's typed_decision step, and any
-    # judgement BOSS asks with its answers named up front. "typesafe" needs the project's own
-    # Jev key (Setup -> Decision model); without one, decisions fall back to Claude.
+    # Saved preference for typed decisions. Live workflow decisions are held by
+    # BOSS-451 until every model call has committed budget and receipt evidence.
     "decision_backend": {
         "attr": "decision_backend",
         "label": "Decision model",
-        "help": "Who answers multiple-choice decisions in workflows. claude uses the connected "
-                "subscription; typesafe uses TypeSafe's Jev on your own key and asks Claude "
-                "again when Jev is unsure.",
+        "help": "Saved preference for workflow choice decisions. Live decisions are paused "
+                "until their model calls have budget and receipt tracking (BOSS-451).",
         "kind": "choice", "choices": ("claude", "typesafe"),
     },
     "decision_model": {
         "attr": "decision_model",
         "label": "Claude model for decisions",
-        "help": "Which Claude model decides, and gives the second opinion when Jev is unsure.",
+        "help": "Saved Claude model for decisions; live workflow decisions are paused "
+                "until BOSS-451 is resolved.",
         "kind": "choice", "choices": "claude_models",
     },
 }

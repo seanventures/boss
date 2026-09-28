@@ -50,6 +50,17 @@ class DecisionBatch:
     usage: dict = field(default_factory=dict)
 
 
+GOVERNANCE_HOLD = (
+    "Typed decision model calls are paused (BOSS-451): each provider attempt needs a "
+    "committed budget reservation, active lease, deduplicated receipt, and cost settlement "
+    "before a workflow can use its answer. Use a human decision step for now."
+)
+
+
+class TypedDecisionGovernanceHold(RuntimeError):
+    """A workflow must not spend before its model authority is durable."""
+
+
 class Decider(Protocol):
     def decide(self, context: str, questions: list[Question]) -> DecisionBatch: ...
 
@@ -321,17 +332,8 @@ def step_problems(step_id: str, binding: dict) -> list[str]:
     return problems
 
 
-def run_step(settings: Settings, binding: dict, state, *, decider: Optional["Decider"] = None) -> dict:
-    """Execute a typed_decision step. Returns the step's output."""
-    if settings is None:
-        from ..config import get_settings
-
-        settings = get_settings()
-    spec = binding["typed_decision"]
-    question = Question("decision", str(spec["question"]),
-                        {str(k): str(v) for k, v in spec["options"].items()})
-    context = state if isinstance(state, str) else json.dumps(state, indent=1, default=str)
-    batch = (decider or make_decider(settings)).decide(context, [question])
+def _step_output(spec: dict, batch: DecisionBatch) -> dict:
+    """Format a previously settled answer without making a provider call."""
     d = batch.decisions.get("decision")
     if d is None or d.answer is None:
         raise RuntimeError(f"the decision model gave no usable answer "
@@ -346,3 +348,8 @@ def run_step(settings: Settings, binding: dict, state, *, decider: Optional["Dec
         "backend": batch.backend, "model": batch.model,
         "latency_ms": batch.latency_ms, "cost_usd_micros": batch.cost_usd_micros,
     }
+
+
+def run_step(settings: Settings, binding: dict, state) -> dict:
+    """Hold live workflow decisions until their model calls are durable and governed."""
+    raise TypedDecisionGovernanceHold(GOVERNANCE_HOLD)

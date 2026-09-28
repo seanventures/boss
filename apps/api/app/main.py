@@ -14948,6 +14948,7 @@ def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
     unsure). Optional: BOSS decides on the Claude subscription without it."""
     payload = payload.payload()
     from .services.setup_service import (
+        DecisionModelGovernanceHold,
         SecretFallbackNotAccepted,
         SetupError,
         store_decision_key,
@@ -14965,6 +14966,8 @@ def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
             return store_decision_key(
                 connection, get_settings(), project_id, str(payload.get("api_key") or ""),
                 actor=actor, accept_database_fallback=bool(payload.get("accept_database_fallback")))
+        except DecisionModelGovernanceHold as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except SecretFallbackNotAccepted as exc:
             raise HTTPException(status_code=409, detail={
                 "error": "secret_store_fallback_not_accepted",

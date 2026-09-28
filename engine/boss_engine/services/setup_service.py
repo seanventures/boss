@@ -1063,13 +1063,17 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
 DECISION_KEY_NAME = "TYPESAFE_API_KEY"
 
 
+class DecisionModelGovernanceHold(SetupError):
+    """Live key proof is a model call and must wait for durable spend control."""
+
+
 def decision_model_status(connection, settings: Settings, project_id: str) -> dict[str, Any]:
     """Which backend decides on this project, and whether the Jev key it would need is held.
 
     Only the fact of a key, never the key: this answer goes to a browser.
     """
     from . import project_settings
-    from .typed_decisions import _typesafe_key
+    from .typed_decisions import GOVERNANCE_HOLD, _typesafe_key
 
     effective = project_settings.applied(connection, project_id, settings)
     backend = (effective.decision_backend or "claude").strip().lower()
@@ -1079,9 +1083,10 @@ def decision_model_status(connection, settings: Settings, project_id: str) -> di
         "claude_model": effective.decision_model or "",
         "typesafe_key": has_key,
         "typesafe_model": effective.typesafe_model,
-        # Said out loud, because otherwise "typesafe" on the dropdown and Claude in the logs
-        # looks like the setting being ignored.
-        "effective_backend": ("typesafe" if backend == "typesafe" and has_key else "claude"),
+        "effective_backend": "paused",
+        "configured_backend": ("typesafe" if backend == "typesafe" and has_key else "claude"),
+        "execution_available": False,
+        "hold_reason": GOVERNANCE_HOLD,
         "key_url": "https://console.typesafe.ai",
     }
 
@@ -1090,59 +1095,9 @@ def store_decision_key(
     connection, settings: Settings, project_id: str, api_key: str, *,
     actor: str = "setup", accept_database_fallback: bool = False,
 ) -> dict[str, Any]:
-    """Prove a TypeSafe key with one tiny decision, store it, and switch decisions to Jev.
+    """Refuse live key proof until it has committed spend and receipt evidence."""
+    from .typed_decisions import GOVERNANCE_HOLD
 
-    Proved first for the reason verify_model_key gives: a stored key that is wrong is found an
-    hour later inside a workflow, where nobody suspects it. The proof costs a few hundred input
-    tokens — about a thousandth of a cent at Jev's listed price.
-    """
-    from . import project_settings
-    from .secret_backends import default_secret_backend
-    from .secrets_service import put_secret
-    from .typed_decisions import Question, TypeSafeDecider
-    from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
-    from .core import emit_event
-
-    api_key = (api_key or "").strip()
-    if not api_key:
+    if not (api_key or "").strip():
         raise SetupError("paste the API key from console.typesafe.ai.")
-    try:
-        batch = TypeSafeDecider(settings, api_key=api_key, attempts=1).decide(
-            "BOSS is checking that this key works.",
-            [Question("check", "Is this a connection check?", {"yes": "It is.", "no": "It is not."})])
-    except RuntimeError as exc:
-        message = str(exc)
-        if " 401" in message:
-            raise SetupError("TypeSafe rejected that key — check it was copied whole.") from None
-        if "fund" in message.lower() or " 402" in message:
-            raise SetupError("the key is valid but the TypeSafe account has no credit. Add "
-                             "funds at console.typesafe.ai and try again.") from None
-        raise SetupError(f"could not use that key: {message[:200]}") from None
-    if batch.decisions["check"].answer is None:
-        raise SetupError("TypeSafe answered, but not with one of the options — try again.")
-
-    backend = default_secret_backend(settings)
-    if backend == "database" and not accept_database_fallback:
-        raise SecretFallbackNotAccepted(
-            backend,
-            "this installation has no secret store configured, so the key would go into BOSS's "
-            "Postgres database. That works and survives restarts, but anyone with the database "
-            "has the key. Set up a secret store, or re-send with accept_database_fallback=true "
-            "to store it there deliberately.")
-    stored = put_secret(
-        connection, settings, project_id=project_id, name=DECISION_KEY_NAME, value=api_key,
-        secret_kind="api_token", backend=backend,
-        scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
-    )
-    connection.execute(
-        text("UPDATE secret_refs SET provider = 'typesafe' WHERE id = :id"),
-        {"id": stored["secret_ref_id"]},
-    )
-    project_settings.set_one(connection, project_id, "decision_backend", "typesafe", actor=actor)
-    emit_event(connection, project_id, "setup.decision_model_connected", actor,
-               "secret_ref", stored["secret_ref_id"],
-               {"backend": backend, "model": batch.model, "latency_ms": batch.latency_ms})
-    return {"ok": True, "backend": "typesafe", "model": batch.model,
-            "latency_ms": batch.latency_ms, "store": stored["backend"],
-            "fingerprint": stored["fingerprint"], "raw_secret_stored": False,
-            "fallback_accepted": backend == "database"}
+    raise DecisionModelGovernanceHold(GOVERNANCE_HOLD)
