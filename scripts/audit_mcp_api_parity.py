@@ -33,6 +33,7 @@ def mounted_rows(edition: str) -> list[dict]:
     rows = []
     for op in surface.operations.values():
         schema_quality = surface.input_schema_quality(op)
+        mounted_quality = surface.mounted_input_schema_quality(op)
         if op.excluded_reason:
             status = "excluded"
         elif op.operator_confirmation:
@@ -50,7 +51,10 @@ def mounted_rows(edition: str) -> list[dict]:
                 "trusted_operator_confirmation_unavailable" if op.operator_confirmation else None
             ),
             "input_schema_quality": schema_quality,
+            "mounted_input_schema_quality": mounted_quality,
+            "curated_input_fields": schema_quality == "curated_json_body",
             "typed_input_schema": status != "excluded" and schema_quality != "loose_json_body",
+            "runtime_validated_input_schema": status != "excluded" and mounted_quality != "loose_json_body",
             "domain_scoped_direct_tool": status == "api_policy_gated",
             "requires_explicit_bound_api_credential": status != "excluded",
             "read_only_available": status == "api_policy_gated" and not op.write,

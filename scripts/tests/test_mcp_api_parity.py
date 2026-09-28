@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 MATRIX = ROOT / "docs/operations/mcp-api-capability-matrix.private.json"
 COMMUNITY_MATRIX = ROOT / "docs/community/mcp-api-capability-matrix.json"
@@ -53,3 +55,39 @@ def test_mcp_capability_matrix_matches_both_live_openapi_compositions():
             assert row["typed_input_schema"] == (
                 row["input_schema_quality"] != "loose_json_body"
             )
+
+
+def test_community_curated_request_fields_are_audited_and_never_paid_only():
+    overlay = json.loads((ROOT / "engine/boss_engine/mcp/curated_request_bodies.json").read_text())
+    assert overlay["version"] == 1
+    assert len(overlay["operations"]) == 19
+    community = json.loads(COMMUNITY_MATRIX.read_text())
+    rows = {(row["method"], row["path"]): row for row in community["operations"]}
+    assert sum(row["mounted_input_schema_quality"] == "loose_json_body"
+               for row in rows.values()) == 107
+    assert sum(row["input_schema_quality"] == "loose_json_body"
+               for row in rows.values()) == 88
+    for key, body in overlay["operations"].items():
+        method, path = key.split(" ", 1)
+        row = rows[(method, path)]
+        assert row["mounted_input_schema_quality"] == "loose_json_body"
+        assert row["input_schema_quality"] == "curated_json_body"
+        assert row["curated_input_fields"] is True
+        assert row["runtime_validated_input_schema"] is False
+        assert body["type"] == "object" and body["additionalProperties"] is True
+        assert body["properties"]
+    assert not {
+        "POST /v1/qa/benchmark-apps/{benchmark_id}/runs",
+        "POST /v1/previews/{preview_id}/feedback",
+    } & overlay["operations"].keys()
+    # The private source contains the original curated field maps. The public
+    # export replaces this file with the Community contract; its operation
+    # inventory check above still protects the published overlay boundary.
+    if (ROOT / "api/openapi.community.yaml").exists():
+        private = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())
+        for key, body in overlay["operations"].items():
+            method, path = key.split(" ", 1)
+            documented = private["paths"][path][method.lower()]["requestBody"]["content"][
+                "application/json"
+            ]["schema"]
+            assert documented == body, key

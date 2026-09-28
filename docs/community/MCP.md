@@ -209,9 +209,14 @@ secret-management routes remain
 available through API permission checks with redacted results.
 
 The mounted OpenAPI schema has **107 Community routes with a loose JSON body**
-and no property-level typing (94 otherwise callable, 13 operator-only). These
-routes can be found and called by alias, but the MCP body schema cannot tell a
-client which fields to supply. The matrix flags them as `loose_json_body`;
-their API request schemas need tightening for full typed parity. The public
-Community export can verify its mounted subset with
+and no property-level typing (94 otherwise callable, 13 operator-only). MCP
+adds audited, descriptive field maps for 19 of those routes (17 otherwise
+callable, two operator-only), including required fields for elastic capacity,
+provider usage, Goldeneye nodes, work trackers, and Cloud linking. These maps
+come from existing curated request documentation checked against Community
+handlers; they do not change API validation or authorization. The matrix labels
+them `curated_json_body` and keeps the mounted schema quality separately.
+**88 Community routes remain loose** in MCP discovery. The API request schemas
+still need tightening for runtime-validated typing. The public Community export
+can verify its mounted subset with
 `python scripts/audit_mcp_api_parity.py --check-community`.

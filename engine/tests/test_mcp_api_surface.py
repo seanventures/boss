@@ -145,6 +145,90 @@ def test_project_and_actor_are_fixed_to_session_for_api_reads_and_writes():
     assert seen[-1].url.raw_path == b"/v1/projects/alpha/tasks/task%201"
 
 
+def test_required_path_and_query_authority_are_bound_without_caller_arguments():
+    schema = {"paths": {
+        "/v1/edition": {"get": {"parameters": [
+            {"name": "project_id", "in": "query", "required": True,
+             "schema": {"type": "string"}},
+            {"name": "actor", "in": "query", "required": True,
+             "schema": {"type": "string"}},
+        ]}},
+        "/v1/projects/{project_id}/actors/{actor}": {"get": {"parameters": [
+            {"name": "project_id", "in": "path", "required": True,
+             "schema": {"type": "string"}},
+            {"name": "actor", "in": "path", "required": True,
+             "schema": {"type": "string"}},
+        ]}},
+    }}
+    seen = []
+    client = httpx.Client(base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(
+        lambda request: (seen.append(request), httpx.Response(200, json={"ok": True}))[1]
+    ))
+    surface = ApiSurface(schema, client=client, principal="member-1",
+                         pinned_project_id="alpha")
+    for path in schema["paths"]:
+        alias = operation_alias("GET", path)
+        described = surface.describe(alias)["inputSchema"]
+        assert described["required"] == ["operation"]
+        assert described["properties"]["path"]["properties"] == {}
+        assert described["properties"]["query"]["properties"] == {}
+        assert surface.invoke(alias, project_id="alpha")["ok"] is True
+    assert seen[0].url.path == "/v1/edition"
+    assert dict(seen[0].url.params) == {"project_id": "alpha", "actor": "member-1"}
+    assert seen[1].url.path == "/v1/projects/alpha/actors/member-1"
+    assert surface.invoke(operation_alias("GET", "/v1/edition"), project_id="alpha",
+                          query={"project_id": "beta"})["error"] == (
+        "unknown_path_or_query_parameter"
+    )
+
+
+def test_curated_community_body_fields_are_described_and_session_bound():
+    schema = {"paths": {"/v1/elastic/capacity": {"post": {"requestBody": {
+        "required": True, "content": {"application/json": {"schema": {
+            "type": "object", "additionalProperties": True,
+        }}}
+    }}}}}
+    seen = []
+    client = httpx.Client(base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(
+        lambda request: (seen.append(json.loads(request.content)),
+                         httpx.Response(201, json={"ok": True}))[1]
+    ))
+    surface = ApiSurface(schema, client=client, principal="member-1",
+                         pinned_project_id="alpha")
+    alias = operation_alias("POST", "/v1/elastic/capacity")
+    described = surface.describe(alias)
+    assert described["mounted_input_schema_quality"] == "loose_json_body"
+    assert described["input_schema_quality"] == "curated_json_body"
+    body_schema = described["inputSchema"]["properties"]["body"]
+    assert body_schema["required"] == ["desired_workers"]
+    assert body_schema["properties"]["desired_workers"]["type"] == "integer"
+    assert "project_id" not in body_schema["properties"]
+    assert "actor" not in body_schema["properties"]
+    assert surface.invoke(alias, project_id="alpha", body={"desired_workers": 2})["ok"]
+    assert seen == [{"desired_workers": 2, "project_id": "alpha", "actor": "member-1"}]
+    assert surface.invoke(alias, project_id="alpha", body={
+        "desired_workers": 2, "project_id": "beta",
+    })["error"] == "project_is_session_bound"
+    assert surface.invoke(alias, project_id="alpha", body={
+        "desired_workers": 2, "actor": "ceo",
+    })["error"] == "actor_is_session_bound"
+    assert len(seen) == 1
+
+
+def test_curated_fields_never_replace_an_updated_mounted_schema():
+    schema = {"paths": {"/v1/elastic/capacity": {"post": {"requestBody": {
+        "required": True, "content": {"application/json": {"schema": {
+            "type": "object", "properties": {"desired_workers": {"type": "integer"}},
+        }}}
+    }}}}}
+    surface = ApiSurface(schema)
+    described = surface.describe(operation_alias("POST", "/v1/elastic/capacity"))
+    assert described["input_schema_quality"] == "typed_json_body"
+    assert described["inputSchema"]["properties"]["body"]["properties"] == {
+        "desired_workers": {"type": "integer"},
+    }
+
+
 def test_policy_and_read_only_denials_do_not_send_http_request():
     surface, seen = _surface()
     assert surface.invoke(operation_alias("DELETE", "/v1/tasks/{task_id}"),

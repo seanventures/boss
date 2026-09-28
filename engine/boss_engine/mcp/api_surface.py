@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
+from pathlib import Path
 import re
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -176,6 +178,25 @@ def _object_schema(properties: dict, required: list[str] | None = None) -> dict:
     }
 
 
+def _mounted_body_schema(operation: dict) -> dict:
+    return ((operation.get("requestBody") or {}).get("content", {})
+            .get("application/json", {}).get("schema") or {})
+
+
+def _loose_json_body(body: dict) -> bool:
+    return (body.get("type") == "object" and not body.get("properties")
+            and body.get("additionalProperties") is True)
+
+
+def _curated_request_bodies() -> dict[str, dict]:
+    """Community-safe field maps for mounted handlers with loose dict inputs."""
+    source = Path(__file__).with_name("curated_request_bodies.json")
+    document = json.loads(source.read_text(encoding="utf-8"))
+    if document.get("version") != 1 or not isinstance(document.get("operations"), dict):
+        raise ValueError("invalid MCP request-body overlay")
+    return document["operations"]
+
+
 def _rewrite_refs(value: Any, used: set[str]) -> Any:
     if isinstance(value, list):
         return [_rewrite_refs(item, used) for item in value]
@@ -227,6 +248,7 @@ class ApiSurface:
         self.edition = edition
         self.scope_reason = scope_reason
         self.pinned_project_id = pinned_project_id
+        self.curated_request_bodies = _curated_request_bodies()
         self.operations: dict[str, ApiOperation] = {}
         for path, methods in (schema.get("paths") or {}).items():
             for raw_method, definition in methods.items():
@@ -364,11 +386,26 @@ class ApiSurface:
             ),
             "approval": "operator_only" if op.operator_confirmation else "api_policy",
             "input_schema_quality": self.input_schema_quality(op),
+            "mounted_input_schema_quality": self.mounted_input_schema_quality(op),
         }
 
+    def _body_schema(self, op: ApiOperation) -> dict:
+        mounted = _mounted_body_schema(op.definition)
+        if _loose_json_body(mounted):
+            return self.curated_request_bodies.get(f"{op.method} {op.path}", mounted)
+        return mounted
+
+    def mounted_input_schema_quality(self, op: ApiOperation) -> str:
+        return self._schema_quality(_mounted_body_schema(op.definition))
+
     def input_schema_quality(self, op: ApiOperation) -> str:
-        body = ((op.definition.get("requestBody") or {}).get("content", {})
-                .get("application/json", {}).get("schema") or {})
+        if f"{op.method} {op.path}" in self.curated_request_bodies and _loose_json_body(
+            _mounted_body_schema(op.definition)
+        ):
+            return "curated_json_body"
+        return self._schema_quality(self._body_schema(op))
+
+    def _schema_quality(self, body: dict) -> str:
         if not body:
             return "parameters_only"
         if "$ref" in body:
@@ -384,7 +421,7 @@ class ApiSurface:
             return {"ok": False, "error": "unknown_operation"}
         path_fields, path_required = _schema_fields(op.definition, "path")
         query_fields, query_required = _schema_fields(op.definition, "query")
-        body = (op.definition.get("requestBody") or {}).get("content", {}).get("application/json", {}).get("schema")
+        body = self._body_schema(op) if op.definition.get("requestBody") else None
         props = {
             "operation": {"type": "string", "const": alias},
             "path": _object_schema(path_fields, path_required),
@@ -475,9 +512,10 @@ class ApiSurface:
                 return {"ok": False, "error": "project_is_session_bound", "field": mismatch}
             if "actor" in body and body["actor"] != self.principal:
                 return {"ok": False, "error": "actor_is_session_bound"}
-            if _body_has_field(op.definition, self.schema, "project_id"):
+            body_schema = self._body_schema(op)
+            if _body_has_field(body_schema, self.schema, "project_id"):
                 body["project_id"] = project_id
-            if _body_has_field(op.definition, self.schema, "actor"):
+            if _body_has_field(body_schema, self.schema, "actor"):
                 body["actor"] = self.principal
         elif body is not None:
             return {"ok": False, "error": "invalid_json_body"}
@@ -535,8 +573,7 @@ def _project_override(value: Any, project_id: str, prefix: str = "body") -> str 
     return None
 
 
-def _body_has_field(operation: dict, schema: dict, field: str) -> bool:
-    body = (operation.get("requestBody") or {}).get("content", {}).get("application/json", {}).get("schema") or {}
+def _body_has_field(body: dict, schema: dict, field: str) -> bool:
     if "$ref" in body:
         name = body["$ref"].rsplit("/", 1)[-1]
         body = schema.get("components", {}).get("schemas", {}).get(name) or {}
