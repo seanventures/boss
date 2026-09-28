@@ -108,7 +108,7 @@ public API. Use `--dry-run` to inspect the changes before installing one.
 Paste a link, say what you want done in plain English, get an edited video waiting for your
 approval before it reaches your channel.
 
-**Steps:** fetch → **let an agent work it out** → publish (stops for you)
+**Steps:** **let an agent fetch and edit** → publish (stops for you)
 **Skills the editing agent holds:** `media.fetch_link`, `media.fetch_image`, `video.trim`,
 `video.cut`, `video.reframe`, `video.caption`, `video.overlay_image`, `video.watermark`,
 `video.bookend`
@@ -152,8 +152,8 @@ puts both in your salesperson's inbox. Nothing goes near the prospect.
 **Steps:** research → assess → draft → notify (stops for you)
 **Needs:** a connected model, and email configured
 
-Shows: two model steps reading the same dossier for different jobs; a workflow that deliberately
-ends at a human rather than at an effect.
+Shows: an assessment handed to a second model step that prepares both the assessment and an
+editable outreach draft for the salesperson. It ends at a human rather than a prospect email.
 
 ### [trend-to-content](trend-to-content/) — a trend becomes a script, or an honest no
 

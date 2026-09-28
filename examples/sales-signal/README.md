@@ -20,11 +20,11 @@ is not, which is why the assessment and the draft are separate steps and a perso
 |---|------|--------------|
 | 1 | **Research** | BOSS's `research` capability — a **cited dossier**, gated on evidence |
 | 2 | **Assess** | Fit score, why-now, risks, and **unknowns** |
-| 3 | **Draft** | A short opening email, grounded in the research |
+| 3 | **Draft** | A note containing the assessment and a short opening email grounded in it |
 | 4 | **Notify** | Emails your **salesperson**. **Stops and waits** |
 
-**Nothing is sent to the prospect.** Step 4 emails your own salesperson the assessment; the
-drafted approach is theirs to edit and send. A workflow that emails prospects unattended is a
+**Nothing is sent to the prospect.** Step 4 emails your own salesperson the assessment and the
+drafted approach for them to edit and send. A workflow that emails prospects unattended is a
 workflow that will eventually email the wrong one.
 
 ### It starts by hand, not on a signal
@@ -94,12 +94,12 @@ The last step stops. Open it to read the assessment and the draft before either 
 | Step | Input | Source |
 |---|---|---|
 | Research | `seed` | run input → `company` |
-| Assess | `prompt` | run input → `assess_brief` |
+| Assess | `prompt` | run input → `assess_brief`, or the stored scoring brief |
 | Assess | `context` | **from an earlier step** → Research → `dossier` |
-| Draft | `prompt` | run input → `draft_brief` |
-| Draft | `context` | **from an earlier step** → Research → `dossier` |
+| Draft | `prompt` | run input → `draft_brief`, or the stored draft brief |
+| Draft | `context` | **from an earlier step** → Assess → `text` |
 | Notify | `to` | run input → `salesperson` |
-| Notify | `body` | **from an earlier step** → Assess → `text` |
+| Notify | `body` | **from an earlier step** → Draft → `text` |
 
 Set the agents to `program_manager`. Save.
 

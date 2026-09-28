@@ -22,11 +22,10 @@ does the work, and shows you the result. Nothing reaches YouTube until you say s
 
 | # | Step | Agent | What it does |
 |---|------|-------|--------------|
-| 1 | **Fetch the video** | `video_editor` | Places the link — Google Drive, an S3 bucket, or a plain HTTPS file — and brings it into the project |
-| 2 | **Let an agent work it out** | `video_editor` | **Binds no skill.** Gets your instruction and works out how, using the skills it holds |
-| 3 | **Publish to YouTube** | `media_publisher` | Uploads as **private**. **Stops and waits for you** |
+| 1 | **Let an agent work it out** | `video_editor` | **Binds no skill.** Fetches the link in your instruction and edits with the skills it holds |
+| 2 | **Publish to YouTube** | `media_publisher` | Uploads as **private**. **Stops and waits for you** |
 
-### The one thing worth understanding about step 2
+### The one thing worth understanding about the editing step
 
 **It binds nothing, and that is the point.**
 
@@ -36,7 +35,7 @@ ask for an ending slide needed the operation list to grow a word for it; the nex
 fade, the one after that for a lower third. A framework whose answer to every new request is a
 release is not a framework.
 
-So step 2 carries your **instruction**, and `video_editor`'s **skills** are the vocabulary:
+So the editing step carries your **instruction**, and `video_editor`'s **skills** are the vocabulary:
 
 ```
 media.fetch_link  media.fetch_image  video.trim  video.cut  video.reframe
@@ -78,18 +77,17 @@ is the only thing that says what you meant.
 
 ### 1. A model must be connected
 
-Step 2 is an agent working from your sentence, so it needs a model. Settings → connect one, if
+The editing step is an agent working from your sentence, so it needs a model. Settings → connect one, if
 `connected_engines` is empty.
 
-### 2. Connect Google — required for the first and last step
+### 2. Connect YouTube for publishing
 
-Step 1 stores the fetched video in Drive; step 3 publishes to your channel. One OAuth consent
-covers both.
+The editing agent can fetch a link you provide. Publishing needs a connected YouTube channel.
 
 > **Channels → Connect** in the console.
 
-Without it, steps 1 and 3 fail, and so does most of what step 2 would do — the editing skills
-read from and write back to the same store.
+Without a channel, publishing refuses. Private Google Drive source links also need an account
+that can read them; a public HTTPS source can be fetched without Drive sign-in.
 
 **Several channels?** Connect each one; they get their own keys (`youtube_default`,
 `youtube_2`, …), each with its own token. To pin a step to a particular channel, open that
@@ -164,14 +162,13 @@ nothing, and every step naming it is refused at the first call.
 The agent page shows what it holds. If that list is empty, the workflow cannot work, and the page
 says so rather than looking fine.
 
-### 3. Define the two steps that bind a skill
+### 3. Define the publishing step that binds a skill
 
 **Delivery → Build your own → Your steps → Define a step.** For each: a name, choose **Skill**,
 pick the skill, and list its inputs.
 
 | Name | Skill | Inputs |
 |---|---|---|
-| Fetch the video | `media.fetch_link` | `url` |
 | Publish to YouTube | `publish_youtube` | `media_artifact_id`, `title`, `description` |
 
 Publish will show **always needs a person**. That comes from its risk tier; you cannot turn it
@@ -179,13 +176,12 @@ off.
 
 There is no step to define for the editing. That is the next section.
 
-### 4. Create the workflow and put the agent step in the middle
+### 4. Create the workflow and put the agent step first
 
 **Create a new workflow** → name it → then, from the palette:
 
-1. **Fetch the video** (your step)
-2. **Let an agent work it out** — the first entry in the palette. It binds nothing.
-3. **Publish to YouTube** (your step)
+1. **Let an agent work it out** — the first entry in the palette. It binds nothing.
+2. **Publish to YouTube** (your step)
 
 On the agent step's row, set the instruction source to **ask me when the run starts**. The other
 option, *always do this*, pins a sentence onto the step for a workflow that does the same job
@@ -193,17 +189,17 @@ every time.
 
 ### 5. Wire the inputs
 
-This is the part that makes it a workflow rather than three separate steps. Open each step's
+This is the part that makes it a workflow rather than two separate steps. Open each step's
 **inputs**:
 
 | Step | Input | Source |
 |---|---|---|
-| Fetch the video | `url` | **asked when the run starts** → `video_url` |
 | Let an agent work it out | `instructions` | **asked when the run starts** → `instructions` |
-| Let an agent work it out | `media_artifact_id` | **from an earlier step** → Fetch the video → `media_artifact_id` |
-| Let an agent work it out | `slide_url` | **asked when the run starts** → `slide_url` |
+| Let an agent work it out | `video_url` | optional run input → `video_url` |
+| Let an agent work it out | `asset_url` | optional run input → `asset_url` |
 | Publish to YouTube | `media_artifact_id` | **from an earlier step** → Let an agent work it out → `media_artifact_id` |
-| Publish to YouTube | `title` | **asked when the run starts** → `title` |
+| Publish to YouTube | `title` | **from an earlier step** → Let an agent work it out → `title` |
+| Publish to YouTube | `description` | **from an earlier step** → Let an agent work it out → `description` |
 
 Everything the agent step is given other than `instructions` is passed to the agent as **facts it
 must use exactly** — an artifact id it must not invent. The agent step's own output carries
@@ -212,7 +208,7 @@ whatever its skills returned, last one winning, which is why **Publish** can rea
 
 ### 6. Assign the agents
 
-Each step row has an agent dropdown. Set the first two to `video_editor` and **Publish** to
+Each step row has an agent dropdown. Set the editing step to `video_editor` and **Publish** to
 `media_publisher`.
 
 On the agent step, leaving it blank is a real choice with a different meaning: **whichever agent
@@ -233,12 +229,12 @@ does accept. That is the separation being enforced rather than described.
 
 | Field | What to put in it |
 |---|---|
-| `video_url` | the Drive share link to your recording |
+| `video_url` | optional link to your recording; you can put it in the instruction instead |
 | `instructions` | *"Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."* |
-| `slide_url` | the Drive link to your ending slide — a PNG is fine — if your instructions mention one |
-| `title` | the YouTube title |
+| `asset_url` | optional link to an ending slide, logo, or badge |
+| `title` | the editing agent derives the title from your brief |
 
-Watch the run. Steps 1 and 2 proceed on their own, then **Publish** stops and waits. Open the
+Watch the run. The editing step proceeds, then **Publish** stops and waits. Open the
 agent step to see **which skills it chose, in what order, and why** — that record is the answer
 to "what did it actually do", and it is the thing to read before approving.
 
