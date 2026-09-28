@@ -124,7 +124,6 @@
     "packages/specpack/workflows/open_core_cloud_upgrade.yaml"
   ],
   "requires_split": [
-    "LICENSE",
     "Makefile",
     "apps/api/tests/conftest.py",
     "api/openapi.yaml",
@@ -137,6 +136,7 @@
     "packages/specpack/skills/github.yaml",
     "packages/specpack/skills/software_factory.yaml"
   ],
+  "reviewed_license_sha256": "fe847534e6d3ab7e0155d31ae5604d30b4e57030bb7c2c1167356ddba54ed8bd",
   "safe_symlinks": {
     "packages/goldeneye/bin": "core/bin",
     "packages/goldeneye/lib": "core/lib",

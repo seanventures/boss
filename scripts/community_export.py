@@ -296,6 +296,15 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError(f"manifest {key} has duplicate or unsafe paths")
     if set(manifest["requires_split"]) & set(manifest["exclude"]):
         raise ValueError("requires_split and exclude must be disjoint")
+    if "LICENSE" in manifest["include"] and "LICENSE" not in manifest["requires_split"]:
+        digest = manifest.get("reviewed_license_sha256")
+        if (
+            "LICENSE" not in manifest["required_release"]
+            or "LICENSE" in manifest["exclude"]
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise ValueError("exported root LICENSE requires a reviewed SHA-256 pin")
     shared_services = manifest.get("reviewed_community_service_sha256")
     if shared_services is not None:
         if (
@@ -723,6 +732,10 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             blockers.append({"kind": "sensitive-or-generated-path", "path": path})
             continue
         data = git(repo, "cat-file", "blob", oid)
+        if path == "LICENSE" and "reviewed_license_sha256" in manifest:
+            if hashlib.sha256(data).hexdigest() != manifest["reviewed_license_sha256"]:
+                blockers.append({"kind": "reviewed-license-changed", "path": path})
+                continue
         if mode == "120000":
             target = manifest.get("safe_symlinks", {}).get(path)
             if target is None or data != target.encode():
@@ -1089,7 +1102,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "blockers": blockers,
         "excluded_file_count": len(included - selected_paths),
         "review_required": [
-            "BOSS-300 counsel reference and Apache LICENSE/NOTICE metadata",
+            "BOSS-300 counsel decision record and Apache NOTICE/package metadata review",
             "independent secret and dependency/license scans",
             "clean Linux VM API, worker, web, TUI, MCP and installer acceptance",
             "BOSS-293 public-flip checklist and human release signoff",

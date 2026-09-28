@@ -40,6 +40,53 @@ def test_manifest_rejects_unsafe_and_overlapping_rules() -> None:
         raise AssertionError("unsafe export path was accepted")
 
 
+def test_community_license_is_checksum_pinned(tmp_path: Path) -> None:
+    source = (export.ROOT / "LICENSE").read_bytes()
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    assert "LICENSE" in manifest["include"]
+    assert "LICENSE" in manifest["required_release"]
+    assert "LICENSE" not in manifest["requires_split"]
+    assert hashlib.sha256(source).hexdigest() == manifest["reviewed_license_sha256"]
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "LICENSE").write_bytes(source)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "LICENSE"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    focused = {
+        "schema_version": 1,
+        "include": ["LICENSE"],
+        "exclude": ["other-private-file"],
+        "requires_split": ["unused-private-file"],
+        "required_runtime": ["LICENSE"],
+        "required_release": ["LICENSE"],
+        "reviewed_license_sha256": manifest["reviewed_license_sha256"],
+    }
+    export.validate_manifest(focused)
+    report, candidate = export.analyze(repo, sha, focused)
+    assert report["mechanically_complete"]
+    assert candidate["LICENSE"] == source
+
+    focused["reviewed_license_sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, focused)
+    assert "reviewed-license-changed" in {blocker["kind"] for blocker in report["blockers"]}
+    assert "LICENSE" not in candidate
+
+    del focused["reviewed_license_sha256"]
+    try:
+        export.validate_manifest(focused)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unreviewed root license was accepted")
+
+
 def test_local_import_graph_finds_withheld_modules() -> None:
     source = {
         "apps/api/app/main.py",
