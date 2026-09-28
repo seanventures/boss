@@ -37,6 +37,13 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}
 
 
+def _community_raw_sql_disabled(settings: Any) -> bool:
+    """Raw SQL has no tenant fence or domain policy and is unsafe in Community."""
+    return str(getattr(settings, "boss_edition", "community")).strip().lower() in {
+        "community", "oss", "local",
+    }
+
+
 # ===========================================================================
 # READ TOOLS — the "overall view of the workflow engine"
 # ===========================================================================
@@ -337,6 +344,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         ),
     )
     def query_db(ctx, *, project_id, actor, args):
+        if _community_raw_sql_disabled(ctx.settings):
+            return {"ok": False, "error": "Unrestricted SQL reads are unavailable in Community. "
+                    "Use the project-scoped read tools."}
         sql = (args.get("sql") or "").strip().rstrip(";")
         ok, why = _is_read_only(sql)
         if not ok:
@@ -1483,6 +1493,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         from ..ports import sql as _s
         from ..services.core import emit_event
 
+        if _community_raw_sql_disabled(ctx.settings):
+            return {"ok": False, "error": "Unrestricted SQL writes are unavailable in Community. "
+                    "Use a governed project-scoped operation."}
         statement = (args.get("sql") or "").strip().rstrip(";")
         ok, why = _is_single_write(statement, whole_table=bool(args.get("whole_table")))
         if not ok:
@@ -6332,17 +6345,15 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 "note": "secret-shaped names report only whether a value is present"}
 
 
-# NOTHING is withheld from the discuss path.
+# Enterprise discuss can use unrestricted SQL. Community cannot.
 #
 # This held `query_db` back, so Ask BOSS answered from ~17 canned reports while the
 # capability to answer anything sat one registry away. That is the wrong trade for a
 # single-tenant, self-hosted product: every unanswerable question became a request for
 # another tool, and the list never catches up with what an operator wants to ask.
 #
-# The exclusion existed for cross-tenant isolation. There is one tenant in this version,
-# so the fence it bought is not currently buying anything — and when multi-tenant
-# arrives, the fence belongs in the DATABASE (Postgres RLS on the authorised project),
-# not in a hand-maintained deny-list that also has to be right about 20 other tools.
+# Without database row policies this is unsafe for a project-scoped Community actor.
+# The edition-aware registry omits it, and the tool handler also rejects direct calls.
 _DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset()
 
 
@@ -6534,12 +6545,13 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
 _WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
 
 
-def build_discuss_read_registry() -> ToolRegistry:
+def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     """Project-pinned tools for IntentRouter's tool-grounded discuss path.
 
     Every read tool, plus the operational writes in ``_DISCUSS_OPERATIONS_TOOLS``.
-    ``project_id`` is stripped from schemas/args so the model cannot reach past the project
-    the API already authorised — which applies to the writes especially.
+    ``project_id`` is stripped from schemas/args so the model cannot override the authorised
+    project. Community also excludes unrestricted SQL reads and writes; direct invocations
+    are separately rejected by the handlers.
     """
     source = build_default_registry()
     reg = ToolRegistry()
@@ -6549,6 +6561,9 @@ def build_discuss_read_registry() -> ToolRegistry:
     ]
     for spec in admitted:
         if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
+            continue
+        if (edition is not None and edition.strip().lower() in {"community", "oss", "local"}
+                and spec.name in {"query_db", "write_db"}):
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
         properties.pop("project_id", None)

@@ -10532,7 +10532,7 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint="/v1/engine/agent/action"
     )
-    registry = build_discuss_read_registry()
+    registry = build_discuss_read_registry(edition=settings.boss_edition)
     try:
         spec = registry.get(payload.tool)
     except ToolError as error:

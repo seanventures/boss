@@ -1435,7 +1435,7 @@ class IntentRouter:
             # "claude_cli", and so the one interface customers actually talk to ran on the
             # fallback backend while the Claude subscription went to the coding pipeline.
             self._answer_agent_obj = EngineAgent(
-                ctx, registry=build_discuss_read_registry(),
+                ctx, registry=build_discuss_read_registry(edition=self.settings.boss_edition),
                 adapter=make_agent_chat_adapter(self.settings),
             )
         return self._answer_agent_obj
@@ -2478,7 +2478,8 @@ class IntentRouter:
         # The model described buttons instead of calling the tool -- again. Recover them.
         try:
             from ..tools import build_discuss_read_registry
-            _known = set(build_discuss_read_registry().names())
+            _known = set(build_discuss_read_registry(
+                edition=self.settings.boss_edition).names())
         except Exception:  # noqa: BLE001 — recovery is a bonus, never a new failure mode
             _known = set()
         tagged, reply = _recover_tagged_actions(reply, _known, proposed)

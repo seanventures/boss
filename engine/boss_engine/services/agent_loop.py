@@ -512,6 +512,11 @@ def _query_rejection(sql: str) -> Optional[str]:
 
 
 def _tool_query_db(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    if str(getattr(settings, "boss_edition", "community")).strip().lower() in {
+        "community", "oss", "local",
+    }:
+        return {"error": "Unrestricted SQL reads are unavailable in Community. "
+                "Use the project-scoped read tools."}
     sql = str(args.get("sql") or "").strip()
     rejection = _query_rejection(sql)
     if rejection:

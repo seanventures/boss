@@ -11,10 +11,15 @@ The guard is deliberately paranoid about STATEMENT CHAINING: a single SELECT is 
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from boss_engine.services.agent_loop import _query_rejection, _tool_query_db
 from boss_engine.tools.builtin import _is_read_only
+
+
+_ENTERPRISE = SimpleNamespace(boss_edition="enterprise_self_hosted")
 
 
 @pytest.mark.parametrize("sql", [
@@ -93,14 +98,14 @@ class _Connection:
 
 def test_it_returns_rows():
     connection = _Connection(rows=[_Row(id="crun_1", status="failed")])
-    out = _tool_query_db(connection, "p1", None, {"sql": "SELECT id, status FROM runs"})
+    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT id, status FROM runs"})
     assert out["rows"] == [{"id": "crun_1", "status": "failed"}]
     assert out["row_count"] == 1 and out["truncated"] is False
 
 
 def test_a_refused_query_never_reaches_the_database():
     connection = _Connection()
-    out = _tool_query_db(connection, "p1", None, {"sql": "DELETE FROM jobs"})
+    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "DELETE FROM jobs"})
     assert "error" in out
     assert connection.executed == []          # the guard runs BEFORE the connection is touched
 
@@ -109,7 +114,7 @@ def test_truncation_is_declared_rather_than_silent():
     """A silently cut result set is worse than a short one: the model reasons from it as if it
     were complete."""
     connection = _Connection(rows=[_Row(n=i) for i in range(500)])
-    out = _tool_query_db(connection, "p1", None, {"sql": "SELECT n FROM big"})
+    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT n FROM big"})
     assert out["truncated"] is True and out["row_count"] == 200
 
 
@@ -117,7 +122,7 @@ def test_a_broken_query_returns_its_error_instead_of_raising():
     """For a bad query the database's message IS the answer — it is how the model corrects
     itself on the next turn."""
     connection = _Connection(boom=RuntimeError('column "nope" does not exist'))
-    out = _tool_query_db(connection, "p1", None, {"sql": "SELECT nope FROM jobs"})
+    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT nope FROM jobs"})
     assert "nope" in out["error"]
 
 
@@ -126,7 +131,7 @@ def test_select_into_is_a_write_and_is_refused():
     could persist another tenant's rows (or dump secret_refs) into a new relation."""
     assert _query_rejection("SELECT * INTO stolen FROM secret_refs") is not None
     connection = _Connection()
-    out = _tool_query_db(connection, "p1", None, {"sql": "SELECT * INTO stolen FROM jobs"})
+    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT * INTO stolen FROM jobs"})
     assert "error" in out
     assert connection.executed == []
 
