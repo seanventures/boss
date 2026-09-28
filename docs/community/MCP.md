@@ -182,12 +182,12 @@ The operation inventory is generated from each edition's mounted
 operation IDs are duplicated on a few multi-method routes. Run
 `python scripts/audit_mcp_api_parity.py --check` to verify
 [`mcp-api-capability-matrix.json`](mcp-api-capability-matrix.json). At this
-revision it accounts for all **981 Community** and **1,022 Enterprise**
+revision it accounts for all **982 Community** and **1,023 Enterprise**
 operations:
 
 | Mounted edition | API policy eligible | Operator-only unavailable | Excluded from MCP |
 |---|---:|---:|---:|
-| Community | 850 | 77 | 54 |
+| Community | 851 | 77 | 54 |
 | Paid-only additions | 39 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
