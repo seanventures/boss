@@ -4891,6 +4891,47 @@ def plane_sync_endpoint(payload: dict):
     event = payload.get("event")
     if not run_id or not event:
         raise HTTPException(status_code=422, detail="run_id and event are required.")
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as connection:
+        run = load_code_task_run(connection, str(run_id))
+        if not run:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        project_id = run["project_id"]
+        actor = current_api_principal.get() or str(payload.get("actor") or "ceo").strip()
+        require_project_actor(connection, project_id, actor, "integration_manage")
+        pull_request_url = run.get("pull_request_url") or (
+            run.get("finalize_ctx") or {}
+        ).get("pull_request_url")
+
+        if event == "code_task.completed_no_pr" and (
+            run["status"] != "completed" or pull_request_url
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="The run has not completed without a pull request.",
+            )
+        if event == "software_factory.pull_request_merged":
+            if not pull_request_url:
+                raise HTTPException(status_code=409, detail="The run has no pull request.")
+            merged_receipt_id = connection.execute(
+                text(
+                    """
+                    SELECT id FROM receipts
+                    WHERE project_id = :project_id
+                      AND effect_kind = 'github.pull_request.merge'
+                      AND status = 'succeeded'
+                      AND result->>'pull_request_url' = :pull_request_url
+                    LIMIT 1
+                    """
+                ),
+                {"project_id": project_id, "pull_request_url": pull_request_url},
+            ).scalar_one_or_none()
+            if not merged_receipt_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="No successful merge receipt exists for this run's pull request.",
+                )
     from .services import plane_sync
     return plane_sync.on_event(engine, settings, run_id, event)
 

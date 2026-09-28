@@ -6,6 +6,7 @@ import pytest
 from boss_engine.services import (
     code_task_service,
     meeting_service,
+    plane_sync,
     prd_decomposition,
     secrets_service,
 )
@@ -108,6 +109,85 @@ def test_factory_and_infra_effect_routes_require_project_grants(
         accepted = client.post(path, headers=_auth("operator-key"), json=body)
         assert accepted.status_code in {200, 201}, (path, accepted.text)
     assert calls == ["effect", "job", "effect", "job", "effect", "job", "effect"]
+
+
+def test_plane_sync_uses_stored_run_project_and_merge_receipt(
+    client, engine, scoped_operator, monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(
+        plane_sync, "on_event",
+        lambda _engine, _settings, run_id, event: calls.append((run_id, event))
+        or {"synced": True},
+    )
+    home_run = f"crun_plane_ga_{uuid4().hex[:8]}"
+    foreign_run = f"crun_plane_other_{uuid4().hex[:8]}"
+    pr_url = "https://github.com/example/boss/pull/42"
+    with engine.begin() as connection:
+        for run_id, project_id in [(home_run, PROJECT), (foreign_run, scoped_operator)]:
+            connection.execute(
+                text(
+                    "INSERT INTO code_task_runs "
+                    "(id, project_id, title, status, phase, finalize_ctx, pull_request_url) "
+                    "VALUES (:id, :project_id, 'Plane sync authority', 'running', 'coding', "
+                    "'{\"source\":\"plane\",\"plane_issue_id\":\"issue-1\","
+                    "\"plane_project_id\":\"plane-1\"}'::jsonb, :pr_url)"
+                ),
+                {"id": run_id, "project_id": project_id, "pr_url": pr_url},
+            )
+    path = "/v1/integrations/plane/sync"
+    assert client.post(
+        path, headers=_auth("coo-key"),
+        json={"run_id": home_run, "event": "code_task.started"},
+    ).status_code == 403
+    assert client.post(
+        path, headers=_auth("operator-key"),
+        json={"run_id": foreign_run, "event": "code_task.started", "actor": "ceo"},
+    ).status_code == 403
+    assert calls == []
+
+    started = client.post(
+        path, headers=_auth("operator-key"),
+        json={"run_id": home_run, "event": "code_task.started"},
+    )
+    assert started.status_code == 200, started.text
+    assert calls == [(home_run, "code_task.started")]
+
+    forged_merge = client.post(
+        path, headers=_auth("operator-key"),
+        json={"run_id": home_run, "event": "software_factory.pull_request_merged"},
+    )
+    assert forged_merge.status_code == 409, forged_merge.text
+    forged_completion = client.post(
+        path, headers=_auth("operator-key"),
+        json={"run_id": home_run, "event": "code_task.completed_no_pr"},
+    )
+    assert forged_completion.status_code == 409, forged_completion.text
+    assert len(calls) == 1
+
+    with engine.begin() as connection:
+        scope = connection.execute(text(
+            "SELECT p.workspace_id, w.org_id FROM projects p "
+            "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :project_id"
+        ), {"project_id": PROJECT}).mappings().one()
+        connection.execute(text(
+            "INSERT INTO receipts (id, org_id, workspace_id, project_id, dedupe_key, "
+            "effect_kind, payload_hash, status, result) VALUES "
+            "(:id, :org_id, :workspace_id, :project_id, :dedupe_key, "
+            "'github.pull_request.merge', 'test-hash', 'succeeded', "
+            "CAST(:result AS jsonb))"
+        ), {
+            "id": f"rcpt_plane_ga_{uuid4().hex[:8]}",
+            "org_id": scope["org_id"], "workspace_id": scope["workspace_id"],
+            "project_id": PROJECT, "dedupe_key": f"plane-ga-{uuid4().hex[:8]}",
+            "result": '{"pull_request_url":"https://github.com/example/boss/pull/42"}',
+        })
+    merged = client.post(
+        path, headers=_auth("operator-key"),
+        json={"run_id": home_run, "event": "software_factory.pull_request_merged"},
+    )
+    assert merged.status_code == 200, merged.text
+    assert calls[-1] == (home_run, "software_factory.pull_request_merged")
 
 
 @pytest.fixture
