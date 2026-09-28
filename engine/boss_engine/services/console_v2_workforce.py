@@ -51,7 +51,7 @@ WORKING, STUCK, IDLE, GATED = "WORKING", "STUCK", "IDLE", "AT GATE"
 
 
 def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]:
-    """Every agent, its current work, and what it has cost.
+    """Roles with observed customer work, their current work, and what it has cost.
 
     One call for three screens. The counts here are the counts those screens show, so they
     cannot drift apart the way v1's did — "Agents active 0/21" came from counting roles that
@@ -195,7 +195,9 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # That is the difference between "shows IDLE" and "does not appear at all", and the panel
     # seats (engineer, ux_designer, privacy_safety, operations) are in the second category.
     working = ({s["role_key"] for s in steps if s.get("role_key")}
-               | set(spend) | set(step_work) | set(live))
+               | set(spend) | set(step_work) | set(live)
+               | {h["source"] for h in handoffs if h.get("source")}
+               | {h["target"] for h in handoffs if h.get("target")})
     for extra in sorted(working - registered):
         roles.append({
             "role_key": extra,
@@ -213,6 +215,10 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     agents = []
     for role in roles:
         key = role["role_key"]
+        # A seeded role is a definition of who may work, not evidence that anyone has.
+        # Keep it in the registry and Agent Studio; this feed describes actual work.
+        if key not in working:
+            continue
         step = latest.get(key)
         work = spend.get(key) or {}
         sw = step_work.get(key) or {}

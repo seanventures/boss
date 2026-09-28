@@ -24,6 +24,14 @@ const wf = (over: Partial<Workforce> = {}): Workforce => ({
 const html = (w: Workforce) => renderToStaticMarkup(<WorkforceArea workforce={w} />);
 
 describe("v1 Workforce", () => {
+  it("explains a genuinely empty work feed and points to definitions", () => {
+    const out = html(wf({ agents: [], counts: { WORKING: 0, STUCK: 0, IDLE: 0, "AT GATE": 0, total: 0 } }));
+    expect(out).toContain('data-testid="workforce-empty"');
+    expect(out).toContain("No customer agent work recorded yet");
+    expect(out).toContain("Browse agent definitions");
+    expect(out).not.toContain('data-testid="roster-grid"');
+  });
+
   it("shows the current state and recent outcome without turning every role into a scorecard", () => {
     const out = html(wf({ agents: [agent({ ok_calls: 565, success_rate: 0.96, turns: 17474 })] }));
     expect(out).toContain("Software Engineer");
@@ -153,6 +161,17 @@ describe("v1 Org Chart", () => {
     const out = renderToStaticMarkup(
       <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
     expect(out).toContain("No planned roles yet.");
+    expect(out).toContain("Add role to team");
+    expect(out).not.toContain("Roles not in structure");
+  });
+
+  it("does not put an unplaced definition into the planned team", () => {
+    const seeded = { id: "qa", name: "QA", role: "qa", depth: 0, connected: false } as never;
+    const out = renderToStaticMarkup(
+      <OrgChartArea chart={chart({ nodes: [seeded] })} projectId="p" actor="ceo" />);
+    expect(out).toContain("No planned roles yet.");
+    expect(out).not.toContain('data-testid="org-node-qa"');
+    expect(out).toContain('data-testid="org-bench-qa"');
   });
 
   it("does not call an unreachable structure empty", () => {
@@ -183,7 +202,7 @@ describe("v1 Org Chart", () => {
       out.indexOf('data-testid="org-bench-qa_lead"'),
       out.indexOf("</details>"),
     );
-    expect(out).toContain("Roles not in structure");
+    expect(out).toContain("Add role to team");
     expect(row).toContain('data-testid="org-work-qa_lead"');
     expect(row).toContain('data-testid="org-definition-qa_lead"');
     expect(row).toContain(">Work<");

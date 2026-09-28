@@ -91,13 +91,11 @@ def step(key, *, status="succeeded", action="review_code", age_s=60, handoff=Non
 # --------------------------------------------------------------------------- #
 # An agent's status describes the agent, not the schema
 # --------------------------------------------------------------------------- #
-def test_a_role_with_no_recent_work_is_idle_not_active():
-    """"Agents active 0/21" counted the data model. An agent with nothing recent is idle, and
-    the row says so rather than being silently absent or silently counted."""
+def test_a_seeded_role_without_work_is_not_agent_work():
+    """The role stays registered, but a definition alone is not customer work."""
     out = workforce(FakeConn(roles=[role("architect")]), "p")
-    a = out["agents"][0]
-    assert a["status"] == IDLE
-    assert "No work" in a["task"]
+    assert out["agents"] == []
+    assert out["counts"]["total"] == 0
 
 
 def test_a_running_step_makes_the_agent_working():
@@ -128,7 +126,8 @@ def test_the_counts_match_the_agents_listed():
     """The headline number and the list must come from the same place, or they drift."""
     out = workforce(FakeConn(
         roles=[role("a"), role("b"), role("c")],
-        steps=[step("a", status="running"), step("b", status="failed")],
+        steps=[step("a", status="running"), step("b", status="failed"),
+               step("c", status="succeeded")],
     ), "p")
     assert out["counts"]["total"] == 3
     assert out["counts"][WORKING] == 1
@@ -178,7 +177,8 @@ def test_no_query_joins_calls_to_steps_by_time():
 def test_violations_are_surfaced_rather_than_buried():
     """BOSS records policy and scope violations per role and v1 never showed them. An agent
     with violations is precisely the one worth looking at."""
-    out = workforce(FakeConn(roles=[role("rogue", violations=3, hidden=2)]), "p")
+    out = workforce(FakeConn(roles=[role("rogue", violations=3, hidden=2)],
+                             steps=[step("rogue")]), "p")
     a = out["agents"][0]
     assert a["violations"] == 3
     assert a["hidden_failures"] == 2
@@ -205,10 +205,11 @@ def test_the_chart_declares_that_it_is_derived():
     assert "no declared reporting line" in out["note"]
 
 
-def test_an_agent_nobody_works_with_is_flagged_isolated():
-    """Either idle by design or forgotten — both worth seeing, and invisible on a tree."""
+def test_an_agent_working_alone_is_flagged_isolated():
+    """A worked role with no handoff stays visible in the observed view."""
     out = org_chart(FakeConn(
         roles=[role("architect"), role("hermit")],
+        steps=[step("hermit")],
         handoffs=[{"source": "architect", "target": "architect", "times": 1,
                    "last_at": NOW, "last_action": "x"}],
     ), "p")
@@ -298,7 +299,8 @@ def test_the_check_in_time_is_the_step_age():
 
 
 def test_an_agent_with_no_step_has_no_project_or_artefact():
-    out = workforce(FakeConn(roles=[role("idle_one")]), "p")
+    out = workforce(FakeConn(roles=[role("qa")],
+                             spend=[lcall("check_tests", calls=1)]), "p")
     agent = out["agents"][0]
     assert agent["project"] is None
     assert agent["last_touched"] is None
@@ -461,19 +463,21 @@ def test_an_agent_with_no_handoffs_is_not_in_the_tree():
     """It belongs in "working alone", not hanging off a root it has no relationship with."""
     out = org_chart(FakeConn(
         roles=[role("pm"), role("hermit")],
+        steps=[step("hermit")],
         handoffs=[_edge("pm", "pm")],
     ), "p")
     assert "hermit" not in {n["id"] for n in out["tree"]}
     assert "hermit" in out["isolated"]
 
 
-def test_an_edge_to_an_unknown_agent_is_ignored():
-    """A handoff naming a role that no longer exists must not create a phantom node."""
+def test_an_edge_to_an_unregistered_agent_exposes_real_work():
+    """Observed work with no registered role is a governance gap, not a phantom node."""
     out = org_chart(FakeConn(
         roles=[role("pm")],
         handoffs=[_edge("pm", "deleted_role")],
     ), "p")
-    assert {n["id"] for n in out["tree"]} <= {"pm"}
+    assert {n["id"] for n in out["tree"]} == {"pm", "deleted_role"}
+    assert "deleted_role" in {n["id"] for n in out["nodes"] if not n["registered"]}
 
 
 def test_the_tree_is_empty_when_nothing_was_handed_over():
@@ -541,7 +545,7 @@ def test_a_score_is_observed_and_kept_apart_from_the_configured_trust_score():
 
 
 def test_an_agent_with_no_calls_has_no_score_rather_than_zero_or_a_hundred():
-    out = workforce(FakeConn(roles=[role("qa")]), "proj")
+    out = workforce(FakeConn(roles=[role("qa")], steps=[step("qa")]), "proj")
     a = by_id(out)["qa"]
     assert a["success_rate"] is None
     assert a["spend_usd"] is None
@@ -638,7 +642,7 @@ def test_the_agents_that_did_the_work_come_first():
         spend=[lcall("implement", calls=400), lcall("check_tests", calls=100)],
     ), "proj")
     assert [a["id"] for a in out["agents"]][:2] == ["software_engineer", "qa"]
-    assert out["agents"][-1]["id"] == "cao"
+    assert "cao" not in {a["id"] for a in out["agents"]}
 
 
 def test_pipeline_work_counts_toward_the_ranking_too():
@@ -713,6 +717,7 @@ def test_a_run_in_flight_beats_a_stale_inference_from_finished_calls():
 
 def test_the_phase_decides_which_agent_is_working():
     out = workforce(FakeConn(roles=[role("qa"), role("software_engineer")],
+                             steps=[step("software_engineer")],
                              live_runs=[live_run("write_tests")]), "proj")
     a = by_id(out)
     assert a["qa"]["status"] == "WORKING"
@@ -724,7 +729,7 @@ def test_a_queued_run_puts_nobody_to_work():
     an agent to work that is not working."""
     out = workforce(FakeConn(roles=[role("software_engineer")],
                              live_runs=[live_run("awaiting_plan_approval")]), "proj")
-    assert by_id(out)["software_engineer"]["status"] == "IDLE"
+    assert out["agents"] == []
 
 
 def test_an_unresolved_process_step_also_counts_as_working():
@@ -773,8 +778,8 @@ def test_a_panel_in_session_is_its_seats_working():
     # And it says WHAT it is doing, not just that it is busy.
     assert "panel" in by["product_manager"]["task"]
     assert "round1" in by["product_manager"]["task"]
-    # An agent not in the room is not working because someone else is.
-    assert by["qa"]["status"] == IDLE
+    # A seeded role outside the room has no work to show.
+    assert "qa" not in by
 
 
 def test_every_seat_counts_not_just_the_registered_ones():
@@ -803,7 +808,7 @@ def test_research_in_flight_is_an_agent_working():
     # Credited to `researcher`, NOT to a registered agent picked by resemblance — that would
     # report a trust score and an autonomy level for work they did not do.
     assert by["researcher"]["registered"] is False
-    assert by["qa"]["status"] == IDLE
+    assert "qa" not in by
 
 
 def test_the_agent_answering_the_operator_is_working_too():
@@ -816,8 +821,9 @@ def test_the_agent_answering_the_operator_is_working_too():
 
 def test_nothing_running_still_means_idle():
     # The failure mode of this fix is the opposite one: a screen where everything says WORKING
-    # says nothing. Empty sources must leave every agent alone.
-    out = workforce(FakeConn(roles=[role("qa"), role("pm")]), "p1")
+    # says nothing. Completed work remains visible, but it does not stay working.
+    out = workforce(FakeConn(roles=[role("qa"), role("pm")],
+                             steps=[step("qa"), step("pm")]), "p1")
     assert {a["status"] for a in out["agents"]} == {IDLE}
 
 

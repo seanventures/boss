@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, text
 from boss_engine.config import Settings
 from boss_engine.services.agent_process import AgentProcessService
 from boss_engine.services.console_v2_workforce import org_chart, workforce
+from boss_engine.services import org_assignments
 from boss_engine.services.process_manager import (
     CANARY_ORIGIN,
     LEGACY_CANARY_TITLE,
@@ -142,6 +143,12 @@ def test_tick_empty_project_creates_template_canary_and_metrics(db, project_id):
 
 
 def test_first_run_canary_stays_audited_without_polluting_customer_work(db, project_id):
+    # Model the installer: registered roles already exist before the worker's canary.
+    for key in ("cto", "qa"):
+        db.execute(text("INSERT INTO roles (id, project_id, role_key, display_name) "
+                        "VALUES (:id, :p, :key, :name)"),
+                   {"id": f"role_{project_id}_{key}", "p": project_id,
+                    "key": key, "name": key.upper()})
     result = _svc().tick(db, project_id=project_id, actor="system")
     processes = AgentProcessService(Settings())
     run = processes.list_runs(db, project_id)[0]
@@ -151,6 +158,8 @@ def test_first_run_canary_stays_audited_without_polluting_customer_work(db, proj
     assert len(steps) == 11
     assert run["receipt_id"] and result["receipt_id"]
     assert _pm_receipts(db, project_id)
+    assert db.execute(text("SELECT count(*) FROM roles WHERE project_id = :p"),
+                      {"p": project_id}).scalar_one() == 2
 
     roster = workforce(db, project_id)
     chart = org_chart(db, project_id)
@@ -159,6 +168,13 @@ def test_first_run_canary_stays_audited_without_polluting_customer_work(db, proj
     assert roster["unregistered"] == []
     assert chart["nodes"] == []
     assert chart["edges"] == []
+
+    # A conscious team placement still appears, even though its role has not worked.
+    org_assignments.set_one(db, project_id, "qa", actor="ceo")
+    planned = org_assignments.apply_to(org_chart(db, project_id),
+                                       org_assignments.get_all(db, project_id))
+    assert [node["id"] for node in planned["tree"]] == ["qa"]
+    assert [node["id"] for node in planned["nodes"]] == ["qa"]
 
     # If a system check stalls midway, it still must not look like customer work.
     db.execute(text("UPDATE agent_process_runs SET status = 'running' WHERE id = :id"),

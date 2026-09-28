@@ -19,10 +19,10 @@ describe("the chart can be changed", () => {
   });
 
   it("offers the agents nobody has placed yet", () => {
-    // The list of agents BOSS knows about is the thing you build a chart FROM; without it the
-    // only agents you could place would be the ones already placed.
+    // Roles are fetched on demand for placement; they are not chart nodes yet.
     expect(UI).toContain('data-testid="org-bench"');
-    expect(UI).toContain("Roles not in structure");
+    expect(UI).toContain("Add role to team");
+    expect(UI).toContain("/api/agent?view=roles");
     expect(UI).toContain('aria-label={`Reports to for ${displayName(n)}`}');
   });
 

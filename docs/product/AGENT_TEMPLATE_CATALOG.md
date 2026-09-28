@@ -4,6 +4,8 @@ The existing 13 Agent Studio specialists remain. These 21 additions are availabl
 
 The UI uses three separate views: **Agent work** groups recent activity by role; **Team structure** stores a planned role layout and separately shows observed handoffs; **Agent Studio** holds the definitions that can be tested and run. Placing a role on the chart does not change task routing. Installing a template does not place a role on the chart.
 
+On a fresh install, seeded roles and agent definitions remain available in Agent Studio. **Agent work** lists roles only after customer work is recorded through a process step, model call, or live run; the process manager's simulated health check remains in process and audit history without counting as customer work. **Team structure** shows only roles someone has placed in the plan. Its **Add role to team** picker can select an existing role without treating every seeded definition as a team assignment.
+
 | Template | RoleSpec | Intended project work |
 | --- | --- | --- |
 | Mobile App Operator | software_engineer | Plan Android/iOS build, test, launch, interaction, screenshots, and logs; see [runner contract](../operations/MOBILE_AGENT_RUNNER.md) for execution gap. |

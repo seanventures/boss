@@ -7488,6 +7488,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .roster-search { width: min(320px, 100%); padding: 8px 10px;
   border: 1px solid var(--border); border-radius: 3px;
   background: var(--panel, #0d1117); color: var(--ink); }
+.roster-empty { display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap;
+  margin-top: 12px; padding: 16px 2px; border-top: 1px solid var(--border); }
+.roster-empty .detail { flex: 1 1 280px; margin: 0; }
+.roster-empty .cap-btn { white-space: nowrap; }
 .roster-grid { display: grid; margin-top: 12px; border-top: 1px solid var(--border); }
 .roster-card {
   display: grid;
@@ -7512,7 +7516,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .roster-actions button:hover, .roster-show-all:hover { text-decoration: underline; }
 .roster-show-all { margin-top: 14px; }
 .roster-actions button:focus-visible, .roster-guide button:focus-visible,
-.roster-show-all:focus-visible, .roster-search:focus-visible {
+.roster-show-all:focus-visible, .roster-search:focus-visible, .roster-empty button:focus-visible {
   outline: 2px solid var(--accent-text, #2ec5c5); outline-offset: 2px;
 }
 @media (max-width: 740px) {

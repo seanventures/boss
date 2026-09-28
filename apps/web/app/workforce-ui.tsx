@@ -197,7 +197,7 @@ export function WorkforceArea(
     <div className="roster">
       <div className="roster-filterbar">
         <span className="detail">
-          {counts.total} role{counts.total === 1 ? "" : "s"} · last {workforce.window_hours}h
+          {counts.total} role{counts.total === 1 ? "" : "s"} with recorded work
         </span>
         <span className="roster-filters">
           {(["all", "working", "worked"] as const).map((f) => (
@@ -247,7 +247,12 @@ export function WorkforceArea(
       ) : null}
 
       {agents.length === 0 ? (
-        <p className="detail">No agent matches this filter.</p>
+        (workforce.agents ?? []).length === 0 && filter === "all" && !search.trim() ? (
+          <div className="roster-empty" data-testid="workforce-empty">
+            <p className="detail">No customer agent work recorded yet. Browse agent definitions in Agent Studio, then run an agent or workflow to see work here.</p>
+            <button type="button" className="cap-btn" onClick={() => openArea("studio")}>Browse agent definitions</button>
+          </div>
+        ) : <p className="detail">No agent work matches this filter.</p>
       ) : (
         <div className="roster-grid" data-testid="roster-grid">
           {shownAgents.map((a) => (
@@ -301,6 +306,10 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const [live, setLive] = useState<OrgChart>(chart);
   const [view, setView] = useState<"planned" | "observed">("planned");
   const [roleSearch, setRoleSearch] = useState("");
+  const [rolePickerOpen, setRolePickerOpen] = useState(false);
+  const [availableRoles, setAvailableRoles] = useState<Array<{ id: string; name: string; role: string }>>([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [rolesError, setRolesError] = useState<string | null>(null);
   const [placementTargets, setPlacementTargets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -314,6 +323,37 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   useEffect(() => { setLive(chart); }, [chart]);
+
+  useEffect(() => {
+    setAvailableRoles([]);
+    setRolesError(null);
+    setRolePickerOpen(false);
+    if (unassignedRef.current) unassignedRef.current.open = false;
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!rolePickerOpen) return;
+    let alive = true;
+    setRolesLoading(true);
+    void fetch(`/api/agent?view=roles&project_id=${encodeURIComponent(projectId)}`,
+      { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Roles returned ${response.status}`);
+        return response.json();
+      })
+      .then((body) => {
+        if (!alive) return;
+        setAvailableRoles(((body.items ?? []) as Array<Record<string, unknown>>).map((item) => ({
+          id: String(item.role_key ?? ""),
+          name: String(item.display_name ?? item.role_key ?? ""),
+          role: String(item.role_key ?? ""),
+        })).filter((item) => item.id));
+        setRolesError(null);
+      })
+      .catch((error) => { if (alive) setRolesError(String((error as Error).message ?? error)); })
+      .finally(() => { if (alive) setRolesLoading(false); });
+    return () => { alive = false; };
+  }, [rolePickerOpen, projectId]);
 
   useEffect(() => {
     if (!templateOpen) return;
@@ -418,13 +458,16 @@ export function OrgChartArea({ chart, projectId, actor }: {
   for (const root of children.get("") ?? []) visit(root);
   for (const node of treeNow) visit(node);
   const isolated = (chartNow.nodes ?? []).filter((n) => !n.connected);
-  const unplaced = (chartNow.nodes ?? []).filter(
-    (n) => !Object.prototype.hasOwnProperty.call(declared, n.id));
-  const matchingUnplaced = unplaced.filter((n) =>
+  // A definition is available to place, but is not part of the team's structure yet.
+  // Include observed unregistered roles too, so real work can still be assigned explicitly.
+  const placeable = [...new Map([...availableRoles, ...(chartNow.nodes ?? [])]
+    .filter((n) => !Object.prototype.hasOwnProperty.call(declared, n.id))
+    .map((n) => [n.id, n])).values()];
+  const matchingPlaceable = placeable.filter((n) =>
     `${n.name} ${n.role} ${n.id}`.toLowerCase().includes(roleSearch.trim().toLowerCase()));
   const nameCounts = new Map<string, number>();
   for (const n of chartNow.nodes ?? []) nameCounts.set(n.name, (nameCounts.get(n.name) ?? 0) + 1);
-  const displayName = (n: OrgNode) => (nameCounts.get(n.name) ?? 0) > 1
+  const displayName = (n: { id: string; name: string; role: string }) => (nameCounts.get(n.name) ?? 0) > 1
     ? `${n.name} (${humanise(n.id) === n.name ? n.id : humanise(n.id)})` : n.name;
   const namesById = new Map((chartNow.nodes ?? []).map((node) => [node.id, displayName(node)]));
 
@@ -523,7 +566,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
           <p className="detail">{view === "planned"
             ? "No planned roles yet."
             : "No recent handoffs."}</p>
-          {view === "planned" && unplaced.length > 0 ? (
+          {view === "planned" ? (
             <button type="button" className="org-next-action" onClick={() => {
               if (unassignedRef.current) {
                 unassignedRef.current.open = true;
@@ -593,16 +636,21 @@ export function OrgChartArea({ chart, projectId, actor }: {
         </div>
       )}
 
-      {view === "planned" && unplaced.length > 0 ? (
-        <details className="org-unassigned" data-testid="org-unassigned" ref={unassignedRef}>
-          <summary>Roles not in structure <span>{unplaced.length}</span></summary>
+      {view === "planned" ? (
+        <details className="org-unassigned" data-testid="org-unassigned" ref={unassignedRef}
+                 onToggle={(event) => setRolePickerOpen(event.currentTarget.open)}>
+          <summary>Add role to team</summary>
+          <p className="detail">Choose a definition to place in the team. Adding it does not start work.</p>
+          <button type="button" className="org-node-act" onClick={() => openArea("studio")}>Browse agent definitions</button>
+          {rolesError ? <p className="detail" role="alert">Could not load roles: {rolesError}</p> : null}
+          {rolesLoading ? <p className="detail">Loading roles…</p> : null}
           <label className="org-unassigned-search">
             <span>Find a role</span>
             <input type="search" value={roleSearch}
                    onChange={(event) => setRoleSearch(event.target.value)} />
           </label>
           <div className="org-unassigned-list" data-testid="org-bench">
-            {matchingUnplaced.map((n) => (
+            {matchingPlaceable.map((n) => (
               <div className="org-unassigned-row" key={n.id}
                    data-testid={`org-bench-${n.id}`}>
                 <span>{displayName(n)}</span>
@@ -625,7 +673,9 @@ export function OrgChartArea({ chart, projectId, actor }: {
                 </button>
               </div>
             ))}
-            {matchingUnplaced.length === 0 ? <p className="detail">No matching roles.</p> : null}
+            {!rolesLoading && !rolesError && matchingPlaceable.length === 0 ? (
+              <p className="detail">No available roles match. Browse Agent Studio to add a definition.</p>
+            ) : null}
           </div>
         </details>
       ) : null}
