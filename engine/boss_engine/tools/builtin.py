@@ -5445,6 +5445,11 @@ def _register_image_tools(reg: ToolRegistry) -> None:
         import urllib.request
 
         settings = ctx.settings
+        if str(getattr(settings, "boss_edition", "community")).strip().lower() in {
+            "community", "oss", "local",
+        }:
+            return {"ok": False, "error": "Community image generation is paused until "
+                    "provider spend has a budget reservation and receipt."}
         base = str(getattr(settings, "openai_base_url", "") or "").rstrip("/")
         key = str(getattr(settings, "openai_api_key", "") or "")
         if not base or not key:
@@ -6563,7 +6568,7 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
         if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
             continue
         if (edition is not None and edition.strip().lower() in {"community", "oss", "local"}
-                and spec.name in {"query_db", "write_db"}):
+                and spec.name in {"query_db", "write_db", "generate_image"}):
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
         properties.pop("project_id", None)

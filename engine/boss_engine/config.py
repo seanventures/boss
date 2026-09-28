@@ -394,7 +394,7 @@ class Settings(BaseSettings):
         default="",
         alias="BOSS_API_KEY_PRINCIPALS",
     )
-    worker_principal: str = Field(default="ceo", alias="BOSS_WORKER_PRINCIPAL")
+    worker_principal: str = Field(default="system", alias="BOSS_WORKER_PRINCIPAL")
     oidc_enabled: bool = Field(default=False, alias="BOSS_OIDC_ENABLED")
     oidc_issuer: Optional[str] = Field(
         default=None,
