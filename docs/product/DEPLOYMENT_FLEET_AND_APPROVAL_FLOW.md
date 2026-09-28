@@ -204,6 +204,15 @@ does not. Registering a host should be four steps in the UI:
 automated without already having access. BOSS should not ask for, hold, or type a host password —
 so it hands over an exact command and verifies the result.
 
+In Community, OSS, and local editions, direct `install-key`, `provision`, and `retire` API
+actions are disabled even when `BOSS_SSH_HOST_DEPLOY_ALLOWED=true`. They do not yet create
+the approved Resource Plane ChangeSet, budget reservation, and ResourceReceipt required for
+remote host changes. The fleet UI shows the reason and hides those actions. The three routes
+check `providerops_manage` against the host's stored project and reject before key generation,
+SSH, or host state changes. Other editions also require the outward SSH switch.
+Fleet listings require project reader access, including when a caller supplies a different
+project ID.
+
 Two failure modes worth encoding in `preflight`, both hit on the Hetzner fleet this week and both
 of which present as "key auth is broken" when it is not:
 

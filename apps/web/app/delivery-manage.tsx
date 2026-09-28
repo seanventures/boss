@@ -996,12 +996,16 @@ export function FleetPanel({ projectId, targets = [] }: {
   const [copied, setCopied] = React.useState<string | null>(null);
   const [route, setRoute] = React.useState<Record<string, string>>({});
   const [blocker, setBlocker] = React.useState<Blocker | null>(null);
+  const [hostWritesAllowed, setHostWritesAllowed] = React.useState(false);
+  const [hostWriteBlocker, setHostWriteBlocker] = React.useState<string | null>(null);
 
   const reload = React.useCallback(async () => {
     const r = await listDeploymentHostsAction(projectId);
     if (r.ok) {
       setHosts((((r.data as any)?.hosts ?? []) as FleetHost[]));
       setBlocker(((r.data as any)?.preconditions?.blocker ?? null) as Blocker | null);
+      setHostWritesAllowed((r.data as any)?.preconditions?.host_writes_allowed === true);
+      setHostWriteBlocker((r.data as any)?.preconditions?.host_write_blocker?.message ?? null);
     }
     else setErr(r.error ?? "could not load hosts");
   }, [projectId]);
@@ -1035,6 +1039,9 @@ export function FleetPanel({ projectId, targets = [] }: {
           <strong>{blocker.message}</strong>
           <span className="detail"> Setting: <code>{blocker.setting}</code></span>
         </div>
+      ) : null}
+      {hostWriteBlocker ? (
+        <p className="detail" data-testid="fleet-host-write-blocker">{hostWriteBlocker}</p>
       ) : null}
 
       {err ? <div className="cap-badge tone-red" data-testid="fleet-error">{err}</div> : null}
@@ -1182,11 +1189,13 @@ export function FleetPanel({ projectId, targets = [] }: {
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
                       onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
-                    <ActionButton busy={busy} label="Let BOSS install its own key"
-                      busyLabel="Installing…"
-                      title="Replaces the borrowed credential with one BOSS owns and can rotate"
-                      onClick={() => run(() => installHostKeyAction(
-                        null, formOf({ host_id: h.id, backend: keyBackend })))} />
+                    {hostWritesAllowed ? (
+                      <ActionButton busy={busy} label="Let BOSS install its own key"
+                        busyLabel="Installing…"
+                        title="Replaces the borrowed credential with one BOSS owns and can rotate"
+                        onClick={() => run(() => installHostKeyAction(
+                          null, formOf({ host_id: h.id, backend: keyBackend })))} />
+                    ) : null}
                   </div>
                 </div>
               ) : null}
@@ -1199,8 +1208,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                     containers and this host has no docker.
                   </p>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <ActionButton busy={busy} label="Install docker" busyLabel="Provisioning…"
-                      onClick={() => run(() => provisionHostAction(null, formOf({ host_id: h.id })))} />
+                    {hostWritesAllowed ? (
+                      <ActionButton busy={busy} label="Install docker" busyLabel="Provisioning…"
+                        onClick={() => run(() => provisionHostAction(null, formOf({ host_id: h.id })))} />
+                    ) : null}
                     <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
                       onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
                   </div>
@@ -1245,10 +1256,8 @@ export function FleetPanel({ projectId, targets = [] }: {
                 </div>
               ) : null}
 
-              {/* Retire is available at EVERY stage, not just when Ready. Onboarding that can
-                  only be undone once it has succeeded is not undoable — the moment you most
-                  want out is halfway through, when something is wrong. */}
-              <details className="fleet-retire">
+              {/* Where direct host changes are enabled, retirement is available at every stage. */}
+              {hostWritesAllowed ? <details className="fleet-retire">
                 <summary className="detail">Retire this host…</summary>
                 <form style={{ display: "grid", gap: 6, marginTop: 6 }}
                   onSubmit={(e) => {
@@ -1288,7 +1297,7 @@ export function FleetPanel({ projectId, targets = [] }: {
                     </button>
                   </div>
                 </form>
-              </details>
+              </details> : null}
 
               {/* Findings stay visible at every stage: they are the reason for the stage.
                   Render the REMEDY as the sentence and keep the raw detail secondary — the

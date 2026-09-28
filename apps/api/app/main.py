@@ -7784,9 +7784,10 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
     """Every VM, with the apps riding on it and its last preflight verdict."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from boss_engine.services.deployment_fleet import list_hosts
+    from boss_engine.services.deployment_fleet import direct_host_writes_allowed, list_hosts
 
     with begin(engine) as connection:
+        require_project_reader(connection, project_id)
         hosts = list_hosts(connection, project_id, include_retired=include_retired)
 
     # PRECONDITIONS, STATED UP FRONT.
@@ -7797,10 +7798,22 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
     # to connect to anything. A precondition that can invalidate the whole wizard belongs
     # at the top of it, not four steps in.
     outward_ssh = bool(getattr(settings, "ssh_host_deploy_allowed", False))
+    host_writes_allowed = direct_host_writes_allowed(settings)
     return {
         "hosts": hosts,
         "preconditions": {
             "outward_ssh_allowed": outward_ssh,
+            "host_writes_allowed": host_writes_allowed,
+            "host_write_blocker": None if host_writes_allowed else {
+                "message": (
+                    "Direct host changes require BOSS_SSH_HOST_DEPLOY_ALLOWED=true."
+                    if str(getattr(settings, "boss_edition", "community")).strip().lower()
+                    in {"enterprise", "enterprise_cloud", "enterprise_self_hosted", "cloud"}
+                    else ("Direct key installation, Docker provisioning, and host retirement "
+                          "are disabled in this edition until an approved Resource Plane flow "
+                          "is available.")
+                ),
+            },
             "blocker": None if outward_ssh else {
                 "setting": "BOSS_SSH_HOST_DEPLOY_ALLOWED",
                 "message": ("BOSS is configured not to reach out over SSH, so no host can be "
@@ -7986,18 +7999,23 @@ def install_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] =
     actor = str((payload or {}).get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
-    from boss_engine.services.deployment_fleet import get_host, install_generated_key
+    from boss_engine.services.deployment_fleet import (
+        get_host, install_generated_key, require_direct_host_write_policy,
+    )
     from boss_engine.services.secret_backends import SecretUnavailable
 
     with begin(engine) as connection:
         host = get_host(connection, host_id)
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
-        require_project_actor(connection, host["project_id"], actor, "task_create")
+        require_project_actor(connection, host["project_id"], actor, "providerops_manage")
         try:
+            require_direct_host_write_policy(settings)
             return install_generated_key(
                 connection, settings, host_id=host_id,
                 backend=str((payload or {}).get("backend") or "file"), actor=actor)
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         except (SecretUnavailable, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
@@ -8014,18 +8032,23 @@ def provision_deployment_host_endpoint(host_id: str, payload: Optional[dict] = N
     actor = str((payload or {}).get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
-    from boss_engine.services.deployment_fleet import get_host, provision_host
+    from boss_engine.services.deployment_fleet import (
+        get_host, provision_host, require_direct_host_write_policy,
+    )
     from boss_engine.services.secret_backends import SecretUnavailable
 
     with begin(engine) as connection:
         host = get_host(connection, host_id)
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
-        require_project_actor(connection, host["project_id"], actor, "task_create")
+        require_project_actor(connection, host["project_id"], actor, "providerops_manage")
         try:
+            require_direct_host_write_policy(settings)
             return provision_host(
                 connection, settings, host_id=host_id,
                 install_docker=bool((payload or {}).get("install_docker", True)), actor=actor)
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         except (SecretUnavailable, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
@@ -8068,14 +8091,17 @@ def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
     actor = str(p.get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
-    from boss_engine.services.deployment_fleet import get_host, retire_host
+    from boss_engine.services.deployment_fleet import (
+        get_host, require_direct_host_write_policy, retire_host,
+    )
 
     with begin(engine) as connection:
         host = get_host(connection, host_id)
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
-        require_project_actor(connection, host["project_id"], actor, "task_create")
+        require_project_actor(connection, host["project_id"], actor, "providerops_manage")
         try:
+            require_direct_host_write_policy(settings)
             return retire_host(
                 connection, settings, host_id=host_id,
                 revoke_key=bool(p.get("revoke_key", True)),
@@ -8083,6 +8109,8 @@ def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
                 purge=bool(p.get("purge", False)),
                 force=bool(p.get("force", False)),
                 actor=actor)
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 

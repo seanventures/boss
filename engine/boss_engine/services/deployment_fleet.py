@@ -42,6 +42,33 @@ EXPIRED_PASSWORD_MARKERS = (
 )
 
 
+_DIRECT_HOST_WRITE_EDITIONS = frozenset({
+    "enterprise", "enterprise_cloud", "enterprise_self_hosted", "cloud",
+})
+_COMMUNITY_HOST_WRITE_DENIAL = (
+    "Direct deployment-host changes are disabled in Community until they use an "
+    "approved Resource Plane ChangeSet, budget reservation, and ResourceReceipt."
+)
+
+
+def direct_host_writes_allowed(settings: Settings) -> bool:
+    """Unknown editions and a disabled outward-SSH switch fail closed."""
+    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
+    return (edition in _DIRECT_HOST_WRITE_EDITIONS
+            and bool(getattr(settings, "ssh_host_deploy_allowed", False)))
+
+
+def require_direct_host_write_policy(settings: Settings) -> None:
+    """Guard the service itself so callers cannot skip the HTTP route's check."""
+    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
+    if edition not in _DIRECT_HOST_WRITE_EDITIONS:
+        raise PermissionError(_COMMUNITY_HOST_WRITE_DENIAL)
+    if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
+        raise PermissionError(
+            "BOSS_SSH_HOST_DEPLOY_ALLOWED is false — direct host changes are disabled."
+        )
+
+
 def _new_id() -> str:
     return f"dh_{uuid.uuid4().hex[:12]}"
 
@@ -321,6 +348,7 @@ def install_generated_key(connection, settings: Settings, *, host_id: str,
     `authorized_keys`. The append is done with a here-doc over the existing session rather than
     by rewriting the file — a customer's other keys on that host are not BOSS's to reorganise.
     """
+    require_direct_host_write_policy(settings)
     from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
     from .secret_backends import SecretUnavailable, resolve_target_secret
     from .secrets_service import generate_keypair
@@ -406,6 +434,7 @@ def provision_host(connection, settings: Settings, *, host_id: str,
     on purpose — checking is read-only and safe to run at any time, whereas installing packages
     changes someone's machine and should be an explicit act.
     """
+    require_direct_host_write_policy(settings)
     from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
     from .secret_backends import SecretUnavailable, resolve_target_secret
 
@@ -483,6 +512,7 @@ def retire_host(connection, settings: Settings, *, host_id: str,
     Refuses while apps are still pointed here, unless `force` — retiring a host out from under
     a running deployment is a way to discover which apps mattered.
     """
+    require_direct_host_write_policy(settings)
     from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
     from .secret_backends import SecretUnavailable, resolve_target_secret
 
