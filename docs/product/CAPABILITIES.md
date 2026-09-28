@@ -49,9 +49,10 @@ Capability-by-capability detail on the governed runtime. This is the long form; 
 
 - The comms slice now uses the canonical `outbox_messages` and `inbox_messages` tables instead of burying communication intent in chat.
 - Outbound communication follows `draft -> queued -> sending -> acked` when a real provider is enabled, or transitions to `blocked`, `retrying`, or `deadlettered` with visible events when it is not.
-- `comms.outbox.deliver` is a leased worker job kind, so real sends still require a job lease, a reservation, and a receipt.
+- Queued `comms.outbox.deliver` sends run under a worker lease, reservation, and receipt. The synchronous delivery API and SMTP test use the same outbox policy, reservation, and receipt path.
 - Slack is the first provider surface in this slice, but it is fail-closed by default behind `BOSS_SLACK_REAL_SEND_ALLOWED=false`. Real sends require both that flag and `BOSS_SLACK_WEBHOOK_URL`.
 - Email now shares the same outbox path through a real SMTP adapter, fail-closed by default behind `BOSS_EMAIL_REAL_SEND_ALLOWED=false`. Real sends require SMTP host/from-address config and optional auth credentials.
+- `POST /v1/email/test` requires a caller-supplied `dedupe_key` and `comms_manage`; it reserves the configured per-message budget before attempting delivery. Repeating a successful key returns its receipt; a failed key must be reviewed before using a new one. SMTP settings require `integration_manage`, and schedule creation/resumption requires workflow execution permission.
 - Decision digests are API-created `decision_digest` artifacts that group urgent decisions separately from lower-risk batched decisions. An optional channel creates an outbox draft only; sending still requires explicit queueing, reservation, lease, and receipt.
 - Inbox ingestion now deterministically parses decision replies. Valid replies transition the referenced decision through the same permissioned decision service as the UI; malformed or unresolvable replies become visible `inbox_message` deadletters.
 - Outbox queueing honors quiet-hours and per-channel throttling for non-urgent messages through delayed job `run_after` values. `urgent` queue requests bypass those scheduling deferrals but still require reservation, lease, and receipt before any external send.

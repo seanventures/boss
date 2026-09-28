@@ -31266,6 +31266,297 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
 
+  /v1/role-skills/sync:
+    post:
+      summary: Sync Project Role Skills
+      description: 'Give every installed agent the skills its role spec says it may use.
+
+
+        Needed because role specs and role_skills were never joined: an agent was TOLD what it
+
+        could use, in its prompt, and HELD nothing. Exposed as an endpoint and not only a bootstrap
+
+        step because every install that already exists is in that state.
+
+
+        Additive. It never removes an assignment an operator made by hand.'
+      operationId: post_v1_role_skills_sync_e9d1ba8e
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Sync Project Role Skills V1 Role Skills Sync Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/email/config:
+    get:
+      summary: Get Email Config
+      description: How this project sends email. Never returns the password — only whether one is set.
+      operationId: get_v1_email_config_fd82a747
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: executive_console
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Email Config V1 Email Config Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Set Email Config
+      description: Configure SMTP. The password goes to the secret backend, not into the row.
+      operationId: post_v1_email_config_83438be0
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Set Email Config V1 Email Config Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/email/test:
+    post:
+      summary: Test Email Config
+      description: Send a test through the governed outbox, with a receipt and a budget reservation.
+      operationId: post_v1_email_test_a1112ece
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailTestRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Test Email Config V1 Email Test Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/schedules:
+    get:
+      summary: List Workflow Schedules
+      operationId: get_v1_delivery_workflows_schedules_b6925523
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: executive_console
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Workflow Schedules V1 Delivery Workflows Schedules Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Create Workflow Schedule
+      operationId: post_v1_delivery_workflows_schedules_f08a4362
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Payload
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Workflow Schedule V1 Delivery Workflows Schedules Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/schedules/{schedule_id}/enabled:
+    post:
+      summary: Set Workflow Schedule Enabled
+      operationId: post_v1_delivery_workflows_schedules_schedule_id_enabled_87af9b15
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Set Workflow Schedule Enabled V1 Delivery Workflows Schedules  Schedule
+                  Id  Enabled Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/schedules/{schedule_id}:
+    delete:
+      summary: Delete Workflow Schedule
+      operationId: delete_v1_delivery_workflows_schedules_schedule_id_12aa552a
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: executive_console
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Delete Workflow Schedule V1 Delivery Workflows Schedules  Schedule Id  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/schedules/tick:
+    post:
+      summary: Tick Workflow Schedules
+      description: 'Start whatever is due. Called by the worker on its ordinary poll.
+
+
+        Idempotent by construction: the dedupe key is the SCHEDULED moment, so a tick that runs
+
+        twice — two workers, or one retried after a crash — produces one run.'
+      operationId: post_v1_delivery_workflows_schedules_tick_eb278814
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Tick Workflow Schedules V1 Delivery Workflows Schedules Tick Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   securitySchemes:
     BossBearerAuth:
@@ -61670,6 +61961,29 @@ components:
       - tracker
       - issue_key
       title: LinkIssueRequest
+
+    EmailTestRequest:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        to:
+          type: string
+          title: To
+        dedupe_key:
+          type: string
+          maxLength: 128
+          title: Dedupe Key
+        actor:
+          type: string
+          title: Actor
+          default: executive_console
+      type: object
+      required:
+      - project_id
+      - to
+      - dedupe_key
+      title: EmailTestRequest
 
 tags:
 - name: Tasks

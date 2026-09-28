@@ -267,7 +267,7 @@ class ControlPlaneClient:
         """Start any workflow whose schedule has come round."""
         response = self._client.post(
             "/v1/delivery-workflows/schedules/tick",
-            json={"project_id": project_id},
+            json={"project_id": project_id, "actor": "system"},
         )
         response.raise_for_status()
         return response.json()

@@ -2960,6 +2960,21 @@ class OutboxMessageCreateRequest(BaseModel):
     actor: str = "executive_console"
 
 
+class EmailTestRequest(BaseModel):
+    project_id: str
+    to: str
+    dedupe_key: str = Field(max_length=128)
+    actor: str = "executive_console"
+
+    @model_validator(mode="after")
+    def validate_test(self) -> "EmailTestRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.to = _require_text(self.to, "to")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class OutboxMessageSummary(BaseModel):
     id: str
     project_id: str

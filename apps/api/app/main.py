@@ -241,6 +241,7 @@ from .schemas import (
     EnterpriseScimUserUpsertRequest,
     EventFeedResponse,
     EventItem,
+    EmailTestRequest,
     EventSubscriptionCreateRequest,
     EventSubscriptionListResponse,
     EventSubscriptionSummary,
@@ -20225,11 +20226,12 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 # ── Email setup ───────────────────────────────────────────────────────────────
 
 @app.get("/v1/email/config")
-def get_email_config(project_id: str) -> dict:
+def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
     """How this project sends email. Never returns the password — only whether one is set."""
     from boss_engine.services import email_config
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "integration_manage")
         return email_config.describe(connection, project_id)
 
 
@@ -20241,8 +20243,10 @@ def set_email_config(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    actor = str(payload.get("actor") or "executive_console").strip()
     try:
         with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "integration_manage")
             return email_config.save(
                 connection, get_settings(), project_id=project_id,
                 host=str(payload.get("host") or ""),
@@ -20255,43 +20259,134 @@ def set_email_config(payload: dict) -> dict:
                 use_tls=bool(payload.get("use_tls", True)),
                 use_ssl=bool(payload.get("use_ssl", False)),
                 from_name=str(payload.get("from_name") or ""),
-                actor=str(payload.get("actor") or "operator"))
+                actor=actor)
     except email_config.EmailConfigError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/v1/email/test")
-def test_email_config(payload: dict) -> dict:
-    """Send one real message, so "configured" and "working" are not the same claim.
-
-    A mail server accepts a TCP connection long before it accepts a login, and a wrong password
-    or a blocked port is something an operator should learn now rather than when a newsletter
-    silently fails at 8am on a Monday.
-    """
-    from boss_engine.services.email_adapter import EmailAdapter
+def test_email_config(payload: EmailTestRequest) -> dict:
+    """Send a test through the governed outbox, with a receipt and a budget reservation."""
     from boss_engine.services import email_config
+    from boss_engine.services.comms import CommsService
+    from boss_engine.services.github_adapter import IntegrationConfigurationError
 
-    project_id = str(payload.get("project_id") or "").strip()
-    to = str(payload.get("to") or "").strip()
-    if not project_id or not to:
-        raise HTTPException(status_code=400, detail="project_id and to are required")
-    with begin(engine) as connection:
-        settings = email_config.settings_for(connection, get_settings(), project_id)
-    try:
-        message_id = EmailAdapter(settings).send_message(
-            to if to.startswith("email:") else f"email:{to}", "BOSS test message",
-            "This is BOSS checking that it can send email from this project.\n\n"
+    project_id = payload.project_id
+    to = payload.to
+    dedupe_key = payload.dedupe_key
+    actor = payload.actor
+
+    subject = "BOSS test message"
+    body = ("This is BOSS checking that it can send email from this project.\n\n"
             "If you are reading it, sending works.")
-    except Exception as error:  # noqa: BLE001 — the server's own words are the useful part
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return {"sent": True, "to": to, "message_id": message_id}
+    outbox_key = f"email-test-outbox:{project_id}:{dedupe_key}"
+    effect_key = f"email-test-delivery:{project_id}:{dedupe_key}"
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "comms_manage")
+        scoped_settings = email_config.settings_for(connection, get_settings(), project_id)
+        delivery = CommsService(scoped_settings)
+        try:
+            recipient = delivery.email._recipient_from_channel(
+                to if to.startswith("email:") else f"email:{to}")
+        except IntegrationConfigurationError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        channel = f"email:{recipient}"
+
+        # The unique outbox key serializes concurrent retries. Never reuse one request key
+        # for a different recipient, and never reserve budget for an acknowledged send.
+        created_id = connection.execute(
+            text("""
+                INSERT INTO outbox_messages
+                    (id, project_id, channel, subject, body, status, data_boundary, dedupe_key)
+                VALUES (:id, :project_id, :channel, :subject, :body,
+                        'draft', 'internal', :dedupe_key)
+                ON CONFLICT (project_id, dedupe_key) DO NOTHING
+                RETURNING id
+            """),
+            {"id": make_id("out"), "project_id": project_id, "channel": channel,
+             "subject": subject, "body": body, "dedupe_key": outbox_key},
+        ).scalar_one_or_none()
+        if created_id:
+            emit_event(connection, project_id, "outbox.created", actor,
+                       "outbox_message", created_id,
+                       {"channel": channel, "data_boundary": "internal"})
+        message = connection.execute(
+            text("""
+                SELECT id, channel, subject, body, status, receipt_id
+                FROM outbox_messages
+                WHERE project_id = :project_id AND dedupe_key = :dedupe_key
+                FOR UPDATE
+            """),
+            {"project_id": project_id, "dedupe_key": outbox_key},
+        ).mappings().one()
+        if (message["channel"], message["subject"], message["body"]) != (
+            channel, subject, body
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={"sent": False, "detail": "dedupe_key belongs to a different test"},
+            )
+        if message["receipt_id"]:
+            receipt = connection.execute(
+                text("""
+                    SELECT status, provider_ref FROM receipts
+                    WHERE id = :receipt_id AND project_id = :project_id
+                """),
+                {"receipt_id": message["receipt_id"], "project_id": project_id},
+            ).mappings().first()
+            if receipt and receipt["status"] == "succeeded":
+                return {"sent": True, "to": recipient, "message_id": receipt["provider_ref"],
+                        "outbox_message_id": message["id"],
+                        "receipt_id": message["receipt_id"], "status": "reused"}
+            # An SMTP failure may happen after the provider accepted the message. Reusing
+            # that receipt for another send could deliver twice, so leave it for review.
+            detail = (
+                "prior test delivery failed; inspect the receipt and use a new dedupe_key"
+                if receipt and receipt["status"] == "failed"
+                else "test delivery is unresolved"
+            )
+            return JSONResponse(
+                status_code=409,
+                content={"sent": False, "detail": detail,
+                         "outbox_message_id": message["id"],
+                         "receipt_id": message["receipt_id"]},
+            )
+
+        reservation = delivery.budget.reserve(
+            connection, project_id, "comms",
+            scoped_settings.comms_message_budget_usd_micros,
+            "Send one SMTP configuration test message", 15,
+        )
+        if reservation["status"] != "reserved":
+            return JSONResponse(
+                status_code=409,
+                content={"sent": False, "detail": reservation["message"],
+                         "decision_id": reservation.get("decision_id"),
+                         "outbox_message_id": message["id"]},
+            )
+        result = delivery.deliver_outbox_message(
+            connection, project_id, message["id"],
+            reservation["reservation_id"], effect_key,
+        )
+        if result["status"] in {"created", "reused"}:
+            return {"sent": True, "to": recipient, "message_id": result["provider_ref"],
+                    "outbox_message_id": message["id"],
+                    "receipt_id": result["receipt_id"], "status": result["status"]}
+        return JSONResponse(
+            status_code=409,
+            content={"sent": False, "detail": result.get("message") or result["status"],
+                     "decision_id": result.get("decision_id"),
+                     "receipt_id": result.get("receipt_id"),
+                     "outbox_message_id": message["id"]},
+        )
 
 
 @app.get("/v1/delivery-workflows/schedules")
-def list_workflow_schedules(project_id: str) -> dict:
+def list_workflow_schedules(project_id: str, actor: str = "executive_console") -> dict:
     from boss_engine.services import workflow_schedules as schedules
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         return {"schedules": schedules.list_schedules(connection, project_id)}
 
 
@@ -20302,8 +20397,13 @@ def create_workflow_schedule(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    actor = str(payload.get("actor") or "executive_console").strip()
+    enabled = bool(payload.get("enabled", True))
     try:
         with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_manage")
+            if enabled:
+                require_project_actor(connection, project_id, actor, "workflow_execute")
             return schedules.create(
                 connection,
                 project_id=project_id,
@@ -20315,8 +20415,8 @@ def create_workflow_schedule(payload: dict) -> dict:
                 weekday=payload.get("weekday"),
                 tz_name=str(payload.get("timezone") or "UTC"),
                 input_data=payload.get("input") or {},
-                enabled=bool(payload.get("enabled", True)),
-                actor=str(payload.get("actor") or "operator"),
+                enabled=enabled,
+                actor=actor,
             )
     except schedules.ScheduleError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -20329,21 +20429,26 @@ def set_workflow_schedule_enabled(schedule_id: str, payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    actor = str(payload.get("actor") or "executive_console").strip()
+    enabled = bool(payload.get("enabled", True))
     try:
         with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_manage")
+            if enabled:
+                require_project_actor(connection, project_id, actor, "workflow_execute")
             return schedules.set_enabled(
-                connection, project_id, schedule_id, bool(payload.get("enabled", True)),
-                str(payload.get("actor") or "operator"))
+                connection, project_id, schedule_id, enabled, actor)
     except schedules.ScheduleError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.delete("/v1/delivery-workflows/schedules/{schedule_id}")
 def delete_workflow_schedule(schedule_id: str, project_id: str,
-                             actor: str = "operator") -> dict:
+                             actor: str = "executive_console") -> dict:
     from boss_engine.services import workflow_schedules as schedules
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         if not schedules.delete(connection, project_id, schedule_id, actor):
             raise HTTPException(status_code=404, detail=f"no schedule '{schedule_id}'")
     return {"deleted": schedule_id}
@@ -20361,7 +20466,11 @@ def tick_workflow_schedules(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    # The worker may share a principal-bound API key with an operator in a local install.
+    # Use that authenticated identity for authorization rather than trusting a claimed actor.
+    actor = current_api_principal.get() or str(payload.get("actor") or "system").strip()
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
         started = schedules.run_due(connection, project_id=project_id)
     return {"started": started, "count": len(started)}
 
