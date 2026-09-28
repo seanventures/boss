@@ -9,6 +9,7 @@ import pytest
 
 from boss_engine.services import mobile_device
 from boss_engine.services.mobile_device import MobileDeviceError
+from boss_engine.services.scheduling import NICE_LEVEL
 from boss_engine.services.skill_executors import (
     SkillExecutorContext,
     execute_mobile_device,
@@ -79,10 +80,13 @@ def fake_tools(monkeypatch, *, ios: bool = False):
     calls = []
 
     def run(argv, **kwargs):
-        calls.append(argv)
-        if argv[0] == "/tool/adb" and argv[1:] == ["devices"]:
+        # Keep these action tests focused on the typed device command; the scheduling prefix
+        # is asserted separately for both subprocess branches below.
+        command = argv[next(i for i, part in enumerate(argv) if part.startswith("/tool/")):]
+        calls.append(command)
+        if command[0] == "/tool/adb" and command[1:] == ["devices"]:
             data = b"List of devices attached\nemulator-5554\tdevice\n"
-        elif argv[0] == "/tool/xcrun" and argv[1:5] == [
+        elif command[0] == "/tool/xcrun" and command[1:5] == [
             "simctl", "list", "devices", "booted"
         ]:
             data = json.dumps({"devices": {"iOS": [{"udid": IOS_ID}]}}).encode()
@@ -97,6 +101,38 @@ def fake_tools(monkeypatch, *, ios: bool = False):
     monkeypatch.setattr(mobile_device.subprocess, "run", run)
     monkeypatch.setattr(mobile_device.platform, "system", lambda: "Darwin" if ios else "Linux")
     return calls
+
+
+@pytest.mark.parametrize("file_output", [False, True])
+def test_local_device_tools_yield_to_the_control_plane_in_both_output_modes(
+    monkeypatch, tmp_path, file_output
+):
+    commands = []
+
+    def run(argv, **kwargs):
+        commands.append((argv, kwargs))
+        if file_output:
+            kwargs["stdout"].write(b"device output")
+        return subprocess.CompletedProcess(argv, 0, b"device output", b"")
+
+    monkeypatch.setattr(mobile_device.subprocess, "run", run)
+    monkeypatch.setattr(mobile_device.shutil, "which", lambda _name: None)
+    ctx, _ = context(tmp_path)
+    adapter = mobile_device.LocalMobileDeviceAdapter(ctx)
+    output = tmp_path / "device.txt" if file_output else None
+
+    result = adapter._run(["/tool/adb", "devices"], output=output)
+
+    assert len(commands) == 1
+    argv, options = commands[0]
+    assert argv == ["nice", "-n", NICE_LEVEL, "/tool/adb", "devices"]
+    assert options["timeout"] == 60
+    assert options["check"] is False
+    if file_output:
+        assert output.read_bytes() == b"device output"
+        assert result == ""
+    else:
+        assert result == "device output"
 
 
 def test_android_tap_is_executable_receipted_and_not_replayed(monkeypatch, tmp_path):
@@ -218,7 +254,8 @@ def test_android_instrumentation_runs_and_records_test_evidence(monkeypatch, tmp
 
     def run(argv, **kwargs):
         if "instrument" in argv:
-            calls.append(argv)
+            calls.append(argv[next(i for i, part in enumerate(argv)
+                                   if part.startswith("/tool/")):])
             kwargs["stdout"].write(b"Time: 0.1\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n")
             return subprocess.CompletedProcess(argv, 0, b"", b"")
         return original(argv, **kwargs)

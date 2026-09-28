@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 
 from .core import emit_event, make_id
+from .scheduling import low_priority
 from .skill_executors import SkillExecutorConfigurationError, SkillExecutorContext
 
 
@@ -71,10 +72,12 @@ class LocalMobileDeviceAdapter:
     def _run(
         self, argv: list[str], *, output: Path | None = None, timeout: int = _TIMEOUT_SECONDS
     ) -> str:
+        # Simulator tests and evidence capture share a host with the control plane. Keep their
+        # local tool processes from starving its API and worker, including the file-output path.
         try:
             if output is None:
                 completed = subprocess.run(
-                    argv, capture_output=True, timeout=timeout,
+                    low_priority(argv), capture_output=True, timeout=timeout,
                     env=_host_environment(), check=False,
                 )
                 stdout = completed.stdout
@@ -82,7 +85,7 @@ class LocalMobileDeviceAdapter:
                 with output.open("wb") as destination:
                     os.chmod(output, 0o600)
                     completed = subprocess.run(
-                        argv, stdout=destination, stderr=subprocess.PIPE,
+                        low_priority(argv), stdout=destination, stderr=subprocess.PIPE,
                         timeout=timeout, env=_host_environment(), check=False,
                     )
                 stdout = b""

@@ -8,6 +8,10 @@ deduplicated Receipt per job before calling a device tool. Its failure remains
 visible in the Receipt and skill invocation. Local device tools receive a
 minimal environment and fixed argument arrays; no caller-supplied shell
 command or host path is accepted.
+Device tool subprocesses use the shared low-priority scheduler so simulator
+tests and evidence capture yield CPU (and, where supported, disk) to the API
+and worker on the same host. Scheduling does not change the requested action
+or device target.
 
 ## Supported actions
 
