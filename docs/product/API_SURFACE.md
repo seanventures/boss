@@ -61,6 +61,14 @@ and Enterprise mounts 1,022. TUI and MCP discovery can use this inventory,
 while the API remains the authority for authentication, project scope, edition
 gates, approval, budget, and receipts.
 
+The private static contract keeps curated operation text and IDs, but takes
+declared path/query parameters and typed request bodies from the mounted
+Enterprise routes. Its generator retains documented bodies for handlers that
+read a raw `Request` (SAML, SCIM, and signed webhooks), and field guidance for
+existing `payload: dict` handlers whose live schema only says "object". New
+operator routes should use typed request models so live `/openapi.json`, TUI,
+and MCP clients can show the same required fields as the static contract.
+
 ---
 
 ## Authentication (product view)

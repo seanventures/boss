@@ -1,11 +1,50 @@
-"""Release boundary checks for the generated Community HTTP contract."""
+"""Release boundary checks for the edition HTTP contracts."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+RAW_BODY_OPERATIONS = {
+    ("post", "/saml/v2/{project_id}/acs"),
+    ("post", "/v1/reliability/alert"),
+    ("post", "/scim/v2/{project_id}/Groups"),
+    ("put", "/scim/v2/{project_id}/Groups/{group_id}"),
+    ("post", "/scim/v2/{project_id}/Users"),
+    ("put", "/scim/v2/{project_id}/Users/{user_id}"),
+    ("post", "/v1/webhooks/inbound/{source}"),
+    ("post", "/v1/webhooks/github"),
+    ("post", "/v1/webhooks/bitbucket"),
+    ("post", "/v1/webhooks/plane"),
+}
+RAW_HEADER_OPERATIONS = {
+    ("post", "/v1/webhooks/inbound/{source}"),
+    ("post", "/v1/webhooks/github"),
+}
+
+
+def _mounted_enterprise_schema() -> dict:
+    """Import a fresh enterprise app, independent of other tests' edition."""
+    env = os.environ.copy()
+    env["BOSS_EDITION"] = "enterprise"
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "apps/api"), str(ROOT / "engine")))
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            "import json; from app.main import app; print(json.dumps(app.openapi()))",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+    )
+    return json.loads(output)
 
 
 def test_community_schema_contains_only_mounted_shared_identity_routes():
@@ -53,6 +92,84 @@ def test_private_schema_names_every_operation_uniquely():
     operation_ids = [operation.get("operationId") for operation in operations]
     assert all(operation_ids)
     assert len(operation_ids) == len(set(operation_ids))
+
+
+def test_private_request_inputs_match_mounted_enterprise_routes():
+    static = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())["paths"]
+    mounted = _mounted_enterprise_schema()["paths"]
+    methods = {"get", "post", "put", "patch", "delete", "head", "options"}
+    mounted_ops = {
+        (method, path): operation
+        for path, path_item in mounted.items()
+        for method, operation in path_item.items()
+        if method in methods
+    }
+    static_ops = {
+        (method, path): operation
+        for path, path_item in static.items()
+        for method, operation in path_item.items()
+        if method in methods
+    }
+    assert static_ops.keys() == mounted_ops.keys()
+
+    for key, live_operation in mounted_ops.items():
+        documented = static_ops[key]
+        live_params = {
+            (parameter["in"], parameter["name"]): parameter
+            for parameter in live_operation.get("parameters", [])
+        }
+        documented_params = {
+            (parameter["in"], parameter["name"]): parameter
+            for parameter in documented.get("parameters", [])
+        }
+        assert live_params.keys() <= documented_params.keys(), key
+        extra_params = documented_params.keys() - live_params.keys()
+        if key in RAW_HEADER_OPERATIONS:
+            assert all(location == "header" for location, _ in extra_params), key
+        else:
+            assert not extra_params, key
+        for identity, parameter in live_params.items():
+            actual = documented_params[identity].copy()
+            if "description" not in parameter:
+                actual.pop("description", None)
+            assert actual == parameter, (key, identity)
+
+        live_body = live_operation.get("requestBody")
+        documented_body = documented.get("requestBody")
+        if live_body is not None:
+            runtime_content = live_body.get("content", {})
+            runtime_json = runtime_content.get("application/json", {}).get("schema", {})
+            documented_json = (
+                (documented_body or {})
+                .get("content", {})
+                .get("application/json", {})
+                .get("schema", {})
+            )
+            if (
+                len(runtime_content) == 1
+                and runtime_json.get("type") == "object"
+                and runtime_json.get("additionalProperties") is True
+                and not runtime_json.get("properties")
+                and documented_json.get("properties")
+            ):
+                # `payload: dict` exposes no fields to FastAPI. The private
+                # contract retains manually documented accepted fields.
+                assert documented_body["required"] == live_body.get("required", False), key
+                assert documented_json["additionalProperties"] is True, key
+                assert documented_body["content"].keys() == runtime_content.keys(), key
+            else:
+                assert documented_body == live_body, key
+        elif key in RAW_BODY_OPERATIONS:
+            assert documented_body and documented_body["required"] is True, key
+        else:
+            assert documented_body is None, key
+
+    assert static_ops[("post", "/v1/workflows")]["requestBody"]["required"] is True
+    assert static_ops[("get", "/v1/workflows")]["parameters"]
+    assert "desired_workers" in static_ops[("post", "/v1/elastic/capacity")][
+        "requestBody"
+    ]["content"]["application/json"]["schema"]["properties"]
+    assert "requestBody" not in static_ops[("post", "/v1/reliability/meta-eval")]
 
 
 def test_live_openapi_names_mounted_operations_without_shadowed_handlers():

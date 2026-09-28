@@ -13,6 +13,7 @@ import argparse
 import os
 import re
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -27,6 +28,37 @@ from boss_engine.services.api_operation_ids import (  # noqa: E402
 
 PRIVATE_SCHEMA = ROOT / "api/openapi.yaml"
 COMMUNITY_SCHEMA = ROOT / "api/openapi.community.yaml"
+
+# FastAPI cannot infer bodies read from a raw Request. These existing curated
+# contracts document real protocol inputs, so keep them when the live schema
+# has no requestBody. Every other existing input follows the mounted route.
+RAW_REQUEST_BODY_OPERATIONS = frozenset(
+    {
+        ("post", "/saml/v2/{project_id}/acs"),
+        ("post", "/v1/reliability/alert"),
+        ("post", "/scim/v2/{project_id}/Groups"),
+        ("put", "/scim/v2/{project_id}/Groups/{group_id}"),
+        ("post", "/scim/v2/{project_id}/Users"),
+        ("put", "/scim/v2/{project_id}/Users/{user_id}"),
+        ("post", "/v1/webhooks/inbound/{source}"),
+        ("post", "/v1/webhooks/github"),
+        ("post", "/v1/webhooks/bitbucket"),
+        ("post", "/v1/webhooks/plane"),
+    }
+)
+RAW_REQUEST_HEADER_OPERATIONS = frozenset(
+    {
+        ("post", "/v1/webhooks/inbound/{source}"),
+        ("post", "/v1/webhooks/github"),
+    }
+)
+
+
+class _NoAliasDumper(yaml.SafeDumper):
+    """A spliced field must not reuse anchor names elsewhere in the document."""
+
+    def ignore_aliases(self, data: object) -> bool:
+        return True
 
 
 def mounted_schema(edition: str) -> dict:
@@ -82,6 +114,141 @@ def add_missing_private_operation_ids(rendered: str, mounted: dict) -> str:
     ):
         raise ValueError("private contract still has unnamed operations")
     return updated
+
+
+def private_operation_inputs(
+    method: str, path: str, static: dict, runtime: dict
+) -> dict[str, object]:
+    """Use declared runtime inputs, plus documented raw-Request protocol inputs."""
+    result: dict[str, object] = {}
+    runtime_parameters = runtime.get("parameters") or []
+    static_parameters = static.get("parameters") or []
+    static_by_identity = {
+        (parameter.get("in"), parameter.get("name")): parameter
+        for parameter in static_parameters
+    }
+    parameters = []
+    for runtime_parameter in runtime_parameters:
+        parameter = runtime_parameter.copy()
+        old = static_by_identity.get((parameter.get("in"), parameter.get("name")))
+        if old and "description" not in parameter and old.get("description"):
+            parameter["description"] = old["description"]
+        parameters.append(parameter)
+    if (method, path) in RAW_REQUEST_HEADER_OPERATIONS:
+        parameters.extend(
+            parameter
+            for parameter in static_parameters
+            if parameter.get("in") == "header"
+            and (parameter.get("in"), parameter.get("name"))
+            not in {(item.get("in"), item.get("name")) for item in parameters}
+        )
+    if parameters:
+        result["parameters"] = parameters
+
+    if runtime.get("requestBody"):
+        body = runtime["requestBody"]
+        runtime_content = body.get("content", {})
+        runtime_json = runtime_content.get("application/json", {}).get("schema", {})
+        static_body = static.get("requestBody") or {}
+        static_json = (
+            static_body.get("content", {}).get("application/json", {}).get("schema", {})
+        )
+        # A `payload: dict` handler has no field schema for FastAPI to emit.
+        # Preserve its more useful curated field map, while inheriting the
+        # runtime's body-required flag and open-object acceptance.
+        if (
+            len(runtime_content) == 1
+            and runtime_json.get("type") == "object"
+            and runtime_json.get("additionalProperties") is True
+            and not runtime_json.get("properties")
+            and static_json.get("type") == "object"
+            and static_json.get("properties")
+        ):
+            body = deepcopy(static_body)
+            body["required"] = runtime["requestBody"].get("required", False)
+            body["content"]["application/json"]["schema"]["additionalProperties"] = True
+        result["requestBody"] = body
+    elif (method, path) in RAW_REQUEST_BODY_OPERATIONS:
+        if not static.get("requestBody"):
+            raise ValueError(f"Missing raw-Request body contract: {method.upper()} {path}")
+        body = static["requestBody"].copy()
+        body["required"] = True
+        result["requestBody"] = body
+    return result
+
+
+def _field_span(block: str, field: str) -> tuple[int, int] | None:
+    """Locate one operation-level YAML field without touching nested fields."""
+    match = re.search(rf"(?m)^      {re.escape(field)}:(?:[^\n]*)\n", block)
+    if not match:
+        return None
+    next_field = re.search(r"(?m)^      [A-Za-z][A-Za-z0-9_-]*:(?:[^\n]*)\n", block[match.end() :])
+    end = match.end() + next_field.start() if next_field else len(block)
+    return match.start(), end
+
+
+def _replace_operation_input(block: str, field: str, value: object | None) -> str:
+    span = _field_span(block, field)
+    replacement = (
+        "".join(
+            "      " + line + "\n"
+            for line in yaml.dump(
+                {field: value}, Dumper=_NoAliasDumper, sort_keys=False, allow_unicode=True, width=100
+            ).splitlines()
+        )
+        if value is not None
+        else ""
+    )
+    if span:
+        return block[: span[0]] + replacement + block[span[1] :]
+    if value is None:
+        return block
+    before = ("requestBody", "responses") if field == "parameters" else ("responses",)
+    insertion = next(
+        (location[0] for name in before if (location := _field_span(block, name))),
+        len(block),
+    )
+    return block[:insertion] + replacement + block[insertion:]
+
+
+def sync_private_operation_inputs(rendered: str, mounted: dict) -> str:
+    """Splice request inputs without reformatting curated operations or responses."""
+    static_paths = yaml.safe_load(rendered)["paths"]
+    spans: list[tuple[int, int, str, str]] = []
+    current_path: str | None = None
+    active: tuple[int, str, str] | None = None
+    offset = 0
+    for line in rendered.splitlines(keepends=True):
+        path_match = re.fullmatch(r"  (/[^\n:]+):\s*\n", line)
+        method_match = re.fullmatch(r"    (get|post|put|patch|delete|head|options):\s*\n", line)
+        if path_match or method_match or line == "components:\n":
+            if active:
+                start, path, method = active
+                spans.append((start, offset, path, method))
+                active = None
+        if path_match:
+            current_path = path_match.group(1)
+        elif line == "components:\n":
+            current_path = None
+        elif method_match and current_path:
+            active = (offset, current_path, method_match.group(1))
+        offset += len(line)
+    if active:
+        start, path, method = active
+        spans.append((start, len(rendered), path, method))
+
+    for start, end, path, method in reversed(spans):
+        static = static_paths[path][method]
+        runtime = mounted["paths"][path][method]
+        desired = private_operation_inputs(method, path, static, runtime)
+        if all(static.get(field) == desired.get(field) for field in ("parameters", "requestBody")):
+            continue
+        block = rendered[start:end]
+        for field in ("parameters", "requestBody"):
+            if static.get(field) != desired.get(field):
+                block = _replace_operation_input(block, field, desired.get(field))
+        rendered = rendered[:start] + block + rendered[end:]
+    return rendered
 
 
 def render_private(original: str, existing: dict, mounted: dict) -> str:
@@ -145,6 +312,7 @@ def render_private(original: str, existing: dict, mounted: dict) -> str:
         "BOSS Control Plane API for the current 0.14.0 product release.",
     )
     rendered = add_missing_private_operation_ids(rendered, mounted)
+    rendered = sync_private_operation_inputs(rendered, mounted)
     return "\n".join(line.rstrip() for line in rendered.splitlines()) + "\n"
 
 
@@ -208,15 +376,14 @@ def main() -> int:
                 document, yaml.safe_load(destination.read_text(encoding="utf-8"))
             )
         rendered = yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100)
+    operation_count = len(operations(yaml.safe_load(rendered)))
     if args.check:
         if not destination.exists() or destination.read_text(encoding="utf-8") != rendered:
             print(f"OpenAPI contract stale: {destination}", file=sys.stderr)
             return 1
-        operation_count = len(operations(yaml.safe_load(rendered)))
         print(f"OpenAPI contract current: {destination} ({operation_count} operations)")
         return 0
     destination.write_text(rendered, encoding="utf-8")
-    operation_count = len(operations(yaml.safe_load(rendered)))
     print(f"Wrote {destination} ({operation_count} operations)")
     return 0
 
