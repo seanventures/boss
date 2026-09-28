@@ -58,16 +58,29 @@ printf "\n${B}BOSS checkup${N}  (%s)\n\n" "$API"
 # healthy install that runs neither is still a healthy install. The first version of this
 # check hardcoded "expected 6" and failed a correct install — exactly the kind of wrong
 # confident answer a checkup must not give.
-missing=""
-for svc in db api worker; do
-  docker ps --filter "name=boss-community-${svc}-" --format '{{.Names}}' 2>/dev/null \
-    | grep -q . || missing="$missing $svc"
-done
-running=$(docker ps --filter "name=boss-community" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
-if [ -z "$missing" ]; then
-  ok "containers: $running running (db, api, worker required; web and secrets are optional)"
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
+  else
+    DOCKER=()
+  fi
+fi
+compiled=""
+if [ "${#DOCKER[@]}" -eq 0 ]; then
+  bad "containers: Docker is unavailable (start Docker or run this checkup with sudo)"
 else
-  bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)"
+  missing=""
+  for svc in db api worker; do
+    "${DOCKER[@]}" ps --filter "name=boss-community-${svc}-" --format '{{.Names}}' 2>/dev/null \
+      | grep -q . || missing="$missing $svc"
+  done
+  running=$("${DOCKER[@]}" ps --filter "name=boss-community" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
+  if [ -z "$missing" ]; then
+    ok "containers: $running running (db, api, worker required; web and secrets are optional)"
+  else
+    bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)"
+  fi
 fi
 
 # 2. the API answers
@@ -82,7 +95,9 @@ else bad "api: no answer on $API/health"; fi
 # printed as `console: http://host:8000`, which reads as "the console is there" — so an
 # operator opened :8000, got {"detail":"Not Found"} from the API, and reasonably concluded the
 # install was broken. It was fine. That is the API port; the console is on WEB_PORT.
-compiled=$(docker exec boss-community-web-1 printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null || echo "")
+if [ "${#DOCKER[@]}" -gt 0 ]; then
+  compiled=$("${DOCKER[@]}" exec boss-community-web-1 printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null || echo "")
+fi
 if [ -z "$compiled" ]; then warn "console → API: could not read the address it was built with (web container not running?)"
 elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
   if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${BOSS_PUBLIC_URL:-}" ]; then
