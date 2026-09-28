@@ -26,6 +26,7 @@ from .bootstrap_ports import build_ports
 from .config import get_settings
 from .db import begin, database_is_reachable, ensure_schema, get_engine
 from .routers import mount_edition_routers
+from .routers.route_ownership import ENTERPRISE_EDITIONS
 from .routers.governance import build_governance_router
 from .routers.platform import mount_platform_routers
 from .schemas import (
@@ -43,19 +44,6 @@ from .schemas import (
     ArtifactSummary,
     AuthSessionResponse,
     SamlLoginResponse,
-    AccountConnectAuthSessionCompleteRequest,
-    AccountConnectAuthSessionCreateRequest,
-    AccountConnectAuthSessionListResponse,
-    AccountConnectAuthSessionSummary,
-    AccountConnectHealthCheckListResponse,
-    AccountConnectHealthCheckRunRequest,
-    AccountConnectHealthCheckSummary,
-    AccountConnectLinkRequest,
-    AccountConnectBillingPortalSessionCreateRequest,
-    AccountConnectBillingPortalSessionListResponse,
-    AccountConnectBillingPortalSessionSummary,
-    AccountConnectMutationResponse,
-    AccountConnectSyncRequest,
     ReliabilityScanRequest,
     ReliabilityScanResponse,
     ReliabilityIncidentListResponse,
@@ -90,12 +78,6 @@ from .schemas import (
     KnowledgeGraphSeedFromInfraRequest,
     KnowledgeGraphSeedFromInfraResponse,
     KnowledgeRetrievalEvalResponse,
-    AccountConnectSyncResponse,
-    AccountConnectTeamInviteCreateRequest,
-    AccountConnectTeamInviteListResponse,
-    AccountConnectTeamInviteRevokeRequest,
-    AccountConnectTeamInviteSummary,
-    AccountConnectUnlinkRequest,
     AuditExportCounts,
     AuditExportResponse,
     AuditSummaryResponse,
@@ -245,12 +227,6 @@ from .schemas import (
     ModelGatewayLeaseReleaseRequest,
     ModelGatewayLeaseSummary,
     ModelGatewayUsageResponse,
-    EnterpriseClusterListResponse,
-    EnterpriseClusterSummary,
-    EnterpriseClusterValidationRunCreateRequest,
-    EnterpriseClusterValidationRunListResponse,
-    EnterpriseClusterValidationRunSummary,
-    EnterpriseClusterUpsertRequest,
     EnterpriseIdentityRolloutPolicyListResponse,
     EnterpriseIdentityRolloutPolicySummary,
     EnterpriseIdentityRolloutPolicyUpsertRequest,
@@ -263,10 +239,6 @@ from .schemas import (
     EnterpriseScimUserListResponse,
     EnterpriseScimUserSummary,
     EnterpriseScimUserUpsertRequest,
-    EnterpriseSupportCaseCreateRequest,
-    EnterpriseSupportCaseListResponse,
-    EnterpriseSupportCaseSummary,
-    EnterpriseSupportCaseUpdateRequest,
     EventFeedResponse,
     EventItem,
     EventSubscriptionCreateRequest,
@@ -350,12 +322,6 @@ from .schemas import (
     HealthSnapshotListResponse,
     HealthSnapshotRefreshRequest,
     HealthSnapshotSummary,
-    HostedMarketplaceListingListResponse,
-    HostedMarketplaceListingSummary,
-    HostedMarketplaceSyncRequest,
-    HostedMarketplaceSyncResponse,
-    HostedMarketplaceSyncRunListResponse,
-    HostedMarketplaceSyncRunSummary,
     InfraJanitorRunRequest,
     InfraJanitorRunResponse,
     InfraProvisionJobRequest,
@@ -399,7 +365,6 @@ from .schemas import (
     MeetingRunRequest,
     MeetingSweepRequest,
     MeetingTallyRequest,
-    SOC2EvidenceRequest,
     MeetingSummary,
     OpsDigestRequest,
     OpsDigestResponse,
@@ -685,15 +650,9 @@ from .services.comms import (
     InvalidCreatedByJobError,
     OutboxMessageNotFoundError,
 )
-from .services.commercial import (
-    AccountConnectAuthSessionNotFoundError,
-    AccountConnectAuthSessionStateError,
-    AccountConnectConfigurationError,
-    AccountConnectLinkNotFoundError,
-    AccountConnectSyncError,
-    CommercialService,
-)
-from boss_engine.services.cloud_product import CloudLinkRequiredError, CloudProductService
+from boss_engine.services.community_edition import CommunityEditionService
+from boss_engine.services.community_cloud import CommunityCloudService
+from .routers.cloud import register_community_cloud_routes
 from .services.core import stable_dedupe_key, emit_event, make_id
 from .services.deadletters import DeadletterRemediationService
 from .services.docs_agent import DocsUpdateService
@@ -712,7 +671,7 @@ from .services.entitlements import (
     InvalidEntitlementConnectionError,
     SkillNotFoundError,
 )
-from .services.enterprise import EnterpriseService
+from boss_engine.services.self_hosted_identity import SelfHostedIdentityService
 from .services.health import HealthSnapshotService
 from .services.event_subscription_service import (
     create_event_subscription,
@@ -869,7 +828,6 @@ from .services import factory_scale
 from .services.factory_scale import FactoryScaleService
 from .services.dashboard import DashboardService
 from .services.finops_reconciler import FinopsReconcilerService
-from .services.soc2 import SOC2EvidenceService
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -931,15 +889,26 @@ github_reconciler = GitHubReconciliationService(
 )
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
-specpack = SpecPackService(settings)
+if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .services.commercial import CommercialService
+    from boss_engine.services.cloud_product import CloudProductService
+
+    commercial = CommercialService(settings)
+    cloud_product = CloudProductService(settings, commercial)
+else:
+    commercial = CommunityEditionService(settings)
+    cloud_product = CommunityCloudService(settings, commercial)
+specpack = SpecPackService(settings, edition_service=commercial)
 agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
 model_gateway = ModelGatewayService(settings)
 capability_bundles = CapabilityBundleService(settings)
-commercial = CommercialService(settings)
-cloud_product = CloudProductService(settings, commercial)
-enterprise = EnterpriseService(settings)
+enterprise = SelfHostedIdentityService(settings)
 audit = AuditTrailService(settings)
+if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from boss_engine.services.enterprise_audit import EnterpriseAuditTrailService
+
+    audit = EnterpriseAuditTrailService(settings)
 comms = CommsService(settings)
 infrastructure = InfrastructureService(settings)
 reliability = ReliabilityService(settings)
@@ -957,7 +926,6 @@ slack_comms = SlackCommsService(settings)
 factory_scale_service = FactoryScaleService(settings)
 dashboard_service = DashboardService(settings)
 finops_reconciler = FinopsReconcilerService(settings)
-soc2_evidence = SOC2EvidenceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -1781,71 +1749,6 @@ def record_policy_denial(
         return
 
 
-def record_account_connect_sync_denial(project_id: str, actor: str, reason: str) -> None:
-    try:
-        with begin(engine) as audit_connection:
-            project_exists = audit_connection.execute(
-                text("SELECT 1 FROM projects WHERE id = :project_id"),
-                {"project_id": project_id},
-            ).first()
-            if not project_exists:
-                return
-            emit_event(
-                audit_connection,
-                project_id,
-                "account_connect.sync_denied",
-                actor,
-                "account_connect_org",
-                project_id,
-                {"reason": reason},
-            )
-    except Exception as audit_error:
-        LOGGER.exception(
-            "account_connect_sync_denial_audit_write_failed project_id=%s actor=%s reason=%s",
-            project_id,
-            actor,
-            reason,
-            exc_info=audit_error,
-        )
-        return
-
-
-def record_account_connect_denial(
-    project_id: str,
-    actor: str,
-    event_type: str,
-    reason: str,
-    entity_type: str,
-) -> None:
-    try:
-        with begin(engine) as audit_connection:
-            project_exists = audit_connection.execute(
-                text("SELECT 1 FROM projects WHERE id = :project_id"),
-                {"project_id": project_id},
-            ).first()
-            if not project_exists:
-                return
-            emit_event(
-                audit_connection,
-                project_id,
-                event_type,
-                actor,
-                entity_type,
-                project_id,
-                {"reason": reason},
-            )
-    except Exception as audit_error:
-        LOGGER.exception(
-            "account_connect_denial_audit_write_failed project_id=%s actor=%s event_type=%s reason=%s",
-            project_id,
-            actor,
-            event_type,
-            reason,
-            exc_info=audit_error,
-        )
-        return
-
-
 def record_budget_denial_event(
     project_id: str,
     actor: str,
@@ -2521,58 +2424,6 @@ def license_entitlement_summary_from_service(payload) -> LicenseEntitlementSumma
     return LicenseEntitlementSummary(**payload)
 
 
-def account_connect_auth_session_from_service(
-    payload,
-) -> AccountConnectAuthSessionSummary:
-    return AccountConnectAuthSessionSummary(**payload)
-
-
-def account_connect_health_check_from_service(
-    payload,
-) -> AccountConnectHealthCheckSummary:
-    return AccountConnectHealthCheckSummary(**payload)
-
-
-def account_connect_team_invite_from_service(
-    payload,
-) -> AccountConnectTeamInviteSummary:
-    return AccountConnectTeamInviteSummary(**payload)
-
-
-def account_connect_billing_session_from_service(
-    payload,
-) -> AccountConnectBillingPortalSessionSummary:
-    return AccountConnectBillingPortalSessionSummary(**payload)
-
-
-def hosted_marketplace_listing_from_service(
-    payload,
-) -> HostedMarketplaceListingSummary:
-    return HostedMarketplaceListingSummary(**payload)
-
-
-def hosted_marketplace_sync_run_from_service(
-    payload,
-) -> HostedMarketplaceSyncRunSummary:
-    return HostedMarketplaceSyncRunSummary(**payload)
-
-
-def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary:
-    return EnterpriseClusterSummary(**payload)
-
-
-def enterprise_cluster_validation_run_summary_from_service(
-    payload,
-) -> EnterpriseClusterValidationRunSummary:
-    return EnterpriseClusterValidationRunSummary(**payload)
-
-
-def enterprise_support_case_summary_from_service(
-    payload,
-) -> EnterpriseSupportCaseSummary:
-    return EnterpriseSupportCaseSummary(**payload)
-
-
 def enterprise_identity_provider_summary_from_service(
     payload,
 ) -> EnterpriseIdentityProviderSummary:
@@ -3029,409 +2880,6 @@ def get_openapi_coverage() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/cloud/catalog")
-def get_cloud_catalog(project_id: str) -> dict:
-    """Community-callable Cloud/Enterprise feature catalog and independence contract."""
-    with begin(engine) as connection:
-        return cloud_product.catalog(connection, project_id)
-
-
-@app.get("/v1/cloud/status")
-def get_cloud_status(project_id: str) -> dict:
-    """Independence + Account Connect link state for this project."""
-    with begin(engine) as connection:
-        return cloud_product.status(connection, project_id)
-
-
-@app.get("/v1/cloud/comparison")
-def get_cloud_comparison(project_id: str) -> dict:
-    """Community vs Cloud vs Enterprise packaging matrix (marketing parity)."""
-    with begin(engine) as connection:
-        return cloud_product.comparison(connection, project_id)
-
-
-@app.get("/v1/cloud/capabilities")
-def get_cloud_capabilities(project_id: str) -> dict:
-    """Local vs Cloud-locked capabilities for this project."""
-    with begin(engine) as connection:
-        return cloud_product.capabilities(connection, project_id)
-
-
-@app.get("/v1/cloud/workers")
-def get_cloud_managed_workers(project_id: str) -> dict:
-    """Managed worker fabric status (honest planned until fleets ship).
-
-    Includes local hybrid enrollments when present. Never claims
-    managed_workers.available_now=true.
-    """
-    with begin(engine) as connection:
-        return cloud_product.managed_workers_status(connection, project_id)
-
-
-@app.post("/v1/cloud/workers/enroll", status_code=201)
-def enroll_cloud_worker(payload: dict) -> dict:
-    """Enroll a local worker node for hybrid attach after Cloud link (receipted).
-
-    Does not provision elastic managed fleets. Community remains independent when
-    unlinked (returns 404/409 with blocked_reason).
-    """
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    worker_node_id = str(payload.get("worker_node_id") or "").strip()
-    display_name = payload.get("display_name")
-    capabilities = payload.get("capabilities")
-    metadata = payload.get("metadata")
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    if not worker_node_id:
-        raise HTTPException(status_code=422, detail="worker_node_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.enroll_worker(
-                connection,
-                project_id,
-                worker_node_id=worker_node_id,
-                actor=actor,
-                display_name=str(display_name) if display_name else None,
-                capabilities=list(capabilities)
-                if isinstance(capabilities, list)
-                else None,
-                metadata=metadata if isinstance(metadata, dict) else None,
-            )
-        except CloudLinkRequiredError as error:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": error.blocked_reason,
-                },
-            ) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-
-@app.post("/v1/cloud/sync")
-def cloud_sync_entitlements(payload: dict) -> dict:
-    """Sync hosted Account Connect entitlements after Easy Connect link."""
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    hosted_org_id = payload.get("hosted_org_id")
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.sync_entitlements(
-                connection,
-                project_id,
-                actor=actor,
-                hosted_org_id=str(hosted_org_id) if hosted_org_id else None,
-            )
-        except CloudLinkRequiredError as error:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": error.blocked_reason,
-                },
-            ) from error
-        except AccountConnectLinkNotFoundError as error:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": "cloud_not_linked",
-                },
-            ) from error
-        except AccountConnectConfigurationError as error:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": "account_connect_url_missing",
-                },
-            ) from error
-        except AccountConnectSyncError as error:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": "account_connect_sync_failed",
-                },
-            ) from error
-
-
-@app.get("/v1/cloud/entitlements")
-def cloud_list_entitlements(
-    project_id: str,
-    include_inactive: bool = False,
-) -> dict:
-    """List effective entitlements (local edition + hosted when linked)."""
-    with begin(engine) as connection:
-        return cloud_product.list_entitlements(
-            connection,
-            project_id,
-            include_inactive=include_inactive,
-        )
-
-
-@app.post("/v1/cloud/team-invites", status_code=201)
-def cloud_create_team_invite(payload: dict) -> dict:
-    """Create a hosted team invite via Account Connect when Cloud-linked."""
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    email = str(payload.get("email") or "").strip()
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    if not email:
-        raise HTTPException(status_code=422, detail="email is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.create_team_invite(
-                connection,
-                project_id,
-                email=email,
-                actor=actor,
-                display_name=(
-                    str(payload["display_name"])
-                    if payload.get("display_name") is not None
-                    else None
-                ),
-                role_keys=list(payload["role_keys"])
-                if isinstance(payload.get("role_keys"), list)
-                else None,
-                permissions=list(payload["permissions"])
-                if isinstance(payload.get("permissions"), list)
-                else None,
-                metadata=payload.get("metadata")
-                if isinstance(payload.get("metadata"), dict)
-                else None,
-            )
-        except CloudLinkRequiredError as error:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": error.blocked_reason,
-                },
-            ) from error
-        except AccountConnectLinkNotFoundError as error:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": "cloud_not_linked",
-                },
-            ) from error
-
-
-@app.get("/v1/cloud/team-invites")
-def cloud_list_team_invites(project_id: str, limit: int = 50) -> dict:
-    """List local team invite records when Cloud-linked."""
-    with begin(engine) as connection:
-        try:
-            return cloud_product.list_team_invites(
-                connection, project_id, limit=limit
-            )
-        except CloudLinkRequiredError as error:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": str(error),
-                    "blocked_reason": error.blocked_reason,
-                },
-            ) from error
-
-
-@app.get("/v1/cloud/marketplace")
-def cloud_list_marketplace(
-    project_id: str,
-    include_inactive: bool = False,
-    limit: int = 50,
-) -> dict:
-    """List hosted marketplace packs when linked; empty + blocked_reason when not."""
-    with begin(engine) as connection:
-        return cloud_product.list_marketplace(
-            connection,
-            project_id,
-            include_inactive=include_inactive,
-            limit=limit,
-        )
-
-
-@app.post("/v1/cloud/easy-connect", status_code=201)
-def start_cloud_easy_connect(payload: dict) -> dict:
-    """Start Easy Connect from self-hosted Community (or any edition) to BOSS Cloud.
-
-    Community remains fully independent when Cloud is unconfigured. Browser or device
-    methods never accept raw Cloud passwords in this control plane — hosted Account
-    Connect completes auth and returns an org link.
-    """
-    project_id = str(payload.get("project_id") or "").strip()
-    method = str(payload.get("method") or "browser").strip().lower()
-    actor = str(payload.get("actor") or "ceo").strip()
-    return_url = payload.get("return_url")
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.easy_connect(
-                connection,
-                project_id=project_id,
-                method=method,
-                actor=actor,
-                return_url=return_url if isinstance(return_url, str) else None,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except AccountConnectAuthSessionStateError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-
-
-@app.get("/v1/cloud/easy-connect/{session_id}")
-def poll_cloud_easy_connect(
-    session_id: str, project_id: str, actor: str = "ceo"
-) -> dict:
-    """Poll Easy Connect session (device flow) until completed or expired."""
-    with begin(engine) as connection:
-        try:
-            return cloud_product.poll_easy_connect(
-                connection,
-                project_id=project_id,
-                session_id=session_id,
-                actor=actor,
-            )
-        except AccountConnectAuthSessionNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except (
-            AccountConnectAuthSessionStateError,
-            AccountConnectLinkNotFoundError,
-            AccountConnectSyncError,
-            ValueError,
-        ) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-
-
-@app.post("/v1/cloud/easy-connect/{session_id}/complete")
-def complete_cloud_easy_connect(session_id: str, payload: dict) -> dict:
-    """Complete browser Easy Connect after hosted Account Connect returns code/state."""
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    code = payload.get("code")
-    state = payload.get("state")
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.complete_easy_connect(
-                connection,
-                project_id=project_id,
-                session_id=session_id,
-                actor=actor,
-                code=str(code) if code is not None else None,
-                state=str(state) if state is not None else None,
-            )
-        except AccountConnectAuthSessionNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except (
-            AccountConnectAuthSessionStateError,
-            AccountConnectSyncError,
-            AccountConnectConfigurationError,
-            ValueError,
-        ) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-
-
-@app.post("/v1/cloud/easy-connect/complete")
-def complete_cloud_easy_connect_by_state(payload: dict) -> dict:
-    """Complete browser Easy Connect using code+state from the hosted redirect callback."""
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    code = payload.get("code")
-    state = payload.get("state")
-    session_id = payload.get("session_id")
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.complete_easy_connect(
-                connection,
-                project_id=project_id,
-                session_id=str(session_id) if session_id else None,
-                actor=actor,
-                code=str(code) if code is not None else None,
-                state=str(state) if state is not None else None,
-            )
-        except AccountConnectAuthSessionNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except (
-            AccountConnectAuthSessionStateError,
-            AccountConnectSyncError,
-            AccountConnectConfigurationError,
-            ValueError,
-        ) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-
-
-@app.post("/v1/cloud/unlink")
-def unlink_cloud(payload: dict) -> dict:
-    """Disconnect this project from BOSS Cloud; Community stays fully usable."""
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    reason = payload.get("reason")
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.unlink(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                reason=str(reason) if reason else None,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-
-
-@app.get("/v1/cloud/retention")
-def get_cloud_retention(project_id: str) -> dict:
-    """Evidence retention policy for this project (local receipts + Cloud SLA when linked)."""
-    with begin(engine) as connection:
-        return cloud_product.get_retention_policy(connection, project_id)
-
-
-@app.put("/v1/cloud/retention")
-def put_cloud_retention(payload: dict) -> dict:
-    """Set Cloud-linked evidence retention_days (30–2555). Receipted; requires active link."""
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    if "retention_days" not in payload:
-        raise HTTPException(status_code=422, detail="retention_days is required")
-    reason = payload.get("reason")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return cloud_product.update_retention_policy(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                retention_days=payload["retention_days"],
-                reason=str(reason) if reason is not None else None,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-
 @app.get("/v1/diag/sandbox-roundtrip")
 def diag_sandbox_roundtrip() -> dict:
     """Run a submit->poll round-trip to the sandbox-service FROM INSIDE this container,
@@ -3618,108 +3066,6 @@ def list_license_entitlements(
             project_id=project_id,
             edition=edition_status_from_service(edition),
             items=[license_entitlement_summary_from_service(item) for item in items],
-        )
-
-
-@app.post("/v1/account-connect/link", response_model=AccountConnectMutationResponse)
-def link_account_connect(
-    payload: AccountConnectLinkRequest,
-) -> AccountConnectMutationResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        edition = commercial.link_account_connect_org(
-            connection,
-            payload.project_id,
-            hosted_org_id=payload.hosted_org_id,
-            actor=payload.actor,
-            connection_ref=payload.connection_ref,
-            marketplace_identity=payload.marketplace_identity,
-            billing_portal_ref=payload.billing_portal_ref,
-            connector_authorization_refs=payload.connector_authorization_refs,
-            optional_telemetry_enabled=payload.optional_telemetry_enabled,
-            metadata=payload.metadata,
-        )
-        return AccountConnectMutationResponse(
-            project_id=payload.project_id,
-            edition=edition_status_from_service(edition),
-        )
-
-
-@app.post("/v1/account-connect/unlink", response_model=AccountConnectMutationResponse)
-def unlink_account_connect(
-    payload: AccountConnectUnlinkRequest,
-) -> AccountConnectMutationResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            edition = commercial.unlink_account_connect_org(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-                hosted_org_id=payload.hosted_org_id,
-                reason=payload.reason,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return AccountConnectMutationResponse(
-            project_id=payload.project_id,
-            edition=edition_status_from_service(edition),
-        )
-
-
-@app.post("/v1/account-connect/sync", response_model=AccountConnectSyncResponse)
-def sync_account_connect(
-    payload: AccountConnectSyncRequest,
-) -> AccountConnectSyncResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            result = commercial.sync_account_connect_entitlements(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-                hosted_org_id=payload.hosted_org_id,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            record_account_connect_sync_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect_not_linked",
-            )
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except AccountConnectConfigurationError as error:
-            record_account_connect_sync_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect_url_missing",
-            )
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        except AccountConnectSyncError as error:
-            record_account_connect_sync_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect_sync_failed",
-            )
-            raise HTTPException(status_code=502, detail=str(error)) from error
-        return AccountConnectSyncResponse(
-            project_id=result["project_id"],
-            edition=edition_status_from_service(result["edition"]),
-            synced_entitlement_count=result["synced_entitlement_count"],
         )
 
 
@@ -4113,497 +3459,6 @@ def reliability_verify(
         if not result:
             raise HTTPException(status_code=404, detail="incident not found")
         return ReliabilityVerifyResponse(**result)
-
-
-@app.get(
-    "/v1/account-connect/health-checks",
-    response_model=AccountConnectHealthCheckListResponse,
-)
-def list_account_connect_health_checks(
-    project_id: str,
-    limit: int = 50,
-) -> AccountConnectHealthCheckListResponse:
-    with begin(engine) as connection:
-        items = commercial.list_health_checks(connection, project_id, limit=limit)
-        return AccountConnectHealthCheckListResponse(
-            project_id=project_id,
-            items=[
-                account_connect_health_check_from_service(item)
-                for item in items
-            ],
-        )
-
-
-@app.post(
-    "/v1/account-connect/health-checks",
-    response_model=AccountConnectHealthCheckSummary,
-    status_code=201,
-)
-def run_account_connect_health_check(
-    payload: AccountConnectHealthCheckRunRequest,
-) -> AccountConnectHealthCheckSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            check = commercial.run_health_check(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-                hosted_org_id=payload.hosted_org_id,
-                check_kind=payload.check_kind,
-                metadata=payload.metadata,
-            )
-        except AccountConnectAuthSessionStateError as error:
-            record_account_connect_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect.health_check_denied",
-                "account_connect_hosted_org_mismatch",
-                "account_connect_health_check",
-            )
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return account_connect_health_check_from_service(check)
-
-
-@app.get(
-    "/v1/account-connect/auth-sessions",
-    response_model=AccountConnectAuthSessionListResponse,
-)
-def list_account_connect_auth_sessions(
-    project_id: str,
-    limit: int = 50,
-) -> AccountConnectAuthSessionListResponse:
-    with begin(engine) as connection:
-        items = commercial.list_auth_sessions(connection, project_id, limit=limit)
-        return AccountConnectAuthSessionListResponse(
-            project_id=project_id,
-            items=[
-                account_connect_auth_session_from_service(item)
-                for item in items
-            ],
-        )
-
-
-@app.post(
-    "/v1/account-connect/auth-sessions",
-    response_model=AccountConnectAuthSessionSummary,
-    status_code=201,
-)
-def create_account_connect_auth_session(
-    payload: AccountConnectAuthSessionCreateRequest,
-) -> AccountConnectAuthSessionSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            session = commercial.create_auth_session(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-                return_url=payload.return_url,
-                hosted_org_id=payload.hosted_org_id,
-                metadata=payload.metadata,
-            )
-        except AccountConnectAuthSessionStateError as error:
-            record_account_connect_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect.auth_session_denied",
-                "account_connect_hosted_org_mismatch",
-                "account_connect_auth_session",
-            )
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return account_connect_auth_session_from_service(session)
-
-
-@app.post(
-    "/v1/account-connect/auth-sessions/{session_id}/complete",
-    response_model=AccountConnectAuthSessionSummary,
-)
-def complete_account_connect_auth_session(
-    session_id: str,
-    payload: AccountConnectAuthSessionCompleteRequest,
-) -> AccountConnectAuthSessionSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            session = commercial.complete_auth_session(
-                connection,
-                session_id,
-                project_id=payload.project_id,
-                actor=payload.actor,
-                code=payload.code,
-                state=payload.state,
-                metadata=payload.metadata,
-            )
-        except AccountConnectAuthSessionNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except AccountConnectAuthSessionStateError as error:
-            record_account_connect_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect.auth_session_denied",
-                "state_mismatch",
-                "account_connect_auth_session",
-            )
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return account_connect_auth_session_from_service(session)
-
-
-@app.get(
-    "/v1/account-connect/team-invites",
-    response_model=AccountConnectTeamInviteListResponse,
-)
-def list_account_connect_team_invites(
-    project_id: str,
-    limit: int = 50,
-) -> AccountConnectTeamInviteListResponse:
-    with begin(engine) as connection:
-        items = commercial.list_team_invites(connection, project_id, limit=limit)
-        return AccountConnectTeamInviteListResponse(
-            project_id=project_id,
-            items=[
-                account_connect_team_invite_from_service(item)
-                for item in items
-            ],
-        )
-
-
-@app.post(
-    "/v1/account-connect/team-invites",
-    response_model=AccountConnectTeamInviteSummary,
-    status_code=201,
-)
-def create_account_connect_team_invite(
-    payload: AccountConnectTeamInviteCreateRequest,
-) -> AccountConnectTeamInviteSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            invite = commercial.create_team_invite(
-                connection,
-                payload.project_id,
-                email=payload.email,
-                display_name=payload.display_name,
-                role_keys=payload.role_keys,
-                permissions=payload.permissions,
-                metadata=payload.metadata,
-                actor=payload.actor,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            record_account_connect_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect.team_invite_denied",
-                "account_connect_not_linked",
-                "account_connect_team_invite",
-            )
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return account_connect_team_invite_from_service(invite)
-
-
-@app.post(
-    "/v1/account-connect/team-invites/{invite_id}/revoke",
-    response_model=AccountConnectTeamInviteSummary,
-)
-def revoke_account_connect_team_invite(
-    invite_id: str,
-    payload: AccountConnectTeamInviteRevokeRequest,
-) -> AccountConnectTeamInviteSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            invite = commercial.revoke_team_invite(
-                connection,
-                invite_id,
-                project_id=payload.project_id,
-                actor=payload.actor,
-                reason=payload.reason,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            record_account_connect_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect.team_invite_revoke_denied",
-                "account_connect_team_invite_not_found",
-                "account_connect_team_invite",
-            )
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return account_connect_team_invite_from_service(invite)
-
-
-@app.get(
-    "/v1/account-connect/billing-portal-sessions",
-    response_model=AccountConnectBillingPortalSessionListResponse,
-)
-def list_account_connect_billing_portal_sessions(
-    project_id: str,
-    limit: int = 50,
-) -> AccountConnectBillingPortalSessionListResponse:
-    with begin(engine) as connection:
-        items = commercial.list_billing_portal_sessions(
-            connection,
-            project_id,
-            limit=limit,
-        )
-        return AccountConnectBillingPortalSessionListResponse(
-            project_id=project_id,
-            items=[
-                account_connect_billing_session_from_service(item)
-                for item in items
-            ],
-        )
-
-
-@app.post(
-    "/v1/account-connect/billing-portal-sessions",
-    response_model=AccountConnectBillingPortalSessionSummary,
-    status_code=201,
-)
-def create_account_connect_billing_portal_session(
-    payload: AccountConnectBillingPortalSessionCreateRequest,
-) -> AccountConnectBillingPortalSessionSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            session = commercial.create_billing_portal_session(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-                return_url=payload.return_url,
-                metadata=payload.metadata,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            record_account_connect_denial(
-                payload.project_id,
-                payload.actor,
-                "account_connect.billing_portal_denied",
-                "account_connect_not_linked",
-                "account_connect_billing_portal_session",
-            )
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return account_connect_billing_session_from_service(session)
-
-
-@app.get("/v1/enterprise/clusters", response_model=EnterpriseClusterListResponse)
-def list_enterprise_clusters(project_id: str) -> EnterpriseClusterListResponse:
-    with begin(engine) as connection:
-        items = enterprise.list_clusters(connection, project_id)
-        return EnterpriseClusterListResponse(
-            project_id=project_id,
-            items=[enterprise_cluster_summary_from_service(item) for item in items],
-        )
-
-
-@app.post(
-    "/v1/enterprise/clusters",
-    response_model=EnterpriseClusterSummary,
-    status_code=201,
-)
-def upsert_enterprise_cluster(
-    payload: EnterpriseClusterUpsertRequest,
-) -> EnterpriseClusterSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "enterprise_manage",
-        )
-        try:
-            cluster = enterprise.upsert_cluster(
-                connection,
-                payload.project_id,
-                deployment_mode=payload.deployment_mode,
-                account_connect_mode=payload.account_connect_mode,
-                actor=payload.actor,
-                worker_pool_strategy=payload.worker_pool_strategy,
-                ha_profile=payload.ha_profile,
-                data_residency=payload.data_residency,
-                identity_controls=payload.identity_controls,
-                governance_controls=payload.governance_controls,
-                audit_controls=payload.audit_controls,
-                private_worker_pools=payload.private_worker_pools,
-                compliance_packs=payload.compliance_packs,
-                support_tier=payload.support_tier,
-                support_sla=payload.support_sla,
-                status=payload.status,
-                metadata=payload.metadata,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return enterprise_cluster_summary_from_service(cluster)
-
-
-@app.get(
-    "/v1/enterprise/cluster-validation-runs",
-    response_model=EnterpriseClusterValidationRunListResponse,
-)
-def list_enterprise_cluster_validation_runs(
-    project_id: str,
-    enterprise_cluster_id: Optional[str] = None,
-    limit: int = 50,
-) -> EnterpriseClusterValidationRunListResponse:
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
-    with begin(engine) as connection:
-        items = enterprise.list_cluster_validation_runs(
-            connection,
-            project_id,
-            enterprise_cluster_id=enterprise_cluster_id,
-            limit=limit,
-        )
-        return EnterpriseClusterValidationRunListResponse(
-            project_id=project_id,
-            items=[
-                enterprise_cluster_validation_run_summary_from_service(item)
-                for item in items
-            ],
-        )
-
-
-@app.post(
-    "/v1/enterprise/cluster-validation-runs",
-    response_model=EnterpriseClusterValidationRunSummary,
-    status_code=201,
-)
-def create_enterprise_cluster_validation_run(
-    payload: EnterpriseClusterValidationRunCreateRequest,
-) -> EnterpriseClusterValidationRunSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "enterprise_manage",
-        )
-        try:
-            run = enterprise.record_cluster_validation_run(
-                connection,
-                payload.project_id,
-                enterprise_cluster_id=payload.enterprise_cluster_id,
-                validation_kind=payload.validation_kind,
-                status=payload.status,
-                checks=payload.checks,
-                evidence_refs=payload.evidence_refs,
-                actor=payload.actor,
-                metadata=payload.metadata,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return enterprise_cluster_validation_run_summary_from_service(run)
-
-
-@app.get(
-    "/v1/enterprise/support-cases",
-    response_model=EnterpriseSupportCaseListResponse,
-)
-def list_enterprise_support_cases(
-    project_id: str,
-    limit: int = 50,
-) -> EnterpriseSupportCaseListResponse:
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    with begin(engine) as connection:
-        items = enterprise.list_support_cases(connection, project_id, limit)
-        return EnterpriseSupportCaseListResponse(
-            project_id=project_id,
-            items=[
-                enterprise_support_case_summary_from_service(item) for item in items
-            ],
-        )
-
-
-@app.post(
-    "/v1/enterprise/support-cases",
-    response_model=EnterpriseSupportCaseSummary,
-    status_code=201,
-)
-def create_enterprise_support_case(
-    payload: EnterpriseSupportCaseCreateRequest,
-) -> EnterpriseSupportCaseSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "enterprise_manage",
-        )
-        try:
-            item = enterprise.create_support_case(
-                connection,
-                payload.project_id,
-                title=payload.title,
-                description=payload.description,
-                actor=payload.actor,
-                severity=payload.severity,
-                category=payload.category,
-                enterprise_cluster_id=payload.enterprise_cluster_id,
-                escalate_to_hosted=payload.escalate_to_hosted,
-                metadata=payload.metadata,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return enterprise_support_case_summary_from_service(item)
-
-
-@app.post(
-    "/v1/enterprise/support-cases/{case_id}",
-    response_model=EnterpriseSupportCaseSummary,
-)
-def update_enterprise_support_case(
-    case_id: str,
-    payload: EnterpriseSupportCaseUpdateRequest,
-) -> EnterpriseSupportCaseSummary:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "enterprise_manage",
-        )
-        try:
-            item = enterprise.update_support_case(
-                connection,
-                payload.project_id,
-                case_id,
-                actor=payload.actor,
-                status=payload.status,
-                assigned_to=payload.assigned_to,
-                metadata=payload.metadata,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return enterprise_support_case_summary_from_service(item)
 
 
 @app.get(
@@ -11997,15 +10852,6 @@ def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
     return meeting_consensus.sweep_stalled_meeting_runs(engine, settings, actor=payload.actor)
 
 
-@app.post("/v1/enterprise/soc2-evidence", status_code=201)
-def collect_soc2_evidence(payload: SOC2EvidenceRequest) -> dict:
-    """Generate a SOC2 evidence bundle (Trust Services Common Criteria) from live audit/policy/
-    break-glass/change/proof data (spec §F enterprise SOC2 evidence collection)."""
-    with begin(engine) as connection:
-        require_project_actor(connection, payload.project_id, payload.actor, "audit_export")
-        return soc2_evidence.collect_evidence(connection, payload.project_id, actor=payload.actor)
-
-
 @app.post("/v1/finops/reconcile-commitments", status_code=201)
 def reconcile_commitments(payload: CommitmentReconcileRequest) -> dict:
     """Reconcile active commitments vs actual usage → utilization + verdict + review decisions
@@ -12849,7 +11695,7 @@ def put_org_assignment(agent_id: str, payload: dict) -> dict:
 
 
 @app.delete("/v1/console/v2/org/{agent_id}")
-def delete_org_assignment(agent_id: str, project_id: str, actor: str = "operator") -> dict:
+def delete_org_assignment(agent_id: str, project_id: str) -> dict:
     """Hand this agent back to the observed chart."""
     from boss_engine.services import org_assignments as oa
 
@@ -12857,8 +11703,8 @@ def delete_org_assignment(agent_id: str, project_id: str, actor: str = "operator
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
         if agent_id == "*":
-            return {"cleared": oa.clear_all(connection, project_id, actor)}
-        oa.clear_one(connection, project_id, agent_id, actor)
+            return {"cleared": oa.clear_all(connection, project_id)}
+        oa.clear_one(connection, project_id, agent_id)
     return {"agent_id": agent_id, "cleared": 1}
 
 
@@ -13462,88 +12308,6 @@ def list_agent_modules(project_id: str) -> AgentModuleListResponse:
         return AgentModuleListResponse(
             project_id=project_id,
             items=[agent_module_summary_from_service(module) for module in modules],
-        )
-
-
-@app.get(
-    "/v1/marketplace/listings",
-    response_model=HostedMarketplaceListingListResponse,
-)
-def list_hosted_marketplace_listings(
-    project_id: str,
-    include_inactive: bool = False,
-    limit: int = 50,
-) -> HostedMarketplaceListingListResponse:
-    with begin(engine) as connection:
-        listings = commercial.list_marketplace_pack_listings(
-            connection,
-            project_id,
-            include_inactive=include_inactive,
-            limit=limit,
-        )
-        return HostedMarketplaceListingListResponse(
-            project_id=project_id,
-            items=[
-                hosted_marketplace_listing_from_service(listing)
-                for listing in listings
-            ],
-        )
-
-
-@app.get(
-    "/v1/marketplace/sync-runs",
-    response_model=HostedMarketplaceSyncRunListResponse,
-)
-def list_hosted_marketplace_sync_runs(
-    project_id: str,
-    limit: int = 50,
-) -> HostedMarketplaceSyncRunListResponse:
-    with begin(engine) as connection:
-        runs = commercial.list_marketplace_sync_runs(
-            connection,
-            project_id,
-            limit=limit,
-        )
-        return HostedMarketplaceSyncRunListResponse(
-            project_id=project_id,
-            items=[
-                hosted_marketplace_sync_run_from_service(run)
-                for run in runs
-            ],
-        )
-
-
-@app.post(
-    "/v1/marketplace/sync",
-    response_model=HostedMarketplaceSyncResponse,
-    status_code=201,
-)
-def sync_hosted_marketplace(
-    payload: HostedMarketplaceSyncRequest,
-) -> HostedMarketplaceSyncResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "module_manage",
-        )
-        try:
-            result = commercial.sync_marketplace_pack_listings(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-                hosted_org_id=payload.hosted_org_id,
-                metadata=payload.metadata,
-            )
-        except AccountConnectLinkNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except AccountConnectAuthSessionStateError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return HostedMarketplaceSyncResponse(
-            project_id=result["project_id"],
-            sync_run=hosted_marketplace_sync_run_from_service(result["sync_run"]),
-            listing_count=result["listing_count"],
         )
 
 
@@ -21607,7 +20371,6 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
-        REGISTERED_ROLES,
         blocks,
         palette,
     )
@@ -21628,13 +20391,6 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # Control blocks the runtime has always supported and the builder never offered, so a
         # customer could only ever author a straight line.
         "blocks": blocks(),
-        # THE AGENTS A STEP CAN BE GIVEN TO.
-        #
-        # A capability step's `captain` has always become the actor that runs it, which is why
-        # BOSS's own pipelines read as agents doing the work. Custom steps ignored it and the
-        # builder offered no way to set one — so a customer's workflow had no agent in it
-        # anywhere, and nothing on screen suggested there could be.
-        "roles": sorted(REGISTERED_ROLES),
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "
@@ -25628,4 +24384,28 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
-mount_edition_routers(app, settings.boss_edition)
+register_community_cloud_routes(app, engine, cloud_product, require_project_actor)
+paid_router = None
+if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
+    from .enterprise_extensions.cloud_routes import register_paid_cloud_routes
+    from .enterprise_extensions.hosted_routes import register_hosted_routes
+    from .enterprise_extensions.operations_routes import (
+        register_enterprise_operations_routes,
+    )
+    from boss_engine.services.enterprise import EnterpriseService
+    from .routers.enterprise import enterprise_router, register_soc2_route
+
+    register_paid_cloud_routes(app, engine, cloud_product, require_project_actor)
+    register_hosted_routes(
+        app,
+        engine,
+        commercial,
+        require_project_actor,
+        edition_status_from_service,
+    )
+    register_enterprise_operations_routes(
+        app, engine, EnterpriseService(settings), require_project_actor
+    )
+    register_soc2_route(app, engine, settings, require_project_actor)
+    paid_router = enterprise_router
+mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

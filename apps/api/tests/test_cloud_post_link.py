@@ -12,6 +12,26 @@ from apps.api.app import main as api_main
 PROJECT_ID = "boss-dogfood"
 
 
+def test_paid_cloud_routes_keep_hosted_operations() -> None:
+    """The paid composition retains the existing Cloud API methods."""
+
+    assert type(api_main.commercial).__name__ == "CommercialService"
+    assert type(api_main.cloud_product).__name__ == "CloudProductService"
+    paths = api_main.app.openapi()["paths"]
+    methods = {
+        path: set(operations)
+        for path, operations in paths.items()
+        if path.startswith("/v1/cloud/")
+    }
+    assert "post" in methods["/v1/cloud/workers/enroll"]
+    assert "post" in methods["/v1/cloud/sync"]
+    assert "get" in methods["/v1/cloud/entitlements"]
+    assert {"get", "post"} <= methods["/v1/cloud/team-invites"]
+    assert "get" in methods["/v1/cloud/marketplace"]
+    assert {"get", "put"} <= methods["/v1/cloud/retention"]
+    assert "post" in methods["/v1/cloud/easy-connect"]
+
+
 def _blocked_reason(response) -> Optional[str]:
     body = response.json()
     detail = body.get("detail")

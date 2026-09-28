@@ -14,9 +14,10 @@ somebody would otherwise have to learn from the source.
 from __future__ import annotations
 
 import json
+from pathlib import Path as pathlib_Path
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -81,6 +82,13 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "kind": "subscription",
         "source_kind": "official_cli",
         "note": "Authorised through the Codex CLI's own login.",
+    },
+    "grok": {
+        "label": "Grok Build subscription",
+        "api": "subscription",
+        "kind": "subscription",
+        "source_kind": "official_cli",
+        "note": "Authorised through the official Grok CLI's service-user device login.",
     },
     "cursor": {
         "label": "Cursor subscription",
@@ -153,9 +161,6 @@ def verify_model_key(
     except urllib.error.URLError as error:
         return {"ok": False, "status": 0, "model": name, "endpoint": endpoint,
                 "error": f"could not reach {url_base}: {error.reason}"}
-
-
-from pathlib import Path as pathlib_Path
 
 
 def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
@@ -575,12 +580,18 @@ def connect_coding_agent(
         raise SetupError(
             f"no CLI coding agent called {provider!r}. Known: "
             f"{', '.join(sorted(load_specs(settings)))}.")
+    if spec.require_local_session_file and not prove:
+        raise SetupError(f"{provider} requires a live read-only proof turn before connecting.")
     found = detect(spec)
     if not found["installed"]:
         raise SetupError(
             f"the {provider} CLI is not installed on this machine. "
             f"{found['next_step']}")
     if found["authenticated"] is False:
+        if spec.require_local_session_file:
+            raise SetupError(
+                f"the {provider} CLI cannot use this service user's subscription. "
+                f"{found['next_step']}")
         # TRY THE STORED CREDENTIAL BEFORE REFUSING. On a server the CLI is never signed in
         # by hand — nobody can open a browser there — so "not signed in" is the expected
         # starting state, not a verdict. Refusing here made the console's Connect button
@@ -636,7 +647,9 @@ def connect_coding_agent(
         "detected": found,
         "proof": proof,
         "harness": provider,
-        "use_it_with": f"BOSS_PROVIDER_LOCK={provider}",
+        "use_it_with": (f"BOSS_CODE_AGENT_ENGINE={provider}"
+                        if spec.require_local_session_file else
+                        f"BOSS_PROVIDER_LOCK={provider}"),
         **record,
     }
 
@@ -944,7 +957,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         #
         # This card reported the env pair and nothing else, so an install whose operator had
         # connected a repository — tested, passing, and the thing every build will use — was
-        # shown "seanheiney/boss-sandbox · CHECK FAILED" from a shipped default, with the
+        # shown a developer sandbox as failed from a shipped default, with the
         # working connection mentioned nowhere. A screen called "What BOSS is running on" has
         # to name the repository BOSS will run on.
         "environment": {"github": check_github_for_project(connection, settings, project_id),

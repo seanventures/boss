@@ -16,11 +16,9 @@ import { emptyAgentModuleFeed } from "../lib/agent-modules";
 import { emptyAuditSummary } from "../lib/audit";
 import { emptyArtifactFeed } from "../lib/artifacts";
 import { emptyInboxFeed, emptyOutboxFeed } from "../lib/comms";
-import { emptyCommercialFeed } from "../lib/commercial";
 import { emptyActivityFeed } from "../lib/events";
 import { emptyDeadletterFeed } from "../lib/deadletters";
 import { emptyEntitlementFeed } from "../lib/entitlements";
-import { emptyEnterpriseFeed } from "../lib/enterprise";
 import { emptyPackFeed } from "../lib/packs";
 import { emptyHealthSnapshotFeed } from "../lib/health-snapshots";
 import { emptyProviderOpsFeed } from "../lib/providerops";
@@ -85,24 +83,6 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("entitlement api down");
-  });
-
-  it("returns an unavailable commercial feed", () => {
-    const feed = emptyCommercialFeed("commercial api down");
-
-    expect(feed.apiReachable).toBe(false);
-    expect(feed.entitlements).toEqual([]);
-    expect(feed.blockedReason).toBe("commercial api down");
-  });
-
-  it("returns an unavailable enterprise feed", () => {
-    const feed = emptyEnterpriseFeed("enterprise api down");
-
-    expect(feed.apiReachable).toBe(false);
-    expect(feed.clusters).toEqual([]);
-    expect(feed.scimUsers).toEqual([]);
-    expect(feed.summary.blockingGapCount).toBe(0);
-    expect(feed.blockedReason).toBe("enterprise api down");
   });
 
   it("returns an unavailable ProviderOps feed", () => {

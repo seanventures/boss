@@ -1595,53 +1595,28 @@ h1, h2, h3, h4, h5, h6 {
   .bx-refresh-line::after { animation: none; width: 100%; opacity: .55; }
 }
 
-/* THE ROUTE-LEVEL SKELETON — what is on screen before the console exists.
-   Six and a half seconds to first byte means every indicator inside the page is unreachable
-   during the wait it exists for. These are the only styles that are on screen for it. */
+/* The route-level fallback keeps the shell visible while the page loads. */
 .bx-skel {
-  display: block; border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    var(--surface-2, #0F1830) 0%,
-    color-mix(in srgb, var(--surface-3, #16203c) 70%, var(--accent, #2F6FE0) 8%) 45%,
-    var(--surface-2, #0F1830) 90%);
-  background-size: 220% 100%;
-  animation: bx-skel-sweep 1.5s ease-in-out infinite;
+  display: block;
+  border-radius: 2px;
+  background: var(--surface-2, #0F1830);
 }
-/* A skeleton that pulses forever is a page that has hung. The sweep is the only motion, and it
-   is the same rhythm as the loading bar above it so the screen reads as ONE thing waiting. */
-@keyframes bx-skel-sweep {
-  0%   { background-position: 140% 0; }
-  100% { background-position: -40% 0; }
-}
-.bx-skel-chip { height: 26px; width: 92px; border-radius: 999px; }
 .bx-skel-line { height: 11px; }
-.bx-skel-navitem { height: 30px; width: 100%; border-radius: 8px; }
-.bx-skel-nav { display: grid; gap: 8px; padding: 4px 12px; }
+.bx-skel-navitem { height: 9px; width: 64%; }
+.bx-skel-navitem:nth-child(2) { width: 78%; }
+.bx-skel-navitem:nth-child(4) { width: 55%; }
+.bx-skel-nav { display: grid; gap: 22px; padding: 18px 24px; }
 .bx-content-loading { padding: 22px 28px; }
-.bx-skel-grid {
-  display: grid; gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-}
-.bx-skel-card {
-  display: grid; gap: 10px; padding: 18px 16px;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--surface, #0d1424);
-}
-/* Motion is a signal here, not decoration. For a reader who has asked the OS to stop animating
-   things it becomes seven seconds of noise they cannot turn off — the bar's text and the
-   elapsed count still say everything this needs to say. */
-@media (prefers-reduced-motion: reduce) {
-  .bx-skel { animation: none; }
-}
+.bx-skel-title { width: min(240px, 55%); height: 24px; margin-bottom: 18px; }
+.bx-skel-rows { display: grid; gap: 1px; max-width: 760px; margin-top: 34px; background: var(--border); }
+.bx-skel-row { height: 48px; border-radius: 0; background: var(--surface, #0d1424); }
 
 /* The elapsed count. Tabular figures so the number does not jitter the sentence sideways as
    it ticks — a bar that twitches every second reads as broken rather than busy. */
 .bx-loading-elapsed {
-  margin-left: 8px; padding: 1px 6px; border-radius: 4px;
+  margin-left: 8px;
   font-variant-numeric: tabular-nums; font-size: 0.92em;
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 @media (max-width: 900px) { .bx-loading { padding-left: 14px; padding-right: 14px; } }
 
@@ -7816,6 +7791,131 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 @media (max-width: 900px) { .bx-new-project { display: none; } }
 .ct-workflow-default { opacity: .7; font-weight: 400; }
 
+/* Command Center shell: one clear location, one action, quiet system details. */
+.bx-topbar { gap: 14px; }
+.bx-topbar-title {
+  position: static; width: auto; height: auto; margin: 0; padding: 0;
+  overflow: visible; clip: auto; clip-path: none;
+  color: var(--ink); font: 700 .96rem var(--display);
+  white-space: nowrap;
+  order: 0;
+}
+.bx-topbar-title small { display: none; }
+.bx-new-project { order: 2; border-radius: 6px; background: transparent; }
+.bx-topbar-spacer { order: 1; }
+.bx-org-chip {
+  padding: 5px 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--ink-soft);
+}
+.bx-org-chip:hover, .bx-org-chip:focus-visible { color: var(--ink); background: var(--surface-2); }
+.bx-org-switch { font-size: .9rem; }
+.bx-live-status {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: .78rem; cursor: pointer; padding: 6px;
+}
+.bx-live-status:hover { color: var(--ink); }
+.bx-kbd { border: 0; background: transparent; border-radius: 4px; }
+.bx-kbd kbd { background: transparent; }
+.bx-system-menu { position: relative; font-size: .8rem; color: var(--ink-soft); }
+.bx-system-menu summary {
+  cursor: pointer; list-style: none; padding: 7px 8px; border-radius: 4px;
+}
+.bx-system-menu summary::-webkit-details-marker { display: none; }
+.bx-system-menu summary::after { content: "⌄"; margin-left: 6px; }
+.bx-system-menu[open] summary, .bx-system-menu summary:hover { background: var(--surface-2); color: var(--ink); }
+.bx-system-panel {
+  position: absolute; right: 0; top: calc(100% + 9px); z-index: 50;
+  min-width: 270px; padding: 10px 14px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 16px 32px rgba(0,0,0,.35);
+}
+.bx-system-panel > div {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 18px; padding: 9px 0; border-bottom: 1px solid var(--border);
+}
+.bx-system-panel > div:last-child { border-bottom: 0; }
+.bx-system-panel > div > strong { color: var(--ink); font-weight: 600; }
+.bx-system-budget { text-transform: capitalize; }
+.bx-system-budget.amber { color: var(--amber); }
+.bx-system-budget.red { color: var(--red); }
+
+/* Project picker replaces the always-scrolling row of status pills. */
+.bx-strip { min-height: 40px; gap: 8px; }
+.bx-strip-label { display: inline-flex; align-items: center; gap: 8px; }
+.bx-project-trigger {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 38px; padding: 0 6px; border: 0;
+  background: transparent; color: var(--ink-soft); font: inherit;
+  font-size: .79rem; cursor: pointer;
+}
+.bx-project-trigger:hover { color: var(--ink); }
+.bx-project-trigger strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.bx-project-attention { color: var(--amber); }
+.bx-project-picker {
+  position: absolute; top: 39px; left: 28px; z-index: 50;
+  width: min(520px, calc(100vw - 40px)); max-height: min(70vh, 650px);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 18px 36px rgba(0,0,0,.4);
+}
+.bx-project-search-label { font-weight: 650; color: var(--ink); font-size: .85rem; }
+#boss-project-search {
+  width: 100%; padding: 9px 11px; border: 1px solid var(--border-strong);
+  border-radius: 5px; background: var(--surface-2); color: var(--ink); font: inherit;
+}
+.bx-project-picker .bx-strip-filters { gap: 0; border-bottom: 1px solid var(--border); }
+.bx-project-picker .bx-strip-filter { border-radius: 0; text-transform: capitalize; letter-spacing: 0; }
+.bx-project-picker .bx-strip-filter[data-active="true"] { border-bottom: 2px solid var(--accent); background: transparent; }
+.bx-project-picker .bx-strip-scroll {
+  display: flex; flex-direction: column; align-items: stretch;
+  min-height: 0; overflow-x: hidden; overflow-y: auto; mask-image: none;
+}
+.bx-project-picker .bx-strip-item {
+  width: 100%; min-height: 40px; border: 0; border-bottom: 1px solid var(--border);
+  border-radius: 0; padding: 8px 6px; text-align: left;
+}
+.bx-project-picker .bx-strip-name { flex: 1; max-width: none; }
+.bx-project-picker .bx-strip-stage { color: var(--muted); font-family: inherit; letter-spacing: 0; }
+.bx-project-picker .bx-strip-page { display: none; }
+.bx-project-picker .bx-strip-pager { display: none; }
+.bx-project-limited { margin: 0; font-size: .75rem; color: var(--muted); }
+.bx-strip-syncing { color: var(--muted); font-size: .72rem; }
+
+/* The composer is a tool, not a product pitch. Examples stay available on request. */
+.askboss { border-radius: 8px; border-top-width: 1px; background: var(--surface); }
+.askboss-inner { padding: 17px 20px; }
+.askboss-aura { display: none; }
+.askboss-head { margin-bottom: 10px; }
+.askboss-head .mr-title { font-size: 1.16rem; }
+.askboss-sub { font-size: .84rem; }
+.askboss-box { border-radius: 6px; background: var(--surface-2); }
+.askboss-examples { margin-top: 11px; }
+.askboss-examples summary { color: var(--muted); font-size: .8rem; cursor: pointer; width: fit-content; }
+.askboss-examples summary:hover { color: var(--ink); }
+.askboss-examples[open] { padding-top: 8px; border-top: 1px solid var(--border); }
+.askboss-opener, .askboss-seed { border-radius: 5px; }
+.ov-help-disclosure > summary { width: fit-content; padding: 8px 0; cursor: pointer; color: var(--muted); font-size: .82rem; }
+.ov-help-disclosure > summary:hover { color: var(--ink); }
+.ov-help-disclosure[open] > summary { margin-bottom: 10px; }
+.ct-benchmark-disclosure { margin: 12px 0 18px; border: 1px solid var(--border); border-radius: 7px; }
+.ct-benchmark-disclosure > summary { padding: 12px 16px; cursor: pointer; font-size: .84rem; font-weight: 650; }
+.ct-benchmark-disclosure > summary span { margin-left: 6px; color: var(--muted); font-weight: 400; }
+.ct-benchmark-disclosure[open] { padding: 0 14px 14px; }
+.wf-detail-head { scroll-margin-top: 164px; }
+
+@media (max-width: 900px) {
+  .bx-new-project { display: inline-flex; }
+  .bx-project-picker { left: 14px; }
+}
+@media (max-width: 700px) {
+  .bx-topbar-title { display: none; }
+  .bx-live-status, .bx-kbd { display: none; }
+  .bx-topbar { gap: 6px; }
+  .bx-new-project { font-size: .75rem; padding: 0 8px; }
+  .bx-system-panel { right: -6px; min-width: min(270px, calc(100vw - 24px)); }
+}
+
 /* BACK, AND OBVIOUSLY BACK.
    This control had a row to itself above the split; now it shares the project's title row, so
    it has to earn attention without a line of whitespace around it. It is the only thing in
@@ -8208,11 +8308,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* ── Settings ────────────────────────────────────────────────────────────────── */
 .settings-knobs { display: grid; gap: 16px; margin-top: 10px; }
 .settings-knob {
-  display: grid; gap: 5px; padding: 12px 14px; border-radius: 10px;
-  border: 1px solid var(--border, #30363d);
-  background: color-mix(in srgb, var(--panel, #0d1117) 60%, transparent);
+  display: grid; gap: 5px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
 }
+.settings-knob:last-child { border-bottom: 0; }
 .settings-knob-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.settings-knob-title { display: inline-flex; align-items: center; gap: 3px; min-width: 0; }
 .settings-knob-head label { font-size: 13px; font-weight: 600; }
 .settings-knob .detail { margin: 0; }
 .settings-knob-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -8220,18 +8321,51 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* WHERE THE VALUE COMES FROM. "runs three agents" and "nobody chose, so it runs the
    deployment default" are different facts, and only one says whether this dial does anything. */
 .settings-source {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border, #30363d);
-  color: var(--muted, #8b949e);
+  font-size: 10px; white-space: nowrap; color: var(--muted);
 }
-.settings-source[data-source="project"] { color: var(--live, #58a6ff); border-color: currentColor; }
+.settings-source[data-source="project"] { color: var(--teal); }
 .settings-note { margin: 4px 0 0; font-size: 12px; color: var(--muted, #8b949e); }
+
+/* Contextual help stays with its label; the explanation escapes clipped panels. */
+.help-tip-trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; margin: -2px 0;
+  border: 0; border-radius: 4px; background: transparent;
+  color: var(--muted); font: 600 12px/1 var(--sans); vertical-align: middle;
+  cursor: help;
+}
+.help-heading { display: flex; align-items: center; gap: 2px; }
+.help-tip-trigger:hover, .help-tip-trigger[aria-expanded="true"] {
+  color: var(--ink); background: var(--surface-3);
+}
+.help-tip-trigger:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.help-tip-bubble {
+  position: fixed; z-index: 10000; display: block;
+  width: max-content; max-width: min(320px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px); overflow: auto;
+  padding: 10px 12px; border: 1px solid var(--border-strong);
+  border-radius: 6px; background: var(--surface-3);
+  box-shadow: var(--shadow); color: var(--ink);
+  font: 400 12px/1.5 var(--sans); letter-spacing: normal; text-align: left;
+  text-transform: none; white-space: normal;
+}
+@media (forced-colors: active) {
+  .help-tip-bubble { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+}
 
 /* ── Starting a project, on the page that watches it ─────────────────────────────
    This read as a form: a bare white box, a floating label, and a button the same
    weight as the thing it acts on. It is the same act as the Command Center's
    composer, done from a different page, so it should look like it. */
 .dw-new { display: grid; gap: 10px; margin-bottom: 18px; }
+@media (max-width: 600px) {
+  .panel-stack[data-area="delivery_workflows"] { min-width: 0; width: 100%; }
+  .panel-stack[data-area="delivery_workflows"] > * { min-width: 0; }
+  .panel-stack[data-area="delivery_workflows"] .dw { grid-template-columns: minmax(0, 1fr); }
+  .panel-stack[data-area="delivery_workflows"] .dw-tabs {
+    max-width: 100%; overflow-x: auto; white-space: nowrap;
+  }
+}
 .dw-new-head h3 { margin: 0 0 2px; font-size: 15px; }
 .dw-new-head .detail { margin: 0; }
 

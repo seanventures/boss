@@ -183,7 +183,7 @@ describe("card renders a failed preview as failed", () => {
  */
 describe("api client request deadline", () => {
   const source = readFileSync(
-    resolve(__dirname, "../../../packages/api-client/src/index.ts"), "utf8");
+    resolve(__dirname, "../../../packages/api-client/src/community.ts"), "utf8");
 
   it("every request carries an abort deadline", () => {
     expect(source).toMatch(/signal:\s*AbortSignal\.timeout\(timeoutMs\)/);

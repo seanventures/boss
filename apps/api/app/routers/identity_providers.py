@@ -13,7 +13,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from boss_engine.services.enterprise import EnterpriseService
+from boss_engine.services.self_hosted_identity import SelfHostedIdentityService
 from boss_engine.services.identity_provider_catalog import (
     catalog_summary,
     get_identity_provider,
@@ -78,7 +78,7 @@ def project_status(
 ) -> dict[str, Any]:
     """Which catalog IdPs are already configured in the enterprise store."""
     settings, engine = _settings_and_engine()
-    enterprise = EnterpriseService(settings)
+    enterprise = SelfHostedIdentityService(settings)
     with begin(engine) as connection:
         configured = enterprise.list_identity_providers(connection, project_id)
     matched = match_configured_providers(None, configured)

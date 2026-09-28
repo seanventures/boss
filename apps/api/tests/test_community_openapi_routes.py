@@ -1,7 +1,8 @@
-"""Contract: Community GA routes are documented in api/openapi.yaml.
+"""Contract: Community GA routes are documented in api/openapi.community.yaml.
 
 File-only — does not exercise runtime handlers or spend.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,7 +11,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[3]
-OPENAPI_PATH = ROOT / "api" / "openapi.yaml"
+OPENAPI_PATH = ROOT / "api" / "openapi.community.yaml"
 
 REQUIRED_OPERATIONS = (
     ("post", "/v1/previews/fixture"),

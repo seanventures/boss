@@ -286,9 +286,10 @@ describe("BOSS mission-control design system", () => {
     expect(page).toContain("status.openTasks");
     expect(page).toContain("ccRoster.filter");
     expect(page).toContain("events.items.map");
-    expect(page).toContain('className="cc-stage"');
-    expect(page).toContain('className="cc-stage-lines"');
-    expect(page).toContain("CC_NODE_SPOTS");
+    expect(page).toContain("<CoordinationPanel");
+    const coordination = readFileSync(resolve(__dirname, "../app/coordination-ui.tsx"), "utf8");
+    expect(coordination).toContain("5_000");
+    expect(coordination).toContain("currentTaskId");
   });
 
   it("keeps approvals decision-backed and exposes their complete evidence", () => {

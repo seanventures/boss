@@ -53,9 +53,7 @@ export const PROJECT_ID =
  * `NEXT_PUBLIC_BOSS_API_KEY` is inlined into the JavaScript bundle at build time, so reading it
  * in the browser handed every visitor a credential that can write to the control plane. Browser
  * requests now go through `app/v1/[...path]`, which attaches the key on the server. */
-export const API_KEY = IS_SERVER
-  ? (process.env.BOSS_API_KEY ?? process.env.NEXT_PUBLIC_BOSS_API_KEY)
-  : undefined;
+export const API_KEY = IS_SERVER ? process.env.BOSS_API_KEY : undefined;
 
 export function resolveProjectId(projectId?: string): string {
   return projectId?.trim() || PROJECT_ID;

@@ -57,10 +57,7 @@ export function DashboardPanel({
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <p className="detail" style={{ margin: 0 }}>
-          One consolidated, cross-phase snapshot — budget, queue, work, proof, and health. Auto-refreshes live.
-        </p>
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <span className="detail" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>cursor {s.cursor}</span>
       </div>
 

@@ -5,7 +5,7 @@ from apps.api.app.services.plane_client import PlaneClient
 
 
 def _client(**over):
-    s = SimpleNamespace(plane_base_url="https://plane.local.sean.network", plane_workspace="goldeneye",
+    s = SimpleNamespace(plane_base_url="https://plane.local.example.test", plane_workspace="goldeneye",
                         plane_project_url="", plane_api_token="tok")
     for k, v in over.items():
         setattr(s, k, v)
@@ -20,9 +20,9 @@ def test_enabled_requires_base_and_token():
 
 def test_ctx_derives_from_project_url_when_base_unset():
     c = _client(plane_base_url="", plane_workspace="",
-                plane_project_url="https://plane.local.sean.network/goldeneye/projects/abc/issues")
+                plane_project_url="https://plane.local.example.test/goldeneye/projects/abc/issues")
     base, ws, token = c._ctx()
-    assert base == "https://plane.local.sean.network" and ws == "goldeneye"
+    assert base == "https://plane.local.example.test" and ws == "goldeneye"
 
 
 def test_set_state_patches_resolved_id(monkeypatch):

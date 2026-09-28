@@ -27,6 +27,7 @@ import { facetsOf } from "./template-brief";
 import { CRAFT, DETAILS, buildBrief } from "./template-details";
 import { DefaultAgentPicker } from "./default-agent-picker";
 import { SplitAction } from "./split-action";
+import { HelpTip } from "./help-tip";
 import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
@@ -1474,8 +1475,12 @@ export function AskBossHero({
             scale, which is why it read as a different product bolted onto the page. */}
         <header className="mr-header askboss-head">
           <div className="mr-header-main">
-            <span className="eyebrow">BOSS Agent</span>
-            <h3 className="mr-title">Your autonomous software factory.</h3>
+            <span className="eyebrow">Ask BOSS</span>
+            <div className="help-heading">
+              <h3 className="mr-title">What do you want to do?</h3>
+              <HelpTip label="Ask BOSS"
+                text="Ask about current work or describe something to build. BOSS shows the steps before taking gated actions." />
+            </div>
             {/* The first line on the first page described PLUMBING — "reads live control-plane
                 state and acts with your approval" — which tells a visitor how it is wired, not
                 what it is for.
@@ -1483,20 +1488,11 @@ export function AskBossHero({
                 It then said "without the meetings", which sold the wrong thing: the governed
                 panel IS the product. Agents convene it and it produces the PRD, so naming it as
                 friction to avoid undersold the part that makes the output trustworthy. */}
-            <p className="askboss-sub">
-              Describe an outcome. BOSS agents research it, debate it in a governed panel,
-              deliver the PRD, build it and ship it —{" "}
-              <strong>with your approval at every gate.</strong>
-            </p>
+            <p className="askboss-sub">Gated actions require your approval.</p>
           </div>
-          <div className="mr-header-meta">
-            <span className={`cap-badge tone-${busy ? "amber" : "green"}`}>
-              {busy ? (slow ? "working · slow" : "working") : "ready"}
-            </span>
-            <span className="mr-meta-item">reads live state</span>
-            <span className="mr-meta-item">acts on approval</span>
-            {busy ? <span className="mr-meta-item">⏱ {elapsed}s</span> : null}
-          </div>
+          {busy ? <div className="mr-header-meta" role="status">
+            {slow ? `Still working · ${elapsed}s` : "Working"}
+          </div> : null}
         </header>
 
         <form
@@ -1516,7 +1512,7 @@ export function AskBossHero({
               value={input}
               rows={1}
               disabled={busy}
-              placeholder="Describe what to build — or pick Ask from the menu to just ask…"
+              placeholder="Describe what to build or ask a question…"
               onChange={(e) => {
                 setInput(e.target.value);
                 // A brief is many lines; a fixed one-row box hid all but the first.
@@ -1579,6 +1575,8 @@ export function AskBossHero({
           </div>
 
           {!reply && !busy ? (
+            <details className="askboss-examples">
+              <summary>Need an example?</summary>
             <div className="askboss-openers">
               {OPENERS.map((o) => (
                 <button
@@ -1592,9 +1590,6 @@ export function AskBossHero({
                 </button>
               ))}
             </div>
-          ) : null}
-
-          {!reply && !busy ? (
             <div className="askboss-ideas">
               {/* COMPACT ON PURPOSE. These were four full-width sentences, which is a lot of
                   height for a secondary path and pushed the composer — the thing that should
@@ -1730,6 +1725,7 @@ export function AskBossHero({
                 builds until you press Build.
               </p>
             </div>
+            </details>
           ) : null}
         </form>
 

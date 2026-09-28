@@ -184,9 +184,9 @@ describe("GitHub Mission Control", async () => {
           id: "bind_1",
           project_id: "boss-dogfood",
           connection_id: "conn_1",
-          owner: "seanheiney",
+          owner: "example-org",
           name: "boss",
-          full_name: "seanheiney/boss",
+          full_name: "example-org/boss",
           role: "primary" as const,
           default_branch: "main",
           visibility: "private",
@@ -244,7 +244,7 @@ describe("GitHub Mission Control", async () => {
           id: "merge_1",
           repository_binding_id: "bind_1",
           pull_request_number: 87,
-          pull_request_url: "https://github.com/seanheiney/boss/pull/87",
+          pull_request_url: "https://github.com/example-org/boss/pull/87",
           source_ref: "ai/codex/boss-255",
           target_ref: "main",
           status: "pending_approval",
@@ -290,7 +290,7 @@ describe("GitHub Mission Control", async () => {
     );
 
     expect(managedHtml).toContain("GitHub Mission Control");
-    expect(managedHtml).toContain("seanheiney/boss");
+    expect(managedHtml).toContain("example-org/boss");
     expect(managedHtml).toContain("12345678");
     expect(managedHtml).toContain("Governed delivery flow");
     expect(managedHtml).toContain("Conflict resolution");

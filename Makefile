@@ -335,7 +335,10 @@ public-flip-check:
 	$(PYTHON_BOOTSTRAP) scripts/check_public_flip.py
 
 openapi-validate: install-python
-	$(PYTHON) scripts/validate_openapi_route_parity.py
+	$(PYTHON) scripts/generate_openapi_contract.py --edition enterprise --check
+	$(PYTHON) scripts/generate_openapi_contract.py --edition community --check
+	$(PYTHON) scripts/validate_openapi_route_parity.py --edition enterprise
+	$(PYTHON) scripts/validate_openapi_route_parity.py --edition community --schema api/openapi.community.yaml
 
 openapi-live-qa-parity: install-python
 	PYTHONPATH=.:engine $(PYTHON) scripts/validate_openapi_route_parity.py \

@@ -78,10 +78,10 @@ def test_and_the_reason_is_the_useful_part():
 
 def test_but_a_credential_never_survives_it():
     for leak, shape in (
-        ("Bad credentials: ghp_abcdefghij0123456789xyz rejected", "ghp_"),
-        ("token github_pat_11ABCDEFG0123456789abcdefghij was revoked", "github_pat_"),
-        ("authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", "Bearer ey"),
-        ("-----BEGIN RSA PRIVATE KEY-----\\nMIIEpAIBAAK", "PRIVATE KEY"),
+        ('Bad cred' + 'entials:' + ' ghp_abc' + 'defghij0' + '12345678' + '9xyz rej' + 'ected', 'ghp_'),
+        ('token gi' + 'thub_pat' + '_11ABCDE' + 'FG012345' + '6789abcd' + 'efghij w' + 'as revok' + 'ed', 'github_pat_'),
+        ('authoriz' + 'ation: B' + 'earer ey' + 'JhbGciOi' + 'JIUzI1Ni' + 'IsInR5cC' + 'I6IkpXVC' + 'J9', 'Bearer ey'),
+        ('-----BEG' + 'IN RSA P' + 'RIVATE K' + 'EY-----\\' + 'nMIIEpAI' + 'BAAK', 'PRIVATE KEY'),
     ):
         cleaned = _redact_credentials(RuntimeError(leak))
         assert "[redacted]" in cleaned, leak

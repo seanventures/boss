@@ -156,7 +156,7 @@ def test_link_issue_to_release(client):
             "project_id": PROJECT_ID,
             "tracker": "plane",
             "issue_key": "BOSS-999",
-            "url": "https://plane.local.sean.network/goldeneye/browse/BOSS-999",
+            "url": "https://plane.local.example.test/goldeneye/browse/BOSS-999",
             "actor": ACTOR,
         },
     )
@@ -175,7 +175,7 @@ def test_link_issue_to_release(client):
             "project_id": PROJECT_ID,
             "tracker": "plane",
             "issue_key": "BOSS-999",
-            "url": "https://plane.local.sean.network/goldeneye/browse/BOSS-999?v=2",
+            "url": "https://plane.local.example.test/goldeneye/browse/BOSS-999?v=2",
             "actor": ACTOR,
         },
     )

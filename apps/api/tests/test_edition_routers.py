@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from textwrap import dedent
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -30,7 +31,11 @@ def _test_app(edition: str) -> FastAPI:
     def enterprise_route():
         return {"surface": "enterprise"}
 
-    mount_edition_routers(app, edition)
+    mount_edition_routers(
+        app,
+        edition,
+        paid_router=APIRouter() if edition != "community" else None,
+    )
     return app
 
 
@@ -48,6 +53,49 @@ def test_paid_editions_mount_both_router_sets(edition):
     client = TestClient(_test_app(edition))
     assert client.get("/v1/code-tasks").status_code == 200
     assert client.get("/v1/account-connect/link").status_code == 200
+
+
+def test_paid_edition_requires_explicit_paid_router():
+    app = FastAPI()
+    app.get("/v1/account-connect/link")(lambda: {"surface": "paid"})
+    with pytest.raises(ValueError, match="requires an explicit paid router"):
+        mount_edition_routers(app, "cloud")
+    assert any(route.path == "/v1/account-connect/link" for route in app.routes)
+
+
+def test_community_router_imports_without_paid_module(tmp_path):
+    """A Community source tree can omit the paid router implementation."""
+
+    package = tmp_path / "community_only" / "routers"
+    package.mkdir(parents=True)
+    (package.parent / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("from .community import mount_edition_routers\n")
+    source = ROOT / "apps" / "api" / "app" / "routers"
+    for name in ("community.py", "route_ownership.py"):
+        (package / name).write_bytes((source / name).read_bytes())
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from fastapi import FastAPI; "
+                "from fastapi.testclient import TestClient; "
+                "from community_only.routers import mount_edition_routers; "
+                "app=FastAPI(); "
+                "app.get('/v1/code-tasks')(lambda: {'surface': 'community'}); "
+                "app.get('/v1/account-connect/link')(lambda: {'surface': 'paid'}); "
+                "mount_edition_routers(app, 'community'); "
+                "client=TestClient(app); "
+                "assert client.get('/v1/code-tasks').status_code == 200; "
+                "assert client.get('/v1/account-connect/link').status_code == 404"
+            ),
+        ],
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -243,6 +291,7 @@ def test_real_community_app_omits_paid_routes():
                 # Paid: hosted Account Connect, marketplace, cluster packs, self-improvement.
                 "assert '/v1/account-connect/link' not in paths; "
                 "assert '/v1/enterprise/clusters' not in paths; "
+                "assert '/v1/enterprise/soc2-evidence' not in paths; "
                 "assert '/v1/marketplace/listings' not in paths; "
                 "assert '/v1/self-improvement/proposals' not in paths"
             ),
@@ -254,6 +303,313 @@ def test_real_community_app_omits_paid_routes():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_community_api_starts_without_paid_soc2_service():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockPaidSoc2(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname in {
+                            'apps.api.app.enterprise_extensions',
+                            'apps.api.app.enterprise_extensions.soc2',
+                        }:
+                            raise ImportError('SOC2 service deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockPaidSoc2())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/code-tasks' in paths
+                assert '/v1/enterprise/identity-providers' in paths
+                assert '/v1/enterprise/soc2-evidence' not in paths
+                assert 'apps.api.app.enterprise_extensions' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_community_api_starts_without_hosted_routes():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockHostedRoutes(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname == 'apps.api.app.enterprise_extensions.hosted_routes':
+                            raise ImportError('hosted routes deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockHostedRoutes())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/code-tasks' in paths
+                assert '/v1/cloud/easy-connect' in paths
+                assert '/v1/enterprise/identity-providers' in paths
+                assert not any(path.startswith('/v1/account-connect') for path in paths)
+                assert not any(path.startswith('/v1/marketplace') for path in paths)
+                assert 'apps.api.app.enterprise_extensions.hosted_routes' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_api_registers_hosted_route_contract():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "enterprise_self_hosted"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                from fastapi.routing import APIRoute
+                from apps.api.app.main import app
+
+                hosted = {
+                    (method, route.path)
+                    for route in app.routes
+                    if isinstance(route, APIRoute)
+                    and route.path.startswith(('/v1/account-connect', '/v1/marketplace'))
+                    for method in route.methods
+                }
+                expected = {
+                    ('POST', '/v1/account-connect/link'),
+                    ('POST', '/v1/account-connect/unlink'),
+                    ('POST', '/v1/account-connect/sync'),
+                    ('GET', '/v1/account-connect/health-checks'),
+                    ('POST', '/v1/account-connect/health-checks'),
+                    ('GET', '/v1/account-connect/auth-sessions'),
+                    ('POST', '/v1/account-connect/auth-sessions'),
+                    ('POST', '/v1/account-connect/auth-sessions/{session_id}/complete'),
+                    ('GET', '/v1/account-connect/team-invites'),
+                    ('POST', '/v1/account-connect/team-invites'),
+                    ('POST', '/v1/account-connect/team-invites/{invite_id}/revoke'),
+                    ('GET', '/v1/account-connect/billing-portal-sessions'),
+                    ('POST', '/v1/account-connect/billing-portal-sessions'),
+                    ('GET', '/v1/marketplace/listings'),
+                    ('GET', '/v1/marketplace/sync-runs'),
+                    ('POST', '/v1/marketplace/sync'),
+                }
+                assert hosted == expected, (hosted - expected, expected - hosted)
+                assert all(
+                    route.endpoint.__module__
+                    == 'apps.api.app.enterprise_extensions.hosted_routes'
+                    for route in app.routes
+                    if isinstance(route, APIRoute)
+                    and route.path.startswith(('/v1/account-connect', '/v1/marketplace'))
+                )
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_community_api_starts_without_paid_operations_module():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockPaidOperations(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname == 'apps.api.app.enterprise_extensions.operations_routes':
+                            raise ImportError('paid operations deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockPaidOperations())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/enterprise/identity-providers' in paths
+                assert '/v1/enterprise/identity-rollout-policies' in paths
+                assert '/v1/goldeneye/status' in paths
+                assert '/v1/enterprise/clusters' not in paths
+                assert '/v1/enterprise/support-cases' not in paths
+                assert 'apps.api.app.enterprise_extensions.operations_routes' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_community_api_starts_without_paid_enterprise_service():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib.abc
+                import sys
+
+                class BlockPaidEnterpriseService(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname in {
+                            'boss_engine.services.enterprise',
+                            'apps.api.app.services.enterprise',
+                        }:
+                            raise ImportError('paid enterprise service deliberately unavailable')
+                        return None
+
+                sys.meta_path.insert(0, BlockPaidEnterpriseService())
+                from apps.api.app.main import app
+                paths = {getattr(route, 'path', '') for route in app.routes}
+                assert '/v1/enterprise/identity-providers' in paths
+                assert '/v1/enterprise/identity-rollout-policies' in paths
+                assert '/v1/enterprise/scim/users' in paths
+                assert '/v1/identity-providers' in paths
+                assert '/v1/enterprise/clusters' not in paths
+                assert '/v1/enterprise/support-cases' not in paths
+                assert 'boss_engine.services.enterprise' not in sys.modules
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_api_registers_operations_route_contract():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "enterprise_self_hosted"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                from fastapi.routing import APIRoute
+                from apps.api.app.main import app
+
+                prefixes = (
+                    '/v1/enterprise/clusters',
+                    '/v1/enterprise/cluster-validation-runs',
+                    '/v1/enterprise/support-cases',
+                )
+                routes = {
+                    (method, route.path)
+                    for route in app.routes
+                    if isinstance(route, APIRoute) and route.path.startswith(prefixes)
+                    for method in route.methods
+                }
+                assert routes == {
+                    ('GET', '/v1/enterprise/clusters'),
+                    ('POST', '/v1/enterprise/clusters'),
+                    ('GET', '/v1/enterprise/cluster-validation-runs'),
+                    ('POST', '/v1/enterprise/cluster-validation-runs'),
+                    ('GET', '/v1/enterprise/support-cases'),
+                    ('POST', '/v1/enterprise/support-cases'),
+                    ('POST', '/v1/enterprise/support-cases/{case_id}'),
+                }
+                assert all(
+                    route.endpoint.__module__
+                    == 'apps.api.app.enterprise_extensions.operations_routes'
+                    for route in app.routes
+                    if isinstance(route, APIRoute) and route.path.startswith(prefixes)
+                )
+                """
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_api_registers_soc2_route():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "enterprise_self_hosted"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from apps.api.app.main import app; "
+                "routes={getattr(route, 'path', ''): route for route in app.routes}; "
+                "assert '/v1/enterprise/soc2-evidence' in routes; "
+                "assert routes['/v1/enterprise/soc2-evidence'].endpoint.__module__ "
+                "== 'apps.api.app.routers.enterprise'"
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_paid_soc2_route_preserves_actor_gate(client):
+    response = client.post(
+        "/v1/enterprise/soc2-evidence",
+        json={"project_id": "boss-dogfood", "actor": "not_a_project_member"},
+    )
+    assert response.status_code == 403
 
 
 def test_enterprise_event_and_decision_sinks_preserve_postgres_behavior(engine):

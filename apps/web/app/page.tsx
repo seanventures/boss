@@ -1,3 +1,4 @@
+
 import {
   applyChangeSetAction,
   approveChangeSetAction,
@@ -12,14 +13,38 @@ import {
   createEntitlementConnectionSessionAction,
   createOpsDigestAction,
   createDeploymentRunAction,
+  installAgentModuleAction,
+  installPackAction,
+  dryRunOutboxMessageAction,
+  queueOutboxMessageAction,
+  refreshHealthSnapshotAction,
+  disconnectEntitlementSourceAction,
+  revokeBreakGlassGrantAction,
+  rollbackAgentModuleAction,
+  runAutoscalerPlanAction,
+  runDeploymentHealthCheckAction,
+  runResourceJanitorAction,
+  submitOutboxDraftAction,
+  submitCommandAction,
+  syncProviderResourcesAction,
+  uninstallAgentModuleAction,
+  upsertDeploymentEnvironmentPolicyAction,
+  upsertEnterpriseIdentityProviderAction,
+  upsertEnterpriseIdentityRolloutPolicyAction,
+  upsertEnterpriseScimGroupAction,
+  upsertEnterpriseScimUserAction,
+  upsertCommsChannelPolicyAction,
+  upsertOrgMemberAction,
+  upsertWorkerPoolAction,
+  uploadModelCredentialAction,
+} from "./actions";
+import {
   completeAccountConnectAuthSessionAction,
   createAccountConnectBillingPortalSessionAction,
   createAccountConnectAuthSessionAction,
   createAccountConnectTeamInviteAction,
   createEnterpriseSupportCaseAction,
   createEnterpriseClusterValidationRunAction,
-  installAgentModuleAction,
-  installPackAction,
   linkAccountConnectAction,
   startCloudEasyConnectAction,
   unlinkCloudAction,
@@ -27,48 +52,24 @@ import {
   syncCloudAction,
   inviteCloudTeamAction,
   saveCloudRetentionAction,
-  dryRunOutboxMessageAction,
-  queueOutboxMessageAction,
-  refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
-  disconnectEntitlementSourceAction,
-  revokeBreakGlassGrantAction,
-  rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
-
-  runAutoscalerPlanAction,
   runAccountConnectHealthCheckAction,
-  runDeploymentHealthCheckAction,
-  runResourceJanitorAction,
   submitSelfImprovementProposalAction,
-  submitOutboxDraftAction,
-  submitCommandAction,
   syncAccountConnectAction,
   syncHostedMarketplaceAction,
-  syncProviderResourcesAction,
   unlinkAccountConnectAction,
-  uninstallAgentModuleAction,
   revokeAccountConnectTeamInviteAction,
-  upsertDeploymentEnvironmentPolicyAction,
   upsertEnterpriseClusterAction,
-  upsertEnterpriseIdentityProviderAction,
-  upsertEnterpriseIdentityRolloutPolicyAction,
-  upsertEnterpriseScimGroupAction,
-  upsertEnterpriseScimUserAction,
-  upsertCommsChannelPolicyAction,
   updateEnterpriseSupportCaseAction,
-  upsertOrgMemberAction,
-  upsertWorkerPoolAction,
-  uploadModelCredentialAction,
-} from "./actions";
+} from "./actions-paid";
 import ConsoleShell from "./ConsoleShell";
 import {
   CommunityIncludedBadge,
-  PaidSurfaceGate,
-  PaidTierBadge,
   SurfaceHeading,
 } from "./edition-ui";
+import { PaidSurfaceGate, PaidTierBadge } from "./edition-ui-paid";
 import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
 import { OnboardingHelpCard } from "./onboarding-help-card";
 import { BossAgentHome } from "./boss-agent-home";
@@ -79,7 +80,7 @@ import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
-import { fetchAgentModuleFeed } from "../lib/agent-modules";
+import { fetchAgentModuleFeedWithMarketplace as fetchAgentModuleFeed } from "../lib/agent-modules-paid";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
 import { FocusedAgents } from "./focused-agents-ui";
@@ -115,7 +116,6 @@ import { PolicyEvalList, AnomalyScanCard, RunTraceViewer } from "./safety-ui";
 import { fetchLatestEval } from "../lib/evals";
 import { fetchSkillInvocations } from "../lib/skill-invocations";
 import {
-  SelfImprovementRuntime,
   EvalHarnessCard,
   AutonomyEvaluateCard,
   RouterHealthCard,
@@ -131,7 +131,9 @@ import {
 } from "./phase3-ui";
 import { fetchChaosRuns } from "../lib/chaos";
 import { fetchCommitmentReconciliations, fetchFinopsSummary } from "../lib/finops";
-import { ChaosCard, FinopsCard, Soc2Card } from "./phase4-ui";
+import { ChaosCard, FinopsCard } from "./phase4-ui";
+import { Soc2Card } from "./phase4-paid-ui";
+import { SelfImprovementRuntime } from "./phase2-paid-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -177,8 +179,8 @@ import { AiSreHome } from "./ai-sre-ui";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
-import { AgentOrb } from "./agent-orb";
-import { buildAgentRoster } from "../lib/roster";
+import { CoordinationPanel } from "./coordination-ui";
+import { boardStatus, buildAgentRoster, taskBoardColumn } from "../lib/roster";
 import { ReliabilityHome } from "./reliability-ui";
 import { AssuranceCenter } from "./assurance-ui";
 import { fetchAssuranceFeed } from "../lib/assurance";
@@ -211,7 +213,7 @@ import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
-import { fetchDeliveryMetrics, fetchInFlight } from "../lib/metrics";
+import { fetchDeliveryMetrics, fetchInFlight, reconcileRecentWork } from "../lib/metrics";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
@@ -260,6 +262,7 @@ import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
 import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
 
 import { AskBossHero } from "./ask-boss-hero";
+import { HelpTip } from "./help-tip";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -322,27 +325,8 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   return "review required";
 }
 
-function roleInitials(name: string): string {
-  const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "CP";
-  const initials =
-    words.length === 1 ? words[0].slice(0, 3) : words.map((word) => word[0]).join("").slice(0, 3);
-  return initials.toUpperCase();
-}
-
 // Relative "waited Xm" labels use ClientRelativeTime (absolute UTC on SSR,
 // relative after mount) so decision-queue rows never trip React #418.
-
-// Command Center coordination graph: the handoff's node positions (percent of
-// the stage) with their SVG line endpoints (520x340 viewBox) and staggered
-// animation periods.
-const CC_NODE_SPOTS = [
-  { left: 23, top: 24, lineX: 120, lineY: 80, spinSeconds: 3, flowSeconds: 1.1 },
-  { left: 77, top: 23, lineX: 400, lineY: 78, spinSeconds: 3.4, flowSeconds: 1.3 },
-  { left: 17, top: 68, lineX: 90, lineY: 230, spinSeconds: 2.8, flowSeconds: 1.5 },
-  { left: 83, top: 71, lineX: 430, lineY: 240, spinSeconds: 3.2, flowSeconds: 1.2 },
-  { left: 38, top: 85, lineX: 200, lineY: 290, spinSeconds: 3.6, flowSeconds: 1.6 },
-] as const;
 
 function formatMsDuration(ms?: number): string {
   if (!ms || ms <= 0) return "—";
@@ -948,16 +932,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const softwareFactoryArtifactEvidence = extractSoftwareFactoryArtifactEvidence(
     artifacts.items,
   );
-  // Command Center (handoff format): live agent states for the coordination
-  // graph — the busiest agents first so live work is what orbits the core.
+  // Command Center assignments use the canonical task feed for current state.
   const ccRoster = buildAgentRoster(roles.items, tasks.items);
-  const ccStateRank = { running: 0, blocked: 1, verified: 2, idle: 3 } as const;
-  const ccGraphAgents = [...ccRoster]
-    .sort((left, right) => ccStateRank[left.state] - ccStateRank[right.state])
-    .slice(0, CC_NODE_SPOTS.length);
-  const ccVerifiedToday = receipts.items.filter(
-    (receipt) => Date.now() - Date.parse(receipt.createdAt) < 86_400_000,
-  ).length;
+  const unfinishedTasks = tasks.items.filter((task) => taskBoardColumn(boardStatus(task)) !== "done").length;
   const editionId = normalizeEditionId(
     commercial.edition?.editionId ?? selfImprovement.editionId,
   );
@@ -1008,7 +985,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-head">
             <div>
               <span className="eyebrow">Live Dashboard</span>
-              <h2>Cross-phase control snapshot</h2>
+              <div className="help-heading"><h2>Cross-phase control snapshot</h2>
+                <HelpTip label="Live dashboard"
+                  text="A consolidated view of budget, queue, work, proof, and service health. Counts and states come from the control plane." />
+              </div>
             </div>
           </div>
           <DashboardPanel feed={dashboardSnapshot} />
@@ -1157,8 +1137,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
           <div className="cc-kpis">
             <AreaLink className="cc-kpi" area="work" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Outcomes in flight</span>
-              <span className="cc-kpi-n">{status.openTasks}</span>
+              <span className="cc-kpi-l">{tasks.items.length >= 50 ? "Recent unfinished tasks" : "Unfinished tasks"}</span>
+              <span className="cc-kpi-n">{tasks.apiReachable ? unfinishedTasks : "—"}</span>
             </AreaLink>
                         {/* Was "Agents active", which counted ROLES owning a task in an active column.
                 Only 23 of 187 tasks carry an owner_role_id, so it showed 0/21 while four runs
@@ -1186,109 +1166,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </AreaLink>
           </div>
 
-          <div className="cc-grid">
-            <article className="cc-coord" aria-label="Live coordination">
-              <div className="cc-panel-head">
-                <strong>Live coordination</strong>
-                <span className="cc-panel-meta">
-                  {ccRoster.filter((agent) => agent.state === "running").length} running
-                </span>
-              </div>
-              <div className="cc-stage">
-                <svg className="cc-stage-lines" viewBox="0 0 520 340" aria-hidden>
-                  <g strokeWidth="1.6" fill="none" strokeDasharray="4 6">
-                    {CC_NODE_SPOTS.slice(0, ccGraphAgents.length).map((spot, index) => (
-                      <line
-                        key={index}
-                        x1="260"
-                        y1="170"
-                        x2={spot.lineX}
-                        y2={spot.lineY}
-                        stroke={index % 2 === 0 ? "#2f6fe0" : "#2ec5c5"}
-                        style={{ animation: `bpFlow ${spot.flowSeconds}s linear infinite` }}
-                      />
-                    ))}
-                    {ccGraphAgents.length >= 2 ? (
-                      <line
-                        x1={CC_NODE_SPOTS[0].lineX}
-                        y1={CC_NODE_SPOTS[0].lineY}
-                        x2={CC_NODE_SPOTS[1].lineX}
-                        y2={CC_NODE_SPOTS[1].lineY}
-                        stroke="#26365c"
-                        style={{ animation: "bpFlow 2s linear infinite" }}
-                      />
-                    ) : null}
-                  </g>
-                </svg>
-                <div className="cc-core">
-                  <div className="cc-core-tile">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/boss-mark.png" alt="" />
-                  </div>
-                  <span className="cc-core-label">BOSS core</span>
-                </div>
-                {ccGraphAgents.map((agent, index) => {
-                  const spot = CC_NODE_SPOTS[index];
-                  return (
-                    <div
-                      className="cc-node"
-                      key={agent.id}
-                      style={{ left: `${spot.left}%`, top: `${spot.top}%` }}
-                    >
-                      <AgentOrb
-                        label={roleInitials(agent.name)}
-                        state={agent.state}
-                        spinSeconds={spot.spinSeconds}
-                        title={`${agent.name} — ${agent.state}`}
-                      />
-                      <span className="cc-node-label">{agent.name}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </article>
-
-            {/* WHAT YOU STARTED, NOT WHAT THE MACHINE LOGGED.
-                This was the raw event stream: worker heartbeats, leased jobs, budget
-                reservations released. All true, none of it something a person acts on, and it
-                pushed the one question an operator actually has off the page — "I pressed
-                Build, what is it doing, and where do I look?" Each row is a thing they
-                started, the stage it is in, and a link to the area that shows that stage. */}
-            <article className="cc-feed" aria-label="In flight">
-              <div className="cc-panel-head">
-                <span className="cc-live-dot" aria-hidden />
-                <strong>In flight</strong>
-                <span className="cc-feed-meta">last 3 days</span>
-              </div>
-              <div className="cc-feed-list">
-                {inFlight.map((item) => (
-                  <AreaLink
-                    className="cc-flight-row"
-                    area={item.area}
-                    orgId={activeOrgId}
-                    key={item.taskId}
-                    title={item.title}
-                  >
-                    <span className={`cc-flight-stage stage-${item.stage}`}>{item.stage}</span>
-                    <span className="cc-flight-main">
-                      <span className="cc-flight-title">{item.title || item.taskId}</span>
-                      <span className="cc-flight-sub">
-                        {item.active ? "running" : item.status}
-                        {item.createdAt ? <> · <time dateTime={item.createdAt}>{formatDateTime(item.createdAt)}</time></> : null}
-                      </span>
-                    </span>
-                    <span className="cc-flight-go" aria-hidden>→</span>
-                  </AreaLink>
-                ))}
-                {inFlight.length === 0 ? (
-                  <p className="empty-state">
-                    Nothing started in the last three days. Describe something in Ask BOSS and
-                    press Build.
-                  </p>
-                ) : null}
-              </div>
-            </article>
-          </div>
+          <CoordinationPanel key={`${activeOrgId}:${activeProjectId}`}
+            projectId={activeProjectId} orgId={activeOrgId}
+            initial={{ roster: ccRoster, inFlight: reconcileRecentWork(inFlight, tasks.items), observedAt: new Date().toISOString() }} />
           {/* The flow, as one row, in the order the work happens.
               These already carried the two ways in — convene a panel, start a code task. What
               was missing on either side of them is where an idea comes FROM when it is not yet
@@ -1309,11 +1189,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("overview") ? (
         <section className="panel-stack" data-area="overview" aria-label="What you can do here">
-          <OnboardingHelpCard />
+          <details className="ov-help-disclosure">
+            <summary>New here? See how BOSS works</summary>
+            <OnboardingHelpCard />
+          </details>
         </section>
         ) : null}
 
-        {shows("overview") ? (
+        {shows("overview") && metatron ? (
         <section className="stack-grid" data-area="overview">
           <article className="stack-card">
             <div className="section-head">
@@ -1756,12 +1639,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="budget" aria-label="Govern">
           <div className="panel">
             <span className="eyebrow" data-area="budget">Govern</span>
-            <h2>How hard BOSS runs</h2>
-            <p className="detail">
-              These lived in environment variables, so changing one meant an ops action and a
-              restart. Each says where its value comes from; a project value overrides the
-              deployment default.
-            </p>
+            <div className="help-heading"><h2>How hard BOSS runs</h2>
+              <HelpTip label="Project run settings"
+                text="Each value shows whether it comes from this project or the deployment default. A project value overrides that default." />
+            </div>
+            <p className="detail">Changes apply to the next run.</p>
             {/* Numbers only. Which model fills which role is asked in Setup, next to the
                 step that connects one — not here beside concurrency and spend. */}
             <SettingsKnobs projectId={activeProjectId} actor={activeActorId} only="number" />
@@ -1791,11 +1673,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <>
                 <div className="grid compact-grid">
                   <article>
-                    <h2>Actual Spend</h2>
+                    <div className="help-heading"><h2>Actual Spend</h2>
+                      <HelpTip label="Actual spend"
+                        text="Cost receipts recorded for this project." />
+                    </div>
                     <div className="metric">
                       {formatMicros(budgetStatus.actualUsdMicros)}
                     </div>
-                    <p className="detail">Cost receipts recorded for this project.</p>
                   </article>
                   <article>
                     <h2>Reserved</h2>
@@ -1808,14 +1692,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </p>
                   </article>
                   <article>
-                    <h2>Forecast 24h</h2>
+                    <div className="help-heading"><h2>Forecast 24h</h2>
+                      <HelpTip label="24 hour forecast"
+                        text="Observed spend over the recent window plus active reservations." />
+                    </div>
                     <div className="metric">
                       {formatMicros(budgetStatus.forecasted24hUsdMicros)}
                     </div>
-                    <p className="detail">
-                      Observed spend over {budgetStatus.burnWindowHours}h plus
-                      active reservations.
-                    </p>
+                    <p className="detail">Based on {budgetStatus.burnWindowHours}h of spend.</p>
                   </article>
                   <article>
                     <h2>Time To Cap</h2>

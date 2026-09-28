@@ -196,6 +196,70 @@ def _optional_list(inputs: dict[str, Any], key: str) -> list[Any]:
     return value
 
 
+@register_executor("mobile.device.execute")
+def execute_mobile_device(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """One typed mobile action per leased job, with a durable dedupe receipt."""
+    from .core import json_hash
+    from .mobile_device import LocalMobileDeviceAdapter, MobileDeviceError
+
+    if not context.created_by_job_id:
+        raise MobileDeviceError("mobile actions require a leased skill.execute job")
+    org_id, workspace_id = context.tenant_scope()
+    receipt, created = context.receipts.create_or_reuse(
+        context.connection,
+        org_id,
+        workspace_id,
+        context.project_id,
+        f"mobile.device.execute:{context.created_by_job_id}",
+        "mobile.device.action",
+        {
+            "target": str(inputs.get("target") or ""),
+            "device_id": str(inputs.get("device_id") or ""),
+            "data_boundary": "internal",
+        },
+        {
+            "action": str(inputs.get("action") or ""),
+            # Receipts persist only a fingerprint. Text can be a password or
+            # personal data, and must not enter receipt/event metadata.
+            "inputs_sha256": json_hash(inputs),
+        },
+        created_by_job_id=context.created_by_job_id,
+        data_boundary="internal",
+    )
+    if not created:
+        if receipt["status"] == "succeeded":
+            return {
+                **(receipt.get("result") or {}),
+                "receipt_id": receipt["id"],
+                "actual_cost_usd_micros": 0,
+                "reused": True,
+            }
+        raise MobileDeviceError(
+            f"mobile action receipt {receipt['id']} is {receipt['status']}; "
+            "the device effect will not be replayed automatically"
+        )
+    try:
+        result = LocalMobileDeviceAdapter(context).execute(inputs, receipt["id"])
+        context.receipts.mark_succeeded(
+            context.connection, receipt["id"], str(inputs["device_id"]), result
+        )
+    except Exception as exc:
+        context.receipts.mark_failed(
+            context.connection,
+            receipt["id"],
+            {"reason": str(exc)[:1000], "action": str(inputs.get("action") or "")},
+        )
+        raise
+    return {
+        **result,
+        "receipt_id": receipt["id"],
+        "actual_cost_usd_micros": 0,
+    }
+
+
 @register_executor("toolchain.source.assess")
 def execute_toolchain_source_assess(
     context: SkillExecutorContext,

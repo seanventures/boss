@@ -19,7 +19,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("../app/actions", () => ({
   getDeliveryPipelineAction: vi.fn(async () => null),
-  getDeliveryDefaultsAction: vi.fn(async () => ({ owner: "seanheiney", repo: "boss-sandbox" })),
+  getDeliveryDefaultsAction: vi.fn(async () => ({ owner: "example-org", repo: "boss-sandbox" })),
   listReposAction: vi.fn(async () => ({ repos: [] })),
   listRepoAppsAction: vi.fn(async () => ({ apps: [] })),
   listRefsAction: vi.fn(async () => ({ branches: [] })),
@@ -154,7 +154,7 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
             id: "dt_1",
             app_name: "demo",
             environment: "staging",
-            repo: "seanheiney/boss-sandbox",
+            repo: "example-org/boss-sandbox",
             target_kind: "ssh",
             target_ref: "ubuntu@10.0.0.1",
             status: "active",

@@ -85,7 +85,7 @@ def _payload(event: str, *, action: str | None = None, sender: str = "octocat") 
     }
     payload = {
         "action": action or actions.get(event, "created"),
-        "repository": {"full_name": "seanheiney/boss"},
+        "repository": {"full_name": "example-org/boss"},
         "sender": {"login": sender, "type": "User"},
         "number": 42,
     }
@@ -155,7 +155,7 @@ def _configure(settings, monkeypatch) -> None:
     monkeypatch.setattr(
         settings,
         "webhook_project_map_json",
-        json.dumps({"seanheiney/boss": PROJECT_ID}),
+        json.dumps({"example-org/boss": PROJECT_ID}),
     )
 
 
@@ -195,7 +195,7 @@ def test_github_alias_verifies_normalizes_and_queues(
             {"event_id": event_id},
         ).mappings().one()
     assert stored["event_type"] == expected_event
-    assert stored["data"]["normalized"]["repository"] == "seanheiney/boss"
+    assert stored["data"]["normalized"]["repository"] == "example-org/boss"
     assert job["kind"] == expected_job
 
 
@@ -355,7 +355,7 @@ def test_triage_needs_info_and_bug_paths_post_one_comment_each(engine):
     fake = FakeGitHub()
     agent = GitHubTriageAgent(settings, lambda _: fake)
     base = {
-        "repository": "seanheiney/boss",
+        "repository": "example-org/boss",
         "sender": {"login": "octocat", "type": "User"},
         "number": 8,
     }

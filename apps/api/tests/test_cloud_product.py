@@ -6,6 +6,44 @@ from __future__ import annotations
 PROJECT_ID = "boss-dogfood"
 
 
+def test_shared_community_cloud_service_runs_without_hosted_url(engine):
+    from sqlalchemy import text
+
+    from boss_engine.config import get_settings
+    from boss_engine.services.community_cloud import CommunityCloudService
+    from boss_engine.services.community_edition import CommunityEditionService
+
+    settings = get_settings().model_copy(
+        update={"boss_edition": "community", "account_connect_url": None}
+    )
+    edition = CommunityEditionService(settings)
+    cloud = CommunityCloudService(settings, edition)
+    with engine.begin() as connection:
+        status = edition.edition_status(connection, PROJECT_ID)
+        assert status["edition_id"] == "community"
+        assert status["status"] == "active"
+        assert edition.list_license_entitlements(connection, PROJECT_ID)
+        assert cloud.catalog(connection, PROJECT_ID)["independence"][
+            "community_runs_without_cloud"
+        ] is True
+        assert cloud.status(connection, PROJECT_ID)["independent"] is True
+
+        started = cloud.easy_connect(
+            connection,
+            project_id=PROJECT_ID,
+            method="device",
+            actor="ceo",
+        )
+        assert started["status"] == "blocked"
+        assert started["receipt_id"]
+        receipt = connection.execute(
+            text("SELECT status, effect_kind FROM receipts WHERE id = :id"),
+            {"id": started["receipt_id"]},
+        ).mappings().one()
+        assert receipt["status"] == "failed"
+        assert receipt["effect_kind"] == "account_connect.auth_session"
+
+
 def test_cloud_catalog_community_independent(client):
     response = client.get("/v1/cloud/catalog", params={"project_id": PROJECT_ID})
     assert response.status_code == 200, response.text

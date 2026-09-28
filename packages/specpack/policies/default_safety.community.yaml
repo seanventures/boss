@@ -1,0 +1,74 @@
+# No repository write target is enabled by default in Community.
+kind: Policy
+id: default_safety
+version: 0.1.0
+scope:
+  type: org
+rules:
+  external_effects:
+    require_receipt: true
+    require_dedupe_key: true
+  spend:
+    require_budget_reservation: true
+  worker_jobs:
+    require_lease: true
+    require_heartbeat: true
+    max_attempts_default: 3
+  comms:
+    use_outbox_only: true
+    no_silent_drops: true
+    quiet_hours_enabled: false
+  approvals:
+    risk_tier_requirements:
+      '0':
+        approvals: []
+      '1':
+        approvals: []
+      '2':
+        approvals:
+        - ceo
+      '3':
+        approvals:
+        - ceo
+        - cao
+  self_improvement:
+    apply_directly: false
+    require_pr: true
+    require_tests: true
+    require_rollback_plan: true
+  agent_modules:
+    require_spec_backed_catalog: true
+    require_explicit_install: true
+    require_role_lineage: true
+    require_runtime_resolution_for_governed_job_kinds: true
+    forbid_hidden_prompt_overrides: true
+    forbid_direct_core_bypass_for_packaged_agent_logic: true
+  entitlements:
+    require_official_access_method: true
+    forbid_consumer_ui_scraping: true
+    forbid_private_endpoints: true
+    forbid_credential_sharing: true
+    forbid_rate_limit_evasion: true
+    forbid_personal_subscription_for_multi_tenant_workloads: true
+    optimize_within_limits: true
+    enforce_data_boundaries: true
+    local_only_requires_approved_local_model: true
+    restricted_requires_explicit_source_approval: true
+  resource_plane:
+    provider_adapters_are_plugins: true
+    resource_plane_kernel_is_core: true
+    require_changeset_for_provider_write: true
+    require_resource_receipt_for_provider_action: true
+    require_budget_reservation_for_spendy_provider_action: true
+    require_explicit_approval_for_destructive_action: true
+    require_rollback_plan_for_production_dns_or_deploy: true
+    forbid_raw_provider_secrets_in_agent_context: true
+    budget_governor_overrides_autoscaler: true
+    openclaw_not_foundation: true
+  sandbox_real_mode:
+    slack_real_send_allowed: false
+    github_real_pr_allowed: false
+    github_real_merge_allowed: false
+    infra_real_provision_allowed: false
+    model_real_spend_allowed: true
+    allowed_github_targets: []

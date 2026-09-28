@@ -10,8 +10,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from ..config import Settings
-from .core import create_artifact, emit_event, now_utc
+from boss_engine.config import Settings
+from boss_engine.services.core import create_artifact, emit_event, now_utc
 
 
 def _scalar(connection: Connection, sql: str, project_id: str) -> int:

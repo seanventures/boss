@@ -1,4 +1,6 @@
 import { API_URL, authHeaders } from "./client";
+import { boardStatus, taskBoardColumn } from "./roster";
+import type { TaskFeedItem } from "./tasks";
 
 /**
  * Delivery metrics — real aggregates, or absent.
@@ -73,17 +75,39 @@ export type InFlightItem = {
   area: string;
   createdAt: string | null;
   active: boolean;
+  owner?: string;
+  updatedAt?: string | null;
 };
 
-export async function fetchInFlight(projectId: string, limit = 6): Promise<InFlightItem[]> {
+/** Prefer the canonical task lifecycle when the metrics feed and task feed disagree. */
+export function reconcileRecentWork(items: InFlightItem[], tasks: TaskFeedItem[]): InFlightItem[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  return items.map((item) => {
+    const task = byId.get(item.taskId);
+    if (!task) return item;
+    const status = boardStatus(task);
+    return {
+      ...item,
+      status,
+      active: taskBoardColumn(status) === "in_progress",
+      owner: task.ownerRoleId,
+      updatedAt: task.updatedAt,
+    };
+  });
+}
+
+export async function fetchInFlightFeed(projectId: string, limit = 6): Promise<{
+  items: InFlightItem[];
+  apiReachable: boolean;
+}> {
   try {
     const r = await fetch(
       `${API_URL}/v1/metrics/in-flight?project_id=${encodeURIComponent(projectId)}&limit=${limit}`,
       { headers: authHeaders({}), cache: "no-store" },
     );
-    if (!r.ok) return [];
+    if (!r.ok) return { items: [], apiReachable: false };
     const d = (await r.json()) as { items?: Array<Record<string, unknown>> };
-    return (d.items ?? []).map((i) => ({
+    return { items: (d.items ?? []).map((i) => ({
       taskId: String(i.task_id ?? ""),
       title: String(i.title ?? ""),
       status: String(i.status ?? ""),
@@ -91,8 +115,12 @@ export async function fetchInFlight(projectId: string, limit = 6): Promise<InFli
       area: String(i.area ?? "code_tasks"),
       createdAt: (i.created_at as string) ?? null,
       active: Boolean(i.active),
-    }));
+    })), apiReachable: true };
   } catch {
-    return [];
+    return { items: [], apiReachable: false };
   }
+}
+
+export async function fetchInFlight(projectId: string, limit = 6): Promise<InFlightItem[]> {
+  return (await fetchInFlightFeed(projectId, limit)).items;
 }

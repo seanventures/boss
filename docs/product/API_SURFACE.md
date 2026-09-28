@@ -77,11 +77,12 @@ Implementation build order and hard rules: root [`AGENTS.md`](../../AGENTS.md).
 # Route index markdown (METHOD + path, grouped)
 python scripts/generate_api_route_index.py
 
-# Merge implemented routes into OpenAPI stubs
-PYTHONPATH=.:engine python scripts/sync_openapi_from_routes.py
+# Generate both static contracts from the mounted FastAPI editions
+python scripts/generate_openapi_contract.py --edition enterprise
+python scripts/generate_openapi_contract.py --edition community
 
-# Parity check (if present)
-PYTHONPATH=.:engine python scripts/validate_openapi_route_parity.py
+# Fail if either generated contract or its mounted route set has drifted
+make openapi-validate
 ```
 
 Live:

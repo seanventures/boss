@@ -4,19 +4,14 @@ import React, { useEffect, useRef, useState, useTransition, ReactNode } from 're
 import { useRouter } from 'next/navigation';
 
 import { pasteConnectSuccessCopy } from '../lib/paste-connect';
-
-// Server actions are importable from client modules in Next.js (they run on server).
 import {
   createKpiAction,
   submitCommandAction,
   createProviderAccountAction,
   easyConnectProviderAction,
-  submitSelfImprovementProposalAction,
   queueOutboxMessageAction,
   testProviderAccountAction,
   syncProviderResourcesAction,
-  recordSelfImprovementCanaryAction,
-  recordSelfImprovementRolloutAction,
   applyChangeSetAction,
   resolveDecisionAction,
 } from './actions';
@@ -275,19 +270,6 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
   );
 }
 
-export function SelfImprovementProposalForm({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <ActionForm
-      action={submitSelfImprovementProposalAction}
-      successMessage="Improvement proposal submitted. Task + decision inbox entry created."
-      className={className}
-      data-testid="self-imp-proposal-form"
-    >
-      {children}
-    </ActionForm>
-  );
-}
-
 export function BudgetReserveQueueForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <ActionForm
@@ -322,32 +304,6 @@ export function ProviderSyncForm({ children, className }: { children: ReactNode;
       successMessage="Provider sync started. Inventory + costs reconciled with receipts."
       className={className}
       data-testid="provider-sync-form"
-    >
-      {children}
-    </ActionForm>
-  );
-}
-
-export function SelfImpCanaryForm({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <ActionForm
-      action={recordSelfImprovementCanaryAction}
-      successMessage="Canary recorded. Proposal status updated; decision may advance."
-      className={className}
-      data-testid="self-imp-canary-form"
-    >
-      {children}
-    </ActionForm>
-  );
-}
-
-export function SelfImpRolloutForm({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <ActionForm
-      action={recordSelfImprovementRolloutAction}
-      successMessage="Rollout recorded. Changes live (with rollback plan on file)."
-      className={className}
-      data-testid="self-imp-rollout-form"
     >
       {children}
     </ActionForm>

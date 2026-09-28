@@ -21,12 +21,12 @@ class FakeGitHubAdapter:
         type(self).calls += 1
         return {
             "id": 4242,
-            "full_name": "seanheiney/boss",
+            "full_name": "example-org/boss",
             "default_branch": "main",
             "visibility": "private",
             "archived": False,
-            "html_url": "https://github.com/seanheiney/boss",
-            "owner": {"login": "seanheiney"},
+            "html_url": "https://github.com/example-org/boss",
+            "owner": {"login": "example-org"},
             "permissions": {
                 "pull": True,
                 "triage": True,
@@ -40,26 +40,26 @@ class FakeGitHubAdapter:
         type(self).list_calls += 1
         return [
             {
-                "full_name": "seanheiney/boss",
-                "owner": "seanheiney",
+                "full_name": "example-org/boss",
+                "owner": "example-org",
                 "name": "boss",
                 "repository_id": 4242,
                 "default_branch": "main",
                 "visibility": "private",
                 "archived": False,
                 "permissions": {"pull": True, "push": True, "triage": True},
-                "html_url": "https://github.com/seanheiney/boss",
+                "html_url": "https://github.com/example-org/boss",
             },
             {
-                "full_name": "seanheiney/other",
-                "owner": "seanheiney",
+                "full_name": "example-org/other",
+                "owner": "example-org",
                 "name": "other",
                 "repository_id": 99,
                 "default_branch": "main",
                 "visibility": "private",
                 "archived": False,
                 "permissions": {"pull": True},
-                "html_url": "https://github.com/seanheiney/other",
+                "html_url": "https://github.com/example-org/other",
             },
         ]
 
@@ -101,7 +101,7 @@ def _create_binding(client, connection_id: str, **overrides):
     payload = {
         "project_id": PROJECT_ID,
         "connection_id": connection_id,
-        "repository": "seanheiney/boss",
+        "repository": "example-org/boss",
         "role": "primary",
         "actor": "ceo",
     }
@@ -133,7 +133,7 @@ def test_project_github_connection_binding_and_receipted_test(
     bound = _create_binding(client, github_connection["id"])
     assert bound.status_code == 201
     binding = bound.json()
-    assert binding["full_name"] == "seanheiney/boss"
+    assert binding["full_name"] == "example-org/boss"
     assert binding["role"] == "primary"
     assert binding["repository_id"] is None
 
@@ -175,7 +175,7 @@ def test_project_github_connection_binding_and_receipted_test(
     second_binding = _create_binding(
         client,
         github_connection["id"],
-        repository="seanheiney/boss-mirror",
+        repository="example-org/boss-mirror",
         role="source",
     )
     assert second_binding.status_code == 201
@@ -221,7 +221,7 @@ def test_project_github_connection_binding_and_receipted_test(
         ).mappings().all()
     assert receipt["effect_kind"] == "github.repository.read"
     assert receipt["status"] == "succeeded"
-    assert receipt["effect_scope"]["repository"] == "seanheiney/boss"
+    assert receipt["effect_scope"]["repository"] == "example-org/boss"
     assert receipt["result"]["status"] == "passed"
     assert {
         "github.connection_created",
@@ -392,7 +392,7 @@ def test_github_easy_connect_links_repo_and_lists_accessible_repositories(
             "connection_label": "easy-project-github",
             "auth_method": "personal_access_token",
             "env_credential_key": "boss_easy_github_token",
-            "repository": "seanheiney/boss",
+            "repository": "example-org/boss",
             "role": "primary",
             "test_after_link": True,
             "actor": "ceo",
@@ -404,7 +404,7 @@ def test_github_easy_connect_links_repo_and_lists_accessible_repositories(
     assert payload["connection"]["status"] == "active"
     assert payload["connection"]["auth_method"] == "personal_access_token"
     assert "credential_ref" not in payload["connection"]
-    assert payload["repository_binding"]["full_name"] == "seanheiney/boss"
+    assert payload["repository_binding"]["full_name"] == "example-org/boss"
     assert payload["repository_binding"]["role"] == "primary"
     assert payload["test"]["status"] == "passed"
     assert payload["test"]["receipt_id"]
@@ -419,8 +419,8 @@ def test_github_easy_connect_links_repo_and_lists_accessible_repositories(
     repos = listed.json()
     assert repos["connection_id"] == payload["connection"]["id"]
     assert {item["full_name"] for item in repos["items"]} == {
-        "seanheiney/boss",
-        "seanheiney/other",
+        "example-org/boss",
+        "example-org/other",
     }
     assert FakeGitHubAdapter.list_calls == 1
 
@@ -449,7 +449,7 @@ def test_github_repository_binding_is_project_scoped_and_primary_is_unique(clien
     duplicate_primary = _create_binding(
         client,
         github_connection["id"],
-        repository="seanheiney/boss-sandbox",
+        repository="example-org/boss-sandbox",
     )
     assert duplicate_primary.status_code == 409
     assert "primary repository" in duplicate_primary.json()["detail"]

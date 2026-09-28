@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apps.api.app.routers.safety_gates import router
+from boss_engine.config import Settings
 from boss_engine.services.branch_protection_gate import (
     BranchProtectionGateService,
     REQUIRED_CHECKS,
@@ -90,6 +91,31 @@ def test_verify_no_credentials_fail_closed():
     assert result["live"]["error"] == "no_github_credentials"
     assert result["blocker"]
     assert result["checklist"] is not None
+
+
+def test_new_install_has_no_implicit_github_repository():
+    assert Settings.model_fields["github_owner"].default == ""
+    assert Settings.model_fields["github_repo"].default == ""
+    assert Settings.model_fields["target_github_owner"].default == ""
+    assert Settings.model_fields["target_github_repo"].default == ""
+
+    requested = []
+    settings = SimpleNamespace(
+        target_github_owner="",
+        target_github_repo="",
+        github_owner="",
+        github_repo="",
+        github_token="fake",
+    )
+    svc = BranchProtectionGateService(
+        settings,
+        request_fn=lambda method, path: requested.append((method, path)),
+    )
+    result = svc.verify()
+    assert requested == []
+    assert result["live_demo_ready"] is False
+    assert result["live"]["error"] == "repository_not_configured"
+    assert "connect a project repository" in result["blocker"]
 
 
 def test_verify_live_protection_via_injected_request():

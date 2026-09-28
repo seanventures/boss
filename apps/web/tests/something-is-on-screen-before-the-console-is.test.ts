@@ -9,7 +9,7 @@ import { join } from "node:path";
  * Reported repeatedly and fixed repeatedly, because every fix was in the wrong place. Measured
  * on goldeneye against the URL an operator bookmarks:
  *
- *     https://boss.local.sean.network/?org=org_boss&area=code_tasks
+ *     https://boss.local.example.test/?org=org_boss&area=code_tasks
  *     time_to_first_byte: 6.549s   total: 7.373s   size: 5.6 MB
  *
  * Six and a half seconds to the FIRST BYTE. `HomePage` awaits ~50 feeds before returning any

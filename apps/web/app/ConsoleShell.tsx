@@ -1087,22 +1087,16 @@ export default function ConsoleShell({
 
           <div className="bx-topbar-spacer" />
 
-          {/* Reachable from BOTH consoles, deliberately. A one-way door into v2 would strand
-              anyone who tried it before v2 was finished; v1 stays the working console and keeps
-              taking fixes until the parity checklist says otherwise. */}
-          <ConsoleToggle current="v1" orgId={org?.id} />
-
           {org ? (
             <button type="button" className="bx-org-chip" onClick={switchOrg} title="Switch organization">
-              <span className="bx-org-mark">{org.name.slice(0, 2).toUpperCase()}</span>
               <span className="bx-org-name">{org.name}</span>
-              <span className="bx-org-switch">switch</span>
+              <span className="bx-org-switch" aria-hidden>⌄</span>
             </button>
           ) : null}
 
           <button
             type="button"
-            className="bx-chip hide-sm"
+            className="bx-live-status"
             title={live
               ? (refreshPending
                  ? "Fetching the latest data — click to pause live updates"
@@ -1121,18 +1115,16 @@ export default function ConsoleShell({
             <span>Jump to</span>
             <kbd>⌘K</kbd>
           </button>
-
-          <EditionChip editionId={resolvedEdition} />
-
-          <span className="bx-chip hide-sm" title={`Budget state: ${status.budgetState}`}>
-            <span className={`dot ${tone}`} />
-            <b style={{ textTransform: "capitalize" }}>{status.budgetState || "unknown"}</b>
-          </span>
-
-          <span className="bx-chip" title="Active actor">
-            <UserCircle size={15} aria-hidden />
-            <b>{scope.actor}</b>
-          </span>
+          <details className="bx-system-menu">
+            <summary aria-label="System details">System</summary>
+            <div className="bx-system-panel">
+              <div><span>Edition</span><EditionChip editionId={resolvedEdition} /></div>
+              <div><span>Budget</span><strong className={`bx-system-budget ${tone}`}>
+                {status.budgetState || "unknown"}</strong></div>
+              <div><span>Operator</span><strong><UserCircle size={15} aria-hidden /> {scope.actor}</strong></div>
+              <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
+            </div>
+          </details>
         </header>
 
         {/* EVERY PROJECT, WITHOUT LEAVING THE AREA YOU ARE IN.
