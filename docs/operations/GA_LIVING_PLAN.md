@@ -1,5 +1,14 @@
 # BOSS GA living plan
 
+**2026-09-28 release note:** This plan's live QA rows are historical August
+evidence. The product owner confirmed counsel approval for Apache License 2.0
+for the reviewed full Community export (reference `01049940`), recorded in
+[OSS_LICENSING_DECISION.md](OSS_LICENSING_DECISION.md). BOSS-300 implementation
+and BOSS-293 public release gates remain open. The 14-day streak, current
+security review, exact export, and clean x86 installer proof must be checked
+afresh before any public GA claim. See the current
+[PUBLIC_FLIP_CHECKLIST.md](PUBLIC_FLIP_CHECKLIST.md).
+
 **Status date:** 2026-08-14  
 **Overall GA:** **WORKING-SOFTWARE BAR MET** on dogfood — all three sample apps (BugBox, ApproveIt, HookWatch) serve real backends on `fca977c`. **Not** public/C1–C4 GA: 14-day calendar, C2, and BOSS-300 remain open.  
 **System of record:** Plane `goldeneye` / BOSS · umbrella **BOSS-337**  

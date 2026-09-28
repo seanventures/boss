@@ -1,5 +1,16 @@
 # BOSS Autonomous Activity Log
 
+## 2026-09-28 — Codex — BOSS-300 counsel-backed Community license decision
+
+- Product owner confirmed Apache License 2.0 for the reviewed full Community
+  repository at `seanventures/boss`, counsel reference `01049940`.
+- Recorded the decision in the canonical operator record and Plane BOSS-300;
+  aligned Community pack metadata and replaced the engine-only public checklist.
+- The mechanical check now reports `MECHANICAL_PASS`, not release readiness.
+  Twelve focused tests, Ruff, YAML parsing, and diff checks pass. Strict docs
+  still reports 16 pre-existing source-link warnings; release remains gated.
+
+
 ## 2026-09-24 — Codex — Community feedback and release hygiene
 
 - Reserved `seanventures/boss` as an empty private repository. No code was pushed.
