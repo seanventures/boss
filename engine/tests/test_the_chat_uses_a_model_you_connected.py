@@ -245,12 +245,29 @@ def test_and_the_code_agent_gets_it_too():
     assert env.index("claude_code_oauth_token") < env.index("stored_credential")
 
 
-def test_and_an_operator_set_token_still_wins():
+def test_and_an_operator_set_token_still_wins(monkeypatch):
     """What somebody exports while debugging must not be overridden by a store — the same rule
     the chat path follows."""
-    import inspect
-
+    from boss_engine.config import Settings
     from boss_engine.services.code_agent import ClaudeCodeAgent
 
-    env = inspect.getsource(ClaudeCodeAgent._child_env)
-    assert 'if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get("ANTHROPIC_API_KEY"):' in env
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "operator-token")
+
+    def _never(*_args, **_kwargs):
+        raise AssertionError("the store was consulted while an operator token was set")
+
+    monkeypatch.setattr("boss_engine.services.cli_harness.stored_credential", _never)
+    env = ClaudeCodeAgent(Settings(CLAUDE_CODE_OAUTH_TOKEN=""))._child_env()
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "operator-token"
+
+
+def test_a_project_bound_token_wins_over_the_host_environment(monkeypatch):
+    """A project connection must not silently use another project's host credential."""
+    from boss_engine.config import Settings
+    from boss_engine.services.code_agent import ClaudeCodeAgent
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "host-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "host-api-key")
+    env = ClaudeCodeAgent(Settings(CLAUDE_CODE_OAUTH_TOKEN="project-token"))._child_env()
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "project-token"
+    assert "ANTHROPIC_API_KEY" not in env

@@ -57,7 +57,8 @@ def test_a_contended_lane_reports_a_real_wait():
     import time as _t
     _t.sleep(0.25)          # the second caller is now blocked on the full lane
     release.set()
-    t.join(timeout=5); t2.join(timeout=5)
+    t.join(timeout=5)
+    t2.join(timeout=5)
 
     assert waited.get("s", 0) >= 0.2, (
         "a caller that queued behind a full lane reported no wait — which is the exact "
@@ -99,19 +100,37 @@ def test_every_sandbox_command_says_how_long_it_took():
     assert "duration_ms=_ms," in src
 
 
-def test_package_and_browser_downloads_are_cached_between_sandboxes():
+def test_package_and_browser_downloads_are_cached_between_sandboxes(tmp_path, monkeypatch):
     """Every stage gets a fresh clone, so every stage re-runs `npm install` and
     `playwright install`. Without a shared cache those RE-DOWNLOAD — Playwright's browsers
     alone are hundreds of megabytes — for bytes that are byte-identical each time."""
+    from boss_engine.config import Settings
     from boss_engine.services import sandbox
 
     caches = sandbox._shared_tool_caches()
     assert caches["npm_config_cache"].endswith("/npm")
     assert caches["PLAYWRIGHT_BROWSERS_PATH"].endswith("/playwright")
 
-    src = inspect.getsource(sandbox)
-    # Applied to the env every command runs under.
-    assert 'env = {**os.environ, "CI": "1", **_shared_tool_caches()}' in src
+    class FinishedProcess:
+        returncode = 0
+
+        def communicate(self, *, timeout):
+            return "", ""
+
+    spawned = {}
+
+    def start_process(*_args, **kwargs):
+        spawned.update(kwargs)
+        return FinishedProcess()
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://control-plane-secret")
+    monkeypatch.setattr(sandbox.subprocess, "Popen", start_process)
+    sandbox_instance = sandbox.EphemeralSandbox(Settings(), task_id="cache_env_test")
+    sandbox_instance.path = tmp_path
+    assert sandbox_instance.run("python3 -c 'print(1)'").ok
+    assert spawned["env"]["npm_config_cache"] == caches["npm_config_cache"]
+    assert spawned["env"]["PLAYWRIGHT_BROWSERS_PATH"] == caches["PLAYWRIGHT_BROWSERS_PATH"]
+    assert "DATABASE_URL" not in spawned["env"]
 
 
 def test_the_cache_lives_outside_the_working_tree():
