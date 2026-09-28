@@ -21,6 +21,10 @@ Surfaces for defining agents, invoking skills, leasing models, and agent-to-agen
 
 Auth: [README.md](README.md). Product deep-dive: `docs/product/AGENT_STUDIO_A2A.md`.
 
+Agent briefing, thread progress, and thread ledger reads require `agent_chat` in
+the project. Progress and ledger routes resolve that project from the stored
+thread (or its older ledger record); an unknown thread returns 404.
+
 ```bash
 export BOSS_API=http://127.0.0.1:8000
 export BOSS_KEY=dev-key

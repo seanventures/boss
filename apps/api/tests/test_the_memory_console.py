@@ -149,8 +149,14 @@ class TestTheLedgerRead:
             mem.finish_ledger(c, thread_id="athr_ui", actor="ceo")
         assert client.get("/v1/agent/threads/athr_ui/ledger").json()["ledger"] is None
 
-    def test_a_thread_without_one_is_not_an_error(self, client):
+    def test_a_thread_without_one_is_not_an_error(self, client, engine):
         """Most conversations have no long-horizon work; the strip renders nothing."""
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO agent_threads (id, project_id, actor) "
+                     "VALUES ('athr_none', :project_id, 'ceo')"),
+                {"project_id": _pid()},
+            )
         r = client.get("/v1/agent/threads/athr_none/ledger")
         assert r.status_code == 200
         assert r.json()["ledger"] is None

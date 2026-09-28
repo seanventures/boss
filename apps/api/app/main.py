@@ -10266,6 +10266,8 @@ def agent_briefing_endpoint(project_id: str):
     from boss_engine.services.factory_briefing import factory_briefing
 
     with begin(engine) as connection:
+        actor = current_api_principal.get() or "system"
+        require_project_actor(connection, project_id, actor, "agent_chat")
         return factory_briefing(connection, project_id)
 
 
@@ -10437,6 +10439,25 @@ def forget_memory_endpoint(memory_id: str, payload: dict) -> dict:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+def require_agent_thread_reader(connection, thread_id: str) -> str:
+    """Authorize a read against the thread's persisted project, not a caller hint."""
+    project_id = connection.execute(
+        text("SELECT project_id FROM agent_threads WHERE id = :thread_id"),
+        {"thread_id": thread_id},
+    ).scalar_one_or_none()
+    if project_id is None:
+        # Some older ledgers predate their thread rows; their own project is durable.
+        project_id = connection.execute(
+            text("SELECT project_id FROM agent_session_ledger WHERE thread_id = :thread_id"),
+            {"thread_id": thread_id},
+        ).scalar_one_or_none()
+    if project_id is None:
+        raise HTTPException(status_code=404, detail="Agent thread not found.")
+    actor = current_api_principal.get() or "system"
+    require_project_actor(connection, project_id, actor, "agent_chat")
+    return project_id
+
+
 @app.get("/v1/agent/threads/{thread_id}/ledger")
 def thread_ledger_endpoint(thread_id: str) -> dict:
     """Where this session had got to — goal, phase, next step, what was already rejected.
@@ -10448,7 +10469,11 @@ def thread_ledger_endpoint(thread_id: str) -> dict:
     from boss_engine.services.agent_memory import read_ledger
 
     with begin(engine) as connection:
-        return {"thread_id": thread_id, "ledger": read_ledger(connection, thread_id=thread_id)}
+        project_id = require_agent_thread_reader(connection, thread_id)
+        ledger = read_ledger(connection, thread_id=thread_id)
+        if ledger is not None and ledger["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Agent thread not found.")
+        return {"thread_id": thread_id, "ledger": ledger}
 
 
 @app.post("/v1/agent/threads/ensure")
@@ -10498,10 +10523,12 @@ def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
     Cheap on purpose — polled every second or two while a turn is in flight.
     """
     with begin(engine) as connection:
+        project_id = require_agent_thread_reader(connection, thread_id)
         rows = connection.execute(
             text("SELECT id, label, created_at FROM agent_progress "
-                 "WHERE thread_id = :t AND id > :since ORDER BY id LIMIT 50"),
-            {"t": thread_id, "since": int(since or 0)},
+                 "WHERE thread_id = :t AND project_id = :p "
+                 "AND id > :since ORDER BY id LIMIT 50"),
+            {"t": thread_id, "p": project_id, "since": int(since or 0)},
         ).mappings().all()
         # AND WHETHER SOMETHING IS STILL WORKING WHEN THE TURN IS NOT.
         #
@@ -10512,9 +10539,10 @@ def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
         # there while work continued invisibly.
         live = connection.execute(
             text("SELECT id, status, question FROM investigations "
-                 "WHERE thread_id = :t AND status IN ('queued', 'running') "
+                 "WHERE thread_id = :t AND project_id = :p "
+                 "AND status IN ('queued', 'running') "
                  "ORDER BY created_at DESC LIMIT 1"),
-            {"t": thread_id}).mappings().first()
+            {"t": thread_id, "p": project_id}).mappings().first()
     return {"thread_id": thread_id,
             "steps": [{"id": r["id"], "label": r["label"],
                        "at": r["created_at"].isoformat() if r["created_at"] else None}
