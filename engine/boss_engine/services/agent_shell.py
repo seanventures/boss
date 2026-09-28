@@ -14,16 +14,14 @@ scope: read broadly, act only through the governed tools that already have appro
 
 WHAT IS AND IS NOT GUARDED
 --------------------------
-The workspace is a THROWAWAY shallow clone. Anything the agent does to it is cheap and local,
-so the guard does not try to prevent editing, deleting or rewriting files there — that is the
-point of having a shell, and a guard that blocks ordinary work teaches people to avoid the
-tool.
+The workspace is a THROWAWAY shallow clone. Edits inside that clone are cheap and local, so
+the guard permits them. The shell itself is not confined to the clone by the operating system.
 
-What it does refuse is the small set of actions that reach OUTSIDE the workspace or are
-irreversible: publishing (`git push`, `gh pr`), privilege escalation, host-level destruction,
-and reading the credential the clone was made with. Those are refused by name, and the refusal
-is honest about its limits — a determined model can obfuscate a string. The real containment is
-that this runs on a disposable checkout with a tokenless remote, not that the parser is clever.
+It refuses some known publishing and destructive commands by name, and sanitizes inherited
+environment variables. Those are convenience guards, not isolation: `sh -lc` can still read
+host/container files and reach the network outside the disposable checkout. The legacy
+`run_shell` tool is therefore unavailable in Community until it runs in an OS sandbox with
+filesystem and network boundaries. Enabled paid editions retain their existing behavior.
 """
 
 from __future__ import annotations

@@ -310,10 +310,28 @@ def _invoke_mcp_skill(
 # ============================================================
 
 _SENSITIVE = (".env", ".git", "id_rsa", ".pem", ".key", "secret", "credential")
+_SENSITIVE_REPO_NAMES = frozenset({
+    ".npmrc", ".pypirc", ".netrc", ".yarnrc", ".yarnrc.yml",
+    ".aws", ".ssh", ".gnupg", ".kube", ".docker", ".azure",
+    "id_ed25519", "id_ecdsa", "id_dsa", "pip.conf", "auth.json",
+})
 
 
 def _repo_root(settings: Settings) -> Path:
     return Path(settings.agent_repo_root or ".").resolve()
+
+
+def _sensitive_repo_path(path: Path, root: Path) -> bool:
+    """Deny credential-bearing path components before listing or reading a repo file."""
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    return any(
+        part.lower() in _SENSITIVE_REPO_NAMES
+        or any(token in part.lower() for token in _SENSITIVE)
+        for part in parts
+    )
 
 
 def _safe_path(settings: Settings, rel: str) -> Optional[Path]:
@@ -324,8 +342,7 @@ def _safe_path(settings: Settings, rel: str) -> Optional[Path]:
         return None
     if root not in target.parents and target != root:
         return None
-    lowered = str(target).lower()
-    if any(tok in lowered for tok in _SENSITIVE):
+    if _sensitive_repo_path(target, root):
         return None
     return target
 
@@ -379,7 +396,8 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
 # `read_repo_file` answers "what is in this file" and nothing else; the next question always
 # needed the next tool. A shell answers the questions nobody enumerated: grep the tree, diff
 # two files, run the app's checks, read its log. The workspace is a disposable shallow clone of
-# the run's branch with a tokenless remote, so exploring is free and publishing is impossible.
+# the run's branch with a tokenless remote. The clone is disposable but does not isolate
+# `sh -lc` from the host filesystem or network; Community leaves this legacy tool unavailable.
 # --------------------------------------------------------------------------------------- #
 
 
@@ -446,7 +464,25 @@ def _open_workspace(
     )
 
 
+_LEGACY_SHELL_EDITIONS = frozenset({
+    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
+})
+_LEGACY_SHELL_DENIAL = (
+    "The legacy agent shell is unavailable in Community until it runs inside an OS-isolated "
+    "sandbox with controlled filesystem and network access. Use the available read tools."
+)
+
+
+def _legacy_agent_shell_allowed(settings: Settings) -> bool:
+    """Unknown editions fail closed; a disposable clone alone is not a sandbox."""
+    return str(getattr(settings, "boss_edition", "community")).strip().lower() in (
+        _LEGACY_SHELL_EDITIONS
+    )
+
+
 def _tool_run_shell(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    if not _legacy_agent_shell_allowed(settings):
+        return {"error": _LEGACY_SHELL_DENIAL}
     from .agent_shell import run_in_workspace
 
     run_id = str(args.get("run_id") or "").strip()
@@ -588,7 +624,9 @@ def _tool_list_repo_files(connection: Connection, project_id: str, settings: Set
     for p in sorted(base.rglob("*")):
         if any(part in skip for part in p.parts):
             continue
-        if p.is_file() and not any(tok in str(p).lower() for tok in _SENSITIVE):
+        if _sensitive_repo_path(p, root):
+            continue
+        if p.is_file():
             files.append(str(p.relative_to(root)))
         if len(files) >= 120:
             break
@@ -943,15 +981,11 @@ TOOLS: list[dict[str, Any]] = [
             "function": {
                 "name": "run_shell",
                 "description": (
-                    "Run a shell command inside a checkout of an app's own code, and get "
-                    "stdout, stderr and the exit code back. This is the general tool: use it to "
-                    "grep the tree, read any file, diff, inspect package.json or config, run "
-                    "the app's tests or build, or reproduce a failure — instead of asking for a "
-                    "tool that does not exist. The workspace is a disposable clone of the run's "
-                    "branch; editing files there is fine and affects nothing real. A non-zero "
-                    "exit is a RESULT worth reporting, not a failure of the tool. Publishing "
-                    "(git push, gh pr) is refused — start real work with change_existing_app or "
-                    "create_followup_task."
+                    "Run a shell in an app checkout in enabled editions and return stdout, "
+                    "stderr and the exit code. The checkout is disposable, but this legacy "
+                    "shell is not isolated from the host filesystem or network. A non-zero "
+                    "exit is a result worth reporting. Known publishing commands are refused; "
+                    "start real work with change_existing_app or create_followup_task."
                 ),
                 "parameters": {
                     "type": "object",
@@ -1150,6 +1184,14 @@ TOOLS: list[dict[str, Any]] = [
 
 _TOOL_FNS: dict[str, ToolFn] = {t["schema"]["function"]["name"]: t["fn"] for t in TOOLS}
 _TOOL_SCHEMAS: list[dict] = [t["schema"] for t in TOOLS]
+
+
+def _native_tool_schemas(settings: Settings) -> list[dict]:
+    """Do not advertise the unavailable shell to Community models."""
+    if _legacy_agent_shell_allowed(settings):
+        return list(_TOOL_SCHEMAS)
+    return [schema for schema in _TOOL_SCHEMAS
+            if schema["function"]["name"] != "run_shell"]
 
 
 def _dispatch(connection: Connection, project_id: str, settings: Settings, name: str, args: dict) -> dict:
@@ -1827,8 +1869,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
 
     # A BOUNDED RUN GETS NO NATIVE TOOLS AT ALL.
     #
-    # The ordinary loop hands every run a shell, the project's Postgres, the repository and the
-    # deploy tools, because it was written for the software factory, where that is the job. An
+    # In enabled editions, the ordinary loop offers a shell, the project's Postgres, the
+    # repository and deploy tools because it was written for the software factory. An
     # agent step is the opposite case: an operator gave an agent a set of skills and that set is
     # the claim about what it can do. Handing it `run_shell` besides makes the grant decorative —
     # a video editor could read the control plane's database, and "the skills you gave it" would
@@ -1837,7 +1879,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # MCP servers go the same way: a connector is authority over somebody's account, and it is
     # granted by giving the agent a skill that runs through it, not by being registered.
     bounded = isinstance(finalize_ctx.get("agent_step"), dict)
-    schemas = [] if bounded else list(_TOOL_SCHEMAS) + list(_WRITE_SCHEMAS)
+    schemas = [] if bounded else _native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
     occupied = {
         str(schema["function"]["name"])
         for schema in schemas
