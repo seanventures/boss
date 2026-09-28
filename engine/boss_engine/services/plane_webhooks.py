@@ -378,10 +378,19 @@ class PlaneWebhookService:
         try:
             from . import plane_sync
             from .plane_client import PlaneClient
-            run_stub = {"id": run_id, "finalize_ctx": {
+            run_stub = {"id": run_id, "project_id": decision["project_id"],
+                        "finalize_ctx": {
                 "source": "plane", "plane_issue_id": parsed["plane_issue_id"],
                 "plane_project_id": parsed["plane_project_id"]}}
-            plane_sync.sync_run(PlaneClient(self.settings), run_stub, "code_task.started")
+            result = plane_sync.sync_run(
+                PlaneClient(self.settings), run_stub, "code_task.started",
+                connection=connection,
+            )
+            if not result["synced"]:
+                logger.warning(
+                    "plane: 'started' sync needs reconciliation for issue %s: %s",
+                    parsed["plane_issue_id"], result.get("receipt_ids"),
+                )
         except Exception:  # noqa: BLE001
             logger.warning("plane: could not sync 'started' for issue %s", parsed["plane_issue_id"])
         return {"status": "accepted", "run_id": run_id,

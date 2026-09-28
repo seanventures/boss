@@ -1,4 +1,7 @@
 """P2/P4 — Plane status sync-back: event→state mapping, comments, and the loop-guarded orchestration."""
+from sqlalchemy import text
+
+from apps.api.app.config import get_settings
 from apps.api.app.services import plane_sync as ps
 
 
@@ -75,3 +78,57 @@ def test_sync_run_skips_non_plane_runs():
 def test_sync_run_skips_unmapped_event_and_disabled_client():
     assert ps.sync_run(_FakeClient(), _plane_run(), "code_task.random")["synced"] is False
     assert ps.sync_run(_FakeClient(enabled=False), _plane_run(), "code_task.started")["synced"] is False
+
+
+def _recorded_run():
+    return _plane_run(id="crun_plane_sync_receipts", project_id=get_settings().default_project_id)
+
+
+def test_recorded_sync_replay_does_not_repeat_plane_writes(engine):
+    run = _recorded_run()
+    client = _FakeClient()
+    with engine.begin() as connection:
+        first = ps.sync_run(client, run, "code_task.started", connection=connection)
+    with engine.begin() as connection:
+        replay = ps.sync_run(client, run, "code_task.started", connection=connection)
+        rows = connection.execute(text(
+            "SELECT effect_kind, status FROM receipts WHERE project_id=:project_id "
+            "AND dedupe_key LIKE 'plane-sync:%' ORDER BY effect_kind"
+        ), {"project_id": run["project_id"]}).mappings().all()
+    assert first["synced"] and replay["synced"]
+    assert first["receipt_ids"] == replay["receipt_ids"]
+    assert len(client.states) == len(client.comments) == 1
+    assert [(row["effect_kind"], row["status"]) for row in rows] == [
+        ("plane.issue.comment.create", "succeeded"),
+        ("plane.issue.state.update", "succeeded"),
+    ]
+
+
+def test_failed_plane_comment_is_visible_and_not_replayed(engine):
+    class FailingClient(_FakeClient):
+        def add_comment(self, project_id, issue_id, html):
+            self.comments.append((issue_id, html))
+            return False
+
+    run = _recorded_run()
+    client = FailingClient()
+    with engine.begin() as connection:
+        first = ps.sync_run(client, run, "code_task.started", connection=connection)
+    with engine.begin() as connection:
+        replay = ps.sync_run(client, run, "code_task.started", connection=connection)
+        receipt = connection.execute(text(
+            "SELECT status, error FROM receipts WHERE id=:id"
+        ), {"id": first["receipt_ids"]["comment"]}).mappings().one()
+        event_count = connection.execute(text(
+            "SELECT count(*) FROM events WHERE project_id=:project_id "
+            "AND event_type='plane.sync_failed'"
+        ), {"project_id": run["project_id"]}).scalar_one()
+        decision_count = connection.execute(text(
+            "SELECT count(*) FROM decisions WHERE project_id=:project_id "
+            "AND status='pending' AND recommendation->>'action'='review_plane_sync_failure'"
+        ), {"project_id": run["project_id"]}).scalar_one()
+    assert not first["synced"] and not replay["synced"]
+    assert first["receipt_ids"] == replay["receipt_ids"]
+    assert len(client.states) == len(client.comments) == 1
+    assert receipt["status"] == "failed" and receipt["error"]["reason"]
+    assert event_count == decision_count == 1
