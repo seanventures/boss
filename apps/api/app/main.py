@@ -1734,6 +1734,12 @@ def require_project_reader(connection, project_id: str) -> None:
     if not current_transport_authenticated.get():
         # Explicitly unauthenticated local development keeps its existing behavior.
         return
+    exists = connection.execute(
+        text("SELECT 1 FROM projects WHERE id = :project_id"),
+        {"project_id": project_id},
+    ).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Project not found.")
     principal = current_api_principal.get()
     if not principal:
         raise HTTPException(status_code=403, detail="Project member principal required.")
