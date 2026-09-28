@@ -32,6 +32,14 @@ from .receipts import ReceiptService
 # SSHHostAdapter._run_remote when the deploy gate is open.
 SshRunner = Callable[..., dict[str, Any]]
 
+_REMOTE_INSTALL_EDITIONS = frozenset(
+    {"cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted"}
+)
+_COMMUNITY_INSTALL_DENIAL = (
+    "Direct Goldeneye SSH package installation is disabled in Community/local. "
+    "Use an approved Resource Plane flow for real host changes."
+)
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -431,6 +439,13 @@ class GoldeneyePaasService:
     def _real_host_allowed(self) -> bool:
         return bool(getattr(self.settings, "ssh_host_deploy_allowed", False))
 
+    def _assert_remote_module_install_allowed(self) -> None:
+        edition = str(getattr(self.settings, "boss_edition", "community")).strip().lower()
+        if edition not in _REMOTE_INSTALL_EDITIONS:
+            raise PermissionError(_COMMUNITY_INSTALL_DENIAL)
+        if not self._real_host_allowed():
+            raise PermissionError("Goldeneye SSH host deployment is disabled.")
+
     def _actuate_remote_module_install(
         self,
         *,
@@ -445,6 +460,7 @@ class GoldeneyePaasService:
         ``ok``. Raises only when the node lacks ssh_host or local SSH setup fails
         before a remote attempt (adapter guard / key missing).
         """
+        self._assert_remote_module_install_allowed()
         host = (node.get("ssh_host") or "").strip()
         if not host:
             raise ValueError("node has no ssh_host; cannot actuate real install")
@@ -755,6 +771,10 @@ class GoldeneyePaasService:
         force: bool = False,
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        if self._real_host_allowed():
+            # Community/local never turns an operator feature flag into an SSH write.
+            # Reject before tables, receipts, or host calls change any durable state.
+            self._assert_remote_module_install_allowed()
         pkg = self._package_by_id(package_id)
         self.ensure_tables(connection)
         node = self._resolve_node(

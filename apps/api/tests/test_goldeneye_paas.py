@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
 
 from apps.api.app import main as api_main
 from boss_engine.services.goldeneye_paas import GoldeneyePaasService
@@ -216,6 +217,77 @@ def test_goldeneye_unknown_package(client):
     assert bad.status_code == 422
 
 
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
+def test_community_package_install_flag_cannot_reach_host(
+    client, engine, monkeypatch, edition
+):
+    calls: list[dict] = []
+    monkeypatch.setattr(api_main.settings, "boss_edition", edition)
+    monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", True)
+    monkeypatch.setattr(
+        api_main.goldeneye_paas,
+        "ssh_runner",
+        lambda **kwargs: calls.append(kwargs) or {"returncode": 0},
+    )
+    node = client.post(
+        "/v1/goldeneye/nodes",
+        json={
+            "project_id": PROJECT_ID,
+            "actor": "ceo",
+            "name": f"blocked-{edition}",
+            "ssh_host": "blocked.tailnet.example",
+        },
+    )
+    assert node.status_code == 201, node.text
+    with engine.begin() as connection:
+        before = connection.execute(
+            text("SELECT COUNT(*) FROM goldeneye_package_installs WHERE project_id=:p"),
+            {"p": PROJECT_ID},
+        ).scalar_one()
+        receipts_before = connection.execute(
+            text("SELECT COUNT(*) FROM receipts WHERE project_id=:p "
+                 "AND effect_kind='goldeneye.package.install'"),
+            {"p": PROJECT_ID},
+        ).scalar_one()
+    response = client.post(
+        "/v1/goldeneye/packages/install",
+        json={
+            "project_id": PROJECT_ID,
+            "actor": "ceo",
+            "package_id": "layer0-host",
+            "node_id": node.json()["id"],
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert "Resource Plane" in response.json()["detail"]
+    assert calls == []
+    with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM goldeneye_package_installs WHERE project_id=:p"),
+            {"p": PROJECT_ID},
+        ).scalar_one() == before
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM receipts WHERE project_id=:p "
+                 "AND effect_kind='goldeneye.package.install'"),
+            {"p": PROJECT_ID},
+        ).scalar_one() == receipts_before
+
+
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
+def test_direct_remote_install_rejects_non_paid_editions(monkeypatch, edition):
+    calls: list[dict] = []
+    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=True)
+    service = GoldeneyePaasService(
+        settings,
+        ssh_runner=lambda **kwargs: calls.append(kwargs) or {"returncode": 0},
+    )
+    with pytest.raises(PermissionError, match="disabled in Community/local"):
+        service._actuate_remote_module_install(
+            node={"ssh_host": "blocked.tailnet.example"}, package_id="layer0-host"
+        )
+    assert calls == []
+
+
 def test_goldeneye_real_install_calls_ssh_runner(client, monkeypatch):
     """When BOSS_SSH_HOST_DEPLOY_ALLOWED and node.ssh_host set, actuate via runner."""
     calls: list[dict] = []
@@ -237,6 +309,7 @@ def test_goldeneye_real_install_calls_ssh_runner(client, monkeypatch):
         }
 
     # Gate on + injected runner on the live API service instance.
+    monkeypatch.setattr(api_main.settings, "boss_edition", "enterprise_self_hosted")
     monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", True)
     api_main.goldeneye_paas.ssh_runner = fake_runner
     try:
@@ -293,6 +366,7 @@ def test_goldeneye_real_install_failure_marks_error(client, monkeypatch):
             "stderr": "ge: module layer0-host install failed: not root\n",
         }
 
+    monkeypatch.setattr(api_main.settings, "boss_edition", "enterprise_self_hosted")
     monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", True)
     api_main.goldeneye_paas.ssh_runner = fail_runner
     try:
@@ -333,6 +407,7 @@ def test_goldeneye_real_install_failure_marks_error(client, monkeypatch):
 def test_actuate_remote_module_install_uses_adapter_when_no_runner(monkeypatch):
     """Unit: without injected runner, production path calls SSHHostAdapter._run_remote."""
     settings = SimpleNamespace(
+        boss_edition="enterprise_self_hosted",
         ssh_host_deploy_allowed=True,
         ssh_host_private_key="-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n",
         ssh_host_private_key_file=None,
@@ -375,7 +450,9 @@ def test_actuate_remote_module_install_uses_adapter_when_no_runner(monkeypatch):
 
 
 def test_actuate_requires_ssh_host():
-    settings = SimpleNamespace(ssh_host_deploy_allowed=True)
+    settings = SimpleNamespace(
+        boss_edition="enterprise_self_hosted", ssh_host_deploy_allowed=True
+    )
     svc = GoldeneyePaasService(settings)
     with pytest.raises(ValueError, match="ssh_host"):
         svc._actuate_remote_module_install(

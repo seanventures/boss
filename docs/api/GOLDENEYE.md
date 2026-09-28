@@ -147,7 +147,11 @@ curl -sS -H "$(auth)" \
 
 ### `POST /v1/goldeneye/packages/install`
 
-Plan/simulate (or gate real) package install on a node. Returns **201**.
+Community/local records a simulated package install when the SSH host gate is
+off. If `BOSS_SSH_HOST_DEPLOY_ALLOWED=true`, this route returns **409** in
+Community/local before creating an install record, receipt, or SSH connection.
+Real host installation must use a governed Resource Plane flow. The simulated
+request returns **201**.
 
 ```bash
 curl -sS -X POST -H "$(auth)" -H "Content-Type: application/json" \
@@ -169,7 +173,7 @@ curl -sS -X POST -H "$(auth)" -H "Content-Type: application/json" \
 | `node_id` | preferred | Target node id |
 | `node_name` | alt | Target by name if id unknown |
 | `actor` | no | Default `ceo` |
-| `force` | no | Bypass bootstrap order (operator risk) |
+| `force` | no | Bypass bootstrap dependency order only; never enables SSH installation |
 | `metadata` | no | Free-form object |
 
 ---

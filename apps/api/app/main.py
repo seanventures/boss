@@ -18199,6 +18199,8 @@ def install_goldeneye_package(payload: dict) -> dict[str, Any]:
                 if isinstance(payload.get("metadata"), dict)
                 else None,
             )
+        except PermissionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

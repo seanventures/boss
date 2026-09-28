@@ -27,7 +27,7 @@ dogfood instance of the kit.
 |---|---|
 | Kit installer + `ge` CLI + modules (`packages/goldeneye/`) | **Community** — you run it on your metal |
 | BOSS control plane `/v1/goldeneye/*` (register, plan, receipts) | **Community** — optional; simulated by default |
-| Real SSH actuation (`BOSS_SSH_HOST_DEPLOY_ALLOWED`) | **Community** but gated; no host write unless you open the gate |
+| Real SSH actuation (`BOSS_SSH_HOST_DEPLOY_ALLOWED`) | **Paid editions only**; Community/local rejects the API request when the flag is on |
 | Managed multi-tenant Goldeneye fleet / hosted metal as a service | **Platform-only (Cloud)** |
 | Cloud Easy Connect as the node source | **Platform-only (Cloud)** |
 
@@ -146,16 +146,17 @@ agents can walk a fresh node without hard-coding layer sequence.
 | Gate | Behavior |
 |---|---|
 | `BOSS_SSH_HOST_DEPLOY_ALLOWED=false` (default) | Package install / deploy create **simulated** records + receipts; no remote shell |
-| `BOSS_SSH_HOST_DEPLOY_ALLOWED=true` but node has **no** `ssh_host` | Package install is **planned** only (hint: run `ge module install <id>` on the node) |
-| `BOSS_SSH_HOST_DEPLOY_ALLOWED=true` + node `ssh_host` + SSH key | **Real actuation** via SSH host adapter |
+| Community/local + `BOSS_SSH_HOST_DEPLOY_ALLOWED=true` | Package install returns **409** before a record, receipt, or SSH call |
+| Paid edition + gate on but node has **no** `ssh_host` | Package install is **planned** only (hint: run `ge module install <id>` on the node) |
+| Paid edition + gate on + node `ssh_host` + SSH key | **Real actuation** via SSH host adapter |
 
 This matches ProviderOps honesty: Community can model fleet and prove receipts
 without pretending remote metal was mutated.
 
 ### Actuation path (package install)
 
-When the gate is open **and** the node has `ssh_host` set, `POST /v1/goldeneye/packages/install`
-attempts a remote:
+In a paid edition, when the gate is open **and** the node has `ssh_host` set,
+`POST /v1/goldeneye/packages/install` attempts a remote:
 
 ```bash
 ge module install <package_id>
@@ -170,9 +171,10 @@ file only for the call).
 | Remote exit 0 | `installed` | `succeeded` | `metadata.actuation` records host/command/via |
 | Remote non-zero / adapter error | `failed` | `failed` | `error` jsonb: returncode, stderr, host, command |
 | Gate off | `simulated` | `succeeded` | Default; safe for CI and Community |
-| Gate on, no `ssh_host` | `planned` | `succeeded` | Operator/agent must run `ge` on the box |
+| Paid edition, gate on, no `ssh_host` | `planned` | `succeeded` | Operator/agent must run `ge` on the box |
+| Community/local, gate on | No row | No receipt | API returns 409 before any remote call |
 
-Every attempt still emits a `Receipt` with a unique `dedupe_key` and a
+Every allowed attempt emits a `Receipt` with a unique `dedupe_key` and a
 `goldeneye.package.install` event. Failures are never silent.
 
 App deploy real actuation remains planned for a follow-on slice; package install
