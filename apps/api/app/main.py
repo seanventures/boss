@@ -1467,7 +1467,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     if token and allowed_tokens and api_token_allowed(token, allowed_tokens):
         principal_map = settings.api_key_principal_map
         principal = principal_map.get(token)
-        if principal_map and not principal:
+        if not principal:
             return JSONResponse(
                 status_code=401,
                 content={
@@ -1593,7 +1593,14 @@ def require_authenticated_actor_binding(
     connection=None,
 ) -> None:
     principal = current_api_principal.get()
-    if not principal or principal == actor:
+    if not principal:
+        if current_transport_authenticated.get():
+            raise HTTPException(
+                status_code=403,
+                detail="Authenticated API request has no project member principal.",
+            )
+        return
+    if principal == actor:
         return
     # Bounded delegation: allow the authenticated principal to act as a member whose
     # role_keys explicitly include the principal — e.g. the console's system actor
@@ -19198,8 +19205,23 @@ def consume_budget(payload: BudgetConsumeRequest) -> BudgetConsumeResponse:
         )
 
 
+def require_worker_principal() -> None:
+    """Only the configured worker identity may claim or settle leased work."""
+    if not current_transport_authenticated.get():
+        # The local development mode may explicitly disable transport auth.
+        return
+    expected = settings.worker_principal.strip()
+    principal = current_api_principal.get()
+    if not expected or principal != expected:
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated principal is not the configured worker principal.",
+        )
+
+
 @app.post("/v1/worker/poll", response_model=WorkerPollResponse)
 def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         job = jobs.claim_job(
             connection,
@@ -19230,6 +19252,7 @@ def list_workers(project_id: str) -> dict[str, Any]:
 
 @app.post("/v1/worker/heartbeat", response_model=WorkerHeartbeatResponse)
 def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             result = jobs.heartbeat(
@@ -19246,6 +19269,7 @@ def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse
 
 @app.post("/v1/worker/complete", response_model=WorkerCompleteResponse)
 def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             result = jobs.complete(
@@ -19262,6 +19286,7 @@ def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
 
 @app.post("/v1/worker/fail", response_model=WorkerFailResponse)
 def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             result = jobs.fail(

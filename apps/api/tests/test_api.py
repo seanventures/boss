@@ -660,8 +660,10 @@ def test_health_returns_service_status(client):
 def test_v1_routes_can_require_api_key_without_hiding_health(client):
     previous_required = api_main.settings.require_api_auth
     previous_keys = api_main.settings.api_keys
+    previous_principals = api_main.settings.api_key_principals
     api_main.settings.require_api_auth = True
     api_main.settings.api_keys = "secret-one,secret-two"
+    api_main.settings.api_key_principals = "secret-one:ceo,secret-two:ceo"
     try:
         health = client.get("/health")
         assert health.status_code == 200
@@ -684,6 +686,7 @@ def test_v1_routes_can_require_api_key_without_hiding_health(client):
     finally:
         api_main.settings.require_api_auth = previous_required
         api_main.settings.api_keys = previous_keys
+        api_main.settings.api_key_principals = previous_principals
 
 
 def test_v1_routes_fail_closed_when_auth_required_without_configured_keys(client):

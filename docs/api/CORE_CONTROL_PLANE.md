@@ -112,10 +112,14 @@ curl -sS "${AUTH[@]}" -d "{
 | `GET` | `/v1/jobs?project_id=` | Filters: `status`, `kind`, `task_id`, `include_terminal` |
 | `GET` | `/v1/jobs/{job_id}` | Detail |
 | `POST` | `/v1/jobs` | Enqueue (`kind`, `payload`, optional reservation); requires `workflow_execute` in the project and the relevant effect grant for infrastructure, GitHub, communications, integrations, or ProviderOps jobs |
-| `POST` | `/v1/worker/poll` | Claim with lease TTL |
-| `POST` | `/v1/worker/heartbeat` | Extend lease |
-| `POST` | `/v1/worker/complete` | Finish with lease token |
-| `POST` | `/v1/worker/fail` | Fail / deadletter path |
+| `POST` | `/v1/worker/poll` | Claim with lease TTL; configured worker principal only |
+| `POST` | `/v1/worker/heartbeat` | Extend lease; worker principal and lease token |
+| `POST` | `/v1/worker/complete` | Finish; worker principal and lease token |
+| `POST` | `/v1/worker/fail` | Fail / deadletter; worker principal and lease token |
+
+When API authentication is enabled, every API key must map to a project member through
+`BOSS_API_KEY_PRINCIPALS`. Worker calls require the principal named by
+`BOSS_WORKER_PRINCIPAL` (default `ceo` for the Community installer).
 
 ### Create job
 

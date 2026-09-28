@@ -24,6 +24,7 @@ def authenticated_keys(monkeypatch):
         "ceo-key:ceo,coo-key:coo,release-key:release_manager,"
         "runner-key:ga_runner,operator-key:ga_operator",
     )
+    monkeypatch.setattr(api_main.settings, "worker_principal", "ceo")
 
 
 def _auth(key: str) -> dict[str, str]:
@@ -416,3 +417,47 @@ def test_code_task_enqueue_requires_execution_grant_in_target_project(
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["status"] == "queued"
     assert calls == [PROJECT]
+
+
+def test_authenticated_api_key_needs_principal_even_without_a_mapping(
+    client, monkeypatch,
+):
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", "unbound-key")
+    monkeypatch.setattr(api_main.settings, "api_key_principals", "")
+    response = client.get("/v1/projects", headers=_auth("unbound-key"))
+    assert response.status_code == 401
+    assert "not bound to a project member principal" in response.json()["detail"]
+    assert client.post(
+        "/v1/worker/poll", headers=_auth("unbound-key"),
+        json={"worker_id": "fake", "capabilities": ["code.task"]},
+    ).status_code == 401
+
+
+def test_only_configured_worker_principal_can_claim_or_settle_jobs(
+    client, authenticated_keys, monkeypatch,
+):
+    poll = {"worker_id": "fake", "capabilities": ["code.task"]}
+    job = {"worker_id": "fake", "job_id": "job_fake", "lease_token": "lease_fake"}
+    requests = [
+        ("/v1/worker/poll", poll),
+        ("/v1/worker/heartbeat", {**job, "lease_ttl_seconds": 60}),
+        ("/v1/worker/complete", {**job, "result": {}}),
+        ("/v1/worker/fail", {**job, "error": {"message": "fake"}}),
+    ]
+    for path, payload in requests:
+        denied = client.post(path, headers=_auth("coo-key"), json=payload)
+        assert denied.status_code == 403, (path, denied.text)
+
+    monkeypatch.setattr(api_main.jobs, "claim_job", lambda *_args: None)
+    accepted = client.post("/v1/worker/poll", headers=_auth("ceo-key"), json=poll)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "idle"
+
+    monkeypatch.setattr(api_main.settings, "worker_principal", "ga_runner")
+    assert client.post(
+        "/v1/worker/poll", headers=_auth("ceo-key"), json=poll
+    ).status_code == 403
+    assert client.post(
+        "/v1/worker/poll", headers=_auth("runner-key"), json=poll
+    ).status_code == 200
