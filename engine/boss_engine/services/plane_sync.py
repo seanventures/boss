@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 
-from .core import create_blocking_decision, emit_event
+from .core import create_blocking_decision, emit_event, has_event
 from .receipts import ReceiptService
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,34 @@ def _recorded_effect(
     if not created:
         # A failed or in-progress comment may have reached Plane before its response was
         # lost. Replaying it could duplicate a public comment; a decision resolves it.
+        if receipt["status"] == "in_progress":
+            try:
+                with connection.engine.begin() as reconcile_connection:
+                    current = reconcile_connection.execute(
+                        text("SELECT status FROM receipts WHERE id=:id FOR UPDATE"),
+                        {"id": receipt_id},
+                    ).scalar_one()
+                    if current == "in_progress" and not has_event(
+                        reconcile_connection, receipt_id, "plane.sync_uncertain"
+                    ):
+                        emit_event(
+                            reconcile_connection, project_id, "plane.sync_uncertain", "plane_sync",
+                            "receipt", receipt_id,
+                            {"event": event_type, "operation": operation},
+                        )
+                        create_blocking_decision(
+                            reconcile_connection, project_id, run.get("task_id"),
+                            f"Reconcile uncertain Plane {operation} for code task {run['id']}",
+                            {
+                                "action": "review_plane_sync_uncertain", "receipt_id": receipt_id,
+                                "run_id": run["id"], "event": event_type,
+                                "plane_project_id": plane_project_id, "plane_issue_id": issue_id,
+                                "operation": operation,
+                            },
+                            {}, "plane_sync_uncertain",
+                        )
+            except Exception:  # noqa: BLE001 — never resend an uncertain external effect
+                logger.exception("plane sync uncertainty escalation failed for receipt %s", receipt_id)
         return receipt["status"] == "succeeded", receipt_id
 
     reason = "Plane client is not configured" if not enabled else "Plane API returned no success"
@@ -152,15 +180,21 @@ def _recorded_effect(
 
 
 def sync_run(
-    client, run: dict[str, Any], event_type: str, *, connection: Any = None
+    client, run: dict[str, Any], event_type: str, *, connection: Any = None,
+    allow_unrecorded_for_tests: bool = False,
 ) -> dict[str, Any]:
-    """Mirror one lifecycle event onto the run's Plane ticket. Best-effort; returns a small report.
-    Loop-guarded: only ``source == 'plane'`` runs sync."""
+    """Mirror one lifecycle event onto Plane with durable receipts.
+
+    The receiptless path is for hermetic fake-client tests only. Runtime callers
+    must supply a database connection so every outbound write is recorded.
+    """
     fc = run.get("finalize_ctx") or {}
     issue_id = fc.get("plane_issue_id")
     project_id = fc.get("plane_project_id")
     if fc.get("source") != "plane" or not issue_id or not project_id:
         return {"synced": False, "reason": "not a plane-triggered run"}
+    if connection is None and not allow_unrecorded_for_tests:
+        return {"synced": False, "reason": "receipt connection required"}
     try:
         enabled = bool(client.enabled())
     except Exception:  # noqa: BLE001 — a failed credential lookup is still a failed effect
