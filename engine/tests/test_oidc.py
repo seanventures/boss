@@ -88,7 +88,14 @@ def test_jwks_fetch_passes_timeout_and_fails_closed_on_timeout(monkeypatch):
         seen["timeout"] = kwargs.get("timeout")
         raise TimeoutError("slow identity provider")
 
+    class TimeoutOpener:
+        def open(self, *args, **kwargs):
+            return fake_urlopen(*args, **kwargs)
+
+    # PyJWT 2.13 calls urlopen directly; newer 2.x builds an opener so it can reject
+    # redirects. Intercept both supported paths without making a live IdP request.
     monkeypatch.setattr(urllib_request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(urllib_request, "build_opener", lambda *_handlers: TimeoutOpener())
 
     client = jwks_client_for_url("https://issuer.example.com/.well-known/jwks.json")
     with pytest.raises(PyJWKClientConnectionError):

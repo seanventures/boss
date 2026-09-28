@@ -18,19 +18,18 @@ investigation needed. 88% noise makes the signal unfindable.
 import ast
 import pathlib
 
-import pytest
-
 SERVICES = pathlib.Path(__file__).resolve().parents[1] / "boss_engine" / "services"
 
-#: Receipts that are legitimately still open when the creating function returns, because the
-#: effect really does resolve later and elsewhere. Closing these would be a worse lie than
-#: leaving them open.
+#: Receipts that are legitimately still open when the creating function returns. Some effects
+#: resolve later; receipt helpers return the open receipt to a caller that closes it.
+#: Closing these inside the creating function would be a worse lie than leaving them open.
 DEFERRED_BY_DESIGN = {
     "receipts.py::create_or_reuse",           # the helper itself
     "receipts.py::record_completed",          # wraps the helper; closes via mark_succeeded
     "model_gateway.py::start_invocation",     # an invocation that finishes on the response
     "jobs.py::_defer_for_budget_state",       # deferred on purpose; that IS the state
     "jobs.py::_create_or_reuse_budget_policy_decision",   # resolves when a human answers
+    "community_edition.py::_create_account_connect_receipt",  # callers mark the outcome
 }
 
 #: Known open create-and-forget sites, as a RATCHET rather than an exemption list.
@@ -45,7 +44,6 @@ KNOWN_OPEN = {
     "canaries.py::_canary_exactly_once",
     "canonical.py::_record_meeting_run_receipt",
     "code_task_service.py::_release",
-    "commercial.py::_create_account_connect_receipt",
     "focused_agents.py::tick_one",
     "github_code_sync.py::_apply_resolution_branch",
     "github_code_sync.py::create_or_reuse_ref",
