@@ -6,6 +6,10 @@ The Metatron terminal connects to the BOSS HTTP control plane. Set
 from a BOSS checkout. `BOSS_ACTOR` is optional. The API key is sent in the
 `X-Boss-Api-Key` header and is never printed by the terminal.
 
+For an installed Community stack, run `make metatron` from the install
+directory. It opens the terminal inside the API container using the install's
+configured API key and project; no host Python setup is needed.
+
 Conversational text goes to `/v1/metatron/session`. The built-in commands are
 `/goals`, `/watch`, `/overwatch`, and `/drive [auto|go]`. For any other BOSS
 HTTP operation, use `/api METHOD /v1/path [JSON]`. The method may be `GET`,

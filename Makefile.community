@@ -30,10 +30,7 @@ check: .env
 	./scripts/install/checkup.sh
 
 metatron: .env
-	@set -a; . ./.env; set +a; \
-	  BOSS_API_URL="http://127.0.0.1:$${BOSS_API_PORT:-8000}" \
-	  BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" \
-	  python3 scripts/metatron_tui.py
+	$(COMPOSE) exec api sh -c 'BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" python scripts/metatron_tui.py'
 
 stop: .env
 	$(COMPOSE) --profile web stop
