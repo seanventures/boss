@@ -15,9 +15,6 @@ environment. Lose it and every stored token is unrefreshable while the row still
 
 A signal that confidently contradicts the thing it describes is worse than no signal at all.
 """
-from apps.api.app import main as api_main
-
-
 PROJECT = "boss-dogfood"
 
 

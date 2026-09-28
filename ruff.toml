@@ -9,12 +9,13 @@
 line-length = 100
 
 [lint.per-file-ignores]
-# Import order is load-bearing here. DATABASE_URL must be rewritten to a private schema
+# Import order is load-bearing in both test configurations. DATABASE_URL must be rewritten to a private schema
 # BEFORE `apps.api.app.main` is imported, because the app builds its own engine at import
 # time; a fixture that rewrites it later would leave the app in `public` while the tests
 # work in their own schema. The file explains this at length. Reordering these imports
 # would break the confinement that makes `clean_tables` safe to run at all.
 "apps/api/tests/conftest.py" = ["E402"]
+"apps/api/tests/conftest-community.py" = ["E402"]
 
 # BOSS-418: apps/api/app/main.py is a 24,796-line module whose later imports sit after
 # service construction. Some of that placement is deliberate (circular-import avoidance),
