@@ -1,5 +1,25 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-09-28 BOSS-293/BOSS-448 Community integration candidate
+
+- Draft [PR #280](https://github.com/seanheiney/boss/pull/280) is the isolated
+  integration branch for the full Community export, installer, console, five
+  optional workflow examples, and branch reconciliation. The private source
+  checkout and live Goldeneye deployment are unchanged.
+- BOSS-448 reviewed 89 open PRs in #174–#279. Forty heads are ancestors of
+  the integration branch, 13 are patch-equivalent, and the remaining draft
+  changes are reworked or superseded. Canaries #174/#191 need separate
+  disposition. Do not close the older PRs before #280 is pushed and merged.
+- The integrated engine suite passed against a disposable PostgreSQL 16
+  database: 5,092 passed, 13 skipped, one expected failure. The web suite
+  passed 2,454 tests with one skip; its production build passed. These are
+  source-tree checks, not final exported-image or live QA proof.
+- A security review reproduced cross-project writes through MCP server and
+  secret routes using a low-permission authenticated principal. Job enqueue
+  authority is also under repair. The final export, exact-history scans,
+  clean x86 VM run, third-party notices, and release-commit proof remain open.
+  Keep PR #280 draft and the target repository private.
+
 ## 2026-09-28 BOSS-300 Community Apache decision (integration in progress)
 
 - Product owner confirmed counsel approval for Apache License 2.0 for the

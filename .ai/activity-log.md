@@ -1,5 +1,19 @@
 # BOSS Autonomous Activity Log
 
+## 2026-09-28 — Codex — BOSS-293/BOSS-448 Community integration checkpoint
+
+- Created isolated draft PR #280 for the integrated Community candidate.
+  Preserved the original Grok checkout and private target repository.
+- Reconciled 89 open PRs in #174–#279; BOSS-448 holds the branch-by-branch
+  evidence. The integration includes 34 agent definitions and five optional
+  workflow examples. Do not close superseded drafts before #280 merges.
+- Combined source checks: 5,092 engine tests passed (13 skipped, one expected
+  failure) with a disposable PostgreSQL 16 database; 2,454 web tests passed
+  (one skipped), and the production web build passed.
+- Security testing reproduced cross-project MCP server and secret writes from
+  a low-permission authenticated key. Authorization patch and exact-export
+  requalification are in progress; public GA remains blocked.
+
 ## 2026-09-28 — Codex — BOSS-300 counsel-backed Community license decision
 
 - Product owner confirmed Apache License 2.0 for the reviewed full Community

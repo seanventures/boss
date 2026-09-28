@@ -1,5 +1,28 @@
 # Codex Handoff
 
+## 2026-09-28 BOSS-293 Community integration and release hold
+
+- Work in `ai/codex/boss-293-community-integrate` and draft
+  [PR #280](https://github.com/seanheiney/boss/pull/280). Keep the original
+  Grok checkout and live Goldeneye deployment untouched.
+- BOSS-448 reconciled 89 open PRs in #174–#279: 40 exact ancestors, 13
+  patch-equivalent, and the other draft changes reviewed as reworked or
+  superseded. Retain #174/#191 canaries pending their own disposition; defer
+  closing superseded PRs until #280 is current and merged.
+- Community source includes 34 agent YAML definitions and five opt-in example
+  workflows. The integration engine suite passed 5,092 tests with 13 skips
+  and one expected failure on disposable PostgreSQL 16; web passed 2,454 with
+  one skip and built for production. Final security tests and export checks
+  still need rerunning after the active auth and Dockerfile fixes.
+- A low-permission transport-authenticated API key reproduced cross-project
+  writes in MCP server and secret routes. `/v1/jobs` enqueue authorization
+  is also being fixed. Do not export or release until these regressions have
+  negative and positive tests and the resulting tree is requalified.
+- Counsel reference `01049940` covers the first-party Apache decision. It
+  does not close third-party redistribution, reachable-history, fresh-VM,
+  exact-release QA, partner, or public-visibility gates in
+  `docs/operations/PUBLIC_FLIP_CHECKLIST.md`.
+
 ## 2026-08-19 official trio 3/3 — Grok session handoff
 
 - `origin/main` is `973de1f`. Tree is clean. No uncommitted factory diffs.
