@@ -138,8 +138,8 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
     expect(markup).toContain('data-testid="fleet-panel"');
     expect(markup).toContain("Register a host");
     // Deploy wizard is a live-fleet control; must not appear when nothing is registered.
-    expect(markup).not.toContain("Deploy an app");
-    expect(markup).not.toContain("Recent deployments");
+    expect(markup).not.toContain("Plan a deployment");
+    expect(markup).not.toContain("Deployment plans and history");
     // Fail-closed sandbox flag is surfaced honestly.
     expect(markup).toContain("BOSS_ENABLE_SANDBOX_DEPLOY=false");
     expect(markup).toContain('data-testid="sandbox-deploy-disabled"');
@@ -187,7 +187,7 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
         communityEdition={false}
       />,
     );
-    expect(enterpriseMarkup).toContain("Deploy an app");
+    expect(enterpriseMarkup).toContain("Plan a deployment");
   });
 
   it("SandboxDeployFlagNotice only renders when the flag is known false", () => {

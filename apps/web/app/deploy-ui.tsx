@@ -1,21 +1,20 @@
 "use client";
 
 /**
- * Deploying, watched.
+ * Deployment plans and execution, watched.
  *
- * The old console could not show progress because the deployment reported nothing until it
- * ended — every spinner was an animation over an empty data source, which is why it read as
- * broken. Deployments are now asynchronous and record each step as it happens, so this file is
- * a renderer of real state rather than a decoration.
+ * A deploy request creates a reviewable ChangeSet. Execution is a separate approved action;
+ * only a run that is actually running shows progress and step logs.
  *
  * Three parts:
  *   LiveDeployment    — polls a running deployment and draws its steps, timings and logs
- *   DeployWizard      — what to deploy, where, confirm; then hands over to LiveDeployment
+ *   DeployWizard      — choose a target and ref, then show its ChangeSet review step
  *   RecentDeployments — the last N DEPLOYMENTS (not every code task that opened a PR)
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+import { consoleHref } from "./console-href";
 import {
   deployTargetAction, getDeliveryDefaultsAction, getDeploymentAction, listRefsAction,
   redeployAction,
@@ -125,7 +124,11 @@ export function LiveDeployment({ runId, onFinished }: {
       const d = await getDeploymentAction(runId);
       if (!live || !d || d.error) return;
       setRun(d);
-      if (!d.running && !done.current) { done.current = true; onFinished?.(d); }
+      const isPlan = ["created", "planned"].includes(d.status);
+      if ((!d.running || isPlan) && !done.current) {
+        done.current = true;
+        if (!isPlan) onFinished?.(d);
+      }
     };
     tick();
     const poll = setInterval(() => { if (!done.current) tick(); }, 2000);
@@ -137,14 +140,18 @@ export function LiveDeployment({ runId, onFinished }: {
     return (
       <div style={box}>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-          <Spin /> starting deployment…
+          <Spin /> loading deployment record…
         </span>
       </div>
     );
   }
 
   const failed = run.status === "failed" || run.status === "blocked";
-  const tone = run.running ? "#58a6ff" : failed ? "#f85149" : "#3fb950";
+  const planned = run.status === "planned" || run.status === "created";
+  const deployed = ["succeeded", "deployed", "healthy"].includes(run.status);
+  const active = run.running && !planned;
+  const tone = active ? "#58a6ff" : failed ? "#f85149"
+    : planned ? "#d29922" : deployed ? "#3fb950" : "#8b949e";
   const runningStep = run.steps.find((s) => s.status === "running");
 
   return (
@@ -152,8 +159,9 @@ export function LiveDeployment({ runId, onFinished }: {
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ color: tone, fontWeight: 600, display: "inline-flex",
                        alignItems: "center", gap: 7 }}>
-          {run.running && <Spin size={14} />}
-          {run.running ? "Deploying" : failed ? "Deployment failed" : "Deployed"}
+          {active && <Spin size={14} />}
+          {active ? "Deploying" : failed ? "Deployment failed"
+            : planned ? "Awaiting ChangeSet review" : deployed ? "Deployed" : run.status}
         </span>
         <strong style={{ fontSize: 13 }}>{run.app_name}</strong>
         {run.environment && <span className="cap-badge tone-blue">{run.environment}</span>}
@@ -164,11 +172,11 @@ export function LiveDeployment({ runId, onFinished }: {
         )}
         <span style={{ flex: 1 }} />
         <span className="detail" style={{ fontSize: 12 }}>
-          {run.running ? `${elapsed}s elapsed` : `took ${ms(run.duration_ms)}`}
+          {active ? `${elapsed}s elapsed` : ms(run.duration_ms) ? `took ${ms(run.duration_ms)}` : ""}
         </span>
       </div>
 
-      {run.running && runningStep && (
+      {active && runningStep && (
         <div className="detail" style={{ fontSize: 12, marginTop: 4 }}>
           {runningStep.label}…
         </div>
@@ -181,7 +189,13 @@ export function LiveDeployment({ runId, onFinished }: {
         ))}
       </div>
 
-      {!run.running && !failed && run.url && (
+      {planned && (
+        <div className="detail" style={{ fontSize: 12, marginTop: 8 }}>
+          No deployment is running. Review, approve, and apply its ChangeSet in{" "}
+          <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+        </div>
+      )}
+      {deployed && run.url && (
         <div style={{ marginTop: 10 }}>
           <a href={`http://${run.url}/`} target="_blank" rel="noreferrer"
              style={{ fontSize: 13 }}>Open {run.url} ↗</a>
@@ -208,6 +222,26 @@ type WizardTarget = {
   auto_deploy?: boolean; paused?: boolean;
 };
 
+type PlannedDeployment = {
+  deployment_run_id: string;
+  changeset_id: string;
+  next_action: "approve_and_apply_changeset";
+};
+
+function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
+  return (
+    <div style={{ ...box, borderColor: "rgba(210,153,34,.35)" }} role="status">
+      <strong>Deployment plan created</strong>
+      <div className="detail" style={{ fontSize: 12, marginTop: 6 }}>
+        Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready for review.
+        Next, open <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>,
+        approve it, then apply it. Deployment run <code>{plan.deployment_run_id}</code>
+        records the plan.
+      </div>
+    </div>
+  );
+}
+
 export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   const [open, setOpen] = useState(false);
   const [targetId, setTargetId] = useState("");
@@ -215,7 +249,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   const [refs, setRefs] = useState<{ name: string; sha: string }[]>([]);
   const [refsError, setRefsError] = useState<string | null>(null);
   const [defaultOwner, setDefaultOwner] = useState("");
-  const [runId, setRunId] = useState<string | null>(null);
+  const [plan, setPlan] = useState<PlannedDeployment | null>(null);
   const [starting, setStarting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -260,21 +294,25 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
       setErr(typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 220));
       return;
     }
-    // Asynchronous: the response carries an id to watch, not a finished deployment.
-    setRunId(out.deployment_run_id);
+    if (out?.status !== "planned" || !out.deployment_run_id || !out.changeset_id
+        || out.next_action !== "approve_and_apply_changeset") {
+      setErr("Deployment request did not return a reviewable ChangeSet. No deployment was started.");
+      return;
+    }
+    setPlan(out as PlannedDeployment);
   };
 
   if (!open) {
     return <button style={{ ...btn, padding: "7px 16px" }} onClick={() => setOpen(true)}>
-      Deploy an app
+      Plan a deployment
     </button>;
   }
 
   return (
     <section className="ct-block">
-      <div className="ct-block-title">Deploy</div>
+      <div className="ct-block-title">Plan a deployment</div>
 
-      {!runId && (
+      {!plan && (
         <div style={{ ...box, display: "grid", gap: 12 }}>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
             <label style={{ display: "grid", gap: 3 }}>
@@ -334,35 +372,37 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
             </div>
           )}
 
-          {/* What WILL happen, before it happens. A deploy is easier to authorise than to undo. */}
+          {/* Describe the request accurately before an operator submits it. */}
           {target && (
             <div className="detail" style={{ fontSize: 12 }}>
-              Deploy <strong>{target.app_name}</strong> from{" "}
+              Plan deployment of <strong>{target.app_name}</strong> from{" "}
               <code>{target.repo_owner || defaultOwner || "?"}/{target.repo}@
               {ref || "default branch"}</code>
               {target.app_entry && <> (<code>{target.app_entry}</code>)</>} to{" "}
               <code>{target.environment}</code>
-              {target.domains?.[0] && <> at <code>{target.domains[0]}</code></>}. BOSS will
-              build, transfer, start the container and health-check it — usually under a minute.
+              {target.domains?.[0] && <> at <code>{target.domains[0]}</code></>}.
+              For a provider-backed target, BOSS creates a ChangeSet to review, approve, and
+              apply before any deployment runs.
             </div>
           )}
 
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button style={btn} disabled={starting} onClick={start}>
-              {starting ? "starting…" : "Deploy"}
+              {starting ? "planning…" : "Create deployment plan"}
             </button>
             <button style={btn} onClick={() => setOpen(false)}>Cancel</button>
-            {err && <span className="detail" style={{ color: "#f85149", fontSize: 12 }}>{err}</span>}
+            {err && <span role="alert" className="detail"
+                          style={{ color: "#f85149", fontSize: 12 }}>{err}</span>}
           </div>
         </div>
       )}
 
-      {runId && (
+      {plan && (
         <div style={{ display: "grid", gap: 10 }}>
-          <LiveDeployment runId={runId} />
+          <ChangeSetNextStep plan={plan} />
           <div>
-            <button style={btn} onClick={() => { setRunId(null); setErr(null); }}>
-              Deploy another
+            <button style={btn} onClick={() => { setPlan(null); setErr(null); }}>
+              Plan another
             </button>
             <button style={{ ...btn, marginLeft: 8 }} onClick={() => setOpen(false)}>Close</button>
           </div>
@@ -407,19 +447,33 @@ type Deployment = {
 
 export function RecentDeployments({ deployments }: { deployments?: Deployment[] | null }) {
   const [openId, setOpenId] = useState<string | null>(null);
-  // A redeploy is a NEW run, so the row that started it is not the row to watch.
-  const [startedFrom, setStartedFrom] = useState<Record<string, string>>({});
+  // A redeploy request creates a new plan; keep its review details beside the source run.
+  const [plannedFrom, setPlannedFrom] = useState<Record<string, PlannedDeployment>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const rows = deployments ?? [];
 
   const again = async (id: string) => {
     setBusy(id);
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     const out = await redeployAction(id);
     setBusy(null);
-    if (out?.deployment_run_id) {
-      setStartedFrom((m) => ({ ...m, [id]: out.deployment_run_id }));
-      setOpenId(null);
+    if (out?.error) {
+      setErrors((current) => ({ ...current, [id]: String(out.error) }));
+      return;
     }
+    if (out?.status !== "planned" || !out.deployment_run_id || !out.changeset_id
+        || out.next_action !== "approve_and_apply_changeset") {
+      setErrors((current) => ({ ...current,
+        [id]: "Redeploy request did not return a reviewable ChangeSet. No deployment was started." }));
+      return;
+    }
+    setPlannedFrom((current) => ({ ...current, [id]: out as PlannedDeployment }));
+    setOpenId(null);
   };
 
   const tone = (s: string) =>
@@ -432,9 +486,9 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
 
   return (
     <section className="ct-block">
-      <div className="ct-block-title">Recent deployments</div>
+      <div className="ct-block-title">Deployment plans and history</div>
       {rows.length === 0 && (
-        <div className="detail">Nothing has been deployed yet.</div>
+        <div className="detail">No deployment plans or runs yet.</div>
       )}
       {rows.map((d) => (
         <div key={d.id} style={{ borderTop: "1px solid rgba(255,255,255,.07)", padding: "8px 0" }}>
@@ -455,20 +509,31 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
                 you happened to be watching when it ran. */}
             <button style={{ ...btn, padding: "2px 9px", fontSize: 11 }}
                     onClick={() => setOpenId(openId === d.id ? null : d.id)}>
-              {openId === d.id ? "hide steps" : "steps & logs"}
+              {openId === d.id ? "hide details"
+                : ["planned", "created"].includes(d.status) ? "plan details" : "steps & logs"}
             </button>
-            {/* "Run that again" without retyping what it was. A new run, so this row's history
-                survives instead of being overwritten by its own replacement. */}
+            {/* Request a new reviewable plan while preserving this run's history. */}
             <button style={{ ...btn, padding: "2px 9px", fontSize: 11 }}
                     disabled={busy === d.id}
-                    title="Ship this target again as a new deployment"
+                    title="Create a new ChangeSet for redeployment review"
                     onClick={() => again(d.id)}>
-              {busy === d.id ? "starting…" : "redeploy"}
+              {busy === d.id ? "planning…" : "plan redeploy"}
             </button>
           </div>
-          {startedFrom[d.id] && (
+          {["planned", "created"].includes(d.status) && !plannedFrom[d.id] && (
+            <div className="detail" style={{ fontSize: 12, marginTop: 4 }}>
+              No deployment is running. Review its ChangeSet in{" "}
+              <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+            </div>
+          )}
+          {errors[d.id] && (
+            <div role="alert" className="detail" style={{ color: "#f85149", fontSize: 12, marginTop: 8 }}>
+              {errors[d.id]}
+            </div>
+          )}
+          {plannedFrom[d.id] && (
             <div style={{ marginTop: 8 }}>
-              <LiveDeployment runId={startedFrom[d.id]} />
+              <ChangeSetNextStep plan={plannedFrom[d.id]} />
             </div>
           )}
           {d.failure_reason && openId !== d.id && (
