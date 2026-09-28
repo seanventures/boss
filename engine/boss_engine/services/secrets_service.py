@@ -121,7 +121,8 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
 def generate_keypair(connection, settings: Settings, *, project_id: str, name: str,
                      algorithm: str = "ed25519",
                      backend: str = "platform_secret_store",
-                     scope_id: Optional[str] = None, comment: Optional[str] = None,
+                     scope_type: str = "project", scope_id: Optional[str] = None,
+                     comment: Optional[str] = None,
                      actor: str = "operator") -> dict[str, Any]:
     """Generate a keypair, store the PRIVATE half, return only the public half.
 
@@ -164,7 +165,7 @@ def generate_keypair(connection, settings: Settings, *, project_id: str, name: s
 
         stored = put_secret(connection, settings, project_id=project_id, name=name,
                             value=private, secret_kind="ssh_private_key", backend=backend,
-                            scope_id=scope_id, actor=actor)
+                            scope_type=scope_type, scope_id=scope_id, actor=actor)
     finally:
         # The private half must not outlive this function on the BOSS host.
         for p in (path, path + ".pub"):
@@ -262,6 +263,13 @@ def bind_secret_to_target(connection, *, target_id: str, name: str, secret_ref_i
         {"i": target_id, "p": project_id}).mappings().first()
     if not row:
         raise ValueError(f"no deployment target {target_id}")
+
+    owned_ref = connection.execute(
+        sql("SELECT 1 FROM secret_refs WHERE id = :id AND project_id = :project_id"),
+        {"id": secret_ref_id, "project_id": project_id},
+    ).first()
+    if not owned_ref:
+        raise ValueError("Secret ref is not in this project.")
 
     bindings = [b for b in (row["secret_refs"] or [])
                 if isinstance(b, dict) and b.get("name") != name]

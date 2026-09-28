@@ -136,6 +136,11 @@ The value goes straight to the backend and is dropped. What BOSS keeps is the re
 the key. For SSH keys the fingerprint is the standard one, so it can be compared against
 `ssh-keygen -lf` output on the box.
 
+Uploading, generating, verifying, and binding secrets requires the project's
+`integration_manage` grant. A supplied `scope_id` must identify this project or one of its
+deployment targets or hosts; a secret reference bound to a target must belong to the same
+project.
+
 `GET` never returns `value`. There is no endpoint that does.
 
 ### 4.4 Generating a keypair

@@ -4913,6 +4913,9 @@ def list_mcp(project_id: str):
 def register_mcp(payload: McpServerRegisterRequest):
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
             return register_mcp_server(
                 connection,
                 payload.project_id,
@@ -4968,7 +4971,9 @@ def toggle_mcp(server_id: str, project_id: str, enabled: bool):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        row = set_mcp_enabled(connection, project_id, server_id, enabled, actor="executive_console")
+        actor = current_api_principal.get() or "executive_console"
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        row = set_mcp_enabled(connection, project_id, server_id, enabled, actor=actor)
         if row is None:
             raise HTTPException(status_code=404, detail="MCP server not found.")
         return row
@@ -4979,7 +4984,9 @@ def remove_mcp(server_id: str, project_id: str):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        ok = delete_mcp_server(connection, project_id, server_id, actor="executive_console")
+        actor = current_api_principal.get() or "executive_console"
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        ok = delete_mcp_server(connection, project_id, server_id, actor=actor)
         if not ok:
             raise HTTPException(status_code=404, detail="MCP server not found.")
     return Response(status_code=204)
@@ -6957,6 +6964,35 @@ def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict]
 # --------------------------------------------------------------------------- #
 # Secrets — write-through. No endpoint in this section returns a secret value.
 # --------------------------------------------------------------------------- #
+def _secret_actor(payload: Optional[dict] = None) -> str:
+    return str((payload or {}).get("actor") or current_api_principal.get() or "executive_console")
+
+
+def _owned_secret_scope(connection, project_id: str, payload: dict) -> tuple[str, str]:
+    """Only let the generic upload address this project's own backend keys."""
+    scope_id = str(payload.get("scope_id") or project_id)
+    requested_type = str(payload.get("scope_type") or "")
+    if scope_id == project_id:
+        scope_type = "project"
+    else:
+        scope_type = ""
+        for candidate, table in (
+            ("deployment_target", "deployment_targets"),
+            ("deployment_host", "deployment_hosts"),
+        ):
+            if connection.execute(
+                text(f"SELECT 1 FROM {table} WHERE id = :id AND project_id = :project_id"),
+                {"id": scope_id, "project_id": project_id},
+            ).first():
+                scope_type = candidate
+                break
+        if not scope_type:
+            raise HTTPException(status_code=403, detail="Secret scope is not in this project.")
+    if requested_type and requested_type != scope_type:
+        raise HTTPException(status_code=422, detail="Secret scope_type does not match scope_id.")
+    return scope_type, scope_id
+
+
 @app.get("/v1/secrets")
 def list_secrets_endpoint(project_id: str):
     """Secret METADATA: name, backend, kind, fingerprint, last4, status, what it is bound to.
@@ -6968,6 +7004,7 @@ def list_secrets_endpoint(project_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secrets_service import list_secrets
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, _secret_actor(), "integration_manage")
         return {"project_id": project_id, "secrets": list_secrets(connection, project_id)}
 
 
@@ -6984,14 +7021,16 @@ def put_secret_endpoint(payload: dict):
             raise HTTPException(status_code=422, detail=f"{field} is required")
     try:
         with begin(engine) as connection:
+            actor = _secret_actor(payload)
+            require_project_actor(connection, payload["project_id"], actor, "integration_manage")
+            scope_type, scope_id = _owned_secret_scope(connection, payload["project_id"], payload)
             return put_secret(
                 connection, settings,
                 project_id=payload["project_id"], name=payload["name"],
                 value=payload["value"],
                 secret_kind=payload.get("secret_kind") or "api_token",
                 backend=payload.get("backend") or "platform_secret_store",
-                scope_id=payload.get("scope_id"),
-                actor=str(payload.get("actor") or "operator"))
+                scope_type=scope_type, scope_id=scope_id, actor=actor)
     except SecretUnavailable as exc:
         # A backend that cannot accept the write is a configuration problem, not a server bug.
         raise HTTPException(status_code=422, detail=str(exc))
@@ -7010,13 +7049,16 @@ def generate_keypair_endpoint(payload: dict):
             raise HTTPException(status_code=422, detail=f"{field} is required")
     try:
         with begin(engine) as connection:
+            actor = _secret_actor(payload)
+            require_project_actor(connection, payload["project_id"], actor, "integration_manage")
+            scope_type, scope_id = _owned_secret_scope(connection, payload["project_id"], payload)
             return generate_keypair(
                 connection, settings,
                 project_id=payload["project_id"], name=payload["name"],
                 algorithm=payload.get("algorithm") or "ed25519",
                 backend=payload.get("backend") or "platform_secret_store",
-                scope_id=payload.get("scope_id"), comment=payload.get("comment"),
-                actor=str(payload.get("actor") or "operator"))
+                scope_type=scope_type, scope_id=scope_id,
+                comment=payload.get("comment"), actor=actor)
     except (SecretUnavailable, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -7029,8 +7071,16 @@ def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secrets_service import verify_secret
     with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM secret_refs WHERE id = :id"),
+            {"id": secret_ref_id},
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Secret ref not found.")
+        actor = _secret_actor(payload)
+        require_project_actor(connection, row["project_id"], actor, "integration_manage")
         return verify_secret(connection, settings, secret_ref_id,
-                             actor=str((payload or {}).get("actor") or "operator"))
+                             actor=actor)
 
 
 @app.get("/v1/secrets/{secret_ref_id}")
@@ -7040,6 +7090,7 @@ def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secrets_service import list_secrets
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, _secret_actor(), "integration_manage")
         for item in list_secrets(connection, project_id):
             if item.get("secret_ref_id") == secret_ref_id:
                 return item
@@ -7057,10 +7108,12 @@ def bind_secret_endpoint(target_id: str, payload: dict):
             raise HTTPException(status_code=422, detail=f"{field} is required")
     try:
         with begin(engine) as connection:
+            actor = _secret_actor(payload)
+            require_project_actor(connection, payload["project_id"], actor, "integration_manage")
             return bind_secret_to_target(
                 connection, target_id=target_id, name=payload["name"],
                 secret_ref_id=payload["secret_ref_id"], project_id=payload["project_id"],
-                actor=str(payload.get("actor") or "operator"))
+                actor=actor)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -18534,9 +18587,28 @@ def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
             }
 
 
+def _job_effect_permission(kind: str) -> Optional[str]:
+    if kind.startswith("infra."):
+        return "infra_provision"
+    if kind.startswith(("github.", "software_factory.", "docs.")):
+        return "github_manage"
+    if kind.startswith("comms."):
+        return "comms_manage"
+    if kind.startswith(("webhook.", "a2a.", "work_tracker.")):
+        return "integration_manage"
+    if kind.startswith("providerops."):
+        return "providerops_manage"
+    return None
+
+
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
+        actor = current_api_principal.get() or "ceo"
+        require_project_actor(connection, payload.project_id, actor, "workflow_execute")
+        effect_permission = _job_effect_permission(payload.kind)
+        if effect_permission:
+            require_project_actor(connection, payload.project_id, actor, effect_permission)
         job_payload = {
             **payload.payload,
             **(

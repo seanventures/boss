@@ -111,7 +111,7 @@ curl -sS "${AUTH[@]}" -d "{
 |--------|------|--------|
 | `GET` | `/v1/jobs?project_id=` | Filters: `status`, `kind`, `task_id`, `include_terminal` |
 | `GET` | `/v1/jobs/{job_id}` | Detail |
-| `POST` | `/v1/jobs` | Enqueue (`kind`, `payload`, optional reservation) |
+| `POST` | `/v1/jobs` | Enqueue (`kind`, `payload`, optional reservation); requires `workflow_execute` in the project and the relevant effect grant for infrastructure, GitHub, communications, integrations, or ProviderOps jobs |
 | `POST` | `/v1/worker/poll` | Claim with lease TTL |
 | `POST` | `/v1/worker/heartbeat` | Extend lease |
 | `POST` | `/v1/worker/complete` | Finish with lease token |

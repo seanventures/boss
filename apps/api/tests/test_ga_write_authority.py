@@ -1,0 +1,231 @@
+"""Community write routes must honor the caller's project grants before effects."""
+
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import text
+
+from apps.api.app import main as api_main
+from boss_engine.services import secrets_service
+
+
+PROJECT = "boss-dogfood"
+
+
+@pytest.fixture
+def authenticated_keys(monkeypatch):
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", "ceo-key,coo-key,release-key,runner-key")
+    monkeypatch.setattr(
+        api_main.settings,
+        "api_key_principals",
+        "ceo-key:ceo,coo-key:coo,release-key:release_manager,runner-key:ga_runner",
+    )
+
+
+def _auth(key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {key}"}
+
+
+def test_mcp_registry_mutations_require_pack_manage(client, authenticated_keys):
+    payload = {
+        "project_id": PROJECT,
+        "name": f"GA authority {uuid4().hex[:8]}",
+        "url": "https://example.test/mcp",
+        "actor": "coo",
+    }
+    denied = client.post("/v1/mcp/servers", headers=_auth("coo-key"), json=payload)
+    assert denied.status_code == 403, denied.text
+
+    spoofed = client.post(
+        "/v1/mcp/servers", headers=_auth("release-key"),
+        json={**payload, "actor": "ceo"},
+    )
+    assert spoofed.status_code == 403, spoofed.text
+
+    created = client.post(
+        "/v1/mcp/servers", headers=_auth("ceo-key"),
+        json={**payload, "actor": "ceo"},
+    )
+    assert created.status_code == 201, created.text
+    path = f"/v1/mcp/servers/{created.json()['id']}"
+    params = {"project_id": PROJECT, "enabled": False}
+    assert client.patch(path, headers=_auth("coo-key"), params=params).status_code == 403
+    assert client.delete(
+        path, headers=_auth("coo-key"), params={"project_id": PROJECT}
+    ).status_code == 403
+    assert client.patch(path, headers=_auth("ceo-key"), params=params).status_code == 200
+    assert client.delete(
+        path, headers=_auth("ceo-key"), params={"project_id": PROJECT}
+    ).status_code == 204
+
+
+def test_secret_writes_require_integration_grant_before_backend_call(
+    client, authenticated_keys, monkeypatch,
+):
+    calls = []
+
+    def fake_put(_connection, _settings, **kwargs):
+        calls.append(("put", kwargs))
+        return {"secret_ref_id": "sref_demo", "raw_secret_stored": False}
+
+    def fake_keypair(_connection, _settings, **kwargs):
+        calls.append(("keypair", kwargs))
+        return {"secret_ref_id": "sref_demo", "public_key": "ssh-ed25519 test"}
+
+    monkeypatch.setattr(secrets_service, "put_secret", fake_put)
+    monkeypatch.setattr(secrets_service, "generate_keypair", fake_keypair)
+    upload = {"project_id": PROJECT, "name": "demo", "value": "test-only", "actor": "coo"}
+    keypair = {"project_id": PROJECT, "name": "demo", "actor": "coo"}
+
+    assert client.post("/v1/secrets", headers=_auth("coo-key"), json=upload).status_code == 403
+    assert client.post(
+        "/v1/secrets/keypair", headers=_auth("coo-key"), json=keypair
+    ).status_code == 403
+    assert client.post(
+        "/v1/secrets", headers=_auth("release-key"),
+        json={**upload, "actor": "ceo"},
+    ).status_code == 403
+    assert calls == []
+
+    stored = client.post(
+        "/v1/secrets", headers=_auth("ceo-key"), json={**upload, "actor": "ceo"}
+    )
+    assert stored.status_code == 201, stored.text
+    minted = client.post(
+        "/v1/secrets/keypair", headers=_auth("ceo-key"),
+        json={**keypair, "actor": "ceo"},
+    )
+    assert minted.status_code == 201, minted.text
+    assert [kind for kind, _ in calls] == ["put", "keypair"]
+    assert all(args["scope_type"] == "project" and args["scope_id"] == PROJECT
+               for _, args in calls)
+
+
+def test_secret_scope_cannot_name_another_projects_backend_key(
+    client, authenticated_keys, monkeypatch,
+):
+    monkeypatch.setattr(
+        secrets_service, "put_secret",
+        lambda *_args, **_kwargs: pytest.fail("backend must not be called"),
+    )
+    response = client.post(
+        "/v1/secrets", headers=_auth("ceo-key"),
+        json={"project_id": PROJECT, "name": "deployment", "value": "test-only",
+              "scope_id": "other-project", "actor": "ceo"},
+    )
+    assert response.status_code == 403, response.text
+
+
+def test_secret_binding_requires_grant_before_service_call(
+    client, authenticated_keys, monkeypatch,
+):
+    monkeypatch.setattr(
+        secrets_service, "bind_secret_to_target",
+        lambda *_args, **_kwargs: {"target_id": "target_demo", "bindings": []},
+    )
+    payload = {"project_id": PROJECT, "name": "ssh_key",
+               "secret_ref_id": "sref_demo", "actor": "coo"}
+    denied = client.post(
+        "/v1/deployment-targets/target_demo/secrets",
+        headers=_auth("coo-key"), json=payload,
+    )
+    assert denied.status_code == 403, denied.text
+    allowed = client.post(
+        "/v1/deployment-targets/target_demo/secrets",
+        headers=_auth("ceo-key"), json={**payload, "actor": "ceo"},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+def test_secret_metadata_and_verify_require_project_grant(
+    client, engine, authenticated_keys, monkeypatch,
+):
+    ref_id = f"sref_ga_auth_{uuid4().hex[:8]}"
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO secret_refs "
+            "(id, project_id, scope_type, scope_id, ref_kind, ref_key, created_by) "
+            "VALUES (:id, :project, 'project', :project, 'env', :key, 'ceo')"
+        ), {"id": ref_id, "project": PROJECT, "key": f"BOSS_{ref_id.upper()}"})
+    monkeypatch.setattr(
+        secrets_service, "verify_secret",
+        lambda *_args, **_kwargs: {"secret_ref_id": ref_id, "resolvable": True},
+    )
+
+    path = f"/v1/secrets/{ref_id}"
+    assert client.get(
+        "/v1/secrets", headers=_auth("coo-key"), params={"project_id": PROJECT}
+    ).status_code == 403
+    assert client.get(
+        path, headers=_auth("coo-key"), params={"project_id": PROJECT}
+    ).status_code == 403
+    assert client.post(
+        f"{path}/verify", headers=_auth("coo-key"), json={"actor": "coo"}
+    ).status_code == 403
+    assert client.get(
+        path, headers=_auth("ceo-key"), params={"project_id": PROJECT}
+    ).status_code == 200
+    assert client.post(
+        f"{path}/verify", headers=_auth("ceo-key"), json={"actor": "ceo"}
+    ).status_code == 200
+
+
+def test_secret_binding_rejects_foreign_project_reference(engine):
+    other_project = f"ga-other-{uuid4().hex[:8]}"
+    target_id = f"deptgt_ga_{uuid4().hex[:8]}"
+    ref_id = f"sref_ga_{uuid4().hex[:8]}"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            workspace_id = connection.execute(text(
+                "SELECT workspace_id FROM projects WHERE id = :project"
+            ), {"project": PROJECT}).scalar_one()
+            connection.execute(text(
+                "INSERT INTO projects (id, workspace_id, name, slug) "
+                "VALUES (:id, :workspace, 'Other', :id)"
+            ), {"id": other_project, "workspace": workspace_id})
+            connection.execute(text(
+                "INSERT INTO deployment_targets "
+                "(id, project_id, app_name, repo, environment, target_kind, "
+                "target_ref, created_by) VALUES "
+                "(:id, :project, :app, 'example/repo', 'staging', 'ssh', 'host', 'ceo')"
+            ), {"id": target_id, "project": PROJECT, "app": target_id})
+            connection.execute(text(
+                "INSERT INTO secret_refs "
+                "(id, project_id, scope_type, scope_id, ref_kind, ref_key, created_by) "
+                "VALUES (:id, :project, 'project', :project, 'env', :key, 'ceo')"
+            ), {"id": ref_id, "project": other_project, "key": f"BOSS_{ref_id.upper()}"})
+
+            with pytest.raises(ValueError, match="not in this project"):
+                secrets_service.bind_secret_to_target(
+                    connection, target_id=target_id, name="ssh_key",
+                    secret_ref_id=ref_id, project_id=PROJECT, actor="ceo",
+                )
+            assert connection.execute(text(
+                "SELECT secret_refs FROM deployment_targets WHERE id = :id"
+            ), {"id": target_id}).scalar_one() == []
+        finally:
+            transaction.rollback()
+
+
+def test_direct_job_enqueue_requires_execution_and_effect_grants(
+    client, engine, authenticated_keys,
+):
+    base = {"project_id": PROJECT, "kind": "plan.generate", "payload": {}}
+    assert client.post("/v1/jobs", headers=_auth("coo-key"), json=base).status_code == 403
+
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_runner",
+            display_name="GA runner", member_type="human", role_keys=[],
+            permissions=["workflow_execute"], actor="ceo",
+        )
+    destructive = {**base, "kind": "infra.droplet.delete"}
+    assert client.post(
+        "/v1/jobs", headers=_auth("runner-key"), json=destructive
+    ).status_code == 403
+
+    allowed = client.post("/v1/jobs", headers=_auth("ceo-key"), json=base)
+    assert allowed.status_code == 201, allowed.text
+    assert allowed.json()["project_id"] == PROJECT
