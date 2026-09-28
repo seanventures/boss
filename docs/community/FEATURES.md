@@ -42,11 +42,6 @@ checks apply to terminal requests as they do to other API clients.
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
 | SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: bound usable ref wins; env is last-resort only when no ref is bound. Unresolvable bound refs do not fall back. **Not GA.** |
-
-Optional Plane integration verifies HTTPS certificates by default. For a private
-certificate authority, set `PLANE_TLS_CA_FILE` to a PEM file readable by the
-API and worker. `PLANE_TLS_INSECURE_SKIP_VERIFY=true` is an explicit local-only
-fallback when no trusted CA is available.
 | Official QA /reports v1.1 | ◐ Honesty helper + inspect gate + Mission Control scorecard island. Missing UI/UX stays `not_scored`. Never invent scores. Live official POSTs may still be in flight. **Not GA.** |
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
@@ -55,6 +50,11 @@ fallback when no trusted CA is available.
 | Pack YAML import / export in Mission Control | ✅ |
 | Managed multi-tenant model gateway | ✦ Cloud |
 | Hosted skill marketplace | ✦ Cloud |
+
+Optional Plane integration verifies HTTPS certificates by default. For a private
+certificate authority, set `PLANE_TLS_CA_FILE` to a PEM file readable by the
+API and worker. `PLANE_TLS_INSECURE_SKIP_VERIFY=true` is an explicit local-only
+fallback when no trusted CA is available.
 
 ## Software Factory
 
