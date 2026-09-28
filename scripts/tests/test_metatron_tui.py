@@ -550,6 +550,22 @@ def test_community_snapshot_maps_every_operator_operation():
     assert all(record["operation_id"] == record["runtime_operation_id"] for record in records)
 
 
+def test_private_snapshot_maps_every_operator_operation_except_inbound_callbacks():
+    yaml = pytest.importorskip("yaml")
+    document = yaml.safe_load((ROOT / "api" / "openapi.yaml").read_text(encoding="utf-8"))
+    records = tui.operation_records(document)
+    assert len(records) == 1022
+    operator_records = [record for record in records if record["path"].startswith("/v1/")]
+    assert len(operator_records) == 1009
+    unaddressable = {(record["method"], record["path"]) for record in operator_records if not record["addressable"]}
+    assert unaddressable == {
+        ("POST", "/v1/webhooks/github"),
+        ("POST", "/v1/webhooks/inbound/{source}"),
+    }
+    assert len({record["operation_id"] for record in records}) == len(records)
+    assert sum(record["runtime_operation_id"] is None for record in records) == 529
+
+
 def test_live_community_app_schema_and_catalog_map_every_mounted_operator_route():
     if importlib.util.find_spec("fastapi") is None:
         pytest.skip("API dependencies are not installed")
