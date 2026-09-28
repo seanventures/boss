@@ -1,8 +1,7 @@
-"""execute_deployment must not mark a rolled-back apply as succeeded.
+"""A direct connector cannot deploy without the Resource Plane receipt boundary.
 
-deploy_ssh health-gates and returns status=rolled_back while restoring the previous
-build. observe() then sees that previous build as healthy. Trusting observe alone marked
-the failed placement succeeded and left commit_ref naming the broken SHA.
+The old connector verdict tests reached apply() directly. That path is now held before
+preflight, so these tests check the actual policy result and lack of host effects.
 """
 from __future__ import annotations
 
@@ -55,10 +54,11 @@ class _Conn:
         return False
 
 
-def test_rolled_back_apply_is_failed_not_succeeded() -> None:
+def test_unlinked_connector_run_is_blocked_before_host_effects() -> None:
     run = {
         "id": "drun_1",
         "project_id": "proj_1",
+        "status": "created",
         "deployment_target_id": "deptgt_1",
         "commit_ref": "deadbeef",
         "release_packet": {"code_task_run_id": "crun_1"},
@@ -84,31 +84,28 @@ def test_rolled_back_apply_is_failed_not_succeeded() -> None:
 
     fake_connector = MagicMock()
     fake_connector.kind = "ssh"
-    fake_connector.plan.return_value = {"steps": []}
-    fake_connector.apply.return_value = {
-        "status": "rolled_back",
-        "detail": "health check returned 500; rolled back to previous build",
-    }
-    # Previous build is healthy — this is exactly the trap.
-    fake_connector.observe.return_value = {"healthy": True, "checks": []}
-
     with patch("boss_engine.db.begin", _ConnCtx()), \
-         patch("boss_engine.services.deployment_connectors.preflight", return_value={"ready": True, "problems": []}), \
+         patch("boss_engine.services.deployment_connectors.preflight") as preflight, \
          patch("boss_engine.services.deployment_connectors.connector_for", return_value=fake_connector), \
+         patch.object(dp, "create_blocking_decision", return_value="decision_1") as decision, \
          patch.object(dp, "emit_event"):
         result = dp.execute_deployment(engine, SimpleNamespace(), "drun_1")
 
-    assert result.get("status") == "failed", result
-    assert fake_connector.observe.call_count == 0
-    assert result.get("healthy") is False, result
-    statuses = [u.get("s") for u in conn.updates if "s" in u]
-    assert "failed" in statuses, conn.updates
+    assert result["status"] == "blocked"
+    assert result["reason_code"] == "deployment_missing_changeset"
+    decision.assert_called_once()
+    assert any(update.get("decision_id") == "decision_1" for update in conn.updates)
+    preflight.assert_not_called()
+    fake_connector.apply.assert_not_called()
+    fake_connector.observe.assert_not_called()
 
 
-def test_deployed_then_unhealthy_observe_is_failed() -> None:
+def test_foreign_changeset_run_is_blocked_before_host_effects() -> None:
     run = {
         "id": "drun_2",
         "project_id": "proj_1",
+        "status": "created",
+        "changeset_id": "changeset_other_project",
         "deployment_target_id": "deptgt_1",
         "commit_ref": "abcd123",
         "release_packet": {"code_task_run_id": "crun_2"},
@@ -128,17 +125,17 @@ def test_deployed_then_unhealthy_observe_is_failed() -> None:
 
     fake_connector = MagicMock()
     fake_connector.kind = "ssh"
-    fake_connector.plan.return_value = {"steps": []}
-    fake_connector.apply.return_value = {
-        "status": "deployed", "deployed_sha": "abcd123",
-    }
-    fake_connector.observe.return_value = {"healthy": False, "checks": [{"ok": False}]}
-
     with patch("boss_engine.db.begin", _ConnCtx()), \
-         patch("boss_engine.services.deployment_connectors.preflight", return_value={"ready": True, "problems": []}), \
+         patch("boss_engine.services.deployment_connectors.preflight") as preflight, \
          patch("boss_engine.services.deployment_connectors.connector_for", return_value=fake_connector), \
+         patch.object(dp, "create_blocking_decision") as decision, \
          patch.object(dp, "emit_event"):
         result = dp.execute_deployment(SimpleNamespace(), SimpleNamespace(), "drun_2")
 
-    assert result.get("status") == "failed", result
-    assert fake_connector.observe.call_count == 1
+    assert result["status"] == "blocked"
+    assert result["reason_code"] == "deployment_changeset_scope_mismatch"
+    decision.assert_not_called()
+    assert conn.updates == []  # A linked run remains available for governed resolution.
+    preflight.assert_not_called()
+    fake_connector.apply.assert_not_called()
+    fake_connector.observe.assert_not_called()
