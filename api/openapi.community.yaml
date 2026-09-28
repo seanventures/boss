@@ -30532,6 +30532,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/coordination:
+    get:
+      summary: Coordination Snapshot Endpoint
+      description: 'Current role assignments and recent work for one authorized project.
+
+
+        Source parity: the Command Center combines GET /v1/roles, the first 50
+
+        GET /v1/tasks, and six GET /v1/metrics/in-flight items. The same canonical
+
+        task lifecycle determines labels and activity in every client.'
+      operationId: get_v1_coordination_66636138
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoordinationSnapshot'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     A2AAcknowledgeRequest:
@@ -35081,6 +35113,126 @@ components:
       required:
       - project_id
       title: CoordinateRequest
+    CoordinationAgent:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        role:
+          type: string
+          title: Role
+        trust:
+          type: integer
+          title: Trust
+        state:
+          type: string
+          enum:
+          - running
+          - verified
+          - blocked
+          - idle
+          title: State
+        currentTask:
+          type: string
+          title: Currenttask
+        currentTaskId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currenttaskid
+        currentTaskStatus:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currenttaskstatus
+        currentTaskOwner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currenttaskowner
+        currentTaskUpdatedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currenttaskupdatedat
+      type: object
+      required:
+      - id
+      - name
+      - role
+      - trust
+      - state
+      - currentTask
+      title: CoordinationAgent
+    CoordinationSnapshot:
+      properties:
+        roster:
+          items:
+            $ref: '#/components/schemas/CoordinationAgent'
+          type: array
+          title: Roster
+        inFlight:
+          items:
+            $ref: '#/components/schemas/CoordinationWorkItem'
+          type: array
+          title: Inflight
+        observedAt:
+          type: string
+          title: Observedat
+      type: object
+      required:
+      - roster
+      - inFlight
+      - observedAt
+      title: CoordinationSnapshot
+    CoordinationWorkItem:
+      properties:
+        taskId:
+          type: string
+          title: Taskid
+        title:
+          type: string
+          title: Title
+        status:
+          type: string
+          title: Status
+        stage:
+          type: string
+          title: Stage
+        area:
+          type: string
+          title: Area
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+        active:
+          type: boolean
+          title: Active
+        owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner
+        updatedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updatedat
+      type: object
+      required:
+      - taskId
+      - title
+      - status
+      - stage
+      - area
+      - createdAt
+      - active
+      title: CoordinationWorkItem
     CostAnomalyListResponse:
       properties:
         project_id:
