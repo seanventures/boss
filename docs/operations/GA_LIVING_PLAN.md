@@ -4,9 +4,12 @@
 evidence. The product owner confirmed counsel approval for Apache License 2.0
 for the reviewed full Community export (reference `01049940`), recorded in
 [OSS_LICENSING_DECISION.md](OSS_LICENSING_DECISION.md). BOSS-300 implementation
-and BOSS-293 public release gates remain open. The 14-day streak, current
-security review, exact export, and clean x86 installer proof must be checked
-afresh before any public GA claim. See the current
+and BOSS-293 public release gates remain open. A 2026-09-28 read-only audit
+found 47 consecutive daily `qa-live` PASS artifacts, but those reports do not
+identify the proposed release commit and the latest working-software proof is
+historical; [QA_LIVE_14DAY.md](QA_LIVE_14DAY.md) keeps PF-6 open. The current
+security review, exact export, and final-candidate x86 installer proof still
+need completion before any public GA claim. See the current
 [PUBLIC_FLIP_CHECKLIST.md](PUBLIC_FLIP_CHECKLIST.md).
 
 **Status date:** 2026-08-14  
