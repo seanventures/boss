@@ -1577,9 +1577,7 @@ paths:
   /v1/orgs:
     get:
       summary: List Orgs
-      description: 'Organizations onboarded to BOSS, each with its primary project and some
-
-        activity counts. Used by the org picker shown before entering the console.'
+      description: Organizations with a project this caller may read, for the org picker.
       operationId: get_v1_orgs_b9cf1a1d
       responses:
         '200':
@@ -1972,6 +1970,14 @@ paths:
         schema:
           type: string
           title: Run Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Payload
       responses:
         '200':
           description: Successful Response
@@ -3731,7 +3737,7 @@ paths:
   /v1/code-tasks/{run_id}/retrospective:
     get:
       summary: Run Retrospective Endpoint
-      description: What this run cost, delivered and lost — assembled from evidence, no model involved.
+      description: What this run cost, delivered and lost for a member of its stored project.
       operationId: get_v1_code_tasks_run_id_retrospective_fbb7144d
       parameters:
       - name: run_id
@@ -3778,9 +3784,9 @@ paths:
         recorded in two other tables and shown nowhere.
 
 
-        Deterministic and read-only. No model is asked to narrate it: a report that runs after
+        Deterministic and read-only for a member of the run''s stored project. No model is asked
 
-        every workflow and occasionally invents a cause is worse than no report.'
+        to narrate it: a report that occasionally invents a cause is worse than no report.'
       operationId: get_v1_workflow_runs_run_id_report_c44df69e
       parameters:
       - name: run_id
@@ -4234,13 +4240,7 @@ paths:
   /v1/deployment-targets/{target_id}/teardown:
     post:
       summary: Teardown Deployment Target Endpoint
-      description: "Remove a deployed app from its host and report the space reclaimed.\n\nThree levels,\
-        \ because \"remove the app\" means different things at different moments:\n  stop_only=true  \
-        \    container goes, files stay — reversible by a redeploy\n  (default)           container +\
-        \ release directories; DATA SURVIVES\n  include_data=true   also the data directory — the only\
-        \ irreversible one\n\nRequires `confirm` to equal the app name. A destructive action reached by\
-        \ a single click is\na destructive action taken by accident, and the operator naming the app is\
-        \ the cheapest\npossible proof they meant this one."
+      description: Refuse direct host teardown until it uses the approved Resource Plane flow.
       operationId: post_v1_deployment_targets_target_id_teardown_f87e0394
       parameters:
       - name: target_id
@@ -4272,23 +4272,7 @@ paths:
   /v1/deployment-targets/{target_id}/purge:
     post:
       summary: Purge Deployment Target Endpoint
-      description: 'Delete a target and its records outright, so the name can be reused.
-
-
-        DELETE retires rather than deletes, because deployment runs and health samples reference a
-
-        target and erasing them destroys the history of everything ever shipped there. That is the
-
-        right default — but it left "I want to start over" with no route except restoring the thing
-
-        you were trying to be rid of.
-
-
-        So: purge is a separate, explicit act. It requires the app name typed, and it refuses while
-
-        the target is still ACTIVE — tear it down first, so nobody deletes the records of an app
-
-        that is still running and then wonders why the host has a container nothing knows about.'
+      description: Refuse history erasure until an approved, recoverable purge flow exists.
       operationId: post_v1_deployment_targets_target_id_purge_6e873143
       parameters:
       - name: target_id
@@ -4320,12 +4304,7 @@ paths:
   /v1/deployment-targets/{target_id}/bootstrap:
     post:
       summary: Bootstrap Deployment Target Endpoint
-      description: 'Have BOSS prepare the host: deploy directory, docker check, and a free port.
-
-
-        These were manual SSH steps for the first two apps. Idempotent and non-destructive — on a
-
-        shared host, anything it would remove belongs to someone else.'
+      description: Refuse direct SSH host writes until Resource Plane records the operation.
       operationId: post_v1_deployment_targets_target_id_bootstrap_7d50bd46
       parameters:
       - name: target_id
@@ -4593,6 +4572,14 @@ paths:
         schema:
           type: string
           title: Repo
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
       responses:
         '200':
           description: Successful Response
@@ -4630,6 +4617,14 @@ paths:
           type: string
           default: ''
           title: Ref
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
       responses:
         '200':
           description: Successful Response
@@ -7187,6 +7182,15 @@ paths:
         schema:
           type: string
           title: Run Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - type: object
+                additionalProperties: true
+              - type: 'null'
+              title: Payload
       responses:
         '200':
           description: Successful Response
@@ -7376,7 +7380,7 @@ paths:
   /v1/sandboxes/{sandbox_id}/preserve:
     post:
       summary: Sandbox Preserve Endpoint
-      description: Hold a retained micro-VM longer for investigation (extends the reaper window).
+      description: Refuse host retention until its cost and external effect are governed.
       operationId: post_v1_sandboxes_sandbox_id_preserve_8e07d0dd
       parameters:
       - name: sandbox_id
@@ -19835,8 +19839,9 @@ paths:
         in: query
         required: false
         schema:
-          type: string
-          default: operator
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Actor
       responses:
         '200':
@@ -20245,8 +20250,9 @@ paths:
         in: query
         required: false
         schema:
-          type: string
-          default: operator
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Actor
       responses:
         '200':
@@ -25415,7 +25421,16 @@ paths:
       tags:
       - security-scan
       summary: Run Scan
-      description: Run scanners against a path; always supports simulated fixture mode.
+      description: 'Authorize the project request, then fail closed before any scanner effect.
+
+
+        A caller-controlled path (including an omitted path that defaults to the API''s
+
+        process CWD) is not a project workspace. The service currently records its
+
+        receipt after invoking binaries and tolerates receipt failure. Neither is a
+
+        safe boundary for an API-triggered host scan.'
       operationId: post_v1_security_scan_run_3ff2ffa2
       requestBody:
         content:
@@ -54906,7 +54921,7 @@ components:
           - type: string
           - type: 'null'
           title: Path
-          description: Filesystem path to scan. Defaults to process CWD when omitted.
+          description: Reserved for a future project-scoped workspace scan.
         scanners:
           anyOf:
           - items:
@@ -54919,7 +54934,7 @@ components:
         simulated:
           type: boolean
           title: Simulated
-          description: When true, return deterministic fixture findings without invoking binaries.
+          description: Reserved fixture mode; API execution remains gated.
           default: false
         timeout_s:
           type: integer

@@ -53922,7 +53922,7 @@ components:
           - type: string
           - type: 'null'
           title: Path
-          description: Filesystem path to scan. Defaults to process CWD when omitted.
+          description: Reserved for a future project-scoped workspace scan.
         scanners:
           anyOf:
           - items:
@@ -53930,14 +53930,12 @@ components:
             type: array
           - type: 'null'
           title: Scanners
-          description: Scanner ids to run. Defaults to semgrep, trivy, osv-scanner,
-            gitleaks. checkov is optional. Unknown ids fail closed. snyk is never
-            runnable.
+          description: Scanner ids to run. Defaults to semgrep, trivy, osv-scanner, gitleaks. checkov is optional.
+            Unknown ids fail closed. snyk is never runnable.
         simulated:
           type: boolean
           title: Simulated
-          description: When true, return deterministic fixture findings without invoking
-            binaries.
+          description: Reserved fixture mode; API execution remains gated.
           default: false
         timeout_s:
           type: integer
@@ -53948,8 +53946,7 @@ components:
         fail_on_critical:
           type: boolean
           title: Fail On Critical
-          description: When true, critical findings mark the run status failed and
-            gate no-go.
+          description: When true, critical findings mark the run status failed and gate no-go.
           default: true
       type: object
       required:
