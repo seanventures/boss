@@ -16,7 +16,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
-import { SettingsKnobs } from "./settings-knobs-ui";
+import { RoleTable } from "./settings-knobs-ui";
 
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
@@ -835,7 +835,7 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
           )}
         </div>
       ) : null}
-      {chosen?.key_url ? (
+      {chosen?.key_url && !decisionKey ? (
         <p className="detail">
           Keys live at <a href={chosen.key_url} target="_blank" rel="noreferrer">{chosen.key_url}</a>.
         </p>
@@ -972,7 +972,7 @@ function RoleModels({ projectId, actor }: { projectId: string; actor: string }) 
           </p>
         </div>
       </div>
-      <SettingsKnobs projectId={projectId} actor={actor} only="choice" />
+      <RoleTable projectId={projectId} actor={actor} />
     </article>
   );
 }
@@ -1010,9 +1010,13 @@ function DecisionKeyForm(
     });
     setBusy(false);
     if (!r.ok && r.decision?.error === "secret_store_fallback_not_accepted") {
+      // A QUESTION, NOT AN ERROR — and the key already passed. The API's sentence names an
+      // API parameter, which means nothing to somebody holding a mouse; this says the trade
+      // and gives the choice its own button.
       setAcceptFallback(true);
-      setResult({ ok: false, text: `${r.error} Press Save again to store it in the database `
-                                   + `deliberately.` });
+      setResult({ ok: true, text: "The key works. This install has no separate secret store, "
+                                  + "so BOSS would keep it in its own database — it survives "
+                                  + "restarts, but anyone with database access could read it." });
       return;
     }
     if (r.ok) setKey("");   // gone from the form the moment BOSS holds it
@@ -1040,7 +1044,7 @@ function DecisionKeyForm(
       </label>
       <button type="button" className="cap-btn primary" disabled={busy || !key.trim()}
               data-testid="setup-decision-key-submit" onClick={() => void save()}>
-        {busy ? "Checking…" : "Verify and save"}
+        {busy ? "Checking…" : acceptFallback ? "Store it in the database" : "Verify and save"}
       </button>
       {result ? (
         <p className={result.ok ? "setup-ok" : "setup-bad"} data-testid="setup-decision-result">

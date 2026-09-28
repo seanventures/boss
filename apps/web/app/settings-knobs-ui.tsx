@@ -181,3 +181,191 @@ export function SettingsKnobs(
     </div>
   );
 }
+
+
+/**
+ * WHO DOES WHAT, AS A TABLE.
+ *
+ * The model pickers were twelve stacked cards — label, paragraph, dropdown — so answering "what
+ * reviews, and on which model?" meant reading two cards that sat five cards apart, and the
+ * operator said so: very difficult to go through. Every one of those knobs is half of a pair,
+ * an ENGINE and a MODEL for one job, so the honest shape is one row per job with the pair side
+ * by side, and the paragraph shrunk to the one line that says what the job is.
+ *
+ * Each cell also says where its value comes from: chosen here, or inherited. An empty picker
+ * that silently means "the implementer's" is the reason a reviewer ends up the same model as
+ * the builder without anybody deciding it.
+ */
+const ROLE_ROWS: {
+  role: string; does: string; engine: string | null; model: string | null;
+  emptyEngine: string; emptyModel: string;
+}[] = [
+  { role: "Implementer", does: "Writes the code and its tests.",
+    engine: "code_agent_engine", model: "code_agent_model",
+    emptyEngine: "deployment default", emptyModel: "engine default" },
+  { role: "Reviewer", does: "Reviews the code adversarially. Best on a different model.",
+    engine: "code_review_engine", model: "code_review_model",
+    emptyEngine: "same as implementer", emptyModel: "lane default" },
+  { role: "Hard problems", does: "Escalations, repairs after failure, security checks.",
+    engine: "code_agent_strong_engine", model: "code_agent_strong_model",
+    emptyEngine: "same as implementer", emptyModel: "engine default" },
+  { role: "Routine work", does: "Small, well-specified changes and design stages.",
+    engine: "code_agent_low_cost_engine", model: "code_agent_low_cost_model",
+    emptyEngine: "same as implementer", emptyModel: "engine default" },
+  { role: "Chat, agents, meetings", does: "Answers in the console and speaks in panels.",
+    engine: "chat_llm_engine", model: "claude_cli_model",
+    emptyEngine: "same as implementer", emptyModel: "engine default" },
+  { role: "Workflow decisions", does: "Picks a branch from fixed options. Jev needs a key.",
+    engine: "decision_backend", model: "decision_model",
+    emptyEngine: "deployment default", emptyModel: "deployment default" },
+  { role: "Codex CLI", does: "The model Codex runs whenever a role uses it.",
+    engine: null, model: "codex_cli_model",
+    emptyEngine: "", emptyModel: "CLI default" },
+];
+
+function RoleCell(
+  { knob, empty, busy, onSave }:
+  { knob: Knob | undefined; empty: string; busy: boolean;
+    onSave: (key: string, value: string) => void },
+) {
+  if (!knob) return <td className="role-cell role-na">—</td>;
+  const inherited = knob.default !== null && knob.default !== "" ? ` (${knob.default})` : "";
+  const control = knob.open_choices ? (
+    <>
+      <input className="input" list={`role-${knob.key}-options`} aria-label={knob.label}
+             placeholder={`${empty}${inherited}`} defaultValue={String(knob.value ?? "")}
+             disabled={busy} data-testid={`knob-${knob.key}`}
+             onBlur={(e) => {
+               if (String(knob.value ?? "") !== e.target.value) onSave(knob.key, e.target.value);
+             }} />
+      <datalist id={`role-${knob.key}-options`}>
+        {(knob.choices ?? []).filter(Boolean).map((c) => <option key={c} value={c} />)}
+      </datalist>
+    </>
+  ) : (
+    <select className="input" aria-label={knob.label} defaultValue={String(knob.value ?? "")}
+            disabled={busy} data-testid={`knob-${knob.key}`}
+            onChange={(e) => {
+              if (String(knob.value ?? "") !== e.target.value) onSave(knob.key, e.target.value);
+            }}>
+      <option value="">{empty}{inherited}</option>
+      {(knob.choices ?? []).filter(Boolean).map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
+  );
+  return (
+    <td className="role-cell" title={knob.help}>
+      {control}
+      <span className="role-origin" data-source={knob.source}>
+        {knob.source === "project" ? "set here" : "inherited"}
+        {knob.source === "project" ? (
+          <button type="button" className="role-reset" disabled={busy}
+                  data-testid={`knob-reset-${knob.key}`} onClick={() => onSave(knob.key, "")}>
+            reset
+          </button>
+        ) : null}
+      </span>
+    </td>
+  );
+}
+
+export function RoleTable({ projectId, actor }: { projectId: string; actor: string }) {
+  const [knobs, setKnobs] = useState<Knob[] | null>(null);
+  const [connected, setConnected] = useState<string[]>([]);
+  const [jevKey, setJevKey] = useState<boolean | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/settings?project_id=${encodeURIComponent(projectId)}`,
+                            { cache: "no-store" });
+      if (!r.ok) { setKnobs([]); return; }
+      const body = await r.json();
+      setKnobs(body.knobs ?? []);
+      setConnected((body.connected_engines ?? []) as string[]);
+    } catch { setKnobs([]); }
+    try {
+      const r = await fetch(
+        `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (r.ok) setJevKey(Boolean((await r.json()).typesafe_key));
+    } catch { setJevKey(null); }
+  }, [projectId]);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = async (key: string, value: string) => {
+    setBusy(key); setNote(null);
+    try {
+      const r = await fetch(`/api/settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, project_id: projectId, actor,
+                               value: value === "" ? null : value }),
+      });
+      const body = await r.json();
+      const label = knobs?.find((k) => k.key === key)?.label ?? key;
+      setNote(r.ok ? `Saved — ${label}: ${body.value ?? "inherited"}. Applies on the next run.`
+                   : (body.error ?? body.detail ?? "Could not save."));
+      await load();
+    } catch (e) {
+      setNote(String((e as Error)?.message ?? e));
+    } finally { setBusy(null); }
+  };
+
+  if (knobs === null) return <p className="detail">Loading settings…</p>;
+  const byKey = new Map(knobs.map((k) => [k.key, k]));
+  const placed = new Set(ROLE_ROWS.flatMap((r) => [r.engine, r.model]).filter(Boolean));
+  // A knob added later and not yet given a row still shows, rather than vanishing.
+  const unplaced = knobs.filter((k) => k.kind === "choice" && !placed.has(k.key));
+
+  return (
+    <div className="role-table-wrap" data-testid="role-table">
+      <p className="detail" data-testid="settings-connected-engines">
+        {connected.length
+          ? <>Choosing between <b>{connected.join(", ")}</b> — connect another model above and
+              it appears here. Changes apply on the next run; nothing restarts.</>
+          : <>Nothing is connected yet, so every engine BOSS can drive is listed.</>}
+      </p>
+      <table className="role-table">
+        <thead>
+          <tr><th scope="col">Job</th><th scope="col">Runs on</th><th scope="col">Model</th></tr>
+        </thead>
+        <tbody>
+          {ROLE_ROWS.map((row) => {
+            const engine = row.engine ? byKey.get(row.engine) : undefined;
+            const model = row.model ? byKey.get(row.model) : undefined;
+            if (!engine && !model) return null;
+            const decisions = row.engine === "decision_backend";
+            return (
+              <tr key={row.role} data-testid={`role-row-${row.role}`}>
+                <th scope="row" className="role-name">
+                  <span>{row.role}</span>
+                  <small>{row.does}</small>
+                  {decisions && jevKey !== null ? (
+                    <small className="role-flag" data-ok={jevKey ? "1" : "0"}>
+                      {jevKey ? "Jev key saved" : "no Jev key — Claude decides"}
+                    </small>
+                  ) : null}
+                </th>
+                {row.engine
+                  ? <RoleCell knob={engine} empty={row.emptyEngine} busy={busy === row.engine}
+                              onSave={(k, v) => void save(k, v)} />
+                  : <td className="role-cell role-na">codex</td>}
+                <RoleCell knob={model} empty={row.emptyModel} busy={busy === row.model}
+                          onSave={(k, v) => void save(k, v)} />
+              </tr>
+            );
+          })}
+          {unplaced.map((k) => (
+            <tr key={k.key}>
+              <th scope="row" className="role-name"><span>{k.label}</span><small>{k.help}</small></th>
+              <RoleCell knob={k} empty="default" busy={busy === k.key}
+                        onSave={(key, v) => void save(key, v)} />
+              <td className="role-cell role-na">—</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {note ? <p className="settings-note" data-testid="settings-note">{note}</p> : null}
+    </div>
+  );
+}

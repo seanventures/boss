@@ -8227,6 +8227,41 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .settings-source[data-source="project"] { color: var(--live, #58a6ff); border-color: currentColor; }
 .settings-note { margin: 4px 0 0; font-size: 12px; color: var(--muted, #8b949e); }
 
+/* WHO DOES WHAT — one row per job, its engine and model side by side. Was twelve stacked
+   cards; the pair that answers "what reviews, on which model?" sat five cards apart. */
+.role-table-wrap { display: grid; gap: 10px; margin-top: 10px; }
+.role-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px;
+  border: 1px solid var(--border, #30363d); border-radius: 10px; overflow: hidden; }
+.role-table thead th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted, #8b949e); padding: 9px 12px;
+  background: color-mix(in srgb, var(--panel, #0d1117) 70%, transparent);
+  border-bottom: 1px solid var(--border, #30363d); }
+.role-table tbody tr + tr > * { border-top: 1px solid var(--border, #30363d); }
+.role-table tbody tr:hover > * { background: rgba(127,127,127,0.04); }
+.role-name { text-align: left; vertical-align: top; padding: 10px 12px; width: 36%; font-weight: 400; }
+.role-name > span { display: block; font-weight: 600; }
+.role-name > small { display: block; color: var(--muted, #8b949e); font-size: 12px; line-height: 1.4; margin-top: 2px; }
+.role-flag { margin-top: 4px !important; }
+.role-flag[data-ok="1"] { color: var(--live, #3fb950) !important; }
+.role-cell { vertical-align: top; padding: 8px 12px; }
+.role-cell .input { width: 100%; min-width: 0; }
+.role-na { color: var(--muted, #8b949e); padding-top: 14px; }
+.role-origin { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 11px;
+  color: var(--muted, #8b949e); }
+.role-origin[data-source="project"] { color: var(--live, #58a6ff); }
+.role-reset { background: none; border: 0; padding: 0; font: inherit; color: inherit;
+  text-decoration: underline; cursor: pointer; }
+/* Phone width: a three-column table does not fit, so each job becomes its own block with the
+   two pickers stacked and labelled. */
+@media (max-width: 720px) {
+  .role-table thead { display: none; }
+  .role-table, .role-table tbody, .role-table tr, .role-table th, .role-table td { display: block; width: auto; }
+  .role-table tbody tr { padding: 6px 0; }
+  .role-cell::before { display: block; font-size: 11px; color: var(--muted, #8b949e); margin-bottom: 3px; }
+  .role-table td:nth-of-type(1)::before { content: "Runs on"; }
+  .role-table td:nth-of-type(2)::before { content: "Model"; }
+}
+
 /* ── Starting a project, on the page that watches it ─────────────────────────────
    This read as a form: a bare white box, a floating label, and a button the same
    weight as the thing it acts on. It is the same act as the Command Center's
