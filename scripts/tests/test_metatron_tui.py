@@ -5,10 +5,14 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "metatron_tui.py"
@@ -88,6 +92,66 @@ def _config(**overrides: Any):
     }
     values.update(overrides)
     return tui.Config(**values)
+
+
+def _openapi() -> dict[str, Any]:
+    return {
+        "paths": {
+            "/v1/tasks": {
+                "get": {
+                    "operationId": "unstable_fastapi_id",
+                    "summary": "List tasks",
+                    "parameters": [{"name": "project_id", "in": "query", "required": True}],
+                },
+                "post": {
+                    "operationId": "unstable_fastapi_id",
+                    "summary": "Create task",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskCreate"}}},
+                    },
+                },
+            },
+            "/v1/tasks/{task_id}": {
+                "get": {
+                    "operationId": "get_task_runtime",
+                    "summary": "Get task",
+                    "parameters": [
+                        {"name": "task_id", "in": "path", "required": True},
+                        {"name": "project_id", "in": "query", "required": True},
+                    ],
+                }
+            },
+            "/health": {"get": {"operationId": "health_runtime", "summary": "Health"}},
+        },
+        "components": {
+            "schemas": {
+                "TaskCreate": {
+                    "type": "object",
+                    "properties": {"project_id": {"type": "string"}, "title": {"type": "string"}},
+                    "required": ["project_id", "title"],
+                }
+            }
+        },
+    }
+
+
+def _catalog() -> dict[str, Any]:
+    return {
+        "domains": [
+            {
+                "id": "core", "title": "Core work", "route_count": 4,
+                "routes": [
+                    {"method": "GET", "path": "/v1/tasks"},
+                    {"method": "POST", "path": "/v1/tasks"},
+                    {"method": "GET", "path": "/v1/tasks/{task_id}"},
+                    {"method": "GET", "path": "/v1/undocumented"},
+                ],
+            },
+            {"id": "system", "title": "System", "route_count": 1,
+             "routes": [{"method": "GET", "path": "/health"}]},
+        ]
+    }
 
 
 def test_parse_natural_language_is_session():
@@ -335,3 +399,182 @@ def test_main_uses_env_and_does_not_need_live_api(monkeypatch):
     assert tui.main([]) == 0
     assert SECRET not in stdout.getvalue()
     assert "metatron" in stdout.getvalue().lower()
+
+
+def test_catalog_search_and_describe_use_live_capabilities():
+    opener = FakeOpener([(200, _catalog()), (200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    domains = client.dispatch(tui.parse_line("/ops"))
+    assert domains["domains"][0]["id"] == "core"
+    found = client.dispatch(tui.parse_line("/ops tasks"))
+    assert found["count"] == 3
+    assert all(item["terminal_invokable"] for item in found["operations"])
+    get_id = next(item["operation_id"] for item in found["operations"] if item["method"] == "GET" and item["path"] == "/v1/tasks")
+    detail = client.dispatch(tui.parse_line(f"/describe {get_id}"))
+    assert detail["method"] == "GET"
+    assert detail["parameters"][0]["name"] == "project_id"
+    assert detail["access_note"].startswith("The API applies edition")
+    create_id = next(item["operation_id"] for item in found["operations"] if item["method"] == "POST")
+    create_detail = client.dispatch(tui.parse_line(f"/describe {create_id}"))
+    assert {field["name"] for field in create_detail["body_fields"] if field["required"]} == {"project_id", "title"}
+    assert '"project_id":"boss-dogfood"' in create_detail["example"]
+    assert [call["url"].split(".test")[-1] for call in opener.calls] == [
+        "/v1/meta/api-catalog", "/openapi.json"
+    ]
+
+
+def test_stable_operation_aliases_disambiguate_duplicate_runtime_ids():
+    records = tui.operation_records(_openapi())
+    tasks = [record for record in records if record["path"] == "/v1/tasks"]
+    assert len(tasks) == 2
+    assert tasks[0]["runtime_operation_id"] == tasks[1]["runtime_operation_id"]
+    assert tasks[0]["operation_id"] != tasks[1]["operation_id"]
+    assert all(record["addressable"] for record in tasks)
+
+
+def test_operation_invocation_uses_api_key_and_project_query_without_bypass():
+    opener = FakeOpener([
+        (200, _openapi()),
+        (200, {"items": [{"id": "task-1"}]}),
+        (200, {"id": "task-2", "event_id": "evt-2"}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    records = tui.operation_records(_openapi())
+    list_id = next(r["operation_id"] for r in records if r["method"] == "GET" and r["path"] == "/v1/tasks")
+    create_id = next(r["operation_id"] for r in records if r["method"] == "POST" and r["path"] == "/v1/tasks")
+    assert client.dispatch(tui.parse_line(f"/op {list_id}"))["items"][0]["id"] == "task-1"
+    created = client.dispatch(tui.parse_line(f'/op {create_id} {{"body":{{"project_id":"boss-dogfood","title":"Plan"}}}}'))
+    assert created["event_id"] == "evt-2"
+    assert opener.calls[1]["url"].endswith("/v1/tasks?project_id=boss-dogfood")
+    assert opener.calls[2]["method"] == "POST"
+    assert opener.calls[2]["body"] == {"project_id": "boss-dogfood", "title": "Plan"}
+    assert all(call["headers"]["x-boss-api-key"] == SECRET for call in opener.calls)
+
+
+def test_operation_rejects_bad_arguments_before_an_effect():
+    opener = FakeOpener([(200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    records = tui.operation_records(_openapi())
+    task_id = next(r["operation_id"] for r in records if r["path"] == "/v1/tasks/{task_id}")
+    create_id = next(r["operation_id"] for r in records if r["method"] == "POST" and r["path"] == "/v1/tasks")
+    for line in (
+        f"/op {task_id}",
+        f'/op {task_id} {{"path":{{"task_id":"../secret"}}}}',
+        f'/op {task_id} {{"path":{{"task_id":"t1"}},"query":{{"unknown":"x"}}}}',
+        f"/op {create_id}",
+    ):
+        result = client.dispatch(tui.parse_line(line))
+        assert result["__command_error__"] is True, line
+    assert len(opener.calls) == 1
+
+
+def test_project_switch_changes_context_and_discards_previous_thread():
+    opener = FakeOpener([(200, {"project_id": "project-two", "goals": []})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.thread_id = "thread-in-old-project"
+    changed = client.dispatch(tui.parse_line("/project project-two"))
+    assert changed["active_project_id"] == "project-two"
+    assert client.thread_id is None
+    client.dispatch(tui.parse_line("/goals"))
+    assert opener.calls[0]["url"].endswith("/v1/metatron/goals?project_id=project-two")
+    assert client.dispatch(tui.parse_line("/project ../other"))["__command_error__"] is True
+
+
+def test_coverage_separates_discovery_terminal_mapping_and_api_access():
+    opener = FakeOpener([(200, _catalog()), (200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    report = client.dispatch(tui.parse_line("/coverage"))
+    assert report["discovered_operations"] == 5
+    assert report["operation_id_invokable"] == 3
+    assert report["raw_api_invokable"] == 4
+    missing = next(r for r in report["operations"] if r["path"] == "/v1/undocumented")
+    assert missing["source"] == "live_catalog_only"
+    assert missing["terminal_invokable"] is False
+    assert missing["raw_api_invokable"] is True
+    assert all(r["edition_policy_access"] == "unverified_server_enforced" for r in report["operations"])
+    assert "Access is checked" in client.handle(tui.parse_line("/coverage"))
+    assert len(opener.calls) == 2  # Cached catalog and schema are reused.
+
+
+def test_coverage_matches_starlette_catchall_to_openapi_template():
+    document = {"paths": {"/v1/previews/{preview_id}/web/{path}": {
+        "get": {"operationId": "runtime_id", "parameters": [
+            {"name": "preview_id", "in": "path", "required": True},
+            {"name": "path", "in": "path", "required": True},
+        ]}
+    }}}
+    catalog = {"domains": [{"id": "delivery", "routes": [
+        {"method": "GET", "path": "/v1/previews/{preview_id}/web/{path:path}"}
+    ]}]}
+    client = tui.MetatronClient(_config(), urlopen=FakeOpener([(200, catalog), (200, document)]))
+    report = client.coverage()
+    assert report["discovered_operations"] == 1
+    assert report["operations"][0]["domain"] == "delivery"
+    assert report["operations"][0]["source"] == "live_openapi"
+
+
+def test_operation_catchall_path_allows_nested_files_only_for_declared_route():
+    document = {"paths": {"/v1/previews/{preview_id}/web/{path}": {
+        "get": {"operationId": "runtime_id", "parameters": [
+            {"name": "preview_id", "in": "path", "required": True},
+            {"name": "path", "in": "path", "required": True},
+        ]}
+    }}}
+    catalog = {"domains": [{"id": "delivery", "routes": [
+        {"method": "GET", "path": "/v1/previews/{preview_id}/web/{path:path}"}
+    ]}]}
+    alias = tui.operation_records(document)[0]["operation_id"]
+    opener = FakeOpener([(200, document), (200, catalog), (200, {"status": "ok"})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    result = client.dispatch(tui.parse_line(
+        f'/op {alias} {{"path":{{"preview_id":"p-1","path":"docs/index.html"}}}}'
+    ))
+    assert result["status"] == "ok"
+    assert opener.calls[-1]["url"].endswith("/v1/previews/p-1/web/docs/index.html")
+    rejected = client.dispatch(tui.parse_line(
+        f'/op {alias} {{"path":{{"preview_id":"p-1","path":"docs/../secret"}}}}'
+    ))
+    assert rejected["__command_error__"] is True
+    assert len(opener.calls) == 3
+
+
+def test_community_snapshot_maps_every_operator_operation():
+    yaml = pytest.importorskip("yaml")
+    document = yaml.safe_load((ROOT / "api" / "openapi.community.yaml").read_text(encoding="utf-8"))
+    records = tui.operation_records(document)
+    assert len(records) == 981
+    operator_records = [record for record in records if record["path"].startswith("/v1/")]
+    assert len(operator_records) == 968
+    assert all(record["addressable"] for record in operator_records)
+    assert len({record["operation_id"] for record in records}) == len(records)
+    assert all(record["operation_id"] == record["runtime_operation_id"] for record in records)
+
+
+def test_live_community_app_schema_and_catalog_map_every_mounted_operator_route():
+    if importlib.util.find_spec("fastapi") is None:
+        pytest.skip("API dependencies are not installed")
+    code = """
+import json
+from apps.api.app.main import app, get_meta_api_catalog
+from scripts.metatron_tui import operation_records, _route_key
+records = operation_records(app.openapi())
+catalog = get_meta_api_catalog()
+documented = {_route_key(r['method'], r['path']) for r in records}
+mounted = {_route_key(r['method'], r['path']) for d in catalog['domains'] for r in d['routes']}
+operator = {key for key in mounted if key[1].startswith('/v1/')}
+assert all(r['addressable'] for r in records if r['path'].startswith('/v1/'))
+assert operator <= documented, sorted(operator - documented)[:10]
+assert len({r['operation_id'] for r in records}) == len(records)
+print(json.dumps({'openapi': len(records), 'operator': len(operator)}))
+"""
+    env = os.environ.copy()
+    env["BOSS_EDITION"] = "community"
+    env.pop("DATABASE_URL", None)
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(ROOT / "engine")))
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    counts = json.loads(result.stdout)
+    assert counts == {"openapi": 981, "operator": 968}
