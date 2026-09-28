@@ -6262,8 +6262,18 @@ def run_investigation_endpoint(investigation_id: str):
     installed in this image and not in the worker's. The worker owns the queue; the container
     with the binary owns the work.
     """
+    require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        project_id = connection.execute(
+            text("SELECT project_id FROM investigations WHERE id = :investigation_id"),
+            {"investigation_id": investigation_id},
+        ).scalar_one_or_none()
+        if project_id is None:
+            return {"ok": False, "error": f"no such investigation: {investigation_id}"}
+        actor = current_api_principal.get() or "system"
+        require_project_actor(connection, project_id, actor, "workflow_execute")
     from boss_engine.services.debug_session import run_investigation
 
     return run_investigation(engine, settings, investigation_id=investigation_id)
@@ -6333,6 +6343,8 @@ def investigation_do_endpoint(investigation_id: str, payload: dict, request: Req
 def list_investigations_endpoint(project_id: str, limit: int = 10):
     """What BOSS has investigated, newest first — the console's window onto the deep work."""
     with begin(engine) as connection:
+        actor = current_api_principal.get() or "system"
+        require_project_actor(connection, project_id, actor, "audit_export")
         rows = connection.execute(
             text("SELECT id, question, status, verdict, turns, duration_ms, allow_fix, "
                  "created_at, finished_at FROM investigations WHERE project_id = :p "

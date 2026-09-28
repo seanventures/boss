@@ -120,6 +120,10 @@ curl -sS "${AUTH[@]}" -d "{
 When API authentication is enabled, every API key must map to a project member through
 `BOSS_API_KEY_PRINCIPALS`. Worker calls require the principal named by
 `BOSS_WORKER_PRINCIPAL` (default `ceo` for the Community installer).
+Investigation execution also requires this worker identity and its
+`workflow_execute` grant in the investigation's stored project.
+Listing investigations requires `audit_export` in the requested project because
+the response includes investigation questions and verdicts.
 
 ### Create job
 
