@@ -21731,13 +21731,11 @@ paths:
       description: 'Install the reviewed SpecPack starter catalog into one project.
 
 
-        Delegates to the isolated Community seed router so honesty fields
+        Delegates to the isolated Community seed service so honesty fields
 
         (model_calls/jobs/budget/receipt) and schema-missing 503 stay in one
 
-        place. FastAPI matches this main.py route first; do not let it shadow
-
-        the stamp-path contract.'
+        place. This is the only registered route at the canonical path.'
       operationId: post_v1_agent_studio_catalog_seed_1c592090
       requestBody:
         content:
@@ -56496,11 +56494,6 @@ components:
         type:
           type: string
           title: Error Type
-        input:
-          title: Input
-        ctx:
-          type: object
-          title: Context
       type: object
       required:
       - loc

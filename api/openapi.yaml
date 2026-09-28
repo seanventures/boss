@@ -9,6 +9,7 @@ security:
 paths:
   /health:
     get:
+      operationId: get_health_12d00a94
       security: []
       summary: Health check
       responses:
@@ -16,12 +17,14 @@ paths:
           description: OK
   /v1/projects:
     get:
+      operationId: get_v1_projects_2a69b54f
       summary: List projects available to the current control-plane client
       responses:
         '200':
           description: Project list
   /v1/auth/session:
     get:
+      operationId: get_v1_auth_session_4664ebe0
       summary: Inspect transport authentication, OIDC state, and principal binding
       responses:
         '200':
@@ -31,6 +34,7 @@ paths:
           and principal binding state: null
   /saml/v2/{project_id}/metadata:
     get:
+      operationId: get_saml_v2_project_id_metadata_e2a5a1c6
       security: []
       summary: Return BOSS SAML service-provider metadata for an enterprise project
       parameters:
@@ -44,6 +48,7 @@ paths:
           description: SAML service-provider metadata XML with ACS endpoint
   /saml/v2/{project_id}/acs:
     post:
+      operationId: post_saml_v2_project_id_acs_a92dace0
       security: []
       summary: Exchange a signed enterprise SAMLResponse for a short-lived BOSS bearer
         session
@@ -89,6 +94,7 @@ paths:
           description: BOSS_ENTERPRISE_SAML_ENABLED is not enabled
   /v1/edition:
     get:
+      operationId: get_v1_edition_9298dd82
       summary: Inspect effective BOSS edition, Account Connect requirement, and active
         commercial capabilities
       parameters:
@@ -103,6 +109,7 @@ paths:
           Cloud is blocked until Account Connect is linked: null
   /v1/entitlements:
     get:
+      operationId: get_v1_entitlements_51bcd83d
       summary: List license entitlements and edition-pack capabilities for a project
       parameters:
       - name: project_id
@@ -121,6 +128,7 @@ paths:
           description: Edition status plus active or requested inactive license entitlements
   /v1/cloud/catalog:
     get:
+      operationId: get_v1_cloud_catalog_ed6eb615
       summary: BOSS Cloud/Enterprise feature catalog and Community independence contract
       parameters:
       - name: project_id
@@ -133,6 +141,7 @@ paths:
           description: Feature matrix with available_now flags and packaging copy
   /v1/cloud/status:
     get:
+      operationId: get_v1_cloud_status_1cfbf17f
       summary: Cloud link status and Easy Connect readiness
       parameters:
       - name: project_id
@@ -146,6 +155,7 @@ paths:
             pending sessions
   /v1/cloud/comparison:
     get:
+      operationId: get_v1_cloud_comparison_8c593553
       summary: Community vs Cloud vs Enterprise packaging matrix
       parameters:
       - name: project_id
@@ -158,6 +168,7 @@ paths:
           description: Marketing-aligned feature comparison rows
   /v1/cloud/capabilities:
     get:
+      operationId: get_v1_cloud_capabilities_6c8c59d4
       summary: Local vs Cloud-locked capabilities for this project
       parameters:
       - name: project_id
@@ -170,6 +181,7 @@ paths:
           description: Capability buckets with unlock paths
   /v1/cloud/workers:
     get:
+      operationId: get_v1_cloud_workers_b10ca411
       summary: Managed worker fabric status (honest planned until fleets ship)
       description: 'Includes local hybrid enrollments when present. Never claims managed
         available_now=true. Elastic fleets remain planned.
@@ -186,6 +198,7 @@ paths:
           description: Managed workers availability, local enrollments, honesty flags
   /v1/cloud/workers/enroll:
     post:
+      operationId: post_v1_cloud_workers_enroll_a324ec4c
       summary: Enroll a local worker node for hybrid attach (receipted)
       description: 'Requires Cloud link via Easy Connect. Enrolls a local worker for
         hybrid attach only — does not provision elastic managed fleets.
@@ -225,6 +238,7 @@ paths:
           description: Missing project_id or worker_node_id
   /v1/cloud/sync:
     post:
+      operationId: post_v1_cloud_sync_4a22de42
       summary: Sync hosted Account Connect entitlements after Cloud link
       requestBody:
         required: true
@@ -253,6 +267,7 @@ paths:
           description: Hosted Account Connect sync failed
   /v1/cloud/entitlements:
     get:
+      operationId: get_v1_cloud_entitlements_d123313a
       summary: List effective entitlements (local + hosted when linked)
       parameters:
       - name: project_id
@@ -271,6 +286,7 @@ paths:
           description: Local and hosted entitlement grants
   /v1/cloud/team-invites:
     get:
+      operationId: get_v1_cloud_team_invites_02855524
       summary: List local team invite records when Cloud-linked
       parameters:
       - name: project_id
@@ -290,6 +306,7 @@ paths:
         '404':
           description: Not linked to BOSS Cloud
     post:
+      operationId: post_v1_cloud_team_invites_ea3932d9
       summary: Create hosted team invite via Account Connect when linked
       requestBody:
         required: true
@@ -327,6 +344,7 @@ paths:
           description: Not linked to BOSS Cloud
   /v1/cloud/marketplace:
     get:
+      operationId: get_v1_cloud_marketplace_c378b937
       summary: List hosted marketplace packs when linked
       description: 'When unlinked returns 200 with empty items and blocked_reason=cloud_not_linked.
         Does not require paid edition mount — always available under /v1/cloud/*.
@@ -355,6 +373,7 @@ paths:
           description: Marketplace listings or empty+blocked when unlinked
   /v1/cloud/easy-connect:
     post:
+      operationId: post_v1_cloud_easy_connect_15312a20
       summary: Start Easy Connect from self-hosted Community to BOSS Cloud
       description: 'Browser or device OAuth-style link. Community remains fully independent
         when BOSS_ACCOUNT_CONNECT_URL is unset (returns blocked with clear reason).
@@ -390,6 +409,7 @@ paths:
           description: Invalid method or project
   /v1/cloud/easy-connect/{session_id}:
     get:
+      operationId: get_v1_cloud_easy_connect_session_id_ad0bbcd0
       summary: Poll Easy Connect session (device flow)
       parameters:
       - name: session_id
@@ -420,6 +440,7 @@ paths:
           description: Session not found
   /v1/cloud/easy-connect/{session_id}/complete:
     post:
+      operationId: post_v1_cloud_easy_connect_session_id_complete_b5cabd56
       summary: Complete browser Easy Connect after Account Connect callback
       parameters:
       - name: session_id
@@ -459,6 +480,7 @@ paths:
           description: State mismatch or session not completable
   /v1/cloud/easy-connect/complete:
     post:
+      operationId: post_v1_cloud_easy_connect_complete_240090be
       summary: Complete browser Easy Connect from hosted redirect (code + state)
       requestBody:
         required: true
@@ -492,6 +514,7 @@ paths:
           description: State mismatch or session not completable
   /v1/cloud/unlink:
     post:
+      operationId: post_v1_cloud_unlink_d59dd015
       summary: Disconnect project from BOSS Cloud (Community remains independent)
       requestBody:
         required: true
@@ -516,6 +539,7 @@ paths:
           description: No active Cloud link
   /v1/cloud/retention:
     get:
+      operationId: get_v1_cloud_retention_60c998be
       summary: Evidence retention policy (local receipts + Cloud SLA when linked)
       parameters:
       - name: project_id
@@ -530,6 +554,7 @@ paths:
 
             '
     put:
+      operationId: put_v1_cloud_retention_988142db
       summary: Set Cloud-linked evidence retention_days (receipted)
       description: 'Requires active Cloud/Account Connect link. Stores policy on account_connect_orgs.metadata
         and emits cloud.retention_updated with a Receipt.
@@ -565,6 +590,7 @@ paths:
           description: Invalid retention_days or missing fields
   /v1/account-connect/link:
     post:
+      operationId: post_v1_account_connect_link_f3a4bf83
       summary: Link a local project to a hosted BOSS Account Connect org
       requestBody:
         required: true
@@ -608,6 +634,7 @@ paths:
             state
   /v1/account-connect/unlink:
     post:
+      operationId: post_v1_account_connect_unlink_f8e39594
       summary: Unlink the active hosted BOSS Account Connect org
       requestBody:
         required: true
@@ -639,6 +666,7 @@ paths:
           description: No active Account Connect link matched the request
   /v1/account-connect/sync:
     post:
+      operationId: post_v1_account_connect_sync_93e8244e
       summary: Sync hosted Account Connect license entitlements through the configured
         real HTTP adapter
       requestBody:
@@ -674,6 +702,7 @@ paths:
           so sync fails closed: null
   /v1/account-connect/health-checks:
     get:
+      operationId: get_v1_account_connect_health_checks_f0b2f4df
       summary: List hosted Account Connect readiness checks and readiness packet evidence
       parameters:
       - name: project_id
@@ -696,6 +725,7 @@ paths:
           errors: null
           and readiness_packet_artifact_id: null
     post:
+      operationId: post_v1_account_connect_health_checks_0023306a
       summary: Run a configured hosted Account Connect readiness check or record fail-closed
         configuration evidence with a readiness packet artifact
       requestBody:
@@ -734,6 +764,7 @@ paths:
             link
   /v1/account-connect/auth-sessions:
     get:
+      operationId: get_v1_account_connect_auth_sessions_83ab475a
       summary: List hosted Account Connect auth sessions and visible blocked/failed
         states
       parameters:
@@ -756,6 +787,7 @@ paths:
           receipt: null
           and completion metadata: null
     post:
+      operationId: post_v1_account_connect_auth_sessions_8b9201f3
       summary: Start a hosted Account Connect login session through a receipt-protected
         adapter call
       requestBody:
@@ -790,6 +822,7 @@ paths:
             link
   /v1/account-connect/auth-sessions/{session_id}/complete:
     post:
+      operationId: post_v1_account_connect_auth_sessions_session_id_complete_8250ce58
       summary: Complete a hosted Account Connect auth session and link the returned
         hosted org
       parameters:
@@ -834,6 +867,7 @@ paths:
           description: Callback state did not match the stored session state
   /v1/account-connect/team-invites:
     get:
+      operationId: get_v1_account_connect_team_invites_5e31d862
       summary: List Account Connect team invites and visible delivery/blocked states
       parameters:
       - name: project_id
@@ -852,6 +886,7 @@ paths:
           description: Team invite records
           including blocked hosted delivery attempts and receipt links: null
     post:
+      operationId: post_v1_account_connect_team_invites_c6050b07
       summary: Create a hosted Account Connect team invite through a receipt-protected
         adapter call
       requestBody:
@@ -895,6 +930,7 @@ paths:
           description: No active Account Connect link matched the request
   /v1/account-connect/team-invites/{invite_id}/revoke:
     post:
+      operationId: post_v1_account_connect_team_invites_invite_id_revoke_e25c6239
       summary: Revoke an Account Connect team invite, using a receipt-protected hosted
         revoke when needed
       parameters:
@@ -931,6 +967,7 @@ paths:
           description: Invite was not found
   /v1/account-connect/billing-portal-sessions:
     get:
+      operationId: get_v1_account_connect_billing_portal_sessions_c686eae9
       summary: List Account Connect billing portal session records
       parameters:
       - name: project_id
@@ -950,6 +987,7 @@ paths:
           failed: null
           or blocked status and receipt links: null
     post:
+      operationId: post_v1_account_connect_billing_portal_sessions_4fd2c12e
       summary: Create a hosted billing portal session through a receipt-protected
         Account Connect adapter call
       requestBody:
@@ -981,6 +1019,7 @@ paths:
           description: No active Account Connect link matched the request
   /scim/v2/{project_id}/Groups:
     get:
+      operationId: get_scim_v2_project_id_groups_0614b0cd
       summary: SCIM 2.0 list groups for an active Enterprise SCIM provider
       security:
       - scimBearerAuth: []
@@ -1006,6 +1045,7 @@ paths:
         '503':
           description: SCIM runtime token configuration is missing
     post:
+      operationId: post_scim_v2_project_id_groups_b63d6f2d
       summary: SCIM 2.0 create or update a group mapping
       security:
       - scimBearerAuth: []
@@ -1035,6 +1075,7 @@ paths:
           description: No active non-blocked SCIM identity provider is configured
   /scim/v2/{project_id}/Groups/{group_id}:
     get:
+      operationId: get_scim_v2_project_id_groups_group_id_c7637a4e
       summary: SCIM 2.0 fetch a group by SCIM id, externalId, or displayName
       security:
       - scimBearerAuth: []
@@ -1055,6 +1096,7 @@ paths:
         '404':
           description: Group not found
     put:
+      operationId: put_scim_v2_project_id_groups_group_id_965e72bf
       summary: SCIM 2.0 replace a group mapping
       security:
       - scimBearerAuth: []
@@ -1084,6 +1126,7 @@ paths:
         '400':
           description: Invalid SCIM group payload
     delete:
+      operationId: delete_scim_v2_project_id_groups_group_id_0628bd3e
       summary: SCIM 2.0 deactivate a group mapping without deleting audit history
       security:
       - scimBearerAuth: []
@@ -1105,6 +1148,7 @@ paths:
           description: Group not found
   /scim/v2/{project_id}/Users:
     get:
+      operationId: get_scim_v2_project_id_users_2a0adfed
       summary: SCIM 2.0 list users for an active Enterprise SCIM provider
       security:
       - scimBearerAuth: []
@@ -1130,6 +1174,7 @@ paths:
         '503':
           description: SCIM runtime token configuration is missing
     post:
+      operationId: post_scim_v2_project_id_users_a90f9181
       summary: SCIM 2.0 create or update a user and effective BOSS org member
       security:
       - scimBearerAuth: []
@@ -1159,6 +1204,7 @@ paths:
           description: No active non-blocked SCIM identity provider is configured
   /scim/v2/{project_id}/Users/{user_id}:
     get:
+      operationId: get_scim_v2_project_id_users_user_id_5b01ebef
       summary: SCIM 2.0 fetch a user by SCIM id, externalId, userName, or member id
       security:
       - scimBearerAuth: []
@@ -1179,6 +1225,7 @@ paths:
         '404':
           description: User not found
     put:
+      operationId: put_scim_v2_project_id_users_user_id_65f650ea
       summary: SCIM 2.0 replace a user and effective BOSS org member mapping
       security:
       - scimBearerAuth: []
@@ -1208,6 +1255,7 @@ paths:
         '400':
           description: Invalid SCIM user payload
     delete:
+      operationId: delete_scim_v2_project_id_users_user_id_f4d51866
       summary: SCIM 2.0 deactivate a user and remove effective org-member access
       security:
       - scimBearerAuth: []
@@ -1229,6 +1277,7 @@ paths:
           description: User not found
   /v1/enterprise/clusters:
     get:
+      operationId: get_v1_enterprise_clusters_9a8f9e52
       summary: List enterprise deployment, clustering, trust, support, and private-worker
         records
       parameters:
@@ -1242,6 +1291,7 @@ paths:
           description: Enterprise cluster/trust records with blocking gaps and normalized
             governance controls
     post:
+      operationId: post_v1_enterprise_clusters_0a8c3061
       summary: Create or update an enterprise cluster/trust record without provisioning
         infrastructure
       requestBody:
@@ -1317,6 +1367,7 @@ paths:
           description: Unsupported enterprise deployment or Account Connect mode
   /v1/enterprise/cluster-validation-runs:
     get:
+      operationId: get_v1_enterprise_cluster_validation_runs_75fd1bda
       summary: List auditable Enterprise cluster validation runs
       parameters:
       - name: project_id
@@ -1342,6 +1393,7 @@ paths:
           status: null
           and blocking gaps: null
     post:
+      operationId: post_v1_enterprise_cluster_validation_runs_0133b2b0
       summary: Record Enterprise cluster validation evidence without claiming a live
         rollout occurred
       requestBody:
@@ -1391,6 +1443,7 @@ paths:
           or check payload: null
   /v1/enterprise/support-cases:
     get:
+      operationId: get_v1_enterprise_support_cases_d949686e
       summary: List enterprise support/SLA cases for a project
       parameters:
       - name: project_id
@@ -1414,6 +1467,7 @@ paths:
           support_packet_artifact_id: null
           and metadata: null
     post:
+      operationId: post_v1_enterprise_support_cases_dc73f64e
       summary: Create a local enterprise support case and optionally request receipt-backed
         hosted escalation
       requestBody:
@@ -1468,6 +1522,7 @@ paths:
           or invalid support payload: null
   /v1/enterprise/support-cases/{case_id}:
     post:
+      operationId: post_v1_enterprise_support_cases_case_id_71bfed98
       summary: Update local enterprise support case status, assignment, or metadata
       parameters:
       - name: case_id
@@ -1512,6 +1567,7 @@ paths:
           description: Support case was not found
   /v1/enterprise/identity-rollout-policies:
     get:
+      operationId: get_v1_enterprise_identity_rollout_policies_839caa33
       summary: List enterprise identity runtime rollout policies
       parameters:
       - name: project_id
@@ -1525,6 +1581,7 @@ paths:
           SAML: null
           and SCIM runtime rollout policies for a project: null
     post:
+      operationId: post_v1_enterprise_identity_rollout_policies_56af0861
       summary: Create or update an enterprise identity runtime rollout policy
       requestBody:
         required: true
@@ -1572,6 +1629,7 @@ paths:
           description: Unsupported identity provider type or runtime mode
   /v1/enterprise/identity-providers:
     get:
+      operationId: get_v1_enterprise_identity_providers_3366dfa1
       summary: List enterprise OIDC, SAML, and SCIM identity-provider metadata records
       parameters:
       - name: project_id
@@ -1584,6 +1642,7 @@ paths:
           description: Enterprise identity-provider records with blocking gaps and
             SecretRef metadata
     post:
+      operationId: post_v1_enterprise_identity_providers_0947784d
       summary: Create or update an enterprise identity-provider metadata record without
         external IdP calls
       requestBody:
@@ -1655,6 +1714,7 @@ paths:
           or invalid required metadata: null
   /v1/enterprise/scim/groups:
     get:
+      operationId: get_v1_enterprise_scim_groups_eb417d0f
       summary: List Enterprise SCIM groups and their BOSS RBAC mappings
       parameters:
       - name: project_id
@@ -1666,6 +1726,7 @@ paths:
         '200':
           description: Enterprise SCIM group records with role and permission mappings
     post:
+      operationId: post_v1_enterprise_scim_groups_15c5a009
       summary: Create or update a SCIM group mapping without external IdP calls
       requestBody:
         required: true
@@ -1708,6 +1769,7 @@ paths:
           description: Invalid SCIM group mapping
   /v1/enterprise/scim/users:
     get:
+      operationId: get_v1_enterprise_scim_users_aac9bc81
       summary: List Enterprise SCIM users and their mapped BOSS org member ids
       parameters:
       - name: project_id
@@ -1720,6 +1782,7 @@ paths:
           description: Enterprise SCIM user records with effective BOSS roles and
             permissions
     post:
+      operationId: post_v1_enterprise_scim_users_de69ee46
       summary: Create or update a SCIM user and map active users to BOSS org members
       requestBody:
         required: true
@@ -1771,6 +1834,7 @@ paths:
           description: Invalid SCIM user payload
   /v1/members:
     get:
+      operationId: get_v1_members_32b49211
       summary: List active project members and system actors
       parameters:
       - name: project_id
@@ -1782,6 +1846,7 @@ paths:
         '200':
           description: Project member directory
     post:
+      operationId: post_v1_members_7de05164
       summary: Create or update a project member
       requestBody:
         required: true
@@ -1823,6 +1888,7 @@ paths:
           description: Actor is not allowed to manage members
   /v1/members/{member_id}:
     get:
+      operationId: get_v1_members_member_id_b16deace
       summary: Get an active project member
       parameters:
       - name: member_id
@@ -1842,6 +1908,7 @@ paths:
           description: Member not found
   /v1/org-members:
     get:
+      operationId: get_v1_org_members_54ec24d6
       summary: List delegated org members for an org
       parameters:
       - name: org_id
@@ -1867,6 +1934,7 @@ paths:
         '403':
           description: Actor is not allowed to manage members
     post:
+      operationId: post_v1_org_members_70170619
       summary: Upsert an org-level delegated member
       requestBody:
         required: true
@@ -1911,6 +1979,7 @@ paths:
           description: Actor is not allowed to manage members
   /v1/break-glass/grants:
     get:
+      operationId: get_v1_break_glass_grants_70c0cbce
       summary: List break-glass access grants
       parameters:
       - name: project_id
@@ -1928,6 +1997,7 @@ paths:
         '200':
           description: Break-glass grant list
     post:
+      operationId: post_v1_break_glass_grants_1caf09fe
       summary: Grant temporary break-glass access with TTL and postmortem task
       requestBody:
         required: true
@@ -1967,6 +2037,7 @@ paths:
           description: Actor is not allowed to grant emergency access
   /v1/break-glass/grants/{grant_id}/revoke:
     post:
+      operationId: post_v1_break_glass_grants_grant_id_revoke_67bc16b2
       summary: Revoke an active break-glass grant
       parameters:
       - name: grant_id
@@ -1995,6 +2066,7 @@ paths:
           description: Break-glass grant not found
   /v1/status:
     get:
+      operationId: get_v1_status_08f0bd3a
       summary: Executive status summary
       parameters:
       - name: project_id
@@ -2007,6 +2079,7 @@ paths:
           description: Status summary
   /v1/metatron/query:
     post:
+      operationId: post_v1_metatron_query_d180aecb
       summary: Ask Metatron for a scoped, freshness-stamped status answer
       requestBody:
         required: true
@@ -2041,6 +2114,7 @@ paths:
             IP+actor for local; prod uses external limiter)
   /v1/health-snapshots:
     get:
+      operationId: get_v1_health_snapshots_bc318534
       summary: List recent health snapshots for a project
       parameters:
       - name: project_id
@@ -2059,6 +2133,7 @@ paths:
           description: Health snapshot list
   /v1/health-snapshots/refresh:
     post:
+      operationId: post_v1_health_snapshots_refresh_10a00f44
       summary: Persist a fresh health snapshot for the project
       requestBody:
         required: true
@@ -2079,6 +2154,7 @@ paths:
           description: Health snapshot created
   /v1/ops/queue:
     get:
+      operationId: get_v1_ops_queue_d0f87677
       summary: Inspect live queue, blocker, deadletter, and decision state for COO
         operations
       parameters:
@@ -2112,6 +2188,7 @@ paths:
           description: Invalid limit
   /v1/ops/digests:
     post:
+      operationId: post_v1_ops_digests_afbb6239
       summary: Create a durable COO operations digest artifact
       requestBody:
         required: true
@@ -2142,6 +2219,7 @@ paths:
           description: Actor lacks health refresh permission
   /v1/commands/propose:
     post:
+      operationId: post_v1_commands_propose_ebc80e03
       summary: Submit a CEO command and create an intake task/job
       requestBody:
         required: true
@@ -2172,6 +2250,7 @@ paths:
             IP+actor for local; prod uses external limiter)
   /v1/agent/chat:
     post:
+      operationId: post_v1_agent_chat_157aea1d
       summary: Persist a conversational turn and route it to a governed BOSS initiator
       requestBody:
         required: true
@@ -2215,6 +2294,7 @@ paths:
           description: Rate limit exceeded for high-cost path
   /v1/tasks:
     get:
+      operationId: get_v1_tasks_339c8c60
       summary: List tasks
       parameters:
       - name: project_id
@@ -2238,6 +2318,7 @@ paths:
         '200':
           description: Task list
     post:
+      operationId: post_v1_tasks_54d40d0b
       summary: Create task
       requestBody:
         required: true
@@ -2303,6 +2384,7 @@ paths:
           description: Actor is not allowed to create tasks
   /v1/departments:
     get:
+      operationId: get_v1_departments_38377f60
       summary: List canonical departments for a project
       parameters:
       - name: project_id
@@ -2326,6 +2408,7 @@ paths:
         '200':
           description: Department list
     post:
+      operationId: post_v1_departments_9ea6f674
       summary: Create or update a canonical department
       requestBody:
         required: true
@@ -2355,6 +2438,7 @@ paths:
           description: Department created or updated
   /v1/kpis:
     get:
+      operationId: get_v1_kpis_003c4d44
       summary: List canonical KPIs for a project
       parameters:
       - name: project_id
@@ -2378,6 +2462,7 @@ paths:
         '200':
           description: KPI list
     post:
+      operationId: post_v1_kpis_ef8faf45
       summary: Create or update a canonical KPI
       requestBody:
         required: true
@@ -2423,6 +2508,7 @@ paths:
           description: Actor is not allowed to manage KPIs
   /v1/policies:
     get:
+      operationId: get_v1_policies_e4da8c89
       summary: List canonical policy records for a project
       parameters:
       - name: project_id
@@ -2446,6 +2532,7 @@ paths:
         '200':
           description: Policy record list
     post:
+      operationId: post_v1_policies_ccacf9ac
       summary: Create or update a canonical policy record
       requestBody:
         required: true
@@ -2478,6 +2565,7 @@ paths:
           description: Policy record created or updated
   /v1/plans:
     get:
+      operationId: get_v1_plans_2f7d5951
       summary: List canonical plans for a project
       parameters:
       - name: project_id
@@ -2501,6 +2589,7 @@ paths:
         '200':
           description: Plan list
     post:
+      operationId: post_v1_plans_85af7364
       summary: Create a canonical plan
       requestBody:
         required: true
@@ -2540,6 +2629,7 @@ paths:
           description: Plan created
   /v1/meetings:
     get:
+      operationId: get_v1_meetings_47e56fd7
       summary: List canonical meetings for a project
       parameters:
       - name: project_id
@@ -2563,6 +2653,7 @@ paths:
         '200':
           description: Meeting list
     post:
+      operationId: post_v1_meetings_f448f870
       summary: Create a canonical meeting record
       requestBody:
         required: true
@@ -2597,6 +2688,7 @@ paths:
           description: Meeting created
   /v1/meetings/{meeting_id}/run:
     post:
+      operationId: post_v1_meetings_meeting_id_run_c550fc65
       summary: Run a structured meeting and materialize outputs
       parameters:
       - name: meeting_id
@@ -2731,6 +2823,7 @@ paths:
           description: Meeting already terminal
   /v1/jobs/{job_id}:
     get:
+      operationId: get_v1_jobs_job_id_1dc169b5
       summary: Get job
       parameters:
       - name: job_id
@@ -2745,6 +2838,7 @@ paths:
           description: Job not found
   /v1/tasks/{task_id}:
     get:
+      operationId: get_v1_tasks_task_id_23ec4533
       summary: Get task
       parameters:
       - name: task_id
@@ -2785,6 +2879,7 @@ paths:
           description: Validation error
   /v1/self-improvement/proposals:
     get:
+      operationId: get_v1_self_improvement_proposals_359d4cb4
       summary: List self-improvement proposals for a project
       parameters:
       - name: project_id
@@ -2802,6 +2897,7 @@ paths:
         '200':
           description: Self-improvement proposal list
     post:
+      operationId: post_v1_self_improvement_proposals_60a4d7fc
       summary: Create a governed self-improvement proposal
       requestBody:
         required: true
@@ -2864,6 +2960,7 @@ paths:
           description: Missing required change-control evidence
   /v1/self-improvement/proposals/{proposal_id}:
     get:
+      operationId: get_v1_self_improvement_proposals_proposal_id_8a656116
       summary: Get self-improvement proposal detail
       parameters:
       - name: proposal_id
@@ -2878,6 +2975,7 @@ paths:
           description: Proposal not found
   /v1/self-improvement/proposals/{proposal_id}/canary:
     post:
+      operationId: post_v1_self_improvement_proposals_proposal_id_canary_0b8ccece
       summary: Record the result of a self-improvement canary
       requestBody:
         required: true
@@ -2915,6 +3013,7 @@ paths:
           description: Missing required canary evidence
   /v1/self-improvement/proposals/{proposal_id}/rollout:
     post:
+      operationId: post_v1_self_improvement_proposals_proposal_id_rollout_5a2f80dd
       summary: Record rollout of an approved self-improvement change
       requestBody:
         required: true
@@ -2951,6 +3050,7 @@ paths:
           description: Missing required rollout evidence
   /v1/self-improvement/proposals/{proposal_id}/rollback:
     post:
+      operationId: post_v1_self_improvement_proposals_proposal_id_rollback_75f6e672
       summary: Record rollback of a self-improvement rollout
       requestBody:
         required: true
@@ -2987,6 +3087,7 @@ paths:
           description: Missing required rollback evidence
   /v1/artifacts:
     get:
+      operationId: get_v1_artifacts_b94eea59
       summary: List artifacts
       parameters:
       - name: project_id
@@ -3011,6 +3112,7 @@ paths:
           description: Artifact list including data_boundary classifications
   /v1/artifacts/{artifact_id}:
     get:
+      operationId: get_v1_artifacts_artifact_id_1e2a9eb8
       summary: Get artifact
       parameters:
       - name: artifact_id
@@ -3059,6 +3161,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     get:
+      operationId: get_v1_roles_dd9a1818
       summary: List installed roles for a project
       parameters:
       - name: project_id
@@ -3071,6 +3174,7 @@ paths:
           description: Role list
   /v1/roles/{role_key}:
     get:
+      operationId: get_v1_roles_role_key_5cf3c1d8
       summary: Get installed role detail
       parameters:
       - name: role_key
@@ -3090,6 +3194,7 @@ paths:
           description: Role not found
   /v1/roles/{role_key}/governance:
     get:
+      operationId: get_v1_roles_role_key_governance_a5fcbd04
       summary: Get governance state for an installed role
       parameters:
       - name: role_key
@@ -3109,6 +3214,7 @@ paths:
           description: Role not found
   /v1/roles/{role_key}/reviews:
     post:
+      operationId: post_v1_roles_role_key_reviews_c2f9a869
       summary: Record a governance review for an installed role
       parameters:
       - name: role_key
@@ -3151,6 +3257,7 @@ paths:
           description: Review payload is invalid
   /v1/roles/{role_key}/autonomy/check:
     post:
+      operationId: post_v1_roles_role_key_autonomy_check_6937e316
       summary: Check whether a role's autonomy level permits an action
       parameters:
       - name: role_key
@@ -3278,6 +3385,7 @@ paths:
               additionalProperties: true
   /v1/roles/{role_key}/trust-evidence:
     post:
+      operationId: post_v1_roles_role_key_trust_evidence_9bb3522a
       summary: Append idempotent, attributable trust evidence for a role
       parameters:
       - name: role_key
@@ -3326,6 +3434,7 @@ paths:
           description: Invalid trust evidence request
   /v1/roles/{role_key}/scope/check:
     post:
+      operationId: post_v1_roles_role_key_scope_check_8eb3a3ce
       summary: Check RoleSpec scope and record drift if an action is out of scope
       parameters:
       - name: role_key
@@ -3365,6 +3474,7 @@ paths:
           description: Invalid role scope check request
   /v1/packs:
     get:
+      operationId: get_v1_packs_76dcb311
       summary: List available packs with install status for a project
       parameters:
       - name: project_id
@@ -3377,6 +3487,7 @@ paths:
           description: Pack list
   /v1/packs/{pack_id}:
     get:
+      operationId: get_v1_packs_pack_id_1b01cf6d
       summary: Get pack detail for a project
       parameters:
       - name: pack_id
@@ -3396,6 +3507,7 @@ paths:
           description: Pack not found
   /v1/packs/install:
     post:
+      operationId: post_v1_packs_install_e63eb251
       summary: Install a spec-backed company pack into a project
       requestBody:
         required: true
@@ -3423,6 +3535,7 @@ paths:
           description: Invalid pack or role spec
   /v1/packs/import:
     post:
+      operationId: post_v1_packs_import_7bff432b
       summary: Import a local PackSpec YAML into a project
       requestBody:
         required: true
@@ -3450,6 +3563,7 @@ paths:
           description: Invalid YAML or PackSpec
   /v1/packs/{pack_id}/export:
     get:
+      operationId: get_v1_packs_pack_id_export_7678de15
       summary: Export a pack as YAML for local import or review
       parameters:
       - name: pack_id
@@ -3473,6 +3587,7 @@ paths:
           description: Pack not found
   /v1/agent-modules:
     get:
+      operationId: get_v1_agent_modules_1dd9da09
       summary: List packaged agent modules with install and entitlement status for
         a project
       parameters:
@@ -3486,6 +3601,7 @@ paths:
           description: Agent module list
   /v1/marketplace/listings:
     get:
+      operationId: get_v1_marketplace_listings_d6453e82
       summary: List hosted Account Connect marketplace listings synced into the local
         control plane
       parameters:
@@ -3512,6 +3628,7 @@ paths:
             syncs
   /v1/marketplace/sync-runs:
     get:
+      operationId: get_v1_marketplace_sync_runs_c2263788
       summary: List hosted marketplace catalog sync attempts and blocked/failed states
       parameters:
       - name: project_id
@@ -3531,6 +3648,7 @@ paths:
             evidence links
   /v1/marketplace/sync:
     post:
+      operationId: post_v1_marketplace_sync_b81fdc38
       summary: Sync hosted marketplace catalog through the configured real Account
         Connect adapter and create an evidence packet artifact
       requestBody:
@@ -3565,6 +3683,7 @@ paths:
             link
   /v1/agent-modules/{module_id}:
     get:
+      operationId: get_v1_agent_modules_module_id_9d389235
       summary: Get packaged agent-module detail for a project
       parameters:
       - name: module_id
@@ -3584,6 +3703,7 @@ paths:
           description: Agent module not found
   /v1/agent-module-install-records:
     get:
+      operationId: get_v1_agent_module_install_records_d7966ae5
       summary: List agent-module install, entitlement-denial, and rollback records
       parameters:
       - name: project_id
@@ -3610,6 +3730,7 @@ paths:
           description: Invalid limit
   /v1/agent-modules/install:
     post:
+      operationId: post_v1_agent_modules_install_084aa712
       summary: Install a packaged agent module into a project after entitlement checks
       requestBody:
         required: true
@@ -3641,6 +3762,7 @@ paths:
           description: Agent module not found
   /v1/agent-modules/{module_id}/uninstall:
     post:
+      operationId: post_v1_agent_modules_module_id_uninstall_f2869259
       summary: Deactivate an installed agent module and restore base role spec where
         available
       parameters:
@@ -3674,6 +3796,7 @@ paths:
           description: Agent module not found
   /v1/agent-modules/{module_id}/rollback:
     post:
+      operationId: post_v1_agent_modules_module_id_rollback_f3a5c733
       summary: Restore an agent module from its latest rollback snapshot
       parameters:
       - name: module_id
@@ -3708,6 +3831,7 @@ paths:
           description: No rollback snapshot is available
   /v1/agent-runtime/resolve:
     post:
+      operationId: post_v1_agent_runtime_resolve_b73e7975
       summary: Resolve the installed agent module, role prompt, skills, and runtime
         contract for a job kind
       requestBody:
@@ -3743,6 +3867,7 @@ paths:
           description: Invalid runtime resolution request
   /v1/toolchain/sources:
     get:
+      operationId: get_v1_toolchain_sources_5f17beb3
       summary: List pinned, license-classified upstream agent-tool sources
       parameters:
       - name: project_id
@@ -3763,6 +3888,7 @@ paths:
           description: Actor lacks pack management permission
   /v1/toolchain/imports:
     get:
+      operationId: get_v1_toolchain_imports_8fccf08d
       summary: List non-executing upstream snapshot assessment runs
       parameters:
       - name: project_id
@@ -3791,6 +3917,7 @@ paths:
           description: Actor lacks pack management permission
   /v1/toolchain/imports/assess:
     post:
+      operationId: post_v1_toolchain_imports_assess_f23ccacb
       summary: Hash and assess a pinned text snapshot without executing or storing
         its raw source
       requestBody:
@@ -3846,6 +3973,7 @@ paths:
           or policy-blocked: null
   /v1/toolchain/candidates/{candidate_id}/review:
     post:
+      operationId: post_v1_toolchain_candidates_candidate_id_review_a669c01e
       summary: Independently approve or reject a normalized toolchain candidate
       parameters:
       - name: candidate_id
@@ -3889,6 +4017,7 @@ paths:
           or invalid state: null
   /v1/toolchain/commands/evaluate:
     post:
+      operationId: post_v1_toolchain_commands_evaluate_dae60318
       summary: Evaluate a command with the deterministic allow-review-block tripwire
       requestBody:
         required: true
@@ -3922,6 +4051,7 @@ paths:
           description: Actor lacks command submission permission
   /v1/toolchain/context/pack:
     post:
+      operationId: post_v1_toolchain_context_pack_89f4891c
       summary: Pack deduplicated context within a token budget while preserving authoritative
         content
       requestBody:
@@ -3964,6 +4094,7 @@ paths:
           description: Invalid budget or context chunk
   /v1/knowledge/pack-context:
     post:
+      operationId: post_v1_knowledge_pack_context_51286b67
       tags:
       - Knowledge
       summary: Pack messages/context items under a token budget with secret redaction
@@ -4024,6 +4155,7 @@ paths:
           description: Invalid budget or empty context
   /v1/knowledge/status:
     get:
+      operationId: get_v1_knowledge_status_99fd0a05
       tags:
       - Knowledge
       summary: Knowledge packing availability and default token budget
@@ -4041,6 +4173,7 @@ paths:
           description: Availability, default/min/max budgets, redaction_enabled
   /v1/skills:
     get:
+      operationId: get_v1_skills_d592b27a
       summary: List registered control-plane skills from specpack
       parameters:
       - name: project_id
@@ -4130,6 +4263,7 @@ paths:
                           type: object
   /v1/skills/invocations:
     get:
+      operationId: get_v1_skills_invocations_2a44161c
       summary: List governed skill invocation records for a project
       parameters:
       - name: project_id
@@ -4148,6 +4282,7 @@ paths:
           description: Skill invocation ledger
   /v1/skills/import:
     post:
+      operationId: post_v1_skills_import_59eb5be8
       summary: Import a local SkillSpec capability bundle without Account Connect
       requestBody:
         required: true
@@ -4186,6 +4321,7 @@ paths:
           or SkillSpec is invalid: null
   /v1/skills/{skill_id}/export:
     get:
+      operationId: get_v1_skills_skill_id_export_2c2a9dd0
       summary: Export a project skill as a canonical local capability bundle
       parameters:
       - name: skill_id
@@ -4213,6 +4349,7 @@ paths:
           description: Skill not found
   /v1/skills/{skill_id}/enable:
     post:
+      operationId: post_v1_skills_skill_id_enable_20272efe
       summary: Enable a project skill and optionally change its load mode
       parameters:
       - name: skill_id
@@ -4246,6 +4383,7 @@ paths:
           description: Skill not found in project catalog
   /v1/skills/{skill_id}/disable:
     post:
+      operationId: post_v1_skills_skill_id_disable_42205aca
       summary: Disable a non-system project skill
       parameters:
       - name: skill_id
@@ -4278,6 +4416,7 @@ paths:
           description: System skills cannot be disabled
   /v1/skills/{skill_id}/invoke:
     post:
+      operationId: post_v1_skills_skill_id_invoke_50af929c
       summary: Mock-invoke a skill, or execute real mode from an exactly scoped worker
         lease
       parameters:
@@ -4327,6 +4466,7 @@ paths:
           description: Invalid invocation input
   /v1/mcp/servers:
     get:
+      operationId: get_v1_mcp_servers_a4d74fba
       summary: List project MCP servers with publisher and provenance
       parameters:
       - name: project_id
@@ -4338,6 +4478,7 @@ paths:
         '200':
           description: MCP server inventory
     post:
+      operationId: post_v1_mcp_servers_e78f8c72
       summary: Register an MCP server with per-tool governance metadata
       requestBody:
         required: true
@@ -4388,6 +4529,7 @@ paths:
           description: MCP server registered
   /v1/mcp/servers/import:
     post:
+      operationId: post_v1_mcp_servers_import_3c9876df
       summary: Import a local MCP descriptor capability bundle without Account Connect
       requestBody:
         required: true
@@ -4423,6 +4565,7 @@ paths:
           or descriptor is invalid: null
   /v1/mcp/servers/{server_id}/export:
     get:
+      operationId: get_v1_mcp_servers_server_id_export_5e408da1
       summary: Export a project MCP descriptor as a canonical capability bundle
       parameters:
       - name: server_id
@@ -4450,6 +4593,7 @@ paths:
           description: MCP server not found
   /v1/mcp/servers/{server_id}:
     patch:
+      operationId: patch_v1_mcp_servers_server_id_5ee851f6
       summary: Enable or disable a project MCP server
       parameters:
       - name: server_id
@@ -4473,6 +4617,7 @@ paths:
         '404':
           description: MCP server not found
     delete:
+      operationId: delete_v1_mcp_servers_server_id_27a858b2
       summary: Remove a project MCP server
       parameters:
       - name: server_id
@@ -4492,6 +4637,7 @@ paths:
           description: MCP server not found
   /v1/model-adapters:
     get:
+      operationId: get_v1_model_adapters_e9c5f77c
       summary: List registered model adapter definitions from the Model Entitlement
         Broker
       responses:
@@ -4500,6 +4646,7 @@ paths:
             rules, and runtime status
   /v1/entitlement-pools:
     get:
+      operationId: get_v1_entitlement_pools_b9772915
       summary: List governed AI entitlement pools for a project
       parameters:
       - name: project_id
@@ -4513,6 +4660,7 @@ paths:
             and policy state
   /v1/entitlement-pools/{pool_id}/probe:
     post:
+      operationId: post_v1_entitlement_pools_pool_id_probe_315e5377
       summary: Record observed capacity for an entitlement pool with a durable CapacityReceipt
       parameters:
       - name: pool_id
@@ -4569,6 +4717,7 @@ paths:
           description: Entitlement pool not found
   /v1/model-route-decisions:
     get:
+      operationId: get_v1_model_route_decisions_9cdecf52
       summary: List canonical ModelRouteDecision records for a project
       parameters:
       - name: project_id
@@ -4660,6 +4809,7 @@ paths:
           description: Invalid limit or mutually exclusive filters
   /v1/model-route-decisions/simulate:
     post:
+      operationId: post_v1_model_route_decisions_simulate_24a5dd03
       summary: Simulate model routing through the entitlement broker and persist a
         ModelRouteDecision
       requestBody:
@@ -4712,6 +4862,7 @@ paths:
           description: Skill not found
   /v1/entitlements/sources/{source_id}/credential-ref:
     post:
+      operationId: post_v1_entitlements_sources_source_id_credential_ref_1115993a
       summary: Bind an existing active SecretRef to a non-subscription model source
       description: Subscription OAuth sources must use official connection sessions.
         The response contains metadata only.
@@ -4747,6 +4898,7 @@ paths:
           or subscription credential binding: null
   /v1/entitlements/sources/{source_id}/credential:
     post:
+      operationId: post_v1_entitlements_sources_source_id_credential_539bc47a
       summary: Write a model API credential through to a secret backend and bind its
         SecretRef
       description: The raw value is write-only and never stored in BOSS or returned.
@@ -4790,6 +4942,7 @@ paths:
           description: Backend unavailable or credential policy denied
   /v1/model-gateway/leases:
     get:
+      operationId: get_v1_model_gateway_leases_f2297cae
       summary: List model capacity leases for operational visibility
       parameters:
       - name: project_id
@@ -4826,6 +4979,7 @@ paths:
         '400':
           description: Invalid limit
     post:
+      operationId: post_v1_model_gateway_leases_f8b8a71f
       summary: Route and acquire fenced job-scoped model capacity
       description: Requires an active parent job lease. Paid sources reserve budget
         before a capacity lease is created.
@@ -4896,6 +5050,7 @@ paths:
           or budget denied: null
   /v1/model-gateway/invocations:
     get:
+      operationId: get_v1_model_gateway_invocations_55b04a37
       summary: List model invocations with receipt, usage, cost, and terminal state
       parameters:
       - name: project_id
@@ -4929,6 +5084,7 @@ paths:
           description: Invalid limit
   /v1/model-gateway/usage:
     get:
+      operationId: get_v1_model_gateway_usage_8481a0e0
       summary: Report project-fenced model calls, tokens, success, and cost
       parameters:
       - name: project_id
@@ -5062,6 +5218,7 @@ paths:
           description: Invalid group_by or missing project_id
   /v1/model-gateway/leases/reap:
     post:
+      operationId: post_v1_model_gateway_leases_reap_2fd558c8
       summary: Mark expired model capacity leases terminal and release unused reservations
       requestBody:
         required: true
@@ -5082,6 +5239,7 @@ paths:
           description: Number of expired leases reaped with audit events
   /v1/model-gateway/leases/{lease_id}/heartbeat:
     post:
+      operationId: post_v1_model_gateway_leases_lease_id_heartbeat_16edddd5
       summary: Heartbeat model capacity while the parent job lease remains active
       parameters:
       - name: lease_id
@@ -5125,6 +5283,7 @@ paths:
           or expired: null
   /v1/model-gateway/leases/{lease_id}/invocations:
     post:
+      operationId: post_v1_model_gateway_leases_lease_id_invocations_c4d5dcd5
       summary: Start a deduplicated receipted provider invocation under model capacity
       description: Stores only a request hash and non-secret metadata, never prompt
         content.
@@ -5180,6 +5339,7 @@ paths:
           or other disallowed fields: null
   /v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle:
     post:
+      operationId: post_v1_model_gateway_leases_lease_id_invocations_invocation_id_sett_ff63d1fc
       summary: Settle provider result, receipt, budget, capacity, and usage telemetry
       parameters:
       - name: lease_id
@@ -5239,6 +5399,7 @@ paths:
           or expired: null
   /v1/model-gateway/leases/{lease_id}/release:
     post:
+      operationId: post_v1_model_gateway_leases_lease_id_release_f149fb4c
       summary: Release unused model capacity and its budget reservation
       parameters:
       - name: lease_id
@@ -5278,6 +5439,7 @@ paths:
           description: Lease invalid or invocation already started
   /v1/assurance/overview:
     get:
+      operationId: get_v1_assurance_overview_f5be16d2
       summary: Read the Ground Truth and Assurance operator projection
       parameters:
       - name: project_id
@@ -5294,6 +5456,7 @@ paths:
           and verifier runs: null
   /v1/assurance/metrics:
     get:
+      operationId: get_v1_assurance_metrics_edd08e6b
       summary: List ground-truth metric contracts
       parameters:
       - name: project_id
@@ -5305,18 +5468,21 @@ paths:
         '200':
           description: Project metric contracts and health
     post:
+      operationId: post_v1_assurance_metrics_c67f221c
       summary: Create a versioned ground-truth metric contract
       responses:
         '201':
           description: Metric contract created
   /v1/assurance/metrics/schedule:
     post:
+      operationId: post_v1_assurance_metrics_schedule_7a744dcc
       summary: Queue due leased metric evaluations and escalate missed evaluator SLAs
       responses:
         '200':
           description: Queued evaluations and overdue decisions
   /v1/assurance/metrics/{metric_id}/observations:
     post:
+      operationId: post_v1_assurance_metrics_metric_id_observations_1b58b8bb
       summary: Record a leased, deduplicated metric observation
       parameters:
       - name: metric_id
@@ -5329,6 +5495,7 @@ paths:
           description: Observation plus regression or recovery signal
   /v1/assurance/metrics/{metric_id}/baseline:
     post:
+      operationId: post_v1_assurance_metrics_metric_id_baseline_9c81e18e
       summary: Change a metric baseline under regression and approval policy
       parameters:
       - name: metric_id
@@ -5341,6 +5508,7 @@ paths:
           description: New current metric contract version
   /v1/assurance/conclusions:
     get:
+      operationId: get_v1_assurance_conclusions_353c07e1
       summary: List versioned settled conclusions
       parameters:
       - name: project_id
@@ -5352,18 +5520,21 @@ paths:
         '200':
           description: Settled conclusion ledger
     post:
+      operationId: post_v1_assurance_conclusions_1ad80b7e
       summary: Create a settled conclusion and its closed-question tells
       responses:
         '201':
           description: Current settled conclusion version
   /v1/assurance/publication-guard:
     post:
+      operationId: post_v1_assurance_publication_guard_54f1dbd6
       summary: Scan proposed output for actionable closed-question regressions
       responses:
         '200':
           description: Allow result or mechanical STOP response
   /v1/assurance/conclusions/{conclusion_id}/reopen:
     post:
+      operationId: post_v1_assurance_conclusions_conclusion_id_reopen_f803aa51
       summary: Reopen a settled conclusion with approved new evidence
       parameters:
       - name: conclusion_id
@@ -5376,6 +5547,7 @@ paths:
           description: Reopened conclusion version
   /v1/assurance/cases:
     get:
+      operationId: get_v1_assurance_cases_9b152eb9
       summary: List Assurance Cases and evidence counts
       parameters:
       - name: project_id
@@ -5387,24 +5559,28 @@ paths:
         '200':
           description: Project Assurance Cases
     post:
+      operationId: post_v1_assurance_cases_5bd9626e
       summary: Create a deduplicated Assurance Case
       responses:
         '201':
           description: Assurance Case created
   /v1/assurance/claims:
     post:
+      operationId: post_v1_assurance_claims_a8cc72b4
       summary: Create a typed claim in an Assurance Case
       responses:
         '201':
           description: Claim created
   /v1/assurance/evidence:
     post:
+      operationId: post_v1_assurance_evidence_e02ebdd7
       summary: Attach immutable, reproducible evidence to a case or claim
       responses:
         '201':
           description: Evidence record created
   /v1/assurance/evidence/{evidence_id}/invalidate:
     post:
+      operationId: post_v1_assurance_evidence_evidence_id_invalidate_4e2ab108
       summary: Invalidate evidence without deleting audit history
       parameters:
       - name: evidence_id
@@ -5417,6 +5593,7 @@ paths:
           description: Evidence marked invalid
   /v1/assurance/claims/{claim_id}/evaluate:
     post:
+      operationId: post_v1_assurance_claims_claim_id_evaluate_4db19a04
       summary: Apply deterministic evidence requirements to a claim
       parameters:
       - name: claim_id
@@ -5432,6 +5609,7 @@ paths:
           or refuted result: null
   /v1/assurance/cases/{case_id}/evaluate:
     post:
+      operationId: post_v1_assurance_cases_case_id_evaluate_d5973a06
       summary: Snapshot effective policy and evaluate an Assurance Case
       parameters:
       - name: case_id
@@ -5447,6 +5625,7 @@ paths:
           and decision: null
   /v1/assurance/surfaces:
     get:
+      operationId: get_v1_assurance_surfaces_1beb59ec
       summary: List production-surface ownership and fence versions
       parameters:
       - name: project_id
@@ -5459,12 +5638,14 @@ paths:
           description: Surface ownership registry
   /v1/assurance/surfaces/acquire:
     post:
+      operationId: post_v1_assurance_surfaces_acquire_8f4c6bdc
       summary: Atomically acquire single-owner authority for a surface
       responses:
         '200':
           description: Ownership and transition evidence
   /v1/assurance/surfaces/{ownership_id}/transfer:
     post:
+      operationId: post_v1_assurance_surfaces_ownership_id_transfer_6bf2c048
       summary: Compare-and-swap surface ownership to a new deployer
       parameters:
       - name: ownership_id
@@ -5477,18 +5658,21 @@ paths:
           description: Updated ownership and transition
   /v1/assurance/surfaces/preflight:
     post:
+      operationId: post_v1_assurance_surfaces_preflight_fcb124f9
       summary: Revalidate owner and fence immediately before an effect
       responses:
         '200':
           description: Allowed ownership preflight
   /v1/assurance/verification-policies:
     post:
+      operationId: post_v1_assurance_verification_policies_5c4c7739
       summary: Create a versioned standing verifier policy
       responses:
         '201':
           description: Verifier policy created
   /v1/assurance/verification-runs:
     get:
+      operationId: get_v1_assurance_verification_runs_b512a728
       summary: List standing verifier runs
       parameters:
       - name: project_id
@@ -5500,12 +5684,14 @@ paths:
         '200':
           description: Project verifier run history
     post:
+      operationId: post_v1_assurance_verification_runs_3372bfe0
       summary: Schedule a budgeted, leased adversarial verification job
       responses:
         '201':
           description: Verifier run and queued job
   /v1/assurance/verification-runs/schedule-due:
     post:
+      operationId: post_v1_assurance_verification_runs_schedule_due_b02f73f8
       summary: Sample authoritative claims and queue due independent verification
         runs
       responses:
@@ -5513,6 +5699,7 @@ paths:
           description: Scheduled verifier runs and explicit budget or policy blocks
   /v1/assurance/verification-runs/{run_id}/complete:
     post:
+      operationId: post_v1_assurance_verification_runs_run_id_complete_581a8742
       summary: Complete a leased verifier with evidence and receipts
       parameters:
       - name: run_id
@@ -5527,6 +5714,7 @@ paths:
           or inconclusive verifier result: null
   /v1/integration-registry/definitions:
     get:
+      operationId: get_v1_integration_registry_definitions_0a7cce7b
       summary: List versioned integration definitions and typed skill contracts
       parameters:
       - name: project_id
@@ -5538,12 +5726,14 @@ paths:
         '200':
           description: Integration definitions
     post:
+      operationId: post_v1_integration_registry_definitions_918e0280
       summary: Create a trusted versioned integration definition
       responses:
         '201':
           description: Definition created
   /v1/integration-registry/connections:
     get:
+      operationId: get_v1_integration_registry_connections_527aab79
       summary: List scoped integration connections without raw credentials
       parameters:
       - name: project_id
@@ -5555,12 +5745,14 @@ paths:
         '200':
           description: Integration connections
     post:
+      operationId: post_v1_integration_registry_connections_332e94f8
       summary: Install a scoped SecretRef-backed integration connection
       responses:
         '201':
           description: Connection created
   /v1/integration-registry/connections/{connection_id}:
     patch:
+      operationId: patch_v1_integration_registry_connections_connection_id_2153db98
       summary: Update connection health, lifecycle, grants, or revocation
       parameters:
       - name: connection_id
@@ -5573,12 +5765,14 @@ paths:
           description: Updated connection
   /v1/integration-registry/resolve:
     post:
+      operationId: post_v1_integration_registry_resolve_688a35fd
       summary: Resolve effective capability by deterministic authority intersection
       responses:
         '200':
           description: Durable allow or deny with explanation
   /v1/integration-registry/resolutions:
     get:
+      operationId: get_v1_integration_registry_resolutions_147c48de
       summary: List capability resolution audit evidence
       parameters:
       - name: project_id
@@ -5591,6 +5785,7 @@ paths:
           description: Capability resolution history
   /v1/agent-groups:
     get:
+      operationId: get_v1_agent_groups_1a1e8663
       summary: List versioned Agent Group definitions
       parameters:
       - name: project_id
@@ -5602,12 +5797,14 @@ paths:
         '200':
           description: Agent Group definitions and current versions
     post:
+      operationId: post_v1_agent_groups_ada2a200
       summary: Create an immutable Agent Group version
       responses:
         '201':
           description: Agent Group and version created
   /v1/agent-groups/runs:
     get:
+      operationId: get_v1_agent_groups_runs_46036763
       summary: List durable Agent Group runs
       parameters:
       - name: project_id
@@ -5619,12 +5816,14 @@ paths:
         '200':
           description: Agent Group runs
     post:
+      operationId: post_v1_agent_groups_runs_34ee6b8a
       summary: Start an Agent Group and queue one leased job per member
       responses:
         '201':
           description: Group run with member jobs
   /v1/agent-groups/runs/{run_id}/members/{member_key}/complete:
     post:
+      operationId: post_v1_agent_groups_runs_run_id_members_member_key_complete_344757c1
       summary: Complete a leased Agent Group member with attributed evidence
       parameters:
       - name: run_id
@@ -5642,6 +5841,7 @@ paths:
           description: Member result persisted
   /v1/agent-groups/runs/{run_id}/finalize:
     post:
+      operationId: post_v1_agent_groups_runs_run_id_finalize_3359c304
       summary: Deterministically consolidate a bounded group protocol
       parameters:
       - name: run_id
@@ -5658,6 +5858,7 @@ paths:
           and receipts: null
   /v1/entitlements/sources:
     get:
+      operationId: get_v1_entitlements_sources_4527101a
       summary: List configured entitlement sources for a project
       parameters:
       - name: project_id
@@ -5669,6 +5870,7 @@ paths:
         '200':
           description: Entitlement source list
     post:
+      operationId: post_v1_entitlements_sources_e24afa3b
       summary: Register or update an entitlement source
       requestBody:
         required: true
@@ -5783,6 +5985,7 @@ paths:
             state
   /v1/entitlement-connection-sessions:
     get:
+      operationId: get_v1_entitlement_connection_sessions_64dbded3
       summary: List durable official model-subscription connection sessions for a
         project
       parameters:
@@ -5812,6 +6015,7 @@ paths:
           description: Invalid limit
   /v1/entitlements/sources/{source_id}/connection-sessions:
     post:
+      operationId: post_v1_entitlements_sources_source_id_connection_sessions_a01cbae3
       summary: Start a durable official-session connection attempt for a public model
         subscription source
       description: Creates an audit record with official provider login instructions.
@@ -5858,6 +6062,7 @@ paths:
             or has invalid connection mode
   /v1/entitlements/sources/{source_id}/connect:
     post:
+      operationId: post_v1_entitlements_sources_source_id_connect_c69ba0e8
       summary: Record a verified official OAuth/session connection for an entitlement
         source
       parameters:
@@ -5914,6 +6119,7 @@ paths:
           description: Subscription source requires an official OAuth connection method
   /v1/entitlement-connection-sessions/{session_id}/complete:
     post:
+      operationId: post_v1_entitlement_connection_sessions_session_id_complete_f6c9b12a
       summary: Complete an official model-subscription connection session with a SecretRef
         or local session reference
       parameters:
@@ -5963,6 +6169,7 @@ paths:
           or otherwise not completable: null
   /v1/entitlements/sources/{source_id}/disconnect:
     post:
+      operationId: post_v1_entitlements_sources_source_id_disconnect_556b0ad1
       summary: Revoke the local official-session reference for an entitlement source
       parameters:
       - name: source_id
@@ -5993,6 +6200,7 @@ paths:
           description: Entitlement source not found
   /v1/router/preview:
     post:
+      operationId: post_v1_router_preview_b6abe802
       summary: Preview entitlement-based model routing and persist a routing log
       requestBody:
         required: true
@@ -6043,6 +6251,7 @@ paths:
           description: Skill not found
   /v1/router/logs:
     get:
+      operationId: get_v1_router_logs_0d2d526a
       summary: List recent routing logs for a project
       parameters:
       - name: project_id
@@ -6061,6 +6270,7 @@ paths:
           description: Routing log list including data_boundary classifications
   /v1/secret-refs:
     get:
+      operationId: get_v1_secret_refs_432486d3
       summary: List SecretRef metadata records for a project
       parameters:
       - name: project_id
@@ -6094,6 +6304,7 @@ paths:
         '200':
           description: SecretRef list without secret material
     post:
+      operationId: post_v1_secret_refs_85bc13c6
       summary: Create a SecretRef metadata record
       requestBody:
         required: true
@@ -6172,6 +6383,7 @@ paths:
           description: Invalid SecretRef payload
   /v1/secret-refs/{secret_ref_id}:
     get:
+      operationId: get_v1_secret_refs_secret_ref_id_cf42b47c
       summary: Get a SecretRef metadata record
       parameters:
       - name: secret_ref_id
@@ -6190,6 +6402,7 @@ paths:
         '404':
           description: SecretRef not found
     patch:
+      operationId: patch_v1_secret_refs_secret_ref_id_36fdffa3
       summary: Update SecretRef metadata or status
       parameters:
       - name: secret_ref_id
@@ -6232,6 +6445,7 @@ paths:
         '404':
           description: SecretRef not found
     delete:
+      operationId: delete_v1_secret_refs_secret_ref_id_0f48b066
       summary: Revoke a SecretRef metadata record
       parameters:
       - name: secret_ref_id
@@ -6257,6 +6471,7 @@ paths:
           description: SecretRef not found
   /v1/github/easy-connect:
     post:
+      operationId: post_v1_github_easy_connect_026e3ecf
       summary: Easy project GitHub connect (env SecretRef + connection + optional
         repo link)
       description: 'One-shot setup for linking GitHub to a BOSS project. Creates an
@@ -6351,6 +6566,7 @@ paths:
           or repository: null
   /v1/github/connections:
     get:
+      operationId: get_v1_github_connections_0b4dbe99
       summary: List project-scoped GitHub connections
       parameters:
       - name: project_id
@@ -6362,6 +6578,7 @@ paths:
         '200':
           description: GitHub connections without SecretRef pointers or secret material
     post:
+      operationId: post_v1_github_connections_12944b5a
       summary: Register a project-scoped GitHub App or PAT connection
       description: Stores only a validated SecretRef pointer plus non-secret installation
         identity. Raw tokens and private keys are rejected from metadata and omitted
@@ -6431,6 +6648,7 @@ paths:
           or secret-shaped metadata: null
   /v1/github/connections/{connection_id}:
     get:
+      operationId: get_v1_github_connections_connection_id_ff93bfd0
       summary: Get a tenant-scoped GitHub connection
       parameters:
       - name: connection_id
@@ -6451,6 +6669,7 @@ paths:
           description: GitHub connection not found in the project
   /v1/github/connections/{connection_id}/repositories:
     get:
+      operationId: get_v1_github_connections_connection_id_repositories_9350b686
       summary: List repositories visible to a project GitHub connection
       description: 'PAT-backed connections only. Returns owner/repo candidates for
         linking to the project without requiring operators to type names from memory.
@@ -6487,6 +6706,7 @@ paths:
           description: GitHub API call failed
   /v1/github/connections/{connection_id}/enable:
     post:
+      operationId: post_v1_github_connections_connection_id_enable_b2528bec
       summary: Re-enable a disabled GitHub connection for required retesting
       parameters:
       - name: connection_id
@@ -6515,6 +6735,7 @@ paths:
           description: SecretRef unusable or connection permanently revoked
   /v1/github/connections/{connection_id}/disable:
     post:
+      operationId: post_v1_github_connections_connection_id_disable_ca9258e4
       summary: Disable a GitHub connection before future adapter invocation
       parameters:
       - name: connection_id
@@ -6541,6 +6762,7 @@ paths:
           description: GitHub connection disabled
   /v1/github/connections/{connection_id}/revoke:
     post:
+      operationId: post_v1_github_connections_connection_id_revoke_e52eb952
       summary: Permanently revoke a GitHub connection and disable its repository bindings
       parameters:
       - name: connection_id
@@ -6569,6 +6791,7 @@ paths:
           description: Connection was already revoked
   /v1/github/connections/{connection_id}/test:
     post:
+      operationId: post_v1_github_connections_connection_id_test_2a64c6df
       summary: Test a project repository binding through a receipt-backed GitHub adapter
         call
       parameters:
@@ -6609,6 +6832,7 @@ paths:
           description: Connection or repository binding is disabled or revoked
   /v1/github/repository-bindings:
     get:
+      operationId: get_v1_github_repository_bindings_e0e58e7e
       summary: List canonical project repository bindings
       parameters:
       - name: project_id
@@ -6625,6 +6849,7 @@ paths:
         '200':
           description: Project repository target list and discovered capabilities
     post:
+      operationId: post_v1_github_repository_bindings_89c785a1
       summary: Bind a repository to a project GitHub connection
       requestBody:
         required: true
@@ -6671,6 +6896,7 @@ paths:
           or active primary already exists: null
   /v1/github/repository-bindings/{binding_id}:
     get:
+      operationId: get_v1_github_repository_bindings_binding_id_6c4a5ae2
       summary: Get a tenant-scoped GitHub repository binding
       parameters:
       - name: binding_id
@@ -6689,6 +6915,7 @@ paths:
         '404':
           description: Repository binding not found in the project
     patch:
+      operationId: patch_v1_github_repository_bindings_binding_id_418376dd
       summary: Update repository role, lifecycle, default branch, or non-secret metadata
       parameters:
       - name: binding_id
@@ -6737,6 +6964,7 @@ paths:
           or primary conflict: null
   /v1/github/branch-policies:
     get:
+      operationId: get_v1_github_branch_policies_a5ceef31
       summary: List versioned branch policies for a project or repository binding
       parameters:
       - name: project_id
@@ -6760,6 +6988,7 @@ paths:
           description: Current policies
           optionally including superseded versions: null
     post:
+      operationId: post_v1_github_branch_policies_0b9ac078
       summary: Create the first active branch policy for a repository binding
       requestBody:
         required: true
@@ -6841,6 +7070,7 @@ paths:
           or active policy already exists: null
   /v1/github/branch-policies/{policy_id}:
     get:
+      operationId: get_v1_github_branch_policies_policy_id_c61ccf34
       summary: Get one tenant-scoped branch policy version
       parameters:
       - name: policy_id
@@ -6859,6 +7089,7 @@ paths:
         '404':
           description: Branch policy not found in the project
     patch:
+      operationId: patch_v1_github_branch_policies_policy_id_bf652ccd
       summary: Supersede a branch policy with a new immutable version
       parameters:
       - name: policy_id
@@ -6934,6 +7165,7 @@ paths:
           description: Superseded policy or invalid rule
   /v1/github/branch-policies/{policy_id}/evaluate:
     post:
+      operationId: post_v1_github_branch_policies_policy_id_evaluate_0d814eaf
       summary: Deterministically evaluate a ref operation against one policy version
       parameters:
       - name: policy_id
@@ -6979,6 +7211,7 @@ paths:
           or method: null
   /v1/github/branch-snapshots:
     get:
+      operationId: get_v1_github_branch_snapshots_ed949c1b
       summary: List immutable GitHub branch topology snapshots
       parameters:
       - name: project_id
@@ -7004,6 +7237,7 @@ paths:
           description: Immutable snapshot evidence newest first
   /v1/github/branch-snapshots/capture:
     post:
+      operationId: post_v1_github_branch_snapshots_capture_cf236e46
       summary: Capture and classify remote branch topology through a receipt-backed
         read
       description: Fetches commit and tree identities, merge-base topology, protection,
@@ -7049,6 +7283,7 @@ paths:
           or unsafe ref: null
   /v1/github/branch-snapshots/{snapshot_id}:
     get:
+      operationId: get_v1_github_branch_snapshots_snapshot_id_93698ea1
       summary: Get one tenant-scoped immutable branch snapshot
       parameters:
       - name: snapshot_id
@@ -7072,6 +7307,7 @@ paths:
           description: Snapshot not found in the project
   /v1/github/branch-leases:
     get:
+      operationId: get_v1_github_branch_leases_6aabbf5c
       summary: List active or historical fenced branch leases
       parameters:
       - name: project_id
@@ -7107,6 +7343,7 @@ paths:
         '200':
           description: Tenant-scoped lease ownership without token hashes
     post:
+      operationId: post_v1_github_branch_leases_fff7ab6a
       summary: Acquire one fenced TTL lease for a mutable repository ref
       description: Serializes acquisition per repository binding, returns the raw
         high-entropy lease token once, stores only its hash, and assigns a monotonically
@@ -7170,6 +7407,7 @@ paths:
           or unsafe ref: null
   /v1/github/branch-leases/{lease_id}:
     get:
+      operationId: get_v1_github_branch_leases_lease_id_92f8b16f
       summary: Get one tenant-scoped branch lease
       parameters:
       - name: lease_id
@@ -7189,6 +7427,7 @@ paths:
           description: Branch lease not found in the project
   /v1/github/branch-leases/{lease_id}/heartbeat:
     post:
+      operationId: post_v1_github_branch_leases_lease_id_heartbeat_83c9e1b7
       summary: Heartbeat and extend an active branch lease
       parameters:
       - name: lease_id
@@ -7231,6 +7470,7 @@ paths:
           description: Expired/inactive lease or stale/invalid token
   /v1/github/branch-leases/{lease_id}/release:
     post:
+      operationId: post_v1_github_branch_leases_lease_id_release_3fc16748
       summary: Release a branch lease using its raw and fencing tokens
       parameters:
       - name: lease_id
@@ -7270,6 +7510,7 @@ paths:
           description: Expired/inactive lease or stale/invalid token
   /v1/github/branch-leases/{lease_id}/reclaim:
     post:
+      operationId: post_v1_github_branch_leases_lease_id_reclaim_bfb3f02b
       summary: Reclaim an expired branch lease without using its lost raw token
       parameters:
       - name: lease_id
@@ -7305,6 +7546,7 @@ paths:
           description: Lease is still unexpired or already terminal
   /v1/github/code-sync-runs:
     get:
+      operationId: get_v1_github_code_sync_runs_c4e80bce
       summary: List project GitHub code synchronization runs
       parameters:
       - name: project_id
@@ -7340,6 +7582,7 @@ paths:
           and rollback identities: null
   /v1/github/code-sync-runs/plan:
     post:
+      operationId: post_v1_github_code_sync_runs_plan_594dc5a5
       summary: Plan a deterministic GitHub branch synchronization from an immutable
         snapshot
       description: Maps topology to noop, non-force fast-forward, protected approval,
@@ -7389,6 +7632,7 @@ paths:
           or policy/ref denial: null
   /v1/github/code-sync-runs/{sync_run_id}:
     get:
+      operationId: get_v1_github_code_sync_runs_sync_run_id_c434c403
       summary: Get one tenant-scoped GitHub code sync run
       parameters:
       - name: sync_run_id
@@ -7408,6 +7652,7 @@ paths:
           description: Sync run not found in the project
   /v1/github/code-sync-runs/{sync_run_id}/apply:
     post:
+      operationId: post_v1_github_code_sync_runs_sync_run_id_apply_1f28db96
       summary: Apply a safe GitHub branch synchronization under a fenced lease
       description: Re-captures remote topology, rejects stale inputs or policies,
         verifies the exact ref lease and fencing token, forbids force push, and records
@@ -7462,6 +7707,7 @@ paths:
           or invalid state: null
   /v1/github/conflict-sets:
     get:
+      operationId: get_v1_github_conflict_sets_c3e11168
       summary: List typed GitHub conflict evidence
       parameters:
       - name: project_id
@@ -7491,6 +7737,7 @@ paths:
           and bounded file evidence: null
   /v1/github/conflict-sets/{conflict_set_id}:
     get:
+      operationId: get_v1_github_conflict_sets_conflict_set_id_4d2877b7
       summary: Get one tenant-scoped GitHub conflict set
       parameters:
       - name: conflict_set_id
@@ -7510,6 +7757,7 @@ paths:
           description: Conflict set not found in the project
   /v1/github/conflict-sets/{conflict_set_id}/resolution-plans:
     post:
+      operationId: post_v1_github_conflict_sets_conflict_set_id_resolution_plans_6090e346
       summary: Propose a GitHub conflict resolution with red-to-green proof
       description: Stores bounded reviewed text-file resolutions on the dedicated
         branch only. The protected target remains unchanged.
@@ -7574,6 +7822,7 @@ paths:
           or red-to-green evidence: null
   /v1/github/resolution-plans:
     get:
+      operationId: get_v1_github_resolution_plans_920316be
       summary: List versioned GitHub conflict resolution plans
       parameters:
       - name: project_id
@@ -7603,6 +7852,7 @@ paths:
           and result commit evidence: null
   /v1/github/resolution-plans/{plan_id}:
     get:
+      operationId: get_v1_github_resolution_plans_plan_id_9168640d
       summary: Get one tenant-scoped GitHub resolution plan
       parameters:
       - name: plan_id
@@ -7622,6 +7872,7 @@ paths:
           description: Resolution plan not found in the project
   /v1/github/resolution-plans/{plan_id}/approve:
     post:
+      operationId: post_v1_github_resolution_plans_plan_id_approve_099faeda
       summary: Independently approve a GitHub conflict resolution plan
       description: The reviewer must differ from the proposal creator and attach an
         approved review verdict and summary.
@@ -7671,6 +7922,7 @@ paths:
           or invalid plan state: null
   /v1/github/resolution-plans/{plan_id}/apply:
     post:
+      operationId: post_v1_github_resolution_plans_plan_id_apply_61341110
       summary: Apply an approved resolution commit to its dedicated branch
       description: Verifies unchanged ours/theirs identities and the exact resolution-branch
         lease, creates an explicit two-parent commit, then performs a non-force fast-forward.
@@ -7723,6 +7975,7 @@ paths:
           or invalid lease/fence: null
   /v1/github/merge-authorizations:
     get:
+      operationId: get_v1_github_merge_authorizations_f5e6a4f4
       summary: List exact-snapshot GitHub merge authorizations and queue state
       parameters:
       - name: project_id
@@ -7761,6 +8014,7 @@ paths:
           receipts: null
           and rollback evidence: null
     post:
+      operationId: post_v1_github_merge_authorizations_f7e3ccde
       summary: Request governed authorization for an exact GitHub PR base/head snapshot
       description: Observes the PR, commits, trees, target head, checks, and reviews
         through the project binding; pins the active policy; creates a zero-cost risk-tier-3
@@ -7839,6 +8093,7 @@ paths:
           or policy denial: null
   /v1/github/merge-authorizations/{authorization_id}:
     get:
+      operationId: get_v1_github_merge_authorizations_authorization_id_83c01e30
       summary: Get one tenant-scoped GitHub MergeAuthorization
       parameters:
       - name: authorization_id
@@ -7865,6 +8120,7 @@ paths:
           description: Merge authorization not found in the project
   /v1/github/merge-authorizations/{authorization_id}/authorize:
     post:
+      operationId: post_v1_github_merge_authorizations_authorization_id_authorize_5b865f8a
       summary: Independently approve an exact GitHub MergeAuthorization
       description: Requires a github_manage actor different from the requester and
         preserves the approved evidence without extending the authorization expiry.
@@ -7916,6 +8172,7 @@ paths:
           or invalid state: null
   /v1/github/merge-authorizations/{authorization_id}/enqueue:
     post:
+      operationId: post_v1_github_merge_authorizations_authorization_id_enqueue_26eec8a7
       summary: Enqueue an approved GitHub merge for its project repository target
       description: Preserves deterministic queue ordering; only the earliest active
         item for a repository target can apply.
@@ -7950,6 +8207,7 @@ paths:
           description: Expired or invalid authorization state
   /v1/github/merge-authorizations/{authorization_id}/apply:
     post:
+      operationId: post_v1_github_merge_authorizations_authorization_id_apply_622d0534
       summary: Reverify and execute the queue-head protected-branch PR merge
       description: Requires the exact target BranchLease and fence, current policy,
         unchanged base/head commits and trees, an open mergeable non-draft PR, passing
@@ -8005,6 +8263,7 @@ paths:
           or invalid lease/fence: null
   /v1/github/reconciliation-runs:
     get:
+      operationId: get_v1_github_reconciliation_runs_122db9de
       summary: List durable GitHub webhook, poll, and repair reconciliation runs
       parameters:
       - name: project_id
@@ -8039,6 +8298,7 @@ paths:
           and deadletters: null
   /v1/github/reconciliation-runs/poll:
     post:
+      operationId: post_v1_github_reconciliation_runs_poll_7611dd83
       summary: Schedule receipt-backed GitHub repository reconciliation
       description: Enqueues one leased, deduplicated reconciliation job per active
         project repository binding. If refs are omitted, BOSS discovers the default
@@ -8079,6 +8339,7 @@ paths:
           description: Invalid refs or dedupe collision
   /v1/github/reconciliation-runs/{run_id}:
     get:
+      operationId: get_v1_github_reconciliation_runs_run_id_f71d4bac
       summary: Get one tenant-scoped GitHub reconciliation run
       parameters:
       - name: run_id
@@ -8098,6 +8359,7 @@ paths:
           description: Reconciliation run not found in the project
   /v1/github/reconciliation-runs/{run_id}/execute:
     post:
+      operationId: post_v1_github_reconciliation_runs_run_id_execute_99a43ef3
       summary: Execute a GitHub reconciliation under an active worker lease
       description: Reads current rate limits and exact branch commit/tree/protection
         state through the project adapter. Each provider read has a Receipt; failures
@@ -8142,6 +8404,7 @@ paths:
           or run state: null
   /v1/github/reconciliation-runs/{run_id}/repair:
     post:
+      operationId: post_v1_github_reconciliation_runs_run_id_repair_22c90b9f
       summary: Schedule an explicit repair of a failed or deadlettered reconciliation
       parameters:
       - name: run_id
@@ -8177,6 +8440,7 @@ paths:
           description: Original is not repairable or dedupe collision
   /v1/github/reconciliation-signals:
     get:
+      operationId: get_v1_github_reconciliation_signals_f05f8ea3
       summary: List deduplicated GitHub webhook branch signals
       parameters:
       - name: project_id
@@ -8211,6 +8475,7 @@ paths:
           or deadlettered state: null
   /v1/github/repository-ref-states:
     get:
+      operationId: get_v1_github_repository_ref_states_97e2256e
       summary: List current reconciled branch truth for project repositories
       parameters:
       - name: project_id
@@ -8241,6 +8506,7 @@ paths:
           and Receipt lineage: null
   /v1/provider-definitions:
     get:
+      operationId: get_v1_provider_definitions_8b5bbca6
       summary: List infrastructure provider connection and authentication contracts
       description: Declares credential slots and adapter availability without claiming
         planned adapters are live.
@@ -8250,6 +8516,7 @@ paths:
             definitions
   /v1/providers:
     get:
+      operationId: get_v1_providers_201c7726
       summary: List ProviderOps provider accounts for a project
       parameters:
       - name: project_id
@@ -8261,6 +8528,7 @@ paths:
         '200':
           description: Provider account list with capability and permission status
     post:
+      operationId: post_v1_providers_936a22e0
       summary: Register a provider account without granting raw credentials to agents
       requestBody:
         required: true
@@ -8335,6 +8603,7 @@ paths:
           or provider definition: null
   /v1/providers/{provider_account_id}:
     get:
+      operationId: get_v1_providers_provider_account_id_5dc17bf9
       summary: Get a tenant-scoped provider account
       parameters:
       - name: provider_account_id
@@ -8353,6 +8622,7 @@ paths:
         '404':
           description: Provider account not found in the project
     patch:
+      operationId: patch_v1_providers_provider_account_id_ee700f3d
       summary: Update provider account policy and non-secret metadata
       parameters:
       - name: provider_account_id
@@ -8403,6 +8673,7 @@ paths:
           description: Invalid policy or secret-shaped metadata
   /v1/providers/{provider_account_id}/enable:
     post:
+      operationId: post_v1_providers_provider_account_id_enable_4999ffad
       summary: Enable a provider account after validating all SecretRefs remain usable
       parameters:
       - name: provider_account_id
@@ -8431,6 +8702,7 @@ paths:
           description: SecretRef unusable or account permanently revoked
   /v1/providers/{provider_account_id}/disable:
     post:
+      operationId: post_v1_providers_provider_account_id_disable_389bdd58
       summary: Disable a provider account before any provider call can occur
       parameters:
       - name: provider_account_id
@@ -8457,6 +8729,7 @@ paths:
           description: Provider account disabled
   /v1/providers/{provider_account_id}/revoke:
     post:
+      operationId: post_v1_providers_provider_account_id_revoke_efdb00ad
       summary: Permanently revoke a provider account and force safe non-deploying
         flags
       parameters:
@@ -8484,6 +8757,7 @@ paths:
           description: Provider account revoked
   /v1/providers/{provider_account_id}/rotate:
     post:
+      operationId: post_v1_providers_provider_account_id_rotate_b963a30e
       summary: Rotate named provider SecretRefs with bounded overlap and lineage
       parameters:
       - name: provider_account_id
@@ -8525,6 +8799,7 @@ paths:
           or SecretRefs: null
   /v1/providers/{provider_account_id}/test:
     post:
+      operationId: post_v1_providers_provider_account_id_test_789a88cc
       summary: Test a provider account through the policy-guarded adapter boundary
       parameters:
       - name: provider_account_id
@@ -8552,6 +8827,7 @@ paths:
           description: Provider account disabled or revoked
   /v1/resources:
     get:
+      operationId: get_v1_resources_1983a064
       summary: List normalized external resources from the Resource Inventory Graph
       parameters:
       - name: project_id
@@ -8589,6 +8865,7 @@ paths:
           and links: null
   /v1/resources/sync:
     post:
+      operationId: post_v1_resources_sync_f8957ccd
       summary: Run read-only provider inventory and billing reconciliation
       description: 'Exact provider billing is synced only where a real provider billing
         API is supported. Providers without direct billing support keep inventory
@@ -8626,6 +8903,7 @@ paths:
             IP+actor for local; prod uses external limiter)
   /v1/costs:
     get:
+      operationId: get_v1_costs_4e4f240b
       summary: List ProviderOps cost ledger events
       parameters:
       - name: project_id
@@ -8650,6 +8928,7 @@ paths:
           description: Cost events with cost layer and confidence labels
   /v1/cost-anomalies:
     get:
+      operationId: get_v1_cost_anomalies_eb87b556
       summary: List ProviderOps cost anomalies and kill-switch decisions
       parameters:
       - name: project_id
@@ -8677,6 +8956,7 @@ paths:
           and recommended kill-switch actions: null
   /v1/changesets:
     get:
+      operationId: get_v1_changesets_723376e3
       summary: List Resource Plane ChangeSets
       parameters:
       - name: project_id
@@ -8708,6 +8988,7 @@ paths:
           approval: null
           and receipt expectations: null
     post:
+      operationId: post_v1_changesets_2034427c
       summary: Create a quoted and policy-checked Resource Plane ChangeSet
       requestBody:
         required: true
@@ -8762,6 +9043,7 @@ paths:
           description: Actor is not allowed to manage ProviderOps
   /v1/changesets/{changeset_id}/approve:
     post:
+      operationId: post_v1_changesets_changeset_id_approve_6093f49b
       summary: Approve a pending Resource Plane ChangeSet
       parameters:
       - name: changeset_id
@@ -8786,6 +9068,7 @@ paths:
           description: ChangeSet not found
   /v1/changesets/{changeset_id}/apply:
     post:
+      operationId: post_v1_changesets_changeset_id_apply_e7856f0c
       summary: Apply an approved ChangeSet and write ResourceReceipts
       parameters:
       - name: changeset_id
@@ -8815,6 +9098,7 @@ paths:
           description: ChangeSet not found
   /v1/resource-receipts:
     get:
+      operationId: get_v1_resource_receipts_7642d8d6
       summary: List Resource Plane receipts
       parameters:
       - name: project_id
@@ -9281,6 +9565,7 @@ paths:
           description: Validation error
   /v1/worker-pools:
     get:
+      operationId: get_v1_worker_pools_116f1baf
       summary: List Budget-Aware Autoscaler worker pools
       parameters:
       - name: project_id
@@ -9295,6 +9580,7 @@ paths:
           capabilities: null
           and cost hints: null
     post:
+      operationId: post_v1_worker_pools_79e20ae4
       summary: Register or update a worker pool
       requestBody:
         required: true
@@ -9360,6 +9646,7 @@ paths:
           description: Invalid worker-pool configuration or provider account
   /v1/autoscaler/plans:
     get:
+      operationId: get_v1_autoscaler_plans_1cddb0eb
       summary: List Budget-Aware Autoscaler scale plans
       parameters:
       - name: project_id
@@ -9384,6 +9671,7 @@ paths:
           decisions: null
           and ChangeSet links: null
     post:
+      operationId: post_v1_autoscaler_plans_aa1d9e43
       summary: Run the Budget-Aware Autoscaler planner
       requestBody:
         required: true
@@ -9414,6 +9702,7 @@ paths:
           description: Invalid worker pool or unsupported cloud spillover operation
   /v1/resource-janitor/run:
     post:
+      operationId: post_v1_resource_janitor_run_8395d0d5
       summary: Run Resource Janitor and propose approval-gated cleanup ChangeSets
       requestBody:
         required: true
@@ -9449,6 +9738,7 @@ paths:
           description: Provider account not found
   /v1/deployments:
     get:
+      operationId: get_v1_deployments_253942da
       summary: List ProviderOps deployment targets
       parameters:
       - name: project_id
@@ -9485,6 +9775,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_deployments_38e0902e
       summary: Register a deployment target in the Deployment Registry
       requestBody:
         required: true
@@ -9556,6 +9847,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-environment-policies:
     get:
+      operationId: get_v1_deployment_environment_policies_31c7de04
       summary: List Deployment Registry environment rollout policies
       parameters:
       - name: project_id
@@ -9590,6 +9882,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_deployment_environment_policies_ec388c2f
       summary: Upsert a Deployment Registry environment rollout policy
       requestBody:
         required: true
@@ -9657,6 +9950,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-runs:
     get:
+      operationId: get_v1_deployment_runs_c0ff8f2f
       summary: List Deployment Registry runs
       parameters:
       - name: project_id
@@ -9696,6 +9990,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_deployment_runs_25295b0d
       summary: Plan a DeploymentRun through release packet and ChangeSet gates
       requestBody:
         required: true
@@ -9744,6 +10039,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-runs/{deployment_run_id}/health-check:
     post:
+      operationId: post_v1_deployment_runs_deployment_run_id_health_check_e905ef9c
       summary: Run real DeploymentRun health checks and write health/rollback artifacts
       parameters:
       - name: deployment_run_id
@@ -9783,6 +10079,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-runs/{deployment_run_id}/rollout/start:
     post:
+      operationId: post_v1_deployment_runs_deployment_run_id_rollout_start_a79297ad
       summary: Start an idempotent health-gated staged rollout for a DeploymentRun
       parameters:
       - name: deployment_run_id
@@ -9822,6 +10119,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-runs/{deployment_run_id}/rollout/advance:
     post:
+      operationId: post_v1_deployment_runs_deployment_run_id_rollout_advance_f6fa3985
       summary: Verify a rollout health observation and advance or auto-rollback
       parameters:
       - name: deployment_run_id
@@ -9862,6 +10160,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-runs/{deployment_run_id}/rollout/rollback:
     post:
+      operationId: post_v1_deployment_runs_deployment_run_id_rollout_rollback_c21d039d
       summary: Idempotently stop a staged rollout and request governed provider rollback
       parameters:
       - name: deployment_run_id
@@ -9900,6 +10199,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-promotions:
     get:
+      operationId: get_v1_deployment_promotions_528cec7f
       summary: List aggregated staging-to-production promotions
       parameters:
       - name: project_id
@@ -9932,6 +10232,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_deployment_promotions_ce7069d0
       summary: Evaluate pipeline evidence and plan the staging leg of a promotion
       requestBody:
         required: true
@@ -9990,6 +10291,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-promotions/{promotion_id}:
     get:
+      operationId: get_v1_deployment_promotions_promotion_id_84809617
       summary: Read one promotion as an ordered evidence timeline
       parameters:
       - name: promotion_id
@@ -10019,6 +10321,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-promotions/{promotion_id}/advance:
     post:
+      operationId: post_v1_deployment_promotions_promotion_id_advance_2e698bee
       summary: Run the staging health gate and plan production only after it passes
       parameters:
       - name: promotion_id
@@ -10054,6 +10357,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/pipeline-config/proposals:
     post:
+      operationId: post_v1_pipeline_config_proposals_7c3020e2
       summary: Discover CI and propose deterministic config as a governed draft PR
         only when absent
       requestBody:
@@ -10111,6 +10415,7 @@ paths:
           or generated configuration is invalid: null
   /v1/provider-health:
     get:
+      operationId: get_v1_provider_health_39ca15ce
       summary: List provider health observations
       parameters:
       - name: project_id
@@ -10143,6 +10448,7 @@ paths:
           and rate-limit status: null
   /v1/drift-reports:
     get:
+      operationId: get_v1_drift_reports_6f814ce4
       summary: List provider drift reports
       parameters:
       - name: project_id
@@ -10170,6 +10476,7 @@ paths:
           and production impact: null
   /v1/reconciliation-runs:
     get:
+      operationId: get_v1_reconciliation_runs_4de062dd
       summary: List Resource Plane reconciliation runs
       parameters:
       - name: project_id
@@ -10194,6 +10501,7 @@ paths:
           description: Provider inventory and cost reconciliation run history
   /v1/comms/policies:
     get:
+      operationId: get_v1_comms_policies_4a7ac291
       summary: List communications rollout policies for a project
       parameters:
       - name: project_id
@@ -10206,6 +10514,7 @@ paths:
           description: Slack/email rollout policies that govern real sends by provider
             and data boundary
     post:
+      operationId: post_v1_comms_policies_abd28d3f
       summary: Create or update a communications rollout policy
       requestBody:
         required: true
@@ -10258,6 +10567,7 @@ paths:
           description: Actor lacks comms_manage permission
   /v1/comms/outbox:
     get:
+      operationId: get_v1_comms_outbox_99cfa189
       summary: List outbound communication records for a project
       parameters:
       - name: project_id
@@ -10281,6 +10591,7 @@ paths:
         '200':
           description: Outbox list including data_boundary classifications
     post:
+      operationId: post_v1_comms_outbox_1e4f84da
       summary: Create an outbox draft message
       requestBody:
         required: true
@@ -10323,6 +10634,7 @@ paths:
           description: Outbox draft created with data_boundary classification
   /v1/comms/outbox/{message_id}/queue:
     post:
+      operationId: post_v1_comms_outbox_message_id_queue_4b527295
       summary: Queue a receipt-gated outbound communication job
       parameters:
       - name: message_id
@@ -10374,6 +10686,7 @@ paths:
           description: Outbox message not found
   /v1/comms/outbox/{message_id}/deliver:
     post:
+      operationId: post_v1_comms_outbox_message_id_deliver_f2955a54
       summary: Deliver a queued outbox message through the configured provider
       parameters:
       - name: message_id
@@ -10412,6 +10725,7 @@ paths:
           description: Outbox message not found
   /v1/comms/inbox:
     get:
+      operationId: get_v1_comms_inbox_b5be43b8
       summary: List inbound communication records for a project
       parameters:
       - name: project_id
@@ -10436,6 +10750,7 @@ paths:
           description: Inbox list including data_boundary classifications
   /v1/comms/inbox/ingest:
     post:
+      operationId: post_v1_comms_inbox_ingest_50998549
       summary: Record an inbound message in the inbox and deterministically process
         decision replies
       requestBody:
@@ -10480,6 +10795,7 @@ paths:
           or deadlettered with data_boundary classification: null
   /v1/decisions/inbox:
     get:
+      operationId: get_v1_decisions_inbox_87376c21
       summary: List decisions for inbox with pending items first
       parameters:
       - name: project_id
@@ -10492,6 +10808,7 @@ paths:
           description: Decision cards
   /v1/decisions/digests:
     post:
+      operationId: post_v1_decisions_digests_fa4358e7
       summary: Create a durable decision digest artifact and optional outbox draft
       requestBody:
         required: true
@@ -10545,6 +10862,7 @@ paths:
           description: Actor lacks decision or comms permission
   /v1/decisions/{decision_id}/approve:
     post:
+      operationId: post_v1_decisions_decision_id_approve_a3155a41
       summary: Approve decision
       parameters:
       - name: decision_id
@@ -10573,6 +10891,7 @@ paths:
           description: Invalid transition
   /v1/decisions/{decision_id}/reject:
     post:
+      operationId: post_v1_decisions_decision_id_reject_3d532536
       summary: Reject decision
       parameters:
       - name: decision_id
@@ -10601,6 +10920,7 @@ paths:
           description: Invalid transition
   /v1/decisions/{decision_id}/revise:
     post:
+      operationId: post_v1_decisions_decision_id_revise_1260be4c
       summary: Request a revision to a pending decision
       parameters:
       - name: decision_id
@@ -10631,6 +10951,7 @@ paths:
           description: Validation error
   /v1/decisions/{decision_id}/delegate:
     post:
+      operationId: post_v1_decisions_decision_id_delegate_fa42dc59
       summary: Delegate a pending decision to another role or owner
       parameters:
       - name: decision_id
@@ -10663,6 +10984,7 @@ paths:
           description: Validation error
   /v1/decisions/{decision_id}/execute:
     post:
+      operationId: post_v1_decisions_decision_id_execute_7da87483
       summary: Mark an approved decision as manually executed with evidence
       parameters:
       - name: decision_id
@@ -10695,6 +11017,7 @@ paths:
           description: Validation error
   /v1/docs/update:
     post:
+      operationId: post_v1_docs_update_c4dfcc3a
       summary: Enqueue a bounded documentation update for an allowlisted completion
         event
       requestBody:
@@ -10750,6 +11073,7 @@ paths:
           description: Event is not allowlisted or the request is invalid
   /v1/docs/update/execute:
     post:
+      operationId: post_v1_docs_update_execute_5f6d9e6a
       summary: Execute a leased docs.update job through the governed docs agent
       requestBody:
         required: true
@@ -10793,6 +11117,7 @@ paths:
           or policy/budget block: null
   /v1/jobs:
     get:
+      operationId: get_v1_jobs_7878e72c
       summary: List jobs for a project
       parameters:
       - name: project_id
@@ -10837,6 +11162,7 @@ paths:
         '200':
           description: Paginated job list with queue metadata
     post:
+      operationId: post_v1_jobs_2b63982a
       summary: Create job
       requestBody:
         required: true
@@ -10899,6 +11225,7 @@ paths:
           description: Created
   /v1/bootstrap/seed:
     post:
+      operationId: post_v1_bootstrap_seed_8a1e5068
       summary: Explicitly reseed local bootstrap data when API seeding is enabled
       description: 'Fails closed unless BOSS_BOOTSTRAP_SEED_API_ENABLED is true. If
         the default project already exists, the actor must have member_manage.
@@ -10918,6 +11245,7 @@ paths:
           description: Seed API disabled or actor lacks member_manage
   /v1/worker/poll:
     post:
+      operationId: post_v1_worker_poll_6bb03440
       summary: Worker polls for leased job
       requestBody:
         required: true
@@ -10946,6 +11274,7 @@ paths:
           description: Job lease or empty response
   /v1/worker/heartbeat:
     post:
+      operationId: post_v1_worker_heartbeat_f4eaa7e0
       summary: Renew job lease heartbeat
       requestBody:
         required: true
@@ -10972,6 +11301,7 @@ paths:
           description: Heartbeat accepted
   /v1/worker/complete:
     post:
+      operationId: post_v1_worker_complete_a4d92a0e
       summary: Complete leased job
       requestBody:
         required: true
@@ -10998,6 +11328,7 @@ paths:
             lacks sufficient proof.
   /v1/worker/fail:
     post:
+      operationId: post_v1_worker_fail_427c3288
       summary: Fail leased job and trigger retry or deadletter handling
       requestBody:
         required: true
@@ -11030,6 +11361,7 @@ paths:
           description: Completion recorded
   /v1/budget/status:
     get:
+      operationId: get_v1_budget_status_95b92c4f
       summary: Budget status for scope
       parameters:
       - name: scope_type
@@ -11110,6 +11442,7 @@ paths:
                           type: integer
   /v1/budget/allocations:
     get:
+      operationId: get_v1_budget_allocations_7ef4923a
       summary: List hierarchical budget allocations for a project
       parameters:
       - name: project_id
@@ -11121,6 +11454,7 @@ paths:
         '200':
           description: Budget allocation list
     post:
+      operationId: post_v1_budget_allocations_6e24dc56
       summary: Create a budget allocation with parent-cap enforcement
       requestBody:
         required: true
@@ -11164,6 +11498,7 @@ paths:
           description: Allocation exceeds parent or project budget cap
   /v1/budget/quote:
     post:
+      operationId: post_v1_budget_quote_7159c6fa
       summary: Quote a spend request against the active project budget
       requestBody:
         required: true
@@ -11190,6 +11525,7 @@ paths:
           description: Quote result
   /v1/budget/forecast:
     get:
+      operationId: get_v1_budget_forecast_a36b5c55
       summary: Forecast project spend over a requested horizon
       parameters:
       - name: scope_type
@@ -11272,6 +11608,7 @@ paths:
                           type: integer
   /v1/budget/reserve:
     post:
+      operationId: post_v1_budget_reserve_a0f08f41
       summary: Internal budget reservation endpoint
       requestBody:
         required: true
@@ -11305,6 +11642,7 @@ paths:
           description: Reservation created or denied
   /v1/budget/release:
     post:
+      operationId: post_v1_budget_release_d6ebc0ff
       summary: Release an active reservation without consuming spend
       requestBody:
         required: true
@@ -11328,6 +11666,7 @@ paths:
           description: Reservation released or current status returned
   /v1/budget/consume:
     post:
+      operationId: post_v1_budget_consume_f6560a8e
       summary: Consume an active reservation and record receipt-linked actual or estimated
         spend
       requestBody:
@@ -11372,6 +11711,7 @@ paths:
           description: Active reservation or receipt is missing
   /v1/openai/plans:
     post:
+      operationId: post_v1_openai_plans_5d297852
       summary: Create a real OpenAI-backed plan artifact behind a reservation
       requestBody:
         required: true
@@ -11406,6 +11746,7 @@ paths:
           or blocked: null
   /v1/software-factory/proposals:
     post:
+      operationId: post_v1_software_factory_proposals_cbc1a135
       summary: Create a real sandbox pull request proposal behind a reservation and
         capture validation, security/dependency, and release go/no-go evidence
       requestBody:
@@ -11461,6 +11802,7 @@ paths:
             evidence
   /v1/software-factory/merges:
     post:
+      operationId: post_v1_software_factory_merges_73d3abd7
       summary: Merge a sandbox pull request behind a receipt-backed control-plane
         gate after passed validation
       requestBody:
@@ -11499,6 +11841,7 @@ paths:
             when policy blocks an external effect
   /v1/software-factory/deployments:
     post:
+      operationId: post_v1_software_factory_deployments_faabcbb8
       summary: Record a sandbox deployment behind a receipt-backed control-plane gate,
         with optional post-deploy health verification
       requestBody:
@@ -11543,6 +11886,7 @@ paths:
             status when configured
   /v1/software-factory/rollouts:
     get:
+      operationId: get_v1_software_factory_rollouts_29220e51
       summary: List durable sandbox deployment rollout records and staged verification
         evidence
       parameters:
@@ -11562,6 +11906,7 @@ paths:
           description: Deployment rollout list
   /v1/software-factory/proposals/queue:
     post:
+      operationId: post_v1_software_factory_proposals_queue_8d4f90af
       summary: Queue a real sandbox PR proposal for leased worker execution
       requestBody:
         required: true
@@ -11617,6 +11962,7 @@ paths:
           description: Proposal job queued
   /v1/software-factory/merges/queue:
     post:
+      operationId: post_v1_software_factory_merges_queue_a91854b7
       summary: Queue a sandbox PR merge for leased worker execution
       requestBody:
         required: true
@@ -11659,6 +12005,7 @@ paths:
           description: Merge job queued
   /v1/software-factory/deployments/queue:
     post:
+      operationId: post_v1_software_factory_deployments_queue_bd0e4196
       summary: Queue a sandbox deployment record for leased worker execution
       requestBody:
         required: true
@@ -11704,6 +12051,7 @@ paths:
           description: Deployment job queued
   /v1/infra/droplets/requests:
     post:
+      operationId: post_v1_infra_droplets_requests_d90c0382
       summary: Create an approval-gated infrastructure provisioning request artifact
         and decision
       requestBody:
@@ -11754,6 +12102,7 @@ paths:
           description: Invalid infrastructure review request
   /v1/infra/droplets:
     post:
+      operationId: post_v1_infra_droplets_50987f6f
       summary: Provision a real sandbox droplet behind decision, reservation, and
         receipt gates
       requestBody:
@@ -11810,6 +12159,7 @@ paths:
           description: Invalid infrastructure provisioning request
   /v1/infra/droplets/queue:
     post:
+      operationId: post_v1_infra_droplets_queue_ef7193ed
       summary: Queue infrastructure provisioning for leased worker execution
       requestBody:
         required: true
@@ -11871,6 +12221,7 @@ paths:
           description: Invalid infrastructure provisioning job request
   /v1/infra/resources:
     get:
+      operationId: get_v1_infra_resources_3b2d99d9
       summary: List provisioned infrastructure resources for a project
       parameters:
       - name: project_id
@@ -11889,6 +12240,7 @@ paths:
           description: Infrastructure resource list
   /v1/infra/resources/{resource_id}/terminate:
     post:
+      operationId: post_v1_infra_resources_resource_id_terminate_20f388e5
       summary: Terminate a provisioned sandbox resource through a receipt-backed adapter
       parameters:
       - name: resource_id
@@ -11931,6 +12283,7 @@ paths:
           description: Invalid infrastructure termination request
   /v1/infra/resources/{resource_id}/terminate/queue:
     post:
+      operationId: post_v1_infra_resources_resource_id_terminate_queue_d7d4bd3b
       summary: Queue infrastructure termination for leased worker execution
       parameters:
       - name: resource_id
@@ -11974,6 +12327,7 @@ paths:
           description: Invalid infrastructure termination job request
   /v1/infra/janitor/run:
     post:
+      operationId: post_v1_infra_janitor_run_fc635598
       summary: Queue termination jobs for expired TTL-managed infrastructure resources
       requestBody:
         required: true
@@ -11999,6 +12353,7 @@ paths:
           description: Actor is not allowed to run the infrastructure janitor
   /v1/receipts/{dedupe_key}:
     get:
+      operationId: get_v1_receipts_dedupe_key_88485e4c
       summary: Get receipt by dedupe key
       parameters:
       - name: dedupe_key
@@ -12011,6 +12366,7 @@ paths:
           description: Receipt including data_boundary classification
   /v1/receipts:
     get:
+      operationId: get_v1_receipts_5c2f5ae1
       summary: List receipts for a project
       parameters:
       - name: project_id
@@ -12035,6 +12391,7 @@ paths:
           description: Receipt list including data_boundary classifications
   /v1/change-journal:
     get:
+      operationId: get_v1_change_journal_50fc3664
       summary: List change artifacts with normalized diff and rollback metadata
       parameters:
       - name: project_id
@@ -12053,6 +12410,7 @@ paths:
           description: Change journal items backed by durable artifacts
   /v1/change-journal/{artifact_id}:
     get:
+      operationId: get_v1_change_journal_artifact_id_251bfc59
       summary: Get change artifact detail and diff content
       parameters:
       - name: artifact_id
@@ -12072,6 +12430,7 @@ paths:
           description: Change artifact not found for project
   /v1/audit/export:
     get:
+      operationId: get_v1_audit_export_0bf39259
       summary: Export a reconstructable audit chain
       parameters:
       - name: project_id
@@ -12115,6 +12474,7 @@ paths:
           description: Unknown project
   /v1/audit/replay-bundles:
     post:
+      operationId: post_v1_audit_replay_bundles_7bbafa08
       summary: Create a replay-bundle artifact from the current audit chain
       requestBody:
         required: true
@@ -12143,6 +12503,7 @@ paths:
           description: Unknown project
   /v1/compliance/evidence-bundles:
     post:
+      operationId: post_v1_compliance_evidence_bundles_09b7cf19
       summary: Create a compliance evidence artifact for access, budget, effects,
         and policy controls
       requestBody:
@@ -12174,6 +12535,7 @@ paths:
           description: Unknown project
   /v1/events:
     get:
+      operationId: get_v1_events_043a7506
       summary: Event feed
       parameters:
       - name: project_id
@@ -12198,6 +12560,7 @@ paths:
           description: Events
   /v1/deadletters:
     get:
+      operationId: get_v1_deadletters_f56019c5
       summary: Deadletter feed
       parameters:
       - name: project_id
@@ -12223,6 +12586,7 @@ paths:
             status for outbound webhook job failures
   /v1/canaries/run:
     post:
+      operationId: post_v1_canaries_run_c11507c4
       summary: Run and persist the BOSS invariant canary suite
       requestBody:
         required: true
@@ -12244,6 +12608,7 @@ paths:
             including reactive dispatch exactly-once proof
   /v1/canaries:
     get:
+      operationId: get_v1_canaries_361aadd7
       summary: List persisted invariant canary runs
       parameters:
       - name: project_id
@@ -12262,6 +12627,7 @@ paths:
           description: Canary runs ordered newest first
   /v1/deadletters/{deadletter_id}/incident:
     post:
+      operationId: post_v1_deadletters_deadletter_id_incident_7cce0894
       summary: Create a deadletter incident packet and investigation task
       parameters:
       - name: deadletter_id
@@ -12298,6 +12664,7 @@ paths:
           description: Deadletter not found
   /v1/deadletters/{deadletter_id}/requeue:
     post:
+      operationId: post_v1_deadletters_deadletter_id_requeue_e6e2498d
       summary: Requeue a terminal job deadletter
       parameters:
       - name: deadletter_id
@@ -12332,6 +12699,7 @@ paths:
           description: Deadletter not found
   /v1/event-subscriptions:
     get:
+      operationId: get_v1_event_subscriptions_1e54641d
       summary: List project-scoped reactive event subscriptions
       parameters:
       - name: project_id
@@ -12363,6 +12731,7 @@ paths:
                     items:
                       $ref: '#/components/schemas/EventSubscription'
     post:
+      operationId: post_v1_event_subscriptions_bed692a9
       summary: Register a project-scoped reactive event subscription
       requestBody:
         required: true
@@ -12418,6 +12787,7 @@ paths:
           description: Invalid or duplicate event subscription
   /v1/event-subscriptions/{subscription_id}:
     patch:
+      operationId: patch_v1_event_subscriptions_subscription_id_95e062ed
       summary: Update a project-scoped reactive event subscription
       parameters:
       - name: subscription_id
@@ -12473,6 +12843,7 @@ paths:
         '404':
           description: Event subscription not found in project
     delete:
+      operationId: delete_v1_event_subscriptions_subscription_id_530cc5dc
       summary: Delete a project-scoped reactive event subscription
       parameters:
       - name: subscription_id
@@ -12498,6 +12869,7 @@ paths:
           description: Event subscription not found in project
   /v1/webhook-endpoints:
     get:
+      operationId: get_v1_webhook_endpoints_6703d140
       summary: List project-scoped outbound webhook endpoints
       parameters:
       - name: project_id
@@ -12509,6 +12881,7 @@ paths:
         '200':
           description: Webhook endpoint list
     post:
+      operationId: post_v1_webhook_endpoints_ba996fc4
       summary: Register an outbound webhook endpoint using a secret reference
       requestBody:
         required: true
@@ -12555,6 +12928,7 @@ paths:
           or boundary: null
   /v1/webhook-endpoints/{endpoint_id}:
     patch:
+      operationId: patch_v1_webhook_endpoints_endpoint_id_eb049122
       summary: Update an outbound webhook endpoint
       parameters:
       - name: endpoint_id
@@ -12601,6 +12975,7 @@ paths:
         '422':
           description: Invalid endpoint update
     delete:
+      operationId: delete_v1_webhook_endpoints_endpoint_id_ebf02346
       summary: Soft-delete an outbound webhook endpoint
       parameters:
       - name: endpoint_id
@@ -12626,6 +13001,7 @@ paths:
           description: Webhook endpoint not found
   /v1/webhook-endpoints/{endpoint_id}/deliver:
     post:
+      operationId: post_v1_webhook_endpoints_endpoint_id_deliver_1f9e7500
       summary: Queue a durable outbound webhook delivery
       parameters:
       - name: endpoint_id
@@ -12683,6 +13059,7 @@ paths:
           description: Boundary or payload validation failed
   /v1/webhook-deliveries:
     get:
+      operationId: get_v1_webhook_deliveries_d76836a6
       summary: List durable outbound webhook deliveries
       parameters:
       - name: project_id
@@ -12703,6 +13080,7 @@ paths:
           description: Webhook delivery list
   /v1/webhook-deliveries/{delivery_id}/deliver:
     post:
+      operationId: post_v1_webhook_deliveries_delivery_id_deliver_d4e7b4b1
       summary: Execute a delivery owned by a leased webhook worker job
       parameters:
       - name: delivery_id
@@ -12740,6 +13118,7 @@ paths:
           description: Active worker lease does not own the delivery
   /v1/webhooks/inbound/{source}:
     post:
+      operationId: post_v1_webhooks_inbound_source_1a98ca26
       security: []
       summary: Receive a raw-body signed provider webhook
       parameters:
@@ -12784,6 +13163,7 @@ paths:
           description: Inbound secret is not configured for this source
   /v1/webhooks/github:
     post:
+      operationId: post_v1_webhooks_github_54827e7e
       security: []
       summary: Receive a signed GitHub community webhook
       description: Verifies the raw body before parsing, durably emits a typed github.*
@@ -12829,6 +13209,7 @@ paths:
           description: BOSS_GITHUB_WEBHOOK_SECRET is not configured
   /v1/github/community/jobs/{job_id}/execute:
     post:
+      operationId: post_v1_github_community_jobs_job_id_execute_4f3c3c9c
       summary: Execute a leased GitHub community triage or review job
       parameters:
       - name: job_id
@@ -12865,6 +13246,7 @@ paths:
           description: Job kind or normalized event payload is invalid
   /v1/qa/benchmark-apps:
     get:
+      operationId: get_v1_qa_benchmark_apps_62685471
       summary: List pinned full-stack QA benchmark application contracts
       responses:
         '200':
@@ -12872,6 +13254,7 @@ paths:
             requirements
   /v1/qa/benchmark-apps/{benchmark_id}/runs:
     post:
+      operationId: post_v1_qa_benchmark_apps_benchmark_id_runs_f16491db
       summary: Launch a benchmark through the strict governed code-task workflow
       parameters:
       - name: benchmark_id
@@ -12926,6 +13309,7 @@ paths:
           description: Invalid project or sandbox validation command
   /v1/qa/benchmark-apps/runs/{run_id}/report:
     get:
+      operationId: get_v1_qa_benchmark_apps_runs_run_id_report_6d926330
       summary: Read an evidence-backed benchmark completion report
       parameters:
       - name: run_id
@@ -12940,6 +13324,7 @@ paths:
           description: Code task not found or is not a benchmark run
   /v1/qa/benchmark-apps/evaluations:
     get:
+      operationId: get_v1_qa_benchmark_apps_evaluations_69d60a1c
       summary: List durable benchmark scorecard and tuning-recommendation snapshots
       parameters:
       - name: project_id
@@ -12960,6 +13345,7 @@ paths:
           description: Versioned terminal benchmark evidence snapshots
   /v1/qa/benchmark-apps/tuning-sweep:
     post:
+      operationId: post_v1_qa_benchmark_apps_tuning_sweep_039d30f3
       summary: Materialize changed terminal benchmark evidence for the tuning ledger
       description: 'Worker-safe analysis-only sweep. It stores scorecard/recommendation
         snapshots but does not call a model or provider, create a candidate diff,
@@ -12991,6 +13377,7 @@ paths:
           description: Invalid sweep limit
   /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal:
     post:
+      operationId: post_v1_qa_benchmark_apps_runs_run_id_tuning_proposal_457940e1
       summary: Create a decision-gated improvement proposal from benchmark evidence
       description: 'Requires a developer-authored PR or configuration-diff reference.
         This endpoint turns observed scorecard gaps into the existing governed self-improvement
@@ -13041,6 +13428,7 @@ paths:
             control is incomplete
   /v1/improvement-programs:
     get:
+      operationId: get_v1_improvement_programs_495f3b3d
       summary: List governed autonomous-improvement programs
       parameters:
       - name: project_id
@@ -13060,6 +13448,7 @@ paths:
         '200':
           description: Programs with pinned baseline and metric contract
     post:
+      operationId: post_v1_improvement_programs_753bf106
       summary: Create a program from a durable baseline evaluation
       requestBody:
         required: true
@@ -13110,6 +13499,7 @@ paths:
           description: Invalid baseline or metric policy
   /v1/improvement-programs/{program_id}:
     patch:
+      operationId: patch_v1_improvement_programs_program_id_5ed6e128
       summary: Pause, resume, or retire an improvement program
       parameters:
       - name: program_id
@@ -13144,6 +13534,7 @@ paths:
           description: Invalid transition input
   /v1/improvement-programs/{program_id}/trials:
     get:
+      operationId: get_v1_improvement_programs_program_id_trials_dee0cdb7
       summary: List single-variable trials for an improvement program
       parameters:
       - name: program_id
@@ -13165,6 +13556,7 @@ paths:
         '404':
           description: Program not found
     post:
+      operationId: post_v1_improvement_programs_program_id_trials_51963dc6
       summary: Evaluate a candidate against the pinned control
       parameters:
       - name: program_id
@@ -13218,6 +13610,7 @@ paths:
           description: Candidate is not a comparable single-variable experiment
   /v1/improvement-programs/trials/{trial_id}/promote:
     post:
+      operationId: post_v1_improvement_programs_trials_trial_id_promote_ad428b11
       summary: Promote a winning trial into the governed proposal state machine
       parameters:
       - name: trial_id
@@ -13249,6 +13642,7 @@ paths:
           description: Trial is not an unpromoted winner
   /v1/improvement-programs/trials/{trial_id}/adopt-baseline:
     post:
+      operationId: post_v1_improvement_programs_trials_trial_id_adopt_baseline_31eecfe4
       summary: Adopt the candidate evaluation after governed rollout completes
       parameters:
       - name: trial_id
@@ -13275,6 +13669,7 @@ paths:
           description: Linked proposal has not completed rollout
   /v1/code-tasks:
     get:
+      operationId: get_v1_code_tasks_12ef81af
       summary: List durable governed code-task runs for a project
       responses:
         '200':
@@ -13305,6 +13700,7 @@ paths:
           default: 50
           title: Limit
     post:
+      operationId: post_v1_code_tasks_7f903e6e
       summary: Queue a budgeted, leased governed code task (or persist a simulated fixture)
       description: >
         Default path enqueues a leased `code.task` job and spends budget when a
@@ -13334,6 +13730,7 @@ paths:
               title: Payload
   /v1/code-tasks/{run_id}:
     get:
+      operationId: get_v1_code_tasks_run_id_1f6fd558
       summary: Read a durable code-task run and its governed evidence
       parameters:
       - name: run_id
@@ -13357,6 +13754,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/code-tasks/{run_id}/follow-up:
     post:
+      operationId: post_v1_code_tasks_run_id_follow_up_e9620a98
       summary: Queue a governed follow-up on an existing code-task lineage
       parameters:
       - name: run_id
@@ -13388,6 +13786,7 @@ paths:
               title: Payload
   /v1/code-tasks/step:
     post:
+      operationId: post_v1_code_tasks_step_80d0bf5b
       summary: Advance one leased code-task attempt from the worker boundary
       responses:
         '200':
@@ -13411,6 +13810,7 @@ paths:
         required: true
   /v1/code-tasks/{run_id}/steer:
     post:
+      operationId: post_v1_code_tasks_run_id_steer_0b30c556
       summary: Record operator guidance for the next safe code-task stage boundary
       parameters:
       - name: run_id
@@ -13444,6 +13844,7 @@ paths:
               title: Payload
   /v1/code-tasks/{run_id}/live:
     get:
+      operationId: get_v1_code_tasks_run_id_live_f53df536
       summary: Read live, read-only tool activity for a code-task run
       parameters:
       - name: run_id
@@ -13479,6 +13880,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/code-tasks/{run_id}/activity:
     get:
+      operationId: get_v1_code_tasks_run_id_activity_054a9c81
       summary: Read persisted per-stage model activity and cost evidence
       parameters:
       - name: run_id
@@ -13503,6 +13905,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/code-tasks/{run_id}/retry:
     post:
+      operationId: post_v1_code_tasks_run_id_retry_7fb71f98
       summary: Retry an eligible governed code-task attempt
       parameters:
       - name: run_id
@@ -13533,6 +13936,7 @@ paths:
               title: Payload
   /v1/code-tasks/{run_id}/override:
     post:
+      operationId: post_v1_code_tasks_run_id_override_5dbef369
       summary: Apply a governed operator override to a code-task gate
       parameters:
       - name: run_id
@@ -13565,6 +13969,7 @@ paths:
               title: Payload
   /v1/code-tasks/{run_id}/deploy:
     post:
+      operationId: post_v1_code_tasks_run_id_deploy_a179e597
       summary: Propose deployment of a completed code-task output through the delivery
         boundary
       parameters:
@@ -13596,6 +14001,7 @@ paths:
               title: Payload
   /v1/delivery/defaults:
     get:
+      operationId: get_v1_delivery_defaults_556b1809
       summary: Read project delivery defaults and configured safety posture
       responses:
         '200':
@@ -13605,6 +14011,7 @@ paths:
               schema: {}
   /v1/delivery/repos:
     get:
+      operationId: get_v1_delivery_repos_e7ee981b
       summary: List repositories available to the governed delivery boundary
       responses:
         '200':
@@ -13629,6 +14036,7 @@ paths:
           title: Project Id
   /v1/delivery/repos/{owner}/{repo}/refs:
     get:
+      operationId: get_v1_delivery_repos_owner_repo_refs_ec38becb
       summary: List visible refs for a repository through the delivery adapter
       parameters:
       - name: owner
@@ -13655,6 +14063,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery/repos/{owner}/{repo}/apps:
     get:
+      operationId: get_v1_delivery_repos_owner_repo_apps_3d25d916
       summary: List deployable apps discovered for a repository
       parameters:
       - name: owner
@@ -13688,6 +14097,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery/health:
     get:
+      operationId: get_v1_delivery_health_7beac2fa
       summary: Read delivery target health and current deployment readiness
       responses:
         '200':
@@ -13710,6 +14120,7 @@ paths:
           title: Project Id
   /v1/delivery/health/sweep:
     post:
+      operationId: post_v1_delivery_health_sweep_b0bbfc51
       summary: Queue or run a bounded delivery-health sweep
       responses:
         '200':
@@ -13734,6 +14145,7 @@ paths:
           title: Project Id
   /v1/delivery/deploy:
     post:
+      operationId: post_v1_delivery_deploy_6395b6d0
       summary: Propose a policy-gated deployment from the delivery boundary
       responses:
         '200':
@@ -13759,6 +14171,7 @@ paths:
         required: true
   /v1/delivery/deployments:
     get:
+      operationId: get_v1_delivery_deployments_f0f2c03f
       summary: List durable deployment runs and their receipt-backed state
       responses:
         '200':
@@ -13788,6 +14201,7 @@ paths:
           title: Limit
   /v1/delivery/deployments/{deployment_run_id}:
     get:
+      operationId: get_v1_delivery_deployments_deployment_run_id_34ff376d
       summary: Read one durable deployment run
       parameters:
       - name: deployment_run_id
@@ -13811,6 +14225,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery/deployments/{deployment_run_id}/execute:
     post:
+      operationId: post_v1_delivery_deployments_deployment_run_id_execute_f80564b4
       summary: Execute an approved deployment through its typed adapter boundary
       parameters:
       - name: deployment_run_id
@@ -13843,6 +14258,7 @@ paths:
               title: Payload
   /v1/delivery/deployments/{deployment_run_id}/redeploy:
     post:
+      operationId: post_v1_delivery_deployments_deployment_run_id_redeploy_58b24d2a
       summary: Propose a governed redeploy using the recorded deployment lineage
       parameters:
       - name: deployment_run_id
@@ -13873,6 +14289,7 @@ paths:
               title: Payload
   /v1/delivery/targets/{target_id}/preflight:
     get:
+      operationId: get_v1_delivery_targets_target_id_preflight_bdb4e33e
       summary: Read a non-mutating deployment-target preflight
       parameters:
       - name: target_id
@@ -13900,6 +14317,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery/pipeline:
     get:
+      operationId: get_v1_delivery_pipeline_6133053b
       summary: Read the project delivery pipeline and current stage states
       responses:
         '200':
@@ -13929,6 +14347,7 @@ paths:
           title: Limit
   /v1/deployment-targets:
     get:
+      operationId: get_v1_deployment_targets_b36e862a
       summary: List project-scoped deployment targets
       responses:
         '200':
@@ -13965,6 +14384,7 @@ paths:
           default: 0
           title: Offset
     post:
+      operationId: post_v1_deployment_targets_82c626d6
       summary: Create a typed deployment target with secret references only
       responses:
         '201':
@@ -13990,6 +14410,7 @@ paths:
               title: Payload
   /v1/deployment-targets/{target_id}:
     patch:
+      operationId: patch_v1_deployment_targets_target_id_a5172f37
       summary: Update a project-scoped deployment target
       parameters:
       - name: target_id
@@ -14018,6 +14439,7 @@ paths:
               additionalProperties: true
               title: Payload
     delete:
+      operationId: delete_v1_deployment_targets_target_id_7619485d
       summary: Retire a deployment target without bypassing its governance history
       parameters:
       - name: target_id
@@ -14044,6 +14466,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-targets/{target_id}/teardown:
     post:
+      operationId: post_v1_deployment_targets_target_id_teardown_f87e0394
       summary: Propose typed teardown for a deployment target
       parameters:
       - name: target_id
@@ -14073,6 +14496,7 @@ paths:
               title: Payload
   /v1/deployment-targets/{target_id}/purge:
     post:
+      operationId: post_v1_deployment_targets_target_id_purge_6e873143
       summary: Request governed purge of a retired deployment target
       parameters:
       - name: target_id
@@ -14102,6 +14526,7 @@ paths:
               title: Payload
   /v1/deployment-targets/{target_id}/bootstrap:
     post:
+      operationId: post_v1_deployment_targets_target_id_bootstrap_7d50bd46
       summary: Bootstrap a deployment target through the typed provider boundary
       parameters:
       - name: target_id
@@ -14132,6 +14557,7 @@ paths:
               title: Payload
   /v1/deployment-targets/{target_id}/secrets:
     post:
+      operationId: post_v1_deployment_targets_target_id_secrets_dd1e80a1
       summary: Attach write-only secret references to a deployment target
       parameters:
       - name: target_id
@@ -14161,6 +14587,7 @@ paths:
               title: Payload
   /v1/deployment-targets/{target_id}/auto-deploy:
     post:
+      operationId: post_v1_deployment_targets_target_id_auto_deploy_b6979f83
       summary: Configure or invoke policy-gated automatic deployment for a target
       parameters:
       - name: target_id
@@ -14190,6 +14617,7 @@ paths:
               title: Payload
   /v1/sandboxes:
     get:
+      operationId: get_v1_sandboxes_6b3df740
       summary: List sandbox host availability and project-scoped sandbox inventory
       responses:
         '200':
@@ -14199,6 +14627,7 @@ paths:
               schema: {}
   /v1/sandboxes/helpers:
     get:
+      operationId: get_v1_sandboxes_helpers_e756bf14
       summary: List sandbox helper capabilities and their availability
       responses:
         '200':
@@ -14208,6 +14637,7 @@ paths:
               schema: {}
   /v1/sandboxes/{sandbox_id}/tree:
     get:
+      operationId: get_v1_sandboxes_sandbox_id_tree_d14c7c01
       summary: Read a sandbox filesystem tree through the sandbox boundary
       parameters:
       - name: sandbox_id
@@ -14229,6 +14659,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/sandboxes/{sandbox_id}/file:
     get:
+      operationId: get_v1_sandboxes_sandbox_id_file_71c791f0
       summary: Read an authorized sandbox file through the sandbox boundary
       parameters:
       - name: sandbox_id
@@ -14263,6 +14694,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/sandboxes/{sandbox_id}/exec:
     post:
+      operationId: post_v1_sandboxes_sandbox_id_exec_5d1d3673
       summary: Execute an allowlisted sandbox operation through the governed boundary
       parameters:
       - name: sandbox_id
@@ -14294,6 +14726,7 @@ paths:
               title: Payload
   /v1/sandboxes/{sandbox_id}/stats:
     get:
+      operationId: get_v1_sandboxes_sandbox_id_stats_6e1d53c1
       summary: Read sandbox resource and process statistics
       parameters:
       - name: sandbox_id
@@ -14315,6 +14748,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/sandboxes/{sandbox_id}/logs:
     get:
+      operationId: get_v1_sandboxes_sandbox_id_logs_6e49aa28
       summary: Read sandbox logs through the sandbox boundary
       parameters:
       - name: sandbox_id
@@ -14336,6 +14770,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/sandboxes/{sandbox_id}/preserve:
     post:
+      operationId: post_v1_sandboxes_sandbox_id_preserve_8e07d0dd
       summary: Preserve a sandbox for governed review or evidence retention
       parameters:
       - name: sandbox_id
@@ -14365,6 +14800,7 @@ paths:
               title: Payload
   /v1/sandboxes/{sandbox_id}:
     delete:
+      operationId: delete_v1_sandboxes_sandbox_id_80e5e0f2
       summary: Destroy a sandbox through the governed sandbox boundary
       parameters:
       - name: sandbox_id
@@ -14388,6 +14824,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/code-tasks/{run_id}/feedback:
     get:
+      operationId: get_v1_code_tasks_run_id_feedback_650ef10e
       summary: Read the durable feedback thread for a code-task lineage
       parameters:
       - name: run_id
@@ -14410,6 +14847,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_code_tasks_run_id_feedback_0a5d0a29
       summary: Ask the feedback agent to clarify and structure an iteration proposal
       parameters:
       - name: run_id
@@ -14453,6 +14891,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/feedback-threads/{thread_id}/confirm:
     post:
+      operationId: post_v1_feedback_threads_thread_id_confirm_4a82473c
       summary: Confirm and dispatch a proposed governed code-task iteration
       parameters:
       - name: thread_id
@@ -14478,6 +14917,7 @@ paths:
           description: No proposal awaits confirmation
   /v1/code-tasks/{run_id}/preview:
     post:
+      operationId: post_v1_code_tasks_run_id_preview_c48987f3
       summary: Start a retained-rootfs, Docker, or host-process preview
       parameters:
       - name: run_id
@@ -14518,6 +14958,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews:
     get:
+      operationId: get_v1_previews_69d3d815
       summary: List and reap previews for a project
       parameters:
       - name: project_id
@@ -14545,6 +14986,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews/{preview_id}/logs:
     get:
+      operationId: get_v1_previews_preview_id_logs_0d85179c
       security: []
       summary: Stream preview startup logs as server-sent events
       parameters:
@@ -14575,6 +15017,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews/{preview_id}/feedback:
     post:
+      operationId: post_v1_previews_preview_id_feedback_1ca3b57d
       security: []
       summary: Capture route-anchored feedback from a live preview capability
       parameters:
@@ -14616,17 +15059,20 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/workflows:
     get:
+      operationId: get_v1_workflows_843b15aa
       summary: List reusable workflow definitions and active immutable versions
       responses:
         '200':
           description: Workflow definition registry
     post:
+      operationId: post_v1_workflows_aec11da9
       summary: Create a reusable workflow definition
       responses:
         '201':
           description: Workflow definition created
   /v1/workflows/{definition_id}:
     get:
+      operationId: get_v1_workflows_definition_id_7f0ef9b6
       summary: Get a workflow definition and its immutable version history
       responses:
         '200':
@@ -14635,6 +15081,7 @@ paths:
           description: Workflow definition not found
   /v1/workflows/{definition_id}/versions:
     post:
+      operationId: post_v1_workflows_definition_id_versions_39b45778
       summary: Validate and publish an immutable workflow version
       responses:
         '201':
@@ -14643,11 +15090,13 @@ paths:
           description: Invalid workflow graph or binding declaration
   /v1/workflow-mappings:
     get:
+      operationId: get_v1_workflow_mappings_71a5a9bd
       summary: List deterministic work-class workflow mappings
       responses:
         '200':
           description: Workflow mappings
     post:
+      operationId: post_v1_workflow_mappings_b950dc10
       summary: Map a class of work to a pinned workflow version and scope
       responses:
         '201':
@@ -14656,6 +15105,7 @@ paths:
           description: Active mapping conflicts with an existing selector
   /v1/workflow-mappings/resolve:
     post:
+      operationId: post_v1_workflow_mappings_resolve_b66ab94e
       summary: Explain and resolve the most-specific workflow mapping
       responses:
         '200':
@@ -14666,11 +15116,13 @@ paths:
           description: No approved mapping matches
   /v1/workflow-runs:
     get:
+      operationId: get_v1_workflow_runs_2de1ea2f
       summary: List durable workflow runs and their current frontier
       responses:
         '200':
           description: Workflow runs
     post:
+      operationId: post_v1_workflow_runs_a2015b8f
       summary: Start an idempotent version-pinned workflow run
       responses:
         '201':
@@ -14679,6 +15131,7 @@ paths:
           description: A required capability binding fails closed
   /v1/workflow-runs/{run_id}:
     get:
+      operationId: get_v1_workflow_runs_run_id_d58dfe93
       summary: Get a workflow run with steps, evidence, migrations, compensation,
         and timeline
       responses:
@@ -14688,18 +15141,21 @@ paths:
           description: Workflow run not found
   /v1/workflow-runs/{run_id}/advance:
     post:
+      operationId: post_v1_workflow_runs_run_id_advance_a51f4775
       summary: Reconcile timers, decisions, subworkflows, and the current run frontier
       responses:
         '200':
           description: Advanced workflow run
   /v1/workflow-runs/{run_id}/pause:
     post:
+      operationId: post_v1_workflow_runs_run_id_pause_a88e0bcf
       summary: Pause a non-terminal workflow run
       responses:
         '200':
           description: Paused workflow run
   /v1/workflow-runs/{run_id}/resume:
     post:
+      operationId: post_v1_workflow_runs_run_id_resume_3b87136b
       summary: Resume and reconcile a paused workflow run
       responses:
         '200':
@@ -14708,12 +15164,14 @@ paths:
           description: Workflow run is not paused
   /v1/workflow-runs/{run_id}/cancel:
     post:
+      operationId: post_v1_workflow_runs_run_id_cancel_a71cd23b
       summary: Cancel a workflow run and optionally begin compensation
       responses:
         '200':
           description: Cancelled or compensating workflow run
   /v1/workflow-runs/{run_id}/steps/claim:
     post:
+      operationId: post_v1_workflow_runs_run_id_steps_claim_42aab978
       summary: Lease or reclaim the next executable workflow step
       responses:
         '200':
@@ -14721,6 +15179,7 @@ paths:
           or null when no step is ready: null
   /v1/workflow-step-runs/{step_run_id}/heartbeat:
     post:
+      operationId: post_v1_workflow_step_runs_step_run_id_heartbeat_d106c6da
       summary: Heartbeat and extend an owned workflow step lease
       responses:
         '200':
@@ -14729,18 +15188,21 @@ paths:
           description: Lease expired or is owned by another worker
   /v1/workflow-step-runs/{step_run_id}/complete:
     post:
+      operationId: post_v1_workflow_step_runs_step_run_id_complete_8f5618c8
       summary: Complete a leased workflow step with output and evidence
       responses:
         '200':
           description: Workflow step completed and frontier advanced
   /v1/workflow-step-runs/{step_run_id}/fail:
     post:
+      operationId: post_v1_workflow_step_runs_step_run_id_fail_645118f6
       summary: Fail a leased workflow step and retry or deadletter it deterministically
       responses:
         '200':
           description: Workflow step retried or deadlettered
   /v1/workflow-runs/{run_id}/migrate:
     post:
+      operationId: post_v1_workflow_runs_run_id_migrate_c035cbe3
       summary: Explicitly migrate a paused workflow run to a compatible version
       responses:
         '200':
@@ -14749,6 +15211,7 @@ paths:
           description: Target version is incompatible or run is active
   /v1/workflow-runs/{run_id}/migrations/rollback:
     post:
+      operationId: post_v1_workflow_runs_run_id_migrations_rollback_7a81c3eb
       summary: Roll back the active safe workflow migration
       responses:
         '200':
@@ -14757,12 +15220,14 @@ paths:
           description: New-version steps have executed and rollback is unsafe
   /v1/workflow-runs/{run_id}/compensate:
     post:
+      operationId: post_v1_workflow_runs_run_id_compensate_258fa2f2
       summary: Begin reverse-order workflow compensation
       responses:
         '200':
           description: Workflow compensation started
   /v1/workflow-runs/{run_id}/compensations/claim:
     post:
+      operationId: post_v1_workflow_runs_run_id_compensations_claim_ced7ef10
       summary: Lease the next reverse-order compensation action
       responses:
         '200':
@@ -14770,18 +15235,21 @@ paths:
           or null: null
   /v1/workflow-compensation-runs/{compensation_id}/complete:
     post:
+      operationId: post_v1_workflow_compensation_runs_compensation_id_complete_74296dd3
       summary: Complete a compensation action and advance the rollback chain
       responses:
         '200':
           description: Compensation action completed
   /v1/workflow-compensation-runs/{compensation_id}/fail:
     post:
+      operationId: post_v1_workflow_compensation_runs_compensation_id_fail_9f822afc
       summary: Retry or deadletter a failed compensation action
       responses:
         '200':
           description: Compensation action retried or deadlettered
   /v1/agent-studio/catalog:
     get:
+      operationId: get_v1_agent_studio_catalog_4d81e7bd
       summary: Read the complete Agent Studio operator feed
       parameters:
       - name: project_id
@@ -14798,6 +15266,7 @@ paths:
           and A2A health/feed: null
   /v1/agent-studio/catalog-smoke:
     post:
+      operationId: post_v1_agent_studio_catalog_smoke_ca300d6c
       summary: Deterministically test every active Agent Studio catalog version
       requestBody:
         required: true
@@ -14824,6 +15293,7 @@ paths:
           description: Catalog is too large or an agent version is invalid
   /v1/agent-studio/catalog/seed:
     post:
+      operationId: post_v1_agent_studio_catalog_seed_1c592090
       summary: Explicitly install the idempotent, zero-effect BOSS Agent Studio starter
         catalog for a project
       requestBody:
@@ -14851,6 +15321,7 @@ paths:
             or policy is absent
   /v1/agent-studio/workflows/validate:
     post:
+      operationId: post_v1_agent_studio_workflows_validate_cfcd3d1c
       summary: Validate and normalize a Workflow draft without publishing or executing
         it
       responses:
@@ -14866,6 +15337,7 @@ paths:
           or schema: null
   /v1/agent-studio/agents:
     get:
+      operationId: get_v1_agent_studio_agents_0c4a4b28
       summary: List versioned AgentDefinitions
       parameters:
       - name: project_id
@@ -14877,6 +15349,7 @@ paths:
         '200':
           description: AgentDefinition list with active immutable versions
     post:
+      operationId: post_v1_agent_studio_agents_0a1fcbec
       summary: Create an AgentDefinition
       responses:
         '200':
@@ -14885,6 +15358,7 @@ paths:
           description: Invalid or duplicate definition
   /v1/agent-studio/agents/{agent_id}/versions:
     post:
+      operationId: post_v1_agent_studio_agents_agent_id_versions_e2be2f9b
       summary: Create an immutable draft AgentVersion with model, prompt, rule, skill,
         scope, limit, and A2A policy
       parameters:
@@ -14898,6 +15372,7 @@ paths:
           description: Draft AgentVersion
   /v1/agent-studio/agent-versions/{version_id}/validate:
     post:
+      operationId: post_v1_agent_studio_agent_versions_version_id_validate_60ffd208
       summary: Compile and validate the effective AgentVersion authority envelope
       parameters:
       - name: version_id
@@ -14910,6 +15385,7 @@ paths:
           description: Deterministic validation result
   /v1/agent-studio/agent-versions/{version_id}/publish:
     post:
+      operationId: post_v1_agent_studio_agent_versions_version_id_publish_3af850ac
       summary: Publish and activate a validated immutable AgentVersion
       parameters:
       - name: version_id
@@ -14924,6 +15400,7 @@ paths:
           description: Validation or lifecycle gate failed
   /v1/agent-studio/agent-versions/{version_id}/tests:
     post:
+      operationId: post_v1_agent_studio_agent_versions_version_id_tests_cbd5b38f
       summary: Run the zero-effect deterministic Agent Studio test bench
       parameters:
       - name: version_id
@@ -14936,6 +15413,7 @@ paths:
           description: Persisted test assertions and evidence
   /v1/agent-studio/agent-versions/{version_id}/runs:
     post:
+      operationId: post_v1_agent_studio_agent_versions_version_id_runs_04287102
       summary: Queue a published AgentVersion as a governed leased job
       parameters:
       - name: version_id
@@ -14948,6 +15426,7 @@ paths:
           description: Queued or explicitly blocked Agent Studio run
   /v1/agent-studio/panels:
     get:
+      operationId: get_v1_agent_studio_panels_1be1020c
       summary: List executable PanelDefinitions
       parameters:
       - name: project_id
@@ -14959,12 +15438,14 @@ paths:
         '200':
           description: PanelDefinition list with active versions
     post:
+      operationId: post_v1_agent_studio_panels_7d1c0872
       summary: Create a PanelDefinition
       responses:
         '200':
           description: Created PanelDefinition
   /v1/agent-studio/panels/{panel_id}/versions:
     post:
+      operationId: post_v1_agent_studio_panels_panel_id_versions_5367c702
       summary: Create a PanelVersion with pinned agents, topology, quorum, evidence,
         consolidation, and dissent rules
       parameters:
@@ -14978,6 +15459,7 @@ paths:
           description: Draft PanelVersion
   /v1/agent-studio/panel-versions/{version_id}/publish:
     post:
+      operationId: post_v1_agent_studio_panel_versions_version_id_publish_6d3d9564
       summary: Publish and activate a validated immutable PanelVersion
       parameters:
       - name: version_id
@@ -14990,6 +15472,7 @@ paths:
           description: Published PanelVersion
   /v1/agent-studio/panel-versions/{version_id}/runs:
     post:
+      operationId: post_v1_agent_studio_panel_versions_version_id_runs_bc6d417d
       summary: Fan out a Panel run into governed member jobs and attributed consolidation
       parameters:
       - name: version_id
@@ -15002,6 +15485,7 @@ paths:
           description: Panel run and member runs
   /v1/a2a/channels:
     get:
+      operationId: get_v1_a2a_channels_be5ca5f5
       summary: List governed project A2A channels
       parameters:
       - name: project_id
@@ -15013,12 +15497,14 @@ paths:
         '200':
           description: Channel list and message/subscriber counts
     post:
+      operationId: post_v1_a2a_channels_fb16be5e
       summary: Create an A2A channel and its schema/retention boundary
       responses:
         '200':
           description: A2A channel
   /v1/a2a/subscriptions:
     post:
+      operationId: post_v1_a2a_subscriptions_ba8bc64b
       summary: Bind a durable Redis consumer group to an agent, panel, workflow, worker,
         system, or operator
       responses:
@@ -15026,6 +15512,7 @@ paths:
           description: A2A subscription
   /v1/a2a/messages:
     get:
+      operationId: get_v1_a2a_messages_6af55051
       summary: Inspect durable A2A envelopes by status or trace
       parameters:
       - name: project_id
@@ -15053,12 +15540,14 @@ paths:
         '200':
           description: Durable A2A envelope list
     post:
+      operationId: post_v1_a2a_messages_624988a4
       summary: Persist an A2A envelope, deliveries, outbox item, and dispatch job
       responses:
         '200':
           description: Queued envelope; duplicate dedupe keys reuse the original
   /v1/a2a/messages/{message_id}/dispatch:
     post:
+      operationId: post_v1_a2a_messages_message_id_dispatch_b85d5fec
       summary: Receipt-backed Redis XADD authorized by an active worker lease
       parameters:
       - name: message_id
@@ -15075,6 +15564,7 @@ paths:
           description: Redis transport unavailable; durable retry state retained
   /v1/a2a/messages/{message_id}/cancel:
     post:
+      operationId: post_v1_a2a_messages_message_id_cancel_1a0fa2a5
       summary: Cancel a non-terminal envelope, its pending deliveries, and dispatch
         job
       parameters:
@@ -15090,6 +15580,7 @@ paths:
           description: Terminal envelopes must be replayed rather than cancelled
   /v1/a2a/messages/{message_id}/replay:
     post:
+      operationId: post_v1_a2a_messages_message_id_replay_33360210
       summary: Replay a terminal envelope with a new dedupe key and causation lineage
       parameters:
       - name: message_id
@@ -15104,6 +15595,7 @@ paths:
           description: Source envelope is not terminal
   /v1/a2a/poll:
     post:
+      operationId: post_v1_a2a_poll_d45d0151
       summary: Claim bounded A2A deliveries through a durable consumer group
       responses:
         '200':
@@ -15112,6 +15604,7 @@ paths:
           description: Redis transport unavailable
   /v1/a2a/deliveries/{delivery_id}/acknowledge:
     post:
+      operationId: post_v1_a2a_deliveries_delivery_id_acknowledge_1376a303
       summary: Persist an actor-bound acknowledgement and receipt-backed Redis XACK
       parameters:
       - name: delivery_id
@@ -15128,6 +15621,7 @@ paths:
           description: Acknowledgement actor does not own the subscription
   /v1/a2a/health:
     get:
+      operationId: get_v1_a2a_health_0be9ac44
       summary: Inspect Redis transport and canonical A2A ledger health
       parameters:
       - name: project_id
@@ -15141,6 +15635,7 @@ paths:
             counts
   /v1/a2a/audit:
     get:
+      operationId: get_v1_a2a_audit_c8646716
       summary: Inspect A2A envelopes, deliveries, and transport attempts for troubleshooting
       parameters:
       - name: project_id
@@ -15159,6 +15654,7 @@ paths:
           description: A2A audit feed
   /v1/work-orchestration/overview:
     get:
+      operationId: get_v1_work_orchestration_overview_1ceb5f9a
       summary: Inspect ranked work, quotas, allocations, jobs, tracker bindings, and
         delivery presence
       parameters:
@@ -15172,6 +15668,7 @@ paths:
           description: Embedded work-orchestration operator read model
   /v1/work-orchestration/items:
     post:
+      operationId: post_v1_work_orchestration_items_f084d7a5
       summary: Score a canonical work item, bind it to the default tracker, allocate
         capacity, and queue synchronization
       responses:
@@ -15186,6 +15683,7 @@ paths:
           or unavailable quota: null
   /v1/work-orchestration/items/{work_item_id}/admission:
     post:
+      operationId: post_v1_work_orchestration_items_work_item_id_admission_f5570401
       summary: Evaluate a non-mutating budget and autonomy admission gate for work
       parameters:
       - name: work_item_id
@@ -15203,6 +15701,7 @@ paths:
           description: Invalid request or work item
   /v1/work-orchestration/quotas:
     post:
+      operationId: post_v1_work_orchestration_quotas_060f1386
       summary: Create or update a bounded resource quota
       responses:
         '200':
@@ -15211,12 +15710,14 @@ paths:
           description: Invalid scope or limit relationship
   /v1/work-orchestration/allocations/plan:
     post:
+      operationId: post_v1_work_orchestration_allocations_plan_430914e8
       summary: Rebalance project capacity in effective-score order
       responses:
         '200':
           description: Deterministic allocation plan with granted and throttled work
   /v1/work-trackers/catalog:
     get:
+      operationId: get_v1_work_trackers_catalog_82c724eb
       summary: Catalog of work/bug trackers (Plane default + Jira, Linear, GitHub
         Issues, Azure DevOps)
       responses:
@@ -15224,6 +15725,7 @@ paths:
           description: Provider catalog with connection field schemas
   /v1/work-trackers:
     get:
+      operationId: get_v1_work_trackers_0d9b5d0f
       summary: List installed tracker providers for a project
       parameters:
       - name: project_id
@@ -15236,6 +15738,7 @@ paths:
           description: Providers with default flag and redacted configuration
   /v1/work-trackers/connect:
     post:
+      operationId: post_v1_work_trackers_connect_6acf1900
       summary: Connect/configure a work tracker and optionally set as default
       requestBody:
         required: true
@@ -15275,6 +15778,7 @@ paths:
           description: Validation or connection test failed
   /v1/work-trackers/set-default:
     post:
+      operationId: post_v1_work_trackers_set_default_3cbfdfbb
       summary: Select the project default work tracker (Plane is seed default)
       requestBody:
         required: true
@@ -15297,6 +15801,7 @@ paths:
           description: Updated default provider
   /v1/work-trackers/test:
     post:
+      operationId: post_v1_work_trackers_test_a737be53
       summary: Test connectivity for a configured tracker
       requestBody:
         required: true
@@ -15319,6 +15824,7 @@ paths:
           description: Connection test result
   /v1/work-orchestration/tracker-bindings:
     post:
+      operationId: post_v1_work_orchestration_tracker_bindings_4cb1f41a
       summary: Bind work to an installed tracker plugin and queue provider synchronization
         when needed
       responses:
@@ -15328,6 +15834,7 @@ paths:
           description: Work item or tracker plugin is unavailable
   /v1/work-orchestration/tracker-sync/execute:
     post:
+      operationId: post_v1_work_orchestration_tracker_sync_execute_789bb1f4
       summary: Execute a receipt-backed tracker write authorized by an active worker
         lease
       responses:
@@ -15337,18 +15844,21 @@ paths:
           description: Lease or tracker binding does not authorize the write
   /v1/work-orchestration/bot-identities:
     post:
+      operationId: post_v1_work_orchestration_bot_identities_abf08307
       summary: Register a governed Plane, GitHub, or Mattermost bot identity
       responses:
         '200':
           description: Delivery bot identity without secret material
   /v1/work-orchestration/status-channels:
     post:
+      operationId: post_v1_work_orchestration_status_channels_5db3255e
       summary: Register a delivery-status channel and its event/data-boundary policy
       responses:
         '200':
           description: Delivery status channel
   /v1/work-orchestration/presence-events:
     post:
+      operationId: post_v1_work_orchestration_presence_events_c43c4bbb
       summary: Record a deduplicated ticket, pull-request, deployment, or bot presence
         event
       responses:
@@ -15356,6 +15866,7 @@ paths:
           description: Delivery presence event
   /v1/diag/sandbox-roundtrip:
     get:
+      operationId: get_v1_diag_sandbox_roundtrip_2da6cd82
       summary: Diagnose sandbox host connectivity with a non-destructive roundtrip
       description: 'Run a submit->poll round-trip to the sandbox-service FROM INSIDE
         this container,
@@ -15375,6 +15886,7 @@ paths:
                 title: Response Diag Sandbox Roundtrip V1 Diag Sandbox Roundtrip Get
   /v1/factory/chunk-plan:
     post:
+      operationId: post_v1_factory_chunk_plan_dd4d73f4
       summary: Plan chunked factory work units for a governed code task
       description: Split a plan/spec into small, independently-shippable PR chunks
         (spec §E spec→chunk planner).
@@ -15401,6 +15913,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/factory/merge-check:
     post:
+      operationId: post_v1_factory_merge_check_68d24452
       summary: Evaluate merge readiness for a factory-produced change
       description: Preview the fail-closed quality gate + merge-confidence verdict
         (spec §E confidence-gated merge).
@@ -15427,6 +15940,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/factory/quality-gate:
     post:
+      operationId: post_v1_factory_quality_gate_c4c63119
       summary: Run factory quality gates over a code-task evidence pack
       description: 'Evaluate + persist a quality gate (explicit lint + CI-green, second-model
         cross-check,
@@ -15455,6 +15969,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/factory/wip:
     get:
+      operationId: get_v1_factory_wip_fe6a3b4e
       summary: List factory work-in-progress code tasks and gates
       description: 'In-flight code tasks vs the per-project WIP limit; admit a new
         task only if a slot is free
@@ -15491,6 +16006,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/github/repository-activity:
     get:
+      operationId: get_v1_github_repository_activity_fc86c393
       summary: Summarize BOSS GitHub activity (PRs, runs, cost) per project repo
       description: 'What BOSS DID in each repo — runs, PRs opened/merged, success
         + first-pass rates,
@@ -15527,6 +16043,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/orchestration/next-move/execute:
     post:
+      operationId: post_v1_orchestration_next_move_execute_be0b9f85
       summary: Execute the orchestrator next_move job for a plan or task
       description: Worker-only boundary for leased agent.orchestrator.next_move jobs
         (BOSS-345).
@@ -15554,6 +16071,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews/{preview_id}/smoke:
     post:
+      operationId: post_v1_previews_preview_id_smoke_342f6bd2
       summary: Run a smoke check against a live preview environment
       description: 'Tier-3 smoke canary: assert the live preview actually works (key
         routes), record a receipt.'
@@ -15587,6 +16105,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews/{preview_id}/stop:
     post:
+      operationId: post_v1_previews_preview_id_stop_f4a2ecf9
       summary: Stop a running preview environment
       description: Tear down a running preview.
       parameters:
@@ -15619,6 +16138,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews/{preview_id}/web:
     put:
+      operationId: put_v1_previews_preview_id_web_e9fa6756
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15654,6 +16174,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     delete:
+      operationId: delete_v1_previews_preview_id_web_a08a3ed1
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15689,6 +16210,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_previews_preview_id_web_f558fb5e
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15724,6 +16246,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     patch:
+      operationId: patch_v1_previews_preview_id_web_39b62107
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15759,6 +16282,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     get:
+      operationId: get_v1_previews_preview_id_web_5b580399
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15795,6 +16319,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /v1/previews/{preview_id}/web/{path}:
     put:
+      operationId: put_v1_previews_preview_id_web_path_36e1bc2f
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15829,6 +16354,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     delete:
+      operationId: delete_v1_previews_preview_id_web_path_087d4bfc
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15863,6 +16389,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
+      operationId: post_v1_previews_preview_id_web_path_97d9bf8f
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15897,6 +16424,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     patch:
+      operationId: patch_v1_previews_preview_id_web_path_c7a12208
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -15931,6 +16459,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     get:
+      operationId: get_v1_previews_preview_id_web_path_6a825b2f
       summary: Preview Web Proxy
       description: 'Browser-facing reverse proxy to a running preview''s loopback
         port — lets a preview be opened
@@ -55232,11 +55761,6 @@ components:
         type:
           type: string
           title: Error Type
-        input:
-          title: Input
-        ctx:
-          type: object
-          title: Context
       type: object
       required:
       - loc

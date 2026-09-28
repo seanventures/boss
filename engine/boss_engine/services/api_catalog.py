@@ -11,6 +11,21 @@ from typing import Any, Optional
 
 # Domain taxonomy used by docs + /v1/meta/api-catalog
 API_DOMAINS: dict[str, dict[str, Any]] = {
+    "workspace": {
+        "title": "Organizations & projects",
+        "description": "Organizations, projects, departments, and operator settings.",
+        "prefixes": ["/v1/projects", "/v1/orgs", "/v1/departments", "/v1/settings"],
+    },
+    "setup": {
+        "title": "Setup & installation",
+        "description": "First-run setup, bootstrap, and local configuration checks.",
+        "prefixes": ["/v1/setup", "/v1/bootstrap"],
+    },
+    "console": {
+        "title": "Executive console",
+        "description": "Dashboard and console read models for operators.",
+        "prefixes": ["/v1/console"],
+    },
     "meta": {
         "title": "Meta & discovery",
         "description": "Edition, health, OpenAPI, API catalog, capabilities.",
@@ -217,13 +232,89 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
 }
 
 
+# The prefix taxonomy above keeps major domains together. Every remaining
+# first-level resource in the mounted contract is assigned here, so a terminal
+# or MCP catalog does not bury real capabilities in a 200-operation "other"
+# bucket. This exact-segment fallback avoids an accidental prefix match such
+# as /v1/agent matching /v1/agent-processes.
+RESOURCE_DOMAINS = {
+    "ai-sre": "ops",
+    "agent-processes": "agents",
+    "preview-sandboxes": "delivery",
+    "captain": "agents",
+    "factory": "delivery",
+    "focused-agents": "agents",
+    "channels": "ops",
+    "investigations": "ops",
+    "discoveries": "knowledge",
+    "packs": "agents",
+    "agent-modules": "agents",
+    "process-manager": "agents",
+    "event-subscriptions": "core",
+    "meeting-roles": "agents",
+    "artifacts": "core",
+    "role-skills": "agents",
+    "safety": "governance",
+    "pipeline-profiles": "delivery_cicd",
+    "memory": "knowledge",
+    "skill-definitions": "agents",
+    "router": "models",
+    "iac": "delivery",
+    "audit": "core",
+    "email": "ops",
+    "self": "auth",
+    "kpis": "core",
+    "policies": "governance",
+    "health-snapshots": "ops",
+    "metrics": "ops",
+    "ops": "ops",
+    "entitlement-pools": "models",
+    "model-route-decisions": "models",
+    "entitlement-connection-sessions": "models",
+    "docs": "meta",
+    "change-journal": "core",
+    "concurrency": "ops",
+    "activity": "core",
+    "pdf": "delivery",
+    "outputs": "delivery",
+    "integrations": "governance",
+    "meeting-rooms": "agents",
+    "prd": "delivery",
+    "web-app": "delivery",
+    "feedback-threads": "work",
+    "bakeoff": "ops",
+    "verifier-meta-eval": "ops",
+    "verifier-ratchet": "ops",
+    "mutation-gate": "governance",
+    "repair-policy": "governance",
+    "scaffold": "delivery",
+    "visual-gate": "ops",
+    "concurrency-load": "ops",
+    "approval-rules": "governance",
+    "status": "meta",
+    "orchestration": "work",
+    "agent-module-install-records": "agents",
+    "agent-runtime": "agents",
+    "model-adapters": "models",
+    "costs": "providers",
+    "cost-anomalies": "providers",
+    "drift-reports": "providers",
+    "reconciliation-runs": "providers",
+    "trace": "ops",
+    "openai": "models",
+    "compliance": "governance",
+    "marketplace": "cloud",
+}
+
+
 def classify_path(path: str) -> str:
     for domain, meta in API_DOMAINS.items():
         for prefix in meta["prefixes"]:
             if path == prefix or path.startswith(prefix):
                 return domain
     if path.startswith("/v1/"):
-        return "other"
+        resource = path.split("/", 3)[2]
+        return RESOURCE_DOMAINS.get(resource, "other")
     return "system"
 
 

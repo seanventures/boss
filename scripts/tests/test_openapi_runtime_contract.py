@@ -42,6 +42,48 @@ def test_community_schema_has_unique_stable_operation_ids():
     assert len(operation_ids) == len(set(operation_ids))
 
 
+def test_private_schema_names_every_operation_uniquely():
+    document = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())
+    operations = [
+        operation
+        for path_item in document["paths"].values()
+        for method, operation in path_item.items()
+        if method in {"get", "post", "put", "patch", "delete", "head", "options"}
+    ]
+    operation_ids = [operation.get("operationId") for operation in operations]
+    assert all(operation_ids)
+    assert len(operation_ids) == len(set(operation_ids))
+
+
+def test_live_openapi_names_mounted_operations_without_shadowed_handlers():
+    from fastapi.routing import APIRoute
+
+    from apps.api.app.main import app
+    from boss_engine.services.api_operation_ids import stable_operation_id
+
+    document = app.openapi()
+    ids = []
+    for path, path_item in document["paths"].items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            operation_id = operation["operationId"]
+            assert operation_id == stable_operation_id(method, path)
+            ids.append(operation_id)
+    assert len(ids) == len(set(ids))
+
+    handlers = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            key = (method, route.path)
+            assert key not in handlers, f"{key} is shadowed by two route handlers"
+            handlers.add(key)
+
+
 def test_cloud_contract_keeps_local_reads_and_excludes_hosted_operations():
     community = yaml.safe_load((ROOT / "api/openapi.community.yaml").read_text())["paths"]
     private = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())["paths"]

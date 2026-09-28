@@ -10,7 +10,6 @@ and their model schemas cannot leak through a path-only filter.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import re
 import sys
@@ -20,9 +19,14 @@ import yaml
 from sync_openapi_from_routes import splice_new_methods, splice_new_paths
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "engine"))
+from boss_engine.services.api_operation_ids import (  # noqa: E402
+    HTTP_METHODS,
+    stable_operation_ids,
+)
+
 PRIVATE_SCHEMA = ROOT / "api/openapi.yaml"
 COMMUNITY_SCHEMA = ROOT / "api/openapi.community.yaml"
-HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 
 def mounted_schema(edition: str) -> dict:
@@ -34,21 +38,6 @@ def mounted_schema(edition: str) -> dict:
     return app.openapi()
 
 
-def stable_operation_ids(document: dict) -> None:
-    """Avoid FastAPI's unstable set-method order for multi-method routes."""
-    for path, operations in document["paths"].items():
-        # FastAPI iterates a set for multi-method routes. Canonical ordering
-        # makes repeated generation byte-for-byte stable across processes.
-        document["paths"][path] = dict(sorted(operations.items()))
-        operations = document["paths"][path]
-        for method, operation in operations.items():
-            if method not in HTTP_METHODS:
-                continue
-            slug = re.sub(r"[^a-z0-9]+", "_", f"{method}_{path}".lower()).strip("_")
-            digest = hashlib.sha256(f"{method} {path}".encode()).hexdigest()[:8]
-            operation["operationId"] = f"{slug[:68]}_{digest}"
-
-
 def operations(document: dict) -> set[tuple[str, str]]:
     return {
         (method, path)
@@ -56,6 +45,43 @@ def operations(document: dict) -> set[tuple[str, str]]:
         for method in path_item
         if method in HTTP_METHODS
     }
+
+
+def add_missing_private_operation_ids(rendered: str, mounted: dict) -> str:
+    """Complete curated operations without rewriting their existing IDs or prose."""
+    existing = yaml.safe_load(rendered)
+    missing = {
+        (path, method): mounted["paths"][path][method]["operationId"]
+        for path, path_item in existing["paths"].items()
+        for method, operation in path_item.items()
+        if method in HTTP_METHODS and not operation.get("operationId")
+    }
+    if not missing:
+        return rendered
+
+    out: list[str] = []
+    current_path: str | None = None
+    for line in rendered.splitlines(keepends=True):
+        path_match = re.fullmatch(r"  (/[^\n:]+):\s*\n", line)
+        if path_match:
+            current_path = path_match.group(1)
+        elif line and not line[0].isspace() and not line.startswith("paths:"):
+            current_path = None
+        out.append(line)
+        method_match = re.fullmatch(r"    (get|post|put|patch|delete|head|options):\s*\n", line)
+        if current_path and method_match:
+            operation_id = missing.get((current_path, method_match.group(1)))
+            if operation_id:
+                out.append(f"      operationId: {operation_id}\n")
+    updated = "".join(out)
+    if any(
+        not operation.get("operationId")
+        for path_item in yaml.safe_load(updated)["paths"].values()
+        for method, operation in path_item.items()
+        if method in HTTP_METHODS
+    ):
+        raise ValueError("private contract still has unnamed operations")
+    return updated
 
 
 def render_private(original: str, existing: dict, mounted: dict) -> str:
@@ -118,6 +144,7 @@ def render_private(original: str, existing: dict, mounted: dict) -> str:
         "OpenAPI document version aligned to product 0.13.0 (was 0.2.1).",
         "BOSS Control Plane API for the current 0.14.0 product release.",
     )
+    rendered = add_missing_private_operation_ids(rendered, mounted)
     return "\n".join(line.rstrip() for line in rendered.splitlines()) + "\n"
 
 

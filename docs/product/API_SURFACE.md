@@ -4,7 +4,7 @@
 **Human docs index:** [`docs/api/README.md`](../api/README.md)  
 **Live discovery:** `GET /v1/meta/api-catalog`  
 **Coverage report:** `GET /v1/meta/openapi-coverage`  
-**Machine schema:** `/openapi.json` · `api/openapi.yaml` in the source checkout\
+**Machine schema:** `/openapi.json` · `api/openapi.yaml` in the source checkout
 **Generated route list:** [`docs/api/ROUTE_INDEX.md`](../api/ROUTE_INDEX.md)
 
 ---
@@ -45,6 +45,21 @@ The control plane API is the primary product surface. `apps/web` is a client, no
 | Ops | `/v1/reliability`, `/dashboard`, `/qa`, `/diag` | [docs/api/README.md](../api/README.md) + OpenAPI |
 
 Domain taxonomy for the live catalog is defined in `engine/boss_engine/services/api_catalog.py`.
+Every mounted `/v1` resource in the current Community and Enterprise contracts
+has a named domain; new routes must be classified before their contract check
+passes.
+
+## Operation identity
+
+The authoritative coverage key is **HTTP method plus path**. Live
+`/openapi.json` assigns each operation a stable ID from that pair, including
+multi-method preview routes. The generated Community contract uses the same
+IDs. The private curated contract retains existing published IDs and fills
+previously unnamed operations; clients reconciling editions should compare
+method and path. As of the 0.14.0 contract, Community mounts 981 operations
+and Enterprise mounts 1,022. TUI and MCP discovery can use this inventory,
+while the API remains the authority for authentication, project scope, edition
+gates, approval, budget, and receipts.
 
 ---
 

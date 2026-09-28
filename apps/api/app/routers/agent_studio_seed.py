@@ -266,12 +266,6 @@ def _seed_catalog(payload: SeedCatalogRequest) -> dict[str, Any]:
         return result
 
 
-@router.post("/v1/agent-studio/catalog/seed")
-def seed_agent_studio_catalog(payload: SeedCatalogRequest) -> dict[str, Any]:
-    """Canonical starter-catalog install. Definitions only; no live launch."""
-    return _seed_catalog(payload)
-
-
 @router.post("/v1/agent-studio/seed")
 def seed_agent_studio_catalog_alias(payload: SeedCatalogRequest) -> dict[str, Any]:
     """Alias for operators who hit ``/v1/agent-studio/seed`` instead of catalog/seed."""

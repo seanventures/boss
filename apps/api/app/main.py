@@ -23884,10 +23884,9 @@ def seed_agent_studio_catalog(
 ) -> dict[str, Any]:
     """Install the reviewed SpecPack starter catalog into one project.
 
-    Delegates to the isolated Community seed router so honesty fields
+    Delegates to the isolated Community seed service so honesty fields
     (model_calls/jobs/budget/receipt) and schema-missing 503 stay in one
-    place. FastAPI matches this main.py route first; do not let it shadow
-    the stamp-path contract.
+    place. This is the only registered route at the canonical path.
     """
     from .routers.agent_studio_seed import SeedCatalogRequest, _seed_catalog
 
@@ -25383,3 +25382,32 @@ if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:
     register_soc2_route(app, engine, settings, require_project_actor)
     paid_router = enterprise_router
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
+
+
+# FastAPI gives a multi-method route one ID for all of its methods. The public
+# OpenAPI contract must give each HTTP operation its own stable name so TUI,
+# MCP, generated clients, and humans can address the same capability.
+_native_openapi = app.openapi
+
+
+def _openapi_with_stable_operation_ids() -> dict[str, Any]:
+    import warnings
+
+    from boss_engine.services.api_operation_ids import stable_operation_ids
+
+    # The preview proxy intentionally accepts several verbs on one route.
+    # FastAPI warns while assigning one temporary ID to all of them; below we
+    # replace those IDs with distinct method+path names before publication.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Duplicate Operation ID preview_web_proxy_",
+            category=UserWarning,
+            module=r"fastapi\.openapi\.utils",
+        )
+        document = _native_openapi()
+    stable_operation_ids(document)
+    return document
+
+
+app.openapi = _openapi_with_stable_operation_ids
