@@ -32,6 +32,7 @@ const PORTS = [
   ["BOSS_API_PORT", 8000, "api"],
   ["BOSS_WEB_PORT", 3000, "console"],
 ];
+const BUILD_STAMPS = new Map();
 
 const step = (n, what) => console.log(`\n[${n}/6] ${what}`);
 const ok = (what) => console.log(`      ✓ ${what}`);
@@ -283,6 +284,7 @@ function composeStream(root, envFile, args) {
 }
 
 function buildStamp(root) {
+  if (BUILD_STAMPS.has(root)) return BUILD_STAMPS.get(root);
   let sha = "unknown";
   try {
     sha = execFileSync("git", ["-C", root, "rev-parse", "--short", "HEAD"],
@@ -291,7 +293,37 @@ function buildStamp(root) {
                                { encoding: "utf8" }).trim();
     if (dirty) sha += "-dirty";          // a developer's working tree is not a commit
   } catch { /* not a clone, or no git — "unknown" is the honest answer */ }
-  return { BOSS_SOURCE_SHA: sha, BOSS_BUILT_AT: new Date().toISOString() };
+  const stamp = { BOSS_SOURCE_SHA: sha, BOSS_BUILT_AT: new Date().toISOString() };
+  BUILD_STAMPS.set(root, stamp);
+  return stamp;
+}
+
+/** Build all images first, then seed the API before any worker tick can run. */
+async function startSeededStack(root, envFile, apiPort, {
+  stream = composeStream,
+  command = compose,
+  wait = waitFor,
+  fail = die,
+} = {}) {
+  step(2, "Building containers and starting the database and API (first run takes a few minutes)");
+  const built = await stream(root, envFile, [...PROFILES, "build"]);
+  if (built !== 0) fail("docker compose could not build the stack.");
+  const core = await stream(root, envFile, [...PROFILES, "up", "-d", "db", "api"]);
+  if (core !== 0) fail("docker compose could not start the database and API.");
+  await wait(`http://127.0.0.1:${apiPort}/health`, 240, "The API");
+  ok("database and API ready");
+
+  step(3, "Creating the database contents");
+  const seed = command(root, envFile, ["exec", "-T", "api", "python", "-m", "boss_engine", "bootstrap"], {
+    capture: true,
+  });
+  if (seed.status !== 0) fail("Could not seed the database.", (seed.stderr || "").trim().slice(-300));
+  ok("schema applied and defaults seeded");
+
+  step(4, "Starting the worker, console, and secret store");
+  const all = await stream(root, envFile, [...PROFILES, "up", "-d"]);
+  if (all !== 0) fail("docker compose could not start the stack.");
+  ok("all containers up");
 }
 
 /**
@@ -404,20 +436,10 @@ async function main() {
   setEnv(envFile, { ...chosen, INFISICAL_SITE_URL: `http://127.0.0.1:${chosen.INFISICAL_PORT}` });
   ok("ports chosen");
 
-  step(2, "Building and starting containers (first run takes a few minutes)");
-  const up = await composeStream(root, envFile, [...PROFILES, "up", "-d", "--build"]);
-  if (up !== 0) die("docker compose could not start the stack.");
-  await waitFor(`http://127.0.0.1:${chosen.BOSS_API_PORT}/health`, 240, "The API");
-  ok("all containers up");
+  await startSeededStack(root, envFile, chosen.BOSS_API_PORT);
 
-  step(3, "Creating the database contents");
-  const seed = compose(root, envFile, ["exec", "-T", "api", "python", "-m", "boss_engine", "bootstrap"], {
-    capture: true,
-  });
-  if (seed.status !== 0) die("Could not seed the database.", (seed.stderr || "").trim().slice(-300));
-  ok("schema applied and defaults seeded");
-
-  step(4, "Provisioning the secret store");
+  // The full stack is running only after the project and its default members exist.
+  // The secret store comes up in that second start and can now be provisioned.
   const port = chosen.INFISICAL_PORT;
 
   // DIAGNOSE WHILE WAITING, not after. A store that will never come up looks exactly like one
@@ -512,4 +534,8 @@ into on this machine still has to be sent across: that is Path C, not Path B.
 `);
 }
 
-main().catch((error) => die(error && error.message ? error.message : String(error)));
+if (require.main === module) {
+  main().catch((error) => die(error && error.message ? error.message : String(error)));
+}
+
+module.exports = { startSeededStack };

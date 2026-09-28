@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Stand up BOSS locally: control plane, console, and a real secret store.",
   "bin": { "create-boss": "index.js" },
+  "scripts": { "test": "node --test" },
   "type": "commonjs",
   "engines": { "node": ">=18" },
   "files": ["index.js", "README.md", "LICENSE"],
