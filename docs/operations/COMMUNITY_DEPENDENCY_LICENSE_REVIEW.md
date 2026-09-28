@@ -1,9 +1,10 @@
 # Community dependency and notice review — BOSS-300 / BOSS-293
 
-**Status (2026-09-28): preliminary inventory; PF-1 and PF-4 remain open.**
-This records packages observed in the integration checkout. It is not an audit
-of the final Linux images, a third-party notice, or a legal compatibility
-decision. Re-run against the exact export and built images before publication.
+**Status (2026-09-28): interim image inventory; PF-1 and PF-4 remain open.**
+The source checkout and the first x86 Linux export candidate were inspected.
+That candidate failed first-install completion and has since changed. These
+findings are review inputs, not third-party notice clearance or a legal
+compatibility decision. Re-run against the final export and built images.
 
 ## Evidence collected
 
@@ -28,14 +29,47 @@ decision. Re-run against the exact export and built images before publication.
   review inputs; the precise distributed versions and files still need
   confirmation from the final image.
 
+## First x86 image candidate (`327b58f2`, superseded)
+
+The [sanitized VM report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-vm-qualification-327b58f2.md)
+records image identities and inspection limits. Its [Python and web package
+inventory](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-runtime-licenses-327b58f2.json),
+[global npm inventory](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-global-npm-licenses-327b58f2.json),
+and [Debian notice inventory](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-os-notices-327b58f2.json)
+are retained outside the proposed public tree.
+
+- API and worker each have 59 Python distributions. `psycopg` and
+  `psycopg-binary` report LGPLv3, `certifi` MPL-2.0, and `tqdm` MPL-2.0 AND
+  MIT. `setuptools` lacks a license metadata field. The web runtime has 103
+  unique pnpm packages, including both x64 glibc and musl
+  `@img/sharp-libvips` 1.2.4 packages under LGPL-3.0-or-later. Their package
+  roots have no separate LICENSE/NOTICE/COPYING file in the inspected depth;
+  their READMEs list native library licenses.
+- The API image also has 207 globally installed npm entries, including
+  Claude Code 2.1.197 (`SEE LICENSE IN README.md`) and Codex 0.158.0
+  (Apache-2.0). The Claude README points to commercial terms. Both API and
+  web global npm trees contain `qrcode-terminal` without a license metadata
+  field. Review CLI redistribution and missing metadata with counsel.
+- The API image has 354 Debian packages and the web image 88. Installed
+  `/usr/share/doc/*/copyright` files resolve for all inventoried packages.
+  API Debian `ffmpeg` 5.1.9 reports GPL version 2 or later and an
+  `--enable-gpl` build with libx264 and libx265. The Playwright browser tree
+  has a headless-shell notice and ffmpeg LGPL notice; the full Chromium tree
+  lacked a general LICENSE/NOTICE in the inspected paths. API copies a Node
+  binary but does not copy the Node license file present in the web image.
+
+Package metadata and notice-path searches do not establish redistribution
+rights, source-offer compliance, or completeness for bundled native binaries.
+
 ## Required disposition before PF-1/PF-4 can close
 
-1. Inventory the exact x86 Linux web, API and worker images, including Node,
-   Python, operating-system packages and bundled binary libraries. Distinguish
-   runtime packages from build-only tools and optional platforms.
+1. Repeat the package and notice inventory on the final x86 Linux web, API and
+   worker images. Distinguish runtime packages from build-only tools and
+   optional platforms.
 2. Check each distributed package's license and included text. Preserve required
    copyright, license and attribution notices in the shipped artifact; review
-   `psycopg[binary]`, sharp/libvips and `caniuse-lite` explicitly with counsel.
+   `psycopg[binary]`, sharp/libvips, `caniuse-lite`, packaged coding CLIs,
+   Debian ffmpeg, Node and Playwright browser binaries explicitly with counsel.
 3. Review the Community `LICENSE`, package metadata, Goldeneye kit terms and
    any final `NOTICE` against the exact export. Record the reviewer, evidence
    hashes and disposition on Plane BOSS-300 and BOSS-293.
