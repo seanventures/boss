@@ -150,11 +150,15 @@ def test_legacy_callback_cannot_reach_host_or_db_write(edition, monkeypatch):
     assert operation["ok"] is False and "unavailable" in operation["error"]
 
 
-def test_legacy_callback_still_allows_a_read_only_query(engine, monkeypatch):
+def test_legacy_callback_holds_read_only_query_without_project_policy(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "boss_edition", "local")
     record = {"id": "inv_legacy", "project_id": PROJECT,
               "actor": "ceo", "allow_fix": True}
-    with engine.begin() as connection:
-        result = debug_session.run_db(connection, record, "SELECT 1 AS answer")
-    assert result == {"ok": True, "rows": [{"answer": 1}], "truncated": False}
+    class NoDatabase:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("project-scoped SQL reached the database")
+
+    result = debug_session.run_db(NoDatabase(), record, "SELECT 1 AS answer")
+    assert result["ok"] is False
+    assert "raw SQL is unavailable" in result["error"]

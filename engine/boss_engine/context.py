@@ -40,6 +40,9 @@ class EngineContext:
     # durable workspace: without the latter, catalog/inspection mode must never
     # pretend that it can create governed work.
     durable_workspace_configured: bool = True
+    # Set only by the explicit local `boss-engine call` command. Model, MCP, workflow,
+    # investigation and API paths must never inherit unrestricted SQL authority.
+    raw_sql_admin_authorized: bool = False
 
     # ---- construction -----------------------------------------------------
     @classmethod

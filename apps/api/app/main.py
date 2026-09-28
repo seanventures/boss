@@ -6586,7 +6586,7 @@ def _investigation_caller(investigation_id: str, request: Request) -> dict:
 
 @app.post("/v1/investigations/{investigation_id}/db")
 def investigation_db_endpoint(investigation_id: str, payload: open_bodies.InvestigationDbBody, request: Request):
-    """SQL for an investigation — SELECT always, writes when it was opened to fix something."""
+    """Legacy SQL callback; project-scoped investigations cannot run raw SQL."""
     payload = payload.payload()
     from boss_engine.services.debug_session import run_db
 

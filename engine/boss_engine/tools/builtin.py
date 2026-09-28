@@ -137,6 +137,11 @@ def _community_raw_sql_disabled(settings: Any) -> bool:
     return _community_restricted(settings)
 
 
+def _raw_sql_admin_authorized(ctx: Any, actor: str) -> bool:
+    """Only an explicit local CLI call can use unscoped SQL in a paid edition."""
+    return actor == "cli" and getattr(ctx, "raw_sql_admin_authorized", False) is True
+
+
 # ===========================================================================
 # READ TOOLS — the "overall view of the workflow engine"
 # ===========================================================================
@@ -425,9 +430,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "query_db",
-        "Run a READ-ONLY SQL query (a single SELECT/WITH) against the engine's "
-        "Postgres and return rows. For questions the structured tools don't cover. "
-        "Writes and multi-statements are rejected; results are capped.",
+        "Local admin CLI only: run a single read-only SELECT/WITH query against the "
+        "engine's Postgres. This is unscoped SQL; use project-scoped read tools in "
+        "chat, MCP, workflows and API sessions. Results are capped.",
         _obj(
             {
                 "sql": {"type": "string", "description": "a single SELECT or WITH…SELECT statement"},
@@ -440,6 +445,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         if _community_raw_sql_disabled(ctx.settings):
             return {"ok": False, "error": "Unrestricted SQL reads are unavailable in Community. "
                     "Use the project-scoped read tools."}
+        if not _raw_sql_admin_authorized(ctx, actor):
+            return {"ok": False, "error": "Unrestricted SQL reads require an explicit local admin CLI call. "
+                    "Use project-scoped read tools here."}
         sql = (args.get("sql") or "").strip().rstrip(";")
         ok, why = _is_read_only(sql)
         if not ok:
@@ -1558,21 +1566,12 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "write_db",
-        "Create, update or delete ONE row when no dedicated tool covers it. This is the reason "
-        "you almost never need to tell an operator that something 'requires a human' or is a "
-        "'custom admin action'. If a record is missing or has the wrong value and you can name "
-        "the table, you can fix it YOURSELF with this. Examples that have no dedicated tool and "
-        "ARE done with write_db: creating a production deployment_targets row for an app that "
-        "only has staging, clearing a paused flag, correcting a wrong domain or URL, fixing a "
-        "status that is stuck. Before you say a change needs someone else, check whether it is "
-        "one row in one table -- if it is, do it. One statement, always WHERE-qualified unless "
-        "whole_table is set. Never invent a value you write: read it first, or ask. "
-        "NOT for deployment targets: use create_deployment_target, which knows the host, the "
-        "free ports and the health check. Composing that INSERT by hand failed on a guessed "
-        "table name and would have written a row missing half its columns. "
-        "PREFER a structured tool when one exists: raw SQL emits no domain events and updates "
-        "no related rows, so cancel_job is better than UPDATE jobs SET status. This is the "
-        "fallback for what those tools do not cover, not a shortcut around them.",
+        "Local admin CLI only: create, update or delete one row with a reason. "
+        "This is unscoped SQL and cannot run from chat, MCP, workflows or API sessions. "
+        "PREFER a structured tool when one exists: raw SQL emits no domain events or "
+        "related updates, so cancel_job is better than UPDATE jobs SET status. "
+        "Use create_deployment_target rather than writing deployment_targets by hand. "
+        "One statement, always WHERE-qualified unless whole_table is set.",
         _obj({"sql": {"type": "string",
                       "description": "a single INSERT, UPDATE or DELETE statement"},
               "reason": {"type": "string", "description": "why — recorded in the event stream"},
@@ -1588,6 +1587,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
         if _community_raw_sql_disabled(ctx.settings):
             return {"ok": False, "error": "Unrestricted SQL writes are unavailable in Community. "
+                    "Use a governed project-scoped operation."}
+        if not _raw_sql_admin_authorized(ctx, actor):
+            return {"ok": False, "error": "Unrestricted SQL writes require an explicit local admin CLI call. "
                     "Use a governed project-scoped operation."}
         statement = (args.get("sql") or "").strip().rstrip(";")
         ok, why = _is_single_write(statement, whole_table=bool(args.get("whole_table")))

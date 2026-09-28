@@ -550,36 +550,13 @@ def _query_rejection(sql: str) -> Optional[str]:
 
 
 def _tool_query_db(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
-    if str(getattr(settings, "boss_edition", "community")).strip().lower() not in {
-        "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-    }:
-        return {"error": "Unrestricted SQL reads are unavailable in Community. "
-                "Use the project-scoped read tools."}
-    sql = str(args.get("sql") or "").strip()
-    rejection = _query_rejection(sql)
-    if rejection:
-        return {"error": rejection, "hint": "SELECT only, one statement, e.g. SELECT ... LIMIT 50"}
-    try:
-        rows = connection.execute(text(sql.rstrip(";"))).mappings().all()
-    except Exception as exc:  # noqa: BLE001 — for a bad query the message IS the answer
-        return {"error": f"{type(exc).__name__}: {exc}"}
-    out = [
-        {k: (v if isinstance(v, (str, int, float, bool, type(None))) else str(v))
-         for k, v in dict(row).items()}
-        for row in rows[:_QUERY_ROW_CAP]
-    ]
-    return {
-        "rows": out,
-        "row_count": len(out),
-        # Said out loud, so the model never reasons from a silently cut result set.
-        "truncated": len(rows) > _QUERY_ROW_CAP,
-        "project_id_for_filtering": project_id,
-    }
+    # This loop is driven by a model in a project-scoped task. Its connection can read
+    # every project, and neither SQL parsing nor a prompt-supplied WHERE is a tenant fence.
+    return {"error": "raw SQL is unavailable to project-scoped agents; use scoped tools"}
 
 
 def _tool_describe_schema(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
-    """What can be queried. Without it the model guesses column names and burns turns on
-    errors — the same way a person explores an unfamiliar database."""
+    """Schema metadata for diagnosing a validation error without reading project rows."""
     table = str(args.get("table") or "").strip()
     if table:
         columns = connection.execute(
@@ -1009,40 +986,13 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "fn": _tool_query_db,
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "query_db",
-                "description": (
-                    "Run a read-only SQL query against BOSS's own database and get rows back. "
-                    "Use it for anything the other tools do not already answer: why a run "
-                    "failed, what a job's error was, what changed between two runs, what a "
-                    "preview recorded, what is in the decision queue. SELECT or WITH only, one "
-                    "statement. Call describe_schema first if unsure of table or column names. "
-                    "Filter by project_id where the table has that column."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "sql": {"type": "string", "description": "A single SELECT statement."},
-                    },
-                    "required": ["sql"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    },
-    {
         "fn": _tool_describe_schema,
         "schema": {
             "type": "function",
             "function": {
                 "name": "describe_schema",
-                "description": (
-                    "List BOSS's tables, or the columns of one table. Call before writing a "
-                    "query so the SQL matches the real schema instead of a guess."
-                ),
+                "description": "List BOSS table and column names for schema diagnostics. "
+                               "Use project-scoped tools to read data.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1189,14 +1139,16 @@ _TOOL_SCHEMAS: list[dict] = [t["schema"] for t in TOOLS]
 
 
 def _native_tool_schemas(settings: Settings) -> list[dict]:
-    """Do not advertise the unavailable shell to Community models."""
-    if _legacy_agent_shell_allowed(settings):
-        return list(_TOOL_SCHEMAS)
+    """Offer only tools whose scope can be enforced for this project."""
     return [schema for schema in _TOOL_SCHEMAS
-            if schema["function"]["name"] != "run_shell"]
+            if schema["function"]["name"] != "query_db"
+            and (schema["function"]["name"] != "run_shell"
+                 or _legacy_agent_shell_allowed(settings))]
 
 
 def _dispatch(connection: Connection, project_id: str, settings: Settings, name: str, args: dict) -> dict:
+    if name == "query_db":
+        return {"error": "raw SQL is unavailable to project-scoped agents; use scoped tools"}
     fn = _TOOL_FNS.get(name)
     if fn is None:
         return {"error": f"unknown tool: {name}"}
@@ -1466,6 +1418,8 @@ def describe_native_tools() -> list[dict]:
 
     for t in TOOLS:
         f = t["schema"]["function"]
+        if f["name"] == "query_db":
+            continue
         catalog.append({
             "name": f["name"], "kind": "read", "risk_tier": 0,
             "description": f.get("description", ""), "parameters": _params(f),

@@ -233,15 +233,15 @@ class TestAnInventedValueIsNotWritten:
     @staticmethod
     def _write(sql: str):
         class Ctx:
-            # Community blocks raw SQL before the legacy placeholder check.
-            # Exercise that check on the paid path where write_db remains available.
+            # Exercise the legacy placeholder guard through the explicit local admin path.
             settings = SimpleNamespace(boss_edition="enterprise_self_hosted")
+            raw_sql_admin_authorized = True
 
             def begin(self):
                 raise AssertionError("EXECUTED — the placeholder check did not run")
 
         return build_default_registry().invoke(
-            "write_db", Ctx(), project_id="p", actor="ceo",
+            "write_db", Ctx(), project_id="p", actor="cli",
             args={"sql": sql, "reason": "test"}, operator_confirmed=True)
 
     def test_the_statement_boss_actually_ran(self):

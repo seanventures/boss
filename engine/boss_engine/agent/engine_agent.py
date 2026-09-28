@@ -29,7 +29,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from .._compat import services_module
-from ..tools import ToolError, ToolRegistry, build_default_registry
+from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
+
+
+_UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
 
 
 _SYSTEM_PROMPT = """You are the BOSS Agent — the conversational interface to the \
@@ -234,7 +237,9 @@ class EngineAgent:
     def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None,
                  adapter: Any = None):
         self.ctx = ctx
-        self.registry = registry or build_default_registry()
+        self.registry = registry or build_discuss_read_registry(
+            edition=getattr(getattr(ctx, "settings", None), "boss_edition", None)
+        )
         #: An explicit backend, when the caller has chosen one. The chat agent runs on Claude
         #: Opus while everything else keeps the engine-wide default — a distinction that has to
         #: be made per consumer, because the worker image has no Claude CLI to run.
@@ -284,7 +289,8 @@ class EngineAgent:
                           if isinstance(b, dict) and b.get("type") == "text")
         ) or ""
         self._notes = []
-        schemas = self.registry.openai_schema()
+        schemas = [schema for schema in self.registry.openai_schema()
+                   if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS]
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
         if history:
             messages.extend(history)
@@ -550,6 +556,8 @@ class EngineAgent:
             name = spec.name
         except ToolError as exc:
             return {"ok": False, "error": str(exc)}
+        if name in _UNSCOPED_SQL_TOOLS:
+            return {"ok": False, "error": "raw SQL is unavailable in project-scoped agent turns"}
         # AN ESCALATION NOBODY ASKED FOR.
         #
         # Cancelling the build, the model passed `force: true` — a flag that overrides the very

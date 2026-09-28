@@ -190,6 +190,10 @@ def _tool_registry():
 def _invoke_tool(
     ctx: Any, tool_name: str, project_id: str, actor: str, args: dict[str, Any]
 ) -> dict[str, Any]:
+    if tool_name in {"query_db", "write_db"}:
+        raise CapabilityExecutionError(
+            "raw SQL is unavailable in project-scoped workflow steps"
+        )
     registry = _tool_registry()
     spec = {s.name: s for s in registry.specs()}.get(tool_name)
     if spec is None:

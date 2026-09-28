@@ -4,7 +4,7 @@ Subcommands:
   bootstrap                   create the schema + seed defaults in DATABASE_URL
   tools                       list the engine tool layer (name, kind, description)
   status  [--project P]       quick project snapshot (what's running)
-  call NAME [--args JSON]     invoke one tool directly and print its JSON result
+  call NAME [--args JSON] [--confirm]  invoke a tool; confirm destructive actions
   ask "MESSAGE"               one-shot BOSS Agent turn (read-only unless --allow-writes)
   chat                        interactive BOSS Agent session
   serve-mcp [--stdio|--http]  expose the tool layer over MCP for external agents
@@ -129,7 +129,13 @@ def _cmd_call(args) -> int:
         print(f"--args must be valid JSON: {exc}", file=sys.stderr)
         return 2
     reg = build_default_registry()
-    result = reg.invoke(args.name, _ctx(), project_id=args.project, actor="cli", args=tool_args)
+    ctx = _ctx()
+    if args.name in {"query_db", "write_db"}:
+        ctx.raw_sql_admin_authorized = True
+    result = reg.invoke(
+        args.name, ctx, project_id=args.project, actor="cli", args=tool_args,
+        operator_confirmed=bool(getattr(args, "confirm", False)),
+    )
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get("ok", True) else 1
 
@@ -401,6 +407,8 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("call", help="invoke one tool")
     c.add_argument("name")
     c.add_argument("--args", help="tool arguments as JSON", default="")
+    c.add_argument("--confirm", action="store_true",
+                   help="confirm a destructive local CLI action")
     c.set_defaults(func=_cmd_call)
 
     a = sub.add_parser("ask", help="one-shot agent turn")

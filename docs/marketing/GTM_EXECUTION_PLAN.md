@@ -31,7 +31,7 @@ All episodes use the public OSS engine only; target 12–15 min each; every comm
 
 **Ep 2 — Execute a sample project end-to-end.** Flow: seed (`make seed` / `seed-demo`) → sample repo (`templates/boss-sandbox`) → `create_code_task` → phase ribbon (cloning → coding → testing → opening PR) → review packet + merge gate → preview tiers → receipts. Depends on: canonical public sample repo decision (#289 body).
 
-**Ep 3 — BOSS via MCP: Claude/Cursor as your BOSS UI.** Flow: `python -m boss_engine serve-mcp` (stdio) + `--http --port 8791` → `claude mcp add` / Cursor config → live tour of the 15 tools (`project_status`, `list_running_work`, `create_code_task`, `get_task_preview`, `query_db`, …) → `read_only=True` for safe demos. Positions MCP as the primary developer interface.
+**Ep 3 — BOSS via MCP: Claude/Cursor as your BOSS UI.** Flow: `python -m boss_engine serve-mcp` (stdio) + `--http --port 8791` → `claude mcp add` / Cursor config → live tour of project-scoped tools (`project_status`, `list_running_work`, `create_code_task`, `get_task_preview`, `get_costs`, …) → `read_only=True` for safe demos. Positions MCP as the primary developer interface.
 
 ## 3. Engine → separate repo, private then public (Plane #291, #292, #293)
 

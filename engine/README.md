@@ -29,7 +29,7 @@ boss_engine/
    microVM fleet, governed Postgres reads); write tools create workflow tasks.
 2. **Engine-native agent** (`boss_engine.agent`) — a batteries-included
    BOSS Agent that reasons over the tool layer. Ships with the OSS engine.
-3. **MCP server** (`boss_engine.mcp`) — the same tools over MCP JSON-RPC, so an
+3. **MCP server** (`boss_engine.mcp`) — project-scoped tools over MCP JSON-RPC, so an
    external agent (GitHub Copilot, Claude, Cursor) can be "the BOSS Agent".
 
 Private design-partner week-1 (monorepo + Mission Control): see
@@ -57,6 +57,12 @@ python -m boss_engine serve-mcp --http --port 8791  # HTTP + Mission Control (re
 # export BOSS_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
 # python -m boss_engine serve-mcp --http --allow-writes --host 127.0.0.1
 ```
+
+Raw control-plane SQL is held out of chat, workflow agents, investigations, and
+MCP because those sessions are pinned to a project and the SQL connection has
+no database-enforced project boundary. In paid editions, a local administrator
+can invoke `call query_db` directly; `call write_db` also needs `--confirm`.
+Community uses the project-scoped read and operation tools.
 
 A fresh database MUST be bootstrapped first — `bootstrap` creates the schema
 (`db/schema.sql`) and seeds the default org/project, budget policy, the
@@ -107,7 +113,7 @@ tunnel. The Mission Control page prompts for that token in write-capable mode
 and keeps it in browser memory for the current page session. It is a snapshot
 viewer by design; approvals remain explicit operator actions.
 
-MCP exposes the engine tool layer (currently 106 tools), not every control
+MCP exposes project-scoped engine tools, not every control
 plane HTTP route. See [Community MCP guide](../docs/community/MCP.md) for the
 capability map and security boundary.
 

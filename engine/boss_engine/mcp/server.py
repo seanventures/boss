@@ -32,6 +32,7 @@ from ..tools import ToolRegistry, build_default_registry
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "boss-engine", "version": __version__}
+_UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
 
 # Shown to the client model at initialize (MCP `instructions`). This is what
 # keeps external agents (Copilot/Claude/Cursor) on BOSS's governed workflow
@@ -102,6 +103,8 @@ class MCPServer:
     # ---- schema ----------------------------------------------------------
     def _tools(self) -> list[dict]:
         tools = [spec.mcp() for spec in self.registry.specs() if (
+            spec.name not in _UNSCOPED_SQL_TOOLS
+            and
             (not self.api_only or spec.name in self.api_tool_names)
             and
             (not self.read_only or spec.kind == "read")
@@ -126,7 +129,8 @@ class MCPServer:
     def _tool_allowed(self, name: str) -> bool:
         try:
             spec = self.registry.get(name)
-            return ((not self.api_only or spec.name in self.api_tool_names)
+            return (spec.name not in _UNSCOPED_SQL_TOOLS
+                    and (not self.api_only or spec.name in self.api_tool_names)
                     and (not self.read_only or spec.kind == "read")
                     and (not self.catalog_only or spec.kind == "read"
                          or not spec.requires_durable_workspace))

@@ -757,17 +757,18 @@ class TestWritingIsAnOperationBeforeItIsAStatement:
         body = inspect.getsource(open_investigation)
         assert "allow_fix: bool = False" in body
 
-    def test_the_prompt_says_to_prefer_an_operation_to_a_statement(self):
+    def test_the_prompt_uses_scoped_operations_instead_of_raw_sql(self):
         from boss_engine.services import debug_session
 
-        assert "PREFER boss-do OVER SQL" in debug_session._PROMPT
+        assert "PREFER boss-do FOR CHANGES" in debug_session._PROMPT
         assert "leaves no trace of the rest" in debug_session._PROMPT
+        assert "Raw SQL is held" in debug_session._PROMPT
 
     def test_and_to_report_the_operation_that_was_missing(self):
-        """Every time it reaches for SQL, that is a gap in the operation set worth closing."""
+        """A missing scoped operation becomes a named product gap."""
         from boss_engine.services import debug_session
 
-        assert "which operation was missing" in debug_session._PROMPT
+        assert "which operation is missing" in debug_session._PROMPT
 
 
 class TestTheOperatorCanSeeItThinking:

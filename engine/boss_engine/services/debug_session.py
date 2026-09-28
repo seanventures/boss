@@ -25,23 +25,22 @@ The same runner the coding pipeline already uses — `claude -p` with its own Ba
 and Glob tools in an ephemeral sandbox — pointed at a DIAGNOSIS instead of a diff. It gets:
 
   * the app's repo checked out, so it can read the code that actually shipped;
-  * `boss-db`, SQL over BOSS's own database;
+  * a project-scoped briefing of BOSS's recorded state;
   * `boss-host`, a shell on any registered fleet host;
   * `boss-do`, BOSS's own operations — the same path the console's buttons take;
   * `boss-probe`, HTTP and TCP against anything it wants to test;
-  * a briefing of what BOSS already knows, so it starts oriented rather than guessing;
   * and a requirement to end with a verdict it has EVIDENCE for.
 
 WHAT IT MAY CHANGE
 
-Nothing, by default. A default investigation is read-only everywhere: `boss-db` refuses
-anything but SELECT, `boss-host` refuses anything outside an enumerated set of read commands,
-and the agent has no Edit or Write tool. Freedom to look is not freedom to act, and that
+Nothing, by default. A default investigation is read-only everywhere: `boss-host` refuses
+anything outside an enumerated set of read commands, and the agent has no Edit or Write tool.
+Freedom to look is not freedom to act, and that
 distinction is the whole reason this can be turned loose at all.
 
 An investigation opened with `fix=True` can change things: `boss-do` runs BOSS's own
-operations exactly as the console's buttons run them, `boss-db` writes rows, and `boss-host`
-gets a real shell. It opens when the OPERATOR authorised action — either by clicking, or by
+operations exactly as the console's buttons run them, and `boss-host` gets a real shell.
+It opens when the OPERATOR authorised action — either by clicking, or by
 telling BOSS to fix something, which is the same authority the write gate already recognises.
 A question still gets an offer.
 
@@ -552,11 +551,8 @@ WHAT YOU HAVE
 Your working directory is {where}. Read BRIEFING.md FIRST: it holds the rows BOSS has already
 read, so you do not have to rediscover them.{repo_note}
 
-Four commands, in addition to your own tools:
+Three commands, in addition to your own tools:
 
-  ./.boss-bin/boss-db "SELECT ..."          SQL over BOSS's database. 244 tables; the briefing
-                                            names the ones that matter. Use it to check any
-                                            claim, including your own. {db_mode}
   ./.boss-bin/boss-host <host> <command>    a shell on a registered fleet host over SSH.
                                             {host_mode}
   ./.boss-bin/boss-do <tool> '<json>'       BOSS's OWN operations — redeploy, retry_code_task,
@@ -567,11 +563,11 @@ Four commands, in addition to your own tools:
                                             available. {do_mode}
   ./.boss-bin/boss-probe <url|host:port>    is it answering? HTTP or a raw socket.
 
-PREFER boss-do OVER SQL. An operation knows things a statement does not: `redeploy` resolves
+PREFER boss-do FOR CHANGES. An operation knows things a statement does not: `redeploy` resolves
 the target's key, reserves budget, records a deployment run and health-checks the result. A
-hand-written UPDATE gets some of that right and leaves no trace of the rest. Reach for SQL when
-no operation covers what you need — and say in `fix` which operation was missing, because that
-gap is worth closing.
+hand-written UPDATE gets some of that right and leaves no trace of the rest. Raw SQL is held
+until the database can enforce the investigation's project boundary. If no operation covers
+what you need, say in `fix` which operation is missing.
 
 HOW TO WORK
 
@@ -607,13 +603,13 @@ in `cause`, put what you ruled OUT in `evidence`, and make `next` the most infor
 try — never a yes/no question, and never a request for an identifier you could look up."""
 
 _FIX_ALLOWED = """YOU MAY FIX IT. This investigation has fix permission: `boss-do` runs BOSS's
-operations, `boss-db` writes rows, and `boss-host` runs commands that change the machine. That
+operations, and `boss-host` runs commands that change the machine. That
 is the point — an investigation that can diagnose a stuck retry and not clear it is half a
 capability.
 
 Use it the way a careful engineer would. Make the smallest change that resolves the problem.
-Prefer `boss-do` to SQL, and SQL to a shell command, because each step down that list knows
-less about what else needs to happen. Verify with boss-probe or by re-running the failing
+Prefer `boss-do` to a shell command because it knows what else needs to happen.
+Verify with boss-probe or by re-running the failing
 check, and record exactly what you changed under `evidence`. Set "applied": true only if you
 made the change AND verified the result.
 
@@ -622,7 +618,7 @@ running build is refused, deliberately and permanently), delete data to make a s
 away, restart services that are not part of the problem, or change the database's shape. If
 the fix needs one of those, put it in `fix` and stop — that is a decision for a person."""
 
-_FIX_REFUSED = """YOU ARE READ-ONLY. `boss-db` refuses anything but SELECT and `boss-host`
+_FIX_REFUSED = """YOU ARE READ-ONLY. `boss-host`
 refuses anything that could change the machine. This is not an obstacle to route around: work
 out exactly what needs to change, prove it with evidence, and put it in `fix` so an operator
 can apply it in one step. Do not spend turns on commands that will be refused."""
@@ -918,9 +914,6 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str) -> d
                            if allow_fix else
                            "Read-only: logs, processes, sockets, disk and service status, "
                            "piped into grep/tail/head/awk/jq."),
-                db_mode=("You may also INSERT, UPDATE and DELETE — WHERE-qualified, one "
-                         "statement at a time. Never DDL."
-                         if allow_fix else "SELECT only."),
                 do_mode=("Available." if allow_fix else
                          "Read-only investigations may not run operations — name the one you "
                          "would have run, with its arguments, in `fix`."),
@@ -1029,32 +1022,9 @@ def authorise(connection, investigation_id: str, token: str) -> dict[str, Any]:
 
 
 def run_db(connection, record: dict, statement: str) -> dict[str, Any]:
-    """SQL for an investigation, on BOSS's connection rather than the sandbox's."""
-    from ..config import get_settings
-
-    community = _community_investigations_paused(get_settings())
-    allowed, why = sql_is_allowed(
-        statement, allow_write=bool(record["allow_fix"]) and not community
-    )
-    if not allowed:
-        if community and record["allow_fix"]:
-            return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
-        return {"ok": False, "error": why}
-    if community:
-        # SQL shaped like a SELECT can call a database function. A read-only transaction
-        # makes PostgreSQL enforce the boundary beyond our parser for legacy tokens.
-        connection.execute(sql("SET TRANSACTION READ ONLY"))
-    body = statement.strip().rstrip(";")
-    result = connection.execute(sql(body))
-    if result.returns_rows:
-        rows = [dict(r) for r in result.mappings().all()]
-        return {"ok": True, "rows": rows[:200], "truncated": len(rows) > 200}
-    emit_event(connection, str(record["project_id"]), "investigation.db_write",
-               str(record["actor"]), "investigation", str(record["id"]),
-               {"sql": body[:2000], "rows": getattr(result, "rowcount", None)})
-    return {"ok": True, "rows_affected": getattr(result, "rowcount", None),
-            "note": "A raw write emits no domain events and updates no related rows. Prefer "
-                    "boss-do when an operation exists for this."}
+    """Fail closed until sandbox SQL can enforce the investigation's project boundary."""
+    return {"ok": False, "error": "raw SQL is unavailable in project-scoped investigations; "
+            "use governed project-scoped operations"}
 
 
 #: Operations an investigation may perform. The registry's own writes, minus the ones that
@@ -1099,7 +1069,7 @@ def run_operation(ctx, record: dict, tool: str, args: dict) -> dict[str, Any]:
     except ToolError as exc:
         return {"ok": False, "error": str(exc), "available": available}
     if spec.kind != "write":
-        return {"ok": False, "error": f"{tool!r} changes nothing — read it with boss-db instead"}
+        return {"ok": False, "error": f"{tool!r} changes nothing — use project-scoped reads instead"}
     if not spec.self_executable:
         return {"ok": False, "requires_confirmation": True,
                 "error": f"{tool!r} requires its own operator click; describe the action "

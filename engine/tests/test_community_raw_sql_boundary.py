@@ -50,7 +50,22 @@ def test_legacy_agent_query_db_blocks_before_execute(edition):
         Connection(), "own", SimpleNamespace(boss_edition=edition),
         {"sql": "SELECT * FROM projects"},
     )
-    assert "Community" in result["error"]
+    assert "raw SQL is unavailable" in result["error"]
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("query_db", {"sql": "SELECT * FROM projects"}),
+    ("write_db", {"sql": "DELETE FROM projects WHERE id='other'", "reason": "test"}),
+])
+def test_paid_default_registry_requires_explicit_local_admin_call(tool, args):
+    ctx = _NoDatabase("enterprise_self_hosted")
+    result = build_default_registry().invoke(
+        tool, ctx, project_id="own", actor="mcp", args=args,
+        operator_confirmed=True,
+    )
+    assert result["ok"] is False
+    assert "local admin CLI" in result["error"]
+    assert ctx.calls == 0
 
 
 @pytest.mark.parametrize("edition", ["cloud", "enterprise", "enterprise_cloud",

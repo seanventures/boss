@@ -67,63 +67,22 @@ def test_empty_is_refused():
     assert _query_rejection("   ") == "empty query"
 
 
-class _Row(dict):
-    def keys(self):
-        return super().keys()
-
-
-class _Result:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def mappings(self):
-        return self
-
-    def all(self):
-        return self._rows
-
-
 class _Connection:
-    def __init__(self, rows=None, boom=None):
-        self.rows = rows or []
-        self.boom = boom
+    def __init__(self):
         self.executed = []
 
     def execute(self, statement, params=None):
         self.executed.append(str(statement))
-        if self.boom:
-            raise self.boom
-        return _Result(self.rows)
+        raise AssertionError("project-scoped raw SQL reached the database")
 
 
-def test_it_returns_rows():
-    connection = _Connection(rows=[_Row(id="crun_1", status="failed")])
-    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT id, status FROM runs"})
-    assert out["rows"] == [{"id": "crun_1", "status": "failed"}]
-    assert out["row_count"] == 1 and out["truncated"] is False
-
-
-def test_a_refused_query_never_reaches_the_database():
+@pytest.mark.parametrize("sql", ["SELECT id FROM runs", "DELETE FROM jobs",
+                                    "SELECT * FROM secret_refs"])
+def test_legacy_model_query_db_is_held_even_in_enterprise(sql):
     connection = _Connection()
-    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "DELETE FROM jobs"})
-    assert "error" in out
-    assert connection.executed == []          # the guard runs BEFORE the connection is touched
-
-
-def test_truncation_is_declared_rather_than_silent():
-    """A silently cut result set is worse than a short one: the model reasons from it as if it
-    were complete."""
-    connection = _Connection(rows=[_Row(n=i) for i in range(500)])
-    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT n FROM big"})
-    assert out["truncated"] is True and out["row_count"] == 200
-
-
-def test_a_broken_query_returns_its_error_instead_of_raising():
-    """For a bad query the database's message IS the answer — it is how the model corrects
-    itself on the next turn."""
-    connection = _Connection(boom=RuntimeError('column "nope" does not exist'))
-    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": "SELECT nope FROM jobs"})
-    assert "nope" in out["error"]
+    out = _tool_query_db(connection, "p1", _ENTERPRISE, {"sql": sql})
+    assert "raw SQL is unavailable" in out["error"]
+    assert connection.executed == []
 
 
 def test_select_into_is_a_write_and_is_refused():
