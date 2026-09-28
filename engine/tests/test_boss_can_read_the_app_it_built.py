@@ -42,6 +42,8 @@ class FakeConnection:
 
     def execute(self, statement, params=None):
         self.queries.append(str(statement))
+        assert params and params.get("p") == "project-a"
+        assert "project_id" in str(statement)
         return FakeResult(self._row)
 
 
@@ -81,7 +83,7 @@ class TestFindingTheCodeForARun:
         """The ordinary case: a code task commits to boss/code/<its own run id>."""
         branches.add("boss/code/crun_abc")
         ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
-        repo, ref, err = builtin._source_for_run(ctx, "crun_abc")
+        repo, ref, err = builtin._source_for_run(ctx, "crun_abc", project_id="project-a")
         assert (repo, ref, err) == ("paramg/boss-sandbox", "boss/code/crun_abc", None)
 
     def test_a_follow_up_run_lives_under_the_branch_it_continues(self, branches):
@@ -95,24 +97,24 @@ class TestFindingTheCodeForARun:
         branches.add("boss/code/crun_earlier")
         ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox",
                                 "base_branch": "boss/code/crun_earlier"}})
-        repo, ref, err = builtin._source_for_run(ctx, "crun_followup")
+        repo, ref, err = builtin._source_for_run(ctx, "crun_followup", project_id="project-a")
         assert ref == "boss/code/crun_earlier"
         assert err is None
 
     def test_no_branch_matches_so_the_default_is_read_and_not_an_error(self, branches):
         """A merged app is on the default branch. Degrade to it; do not refuse the question."""
         ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
-        repo, ref, err = builtin._source_for_run(ctx, "crun_merged")
+        repo, ref, err = builtin._source_for_run(ctx, "crun_merged", project_id="project-a")
         assert (repo, ref, err) == ("paramg/boss-sandbox", None, None)
 
     def test_an_unknown_run_says_so(self, branches):
         ctx = FakeCtx(None)
-        _repo, _ref, err = builtin._source_for_run(ctx, "crun_nope")
+        _repo, _ref, err = builtin._source_for_run(ctx, "crun_nope", project_id="project-a")
         assert err and "crun_nope" in err
 
     def test_a_run_with_no_repository_says_so(self, branches):
         ctx = FakeCtx({"spec": {"owner": "paramg"}})
-        _repo, _ref, err = builtin._source_for_run(ctx, "crun_x")
+        _repo, _ref, err = builtin._source_for_run(ctx, "crun_x", project_id="project-a")
         assert err and "repositor" in err.lower()
 
 
@@ -122,7 +124,7 @@ class TestWhatTheSourceToolsResolve:
         branches.add("boss/code/crun_abc")
         ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
         repo, ref, err = builtin._resolve_source(
-            ctx, {"run_id": "crun_abc", "repo": "boss"})
+            ctx, {"run_id": "crun_abc", "repo": "boss"}, project_id="project-a")
         assert (repo, ref, err) == ("paramg/boss-sandbox", "boss/code/crun_abc", None)
 
     def test_an_explicit_ref_overrides_the_resolved_branch(self, branches):
@@ -130,17 +132,18 @@ class TestWhatTheSourceToolsResolve:
         branches.add("boss/code/crun_abc")
         ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
         _repo, ref, _err = builtin._resolve_source(
-            ctx, {"run_id": "crun_abc", "ref": "v1.2.0"})
+            ctx, {"run_id": "crun_abc", "ref": "v1.2.0"}, project_id="project-a")
         assert ref == "v1.2.0"
 
     def test_without_a_run_id_it_is_boss_own_source(self, branches):
         ctx = FakeCtx(None)
-        assert builtin._resolve_source(ctx, {}) == ("boss", None, None)
+        assert builtin._resolve_source(ctx, {}, project_id="project-a") == ("boss", None, None)
 
     def test_a_bad_run_id_is_reported_rather_than_silently_searching_boss(self, branches):
         """Falling back to BOSS's own source would answer the wrong question convincingly."""
         ctx = FakeCtx(None)
-        repo, _ref, err = builtin._resolve_source(ctx, {"run_id": "crun_nope"})
+        repo, _ref, err = builtin._resolve_source(
+            ctx, {"run_id": "crun_nope"}, project_id="project-a")
         assert err and repo == ""
 
 

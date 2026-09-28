@@ -3678,8 +3678,9 @@ def _repo_root(settings: Any, repo: str,
         return None, f"{type(exc).__name__}: {exc}"[:200]
 
 
-def _source_for_run(ctx: Any, run_id: str) -> tuple[_Optional[str], _Optional[str],
-                                                    _Optional[str]]:
+def _source_for_run(ctx: Any, run_id: str, *, project_id: str) -> tuple[
+    _Optional[str], _Optional[str], _Optional[str],
+]:
     """(repo, ref, error) — WHERE THE CODE FOR THIS RUN ACTUALLY IS.
 
     An operator says "this error, on run crun_abc". The agent should not have to know that the
@@ -3696,7 +3697,8 @@ def _source_for_run(ctx: Any, run_id: str) -> tuple[_Optional[str], _Optional[st
     try:
         with ctx.begin() as connection:
             row = connection.execute(
-                _text("SELECT spec FROM code_task_runs WHERE id = :id"), {"id": run_id},
+                _text("SELECT spec FROM code_task_runs WHERE id = :id AND project_id = :p"),
+                {"id": run_id, "p": project_id},
             ).mappings().first()
     except Exception as exc:  # noqa: BLE001 — a read tool must not raise
         return None, None, f"{type(exc).__name__}: {exc}"[:200]
@@ -3743,7 +3745,9 @@ def _deepen(root: str, depth: int = 200) -> None:
         pass
 
 
-def _resolve_source(ctx: Any, args: dict) -> tuple[str, _Optional[str], _Optional[str]]:
+def _resolve_source(ctx: Any, args: dict, *, project_id: str) -> tuple[
+    str, _Optional[str], _Optional[str],
+]:
     """(repo, ref, error) for a source tool's arguments.
 
     One place, so search_code and read_code cannot disagree about which tree they are on —
@@ -3752,7 +3756,7 @@ def _resolve_source(ctx: Any, args: dict) -> tuple[str, _Optional[str], _Optiona
     """
     run_id = str(args.get("run_id") or "").strip()
     if run_id:
-        repo, ref, err = _source_for_run(ctx, run_id)
+        repo, ref, err = _source_for_run(ctx, run_id, project_id=project_id)
         if err:
             return "", None, err
         return repo or "boss", (args.get("ref") or ref or None), None
@@ -4469,7 +4473,7 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
     )
     def diagnose_run(ctx, *, project_id, actor, args):
         run_id = str(args.get("run_id") or "").strip()
-        pid = args.get("project_id") or project_id
+        pid = project_id
         if not run_id:
             return {"ok": False, "error": "run_id is required"}
 
@@ -4482,11 +4486,10 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                 _text("SELECT id, project_id, title, status, phase, error, created_at, "
                       "updated_at, EXTRACT(EPOCH FROM (coalesce(updated_at, now()) "
                       "  - created_at))/60 AS minutes "
-                      "FROM code_task_runs WHERE id = :r"),
-                {"r": run_id}).mappings().first()
+                      "FROM code_task_runs WHERE id = :r AND project_id = :p"),
+                {"r": run_id, "p": pid}).mappings().first()
             if run is None:
-                return {"ok": False, "error": f"no run {run_id} on this platform"}
-            pid = run["project_id"] or pid
+                return {"ok": False, "error": f"no code task run {run_id}"}
             checked.append("the run row")
 
             turns = c.execute(
@@ -4734,6 +4737,12 @@ def _register_run_turn_tools(reg: ToolRegistry) -> None:
         limit = max(1, min(int(args.get("limit") or 40), 200))
         stage = str(args.get("stage") or "").strip()
         with ctx.begin() as c:
+            run = c.execute(
+                _text("SELECT status, phase FROM code_task_runs "
+                      "WHERE id = :r AND project_id = :p"),
+                {"r": run_id, "p": project_id}).mappings().first()
+            if run is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
             summary = c.execute(
                 _text("SELECT count(*) AS turns, min(created_at) AS first_turn, "
                       "max(created_at) AS last_turn, "
@@ -4742,9 +4751,6 @@ def _register_run_turn_tools(reg: ToolRegistry) -> None:
                       "count(*) FILTER (WHERE ok = false) AS failures, "
                       "EXTRACT(EPOCH FROM (now() - max(created_at))) AS silent_seconds "
                       "FROM agent_turns WHERE code_task_run_id = :r"),
-                {"r": run_id}).mappings().first()
-            run = c.execute(
-                _text("SELECT status, phase FROM code_task_runs WHERE id = :r"),
                 {"r": run_id}).mappings().first()
             rows = c.execute(
                 _text("SELECT turn_index, direction, stage, role_key, tool_name, latency_ms, "
@@ -5672,7 +5678,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             rx = re.compile(args["pattern"])
         except re.error as exc:
             return {"ok": False, "error": f"bad regex: {exc}"}
-        repo, ref, err = _resolve_source(ctx, args)
+        repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
             return {"ok": False, "error": err}
         root, err = _repo_root(ctx.settings, repo, ref,
@@ -5737,7 +5743,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         """
         import fnmatch as _fn
 
-        repo, ref, err = _resolve_source(ctx, args)
+        repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
             return {"ok": False, "error": err}
         root, err = _repo_root(ctx.settings, repo, ref,
@@ -5788,7 +5794,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
              ["file"]),
     )
     def read_code(ctx, *, project_id, actor, args):
-        repo, ref, err = _resolve_source(ctx, args)
+        repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
             return {"ok": False, "error": err}
         root, err = _repo_root(ctx.settings, repo, ref,
@@ -6259,7 +6265,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                          "description": "optional: commits touching this string"}}),
     )
     def git_history(ctx, *, project_id, actor, args):
-        repo, ref, err = _resolve_source(ctx, args)
+        repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
             return {"ok": False, "error": err}
         root, err = _repo_root(ctx.settings, repo, ref,
