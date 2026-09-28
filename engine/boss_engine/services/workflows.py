@@ -29,6 +29,7 @@ from .workflow_capabilities import (
     validate_step as capability_problems,
     validate_captain,
 )
+from .typed_decisions import step_problems as typed_decision_problems
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +317,16 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
             approval["mode"] = mode
             approval.setdefault("on_timeout", "block")
             step["approval"] = approval
+        elif kind == "capability" and binding.get("typed_decision"):
+            # A JUDGEMENT WITH ITS ANSWERS NAMED UP FRONT. The step asks one question about what
+            # it is wired, a decision model picks one of the options, and an ordinary `condition`
+            # routes on `steps.<id>.output.answer`. See services/typed_decisions.py.
+            problems = typed_decision_problems(step_id, binding)
+            if problems:
+                raise WorkflowValidationError(" ".join(problems))
+            # Nothing to approve: it reads and answers, it acts on nothing. What acts is the
+            # branch it selects, and that branch carries its own gate.
+            step["approval"] = {"mode": "auto", "on_timeout": "block"}
         elif kind == "capability" and binding.get("custom_step"):
             # A step the customer defined. It cannot be checked here — whether the skill it
             # binds still exists, and what risk tier it really carries, are facts about the

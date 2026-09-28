@@ -113,6 +113,21 @@ class Settings(BaseSettings):
     # CLI installed there, and a default that requires one would break every developer's
     # console. Production sets it explicitly.
     chat_llm_engine: str = Field(default="", alias="BOSS_CHAT_LLM_ENGINE")
+    # TYPED DECISIONS (services/typed_decisions.py): questions whose answers are fixed in
+    # advance — how much rigor a task needs, which branch a workflow takes. "claude" runs them
+    # on the subscription this install already has; "typesafe" sends them to TypeSafe's hosted
+    # Jev model, which needs the operator's own TYPESAFE_API_KEY and bills that account.
+    # Opus by default: measured on evals/task_rigor it missed 0 of 22 sensitive tasks for about
+    # $0.10 a decision, against Haiku's 1 and the keyword lists' 14.
+    decision_backend: str = Field(default="claude", alias="BOSS_DECISION_BACKEND")
+    decision_model: str = Field(default="opus", alias="BOSS_DECISION_MODEL")
+    # With the typesafe backend, a decision below this confidence is asked again of Claude
+    # instead of acted on. 0 disables the second opinion.
+    decision_fallback_below: float = Field(default=0.7, alias="BOSS_DECISION_FALLBACK_BELOW")
+    typesafe_api_key: Optional[str] = Field(default=None, alias="TYPESAFE_API_KEY")
+    typesafe_api_url: str = Field(default="https://api.typesafe.ai/v1/systemone",
+                                  alias="TYPESAFE_API_URL")
+    typesafe_model: str = Field(default="jev-latest", alias="TYPESAFE_MODEL")
     #: Model for that agent — "opus" tracks the latest Opus rather than pinning a dated id.
     chat_model: str = Field(default="", alias="BOSS_CHAT_MODEL")
     #: Model round-trips the chat agent may spend before it must answer. A step that calls

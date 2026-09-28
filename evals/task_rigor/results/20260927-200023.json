@@ -1,0 +1,2380 @@
+{
+ "report": {
+  "n_items": 88,
+  "n_unambiguous": 66,
+  "all": {
+   "keyword": {
+    "answered": "88/88",
+    "tier_exact_%": 55.7,
+    "under_tier_%": 23.9,
+    "over_tier_%": 20.5,
+    "sensitive_missed": "14/22",
+    "sensitive_false_alarm": "11/66",
+    "latency_p50_ms": 0,
+    "cost_usd_total": 0.0
+   },
+   "haiku": {
+    "answered": "88/88",
+    "tier_exact_%": 93.2,
+    "under_tier_%": 3.4,
+    "over_tier_%": 3.4,
+    "sensitive_missed": "1/22",
+    "sensitive_false_alarm": "2/66",
+    "latency_p50_ms": 9453,
+    "cost_usd_total": 1.8018
+   },
+   "sonnet": {
+    "answered": "87/88",
+    "tier_exact_%": 89.7,
+    "under_tier_%": 8.0,
+    "over_tier_%": 2.3,
+    "sensitive_missed": "1/22",
+    "sensitive_false_alarm": "0/65",
+    "latency_p50_ms": 4603,
+    "cost_usd_total": 4.4223
+   },
+   "opus": {
+    "answered": "88/88",
+    "tier_exact_%": 95.5,
+    "under_tier_%": 2.3,
+    "over_tier_%": 2.3,
+    "sensitive_missed": "0/22",
+    "sensitive_false_alarm": "1/66",
+    "latency_p50_ms": 4324,
+    "cost_usd_total": 8.8046
+   }
+  },
+  "unambiguous": {
+   "keyword": {
+    "answered": "66/66",
+    "tier_exact_%": 57.6,
+    "under_tier_%": 22.7,
+    "over_tier_%": 19.7,
+    "sensitive_missed": "12/20",
+    "sensitive_false_alarm": "7/46",
+    "latency_p50_ms": 0,
+    "cost_usd_total": 0.0
+   },
+   "haiku": {
+    "answered": "66/66",
+    "tier_exact_%": 98.5,
+    "under_tier_%": 1.5,
+    "over_tier_%": 0.0,
+    "sensitive_missed": "1/20",
+    "sensitive_false_alarm": "0/46",
+    "latency_p50_ms": 8933,
+    "cost_usd_total": 1.3275
+   },
+   "sonnet": {
+    "answered": "65/66",
+    "tier_exact_%": 100.0,
+    "under_tier_%": 0.0,
+    "over_tier_%": 0.0,
+    "sensitive_missed": "0/20",
+    "sensitive_false_alarm": "0/45",
+    "latency_p50_ms": 4590,
+    "cost_usd_total": 3.2882
+   },
+   "opus": {
+    "answered": "66/66",
+    "tier_exact_%": 100.0,
+    "under_tier_%": 0.0,
+    "over_tier_%": 0.0,
+    "sensitive_missed": "0/20",
+    "sensitive_false_alarm": "0/46",
+    "latency_p50_ms": 4272,
+    "cost_usd_total": 6.5706
+   }
+  }
+ },
+ "items": [
+  {
+   "id": "t001",
+   "title": "Build a change calendar.\nWho it is for: a team that keeps deploying i\u2026",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new substantial application with multiple screens, complex conflict detection logic, freeze window management, and iCal feed generation\u2014a new module, not an edit to existing code."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-screen application with conflict detection, freeze windows, on-call context, retrospective views, and iCal feeds \u2014 a substantial new build, not a bounded change."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new app with several features: conflict detection, freeze windows, on-call context, a retrospective view and iCal feeds."
+   }
+  },
+  {
+   "id": "t002",
+   "title": "Build a documentation freshness board.\nWho it is for: whoever owns do\u2026",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new application with multiple screens, data ingestion logic, computation engine (staleness calculation), and audit features\u2014this is a substantial new build, not a bounded edit to existing code."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-screen application (repo connect, board, page detail, trend) with parsing, ranking, and review workflows, not a small bounded change."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new app with several screens, and it computes staleness, pulls code references out of pages and tracks a trend."
+   }
+  },
+  {
+   "id": "t003",
+   "title": "Build a lead triage inbox.\nWho it is for: a small team drowning in in\u2026",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new application from scratch with multiple screens, scoring logic, draft generation, approval workflow, and audit systems."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-screen application (ICP editor, scoring engine, draft generation, review queue, audit log) with substantial new behavior."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new app with several screens, lead scoring, drafted replies, an approval gate and an audit log."
+   }
+  },
+  {
+   "id": "t004",
+   "title": "Build an incident timeline builder.\nWho it is for: an on-call enginee\u2026",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new application/module being built from scratch with substantial behavior (parsing, timeline merging, milestone detection, markdown export)."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-feature app (parsing, timeline merging, milestone inference, live recompute, export) rather than a bounded fix."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "A new standalone app that parses two log sources, infers milestones, and supports live editing, gap detection and markdown export."
+   }
+  },
+  {
+   "id": "t005",
+   "title": "Build an interview scorecard app. Who it is for: a hiring manager tir\u2026",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new app from scratch with substantial behaviour including role definition, independent scoring, hidden feedback, and analytics."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-role app with independent scoring, hidden results until submission, and disagreement analysis logic."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This is a new app, which would be tier 2, but hiding each score until its author submits is a per-user access rule, which makes it tier 3."
+   }
+  },
+  {
+   "id": "t006",
+   "title": "Build an interview scorecard app.\nWho it is for: a hiring manager tir\u2026 \u00b7 retry 1",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded behavioral change to an existing app\u2014a new scorecard feature with scoring logic, visibility control, and visualization within the existing platform."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-role scoring workflow with independent hidden submissions, spread calculation, and summary generation, not a bounded tweak."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This adds substantial new behaviour: role and competency definitions, independent hidden scoring, spread and disagreement analysis, and per-candidate summaries."
+   }
+  },
+  {
+   "id": "t007",
+   "title": "Captain: QUALITY IMPROVE PASS. Measured scorecard gaps: ux=not_scored. Do not invent ui/ux",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Small, bounded quality improvements to close named UX/capability gaps in an existing app, keeping verification passing."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Closing a measured UX gap with the smallest honest change to an existing app is a bounded behavior/quality fix, not a new build."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A small UI/UX/capability change to an existing app, meant to close a measured scorecard gap. That changes behaviour in a bounded way, so it is more than a presentation-only edit."
+   }
+  },
+  {
+   "id": "t008",
+   "title": "Follow-up: deferred review findings \u2014 Build an incident timeline builder.\nWho it is for: a",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded bug fix to existing code: catching an uncaught exception on schema version validation to prevent crashes when reading incident files."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded fix to existing read()/list_incidents to handle an uncaught exception gracefully, no new build."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded bug fix that makes list_incidents tolerate an unreadable or unsupported-schema file in an existing app."
+   }
+  },
+  {
+   "id": "t009",
+   "title": "PRD meeting: --- WHAT THIS PANEL IS FOR ---\nYou are the panel inside BOSS's Standard Produ",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new interview scorecard app is a new application build, not a presentation edit or bounded change to existing code."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It's a new standalone app (scorecard tool) rather than a bounded change to existing code."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This builds a new app from scratch, even though the app itself is small."
+   }
+  },
+  {
+   "id": "t010",
+   "title": "URL slug generator",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A bounded utility function that adds behavior but is self-contained, simple, and doesn't constitute a major feature or new service."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded new utility function with defined behavior, not a presentation-only tweak or a new app/service."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A single small pure function with clearly specified behaviour; it is a new file, but its scope matches a bounded change more than a new module or major feature."
+   }
+  },
+  {
+   "id": "t011",
+   "title": "Token-bucket rate limiter",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This creates a new module (rate_limiter.py) with new algorithmic behavior, fitting the definition of a new build or module."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Single new module implementing a bounded, well-specified utility class with validation logic, not a new app or cross-cutting change."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It creates a new standalone module with its own behaviour rather than changing existing code, though the module is small and tightly specified."
+   }
+  },
+  {
+   "id": "t012",
+   "title": "CSV sales aggregation",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Creating a new module file with data aggregation logic fits the 'new module' tier-2 example."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a small bounded new script with a defined function and validation rules, not a large new system."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It adds one new pure function with a narrow, fully specified contract, so it is bounded work even though it lives in a new file."
+   }
+  },
+  {
+   "id": "t013",
+   "title": "Markdown table-of-contents generator",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This creates a new module with a utility function for markdown table-of-contents generation, qualifying as a new app/service/module."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A bounded new script/function implementing parsing logic within a single self-contained utility, not a new app or cross-cutting change."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It builds a new standalone module (md_toc.py) with new parsing behaviour; it does not change any existing code."
+   }
+  },
+  {
+   "id": "t014",
+   "title": "Interval merge with containment queries",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Creates a new module (intervals.py) with new utility functions for interval merging and coverage checking."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Creating a small self-contained utility module with two functions is a bounded, well-specified coding task rather than a new app or major feature."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It creates a new intervals.py module with new merge and covers behaviour, though the scope is small and fully specified."
+   }
+  },
+  {
+   "id": "t015",
+   "title": "Bulk discount in an existing codebase",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This changes billing/invoicing behavior\u2014orders will be invoiced at different rates based on quantity\u2014which is an explicit sensitive surface."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded addition of quantity-based discount logic to an existing pricing path without new services or major features."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This adds a bounded behaviour change, quantity discount tiers, to an existing pricing function, and the acceptance criteria are clear."
+   }
+  },
+  {
+   "id": "t016",
+   "title": "Login button colour",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a styling-only change to an existing button's colors with no behavior modification."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only a CSS color change on an existing button with no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only the login button's colour and hover colour change; the login behaviour stays the same."
+   }
+  },
+  {
+   "id": "t017",
+   "title": "Typo on reset page",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a typo fix in a heading\u2014a presentation-only wording change with no behavior impact on an existing app."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing a typo in heading text is a presentation-only wording change with no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "The work fixes a typo in a heading on an existing page and changes no behaviour."
+   }
+  },
+  {
+   "id": "t018",
+   "title": "Billing header spacing",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Bumping padding and making text bold are presentation-only styling changes to existing code with no behaviour changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only padding/spacing and bold styling on an existing page, no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Padding and bold text on an existing header are purely presentational, and no behaviour changes."
+   }
+  },
+  {
+   "id": "t019",
+   "title": "Rename account button label",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a wording-only change to an existing button label with no behavior change\u2014pure presentation edit."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only a button label/wording change with no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only the button's wording changes; the action behind it stays the same."
+   }
+  },
+  {
+   "id": "t020",
+   "title": "Card grid spacing alignment",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a presentation-only edit adjusting spacing and padding with no functional or behavioural changes, explicitly described as a visual consistency pass on existing app styling."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Purely visual spacing/padding adjustment on an existing dashboard with no behaviour change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Pure spacing/padding adjustment to an existing dashboard grid with no behaviour change."
+   }
+  },
+  {
+   "id": "t021",
+   "title": "Rebrand the admin console",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "All changes are presentation-only: swapping logo, recoloring palette, and updating text labels without behaviour modifications."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded visual/branding update across an existing app, not new behavior or a new build."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "The rebrand touches a lot of files, but it only changes the logo, colours and product-name text, with no behaviour change."
+   }
+  },
+  {
+   "id": "t022",
+   "title": "Friendlier encryption error",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Changing error message wording from a cryptic code to friendly text is a presentation-only edit with no behaviour changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only the displayed error message text is being changed, no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "It only changes the wording of an existing error message and leaves the behaviour alone."
+   }
+  },
+  {
+   "id": "t023",
+   "title": "API keys table contrast",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a styling-only fix: adjusting text contrast (colors) in an existing table UI to meet accessibility standards, with no behavior or functionality changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Purely a color contrast fix on existing UI text, no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "The work is a colour and contrast change to an existing table and doesn't change how anything behaves."
+   }
+  },
+  {
+   "id": "t024",
+   "title": "Archive icon on project rows",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Replacing a trash-can icon with an archive icon is a presentation-only change with no behavior modification."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Swapping one icon for another on existing rows is a purely presentational change with no behaviour difference."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Swapping one icon for another on existing project rows is a presentation-only change and does not alter behaviour."
+   }
+  },
+  {
+   "id": "t025",
+   "title": "Footer year and link text",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Updating copyright year and fixing capitalization of link text are presentation-only edits with no behaviour changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only a copyright year and link label text change, no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Changing the footer year and the link text's capitalisation is a wording-only edit with no behaviour change."
+   }
+  },
+  {
+   "id": "t026",
+   "title": "CLI help typo",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a typo fix in help text output, a presentation-only edit with no behavioral changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing a typo in a CLI help string is a presentation-only text change with no behavior impact."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing a typo in the CLI help text is a wording change and doesn't change behaviour."
+   }
+  },
+  {
+   "id": "t027",
+   "title": "Migration wizard heading weight",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a styling-only change adjusting font-weight on an existing heading element to match other headings."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Pure CSS font-weight fix to match an existing style, no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "The task only changes the font weight of an existing wizard's step indicator, so it's a styling change with no behaviour change."
+   }
+  },
+  {
+   "id": "t028",
+   "title": "Permissions tooltips wrapping",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing tooltip wrapping on narrow screens is a spacing and overflow adjustment to existing presentation without changing functional behavior."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Purely a CSS wrapping fix for tooltip overflow on narrow screens with no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Letting tooltip text wrap is a CSS layout change to an existing UI and doesn't change behaviour."
+   }
+  },
+  {
+   "id": "t029",
+   "title": "Sentence case buttons",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a presentation-only change to button label text casing with no behavior changes."
+   },
+   "sonnet": {
+    "tier": null,
+    "sensitive": false,
+    "reason": ""
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Changing the case of button labels only affects wording, not how the app behaves."
+   }
+  },
+  {
+   "id": "t030",
+   "title": "Search placeholder",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Changing placeholder text is a presentation-only edit to existing code with no behavior changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only a placeholder string in an existing search box is changed, with no behaviour change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only the search box's placeholder text changes. The search itself behaves exactly as before."
+   }
+  },
+  {
+   "id": "t031",
+   "title": "Pay now button overflow",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing button overflow by adjusting layout/spacing is a presentation-only edit with no behavior changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing a CSS overflow so a button fits on the card is a pure layout/styling correction with no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Layout-only CSS fix to an existing button, with no change in behaviour."
+   }
+  },
+  {
+   "id": "t032",
+   "title": "Logo in email templates",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Replacing a logo in email template headers is a presentation-only visual change with no behaviour modifications."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Swapping a logo image/asset in existing email template headers is a presentation-only change with no behavior impact."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Swapping the header logo image in existing email templates only changes branding and markup, not behaviour."
+   }
+  },
+  {
+   "id": "t033",
+   "title": "README env var name",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "This is a documentation-only update: correcting text in the README to reflect the actual environment variable name the app now reads, with no code behavior changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Pure documentation/wording update in README, no code behavior changes."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "The task only rewords the README setup section and leaves the app's behaviour unchanged."
+   }
+  },
+  {
+   "id": "t034",
+   "title": "Session warning wording",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Changing warning message text from one phrase to another is a presentation-only edit with no behaviour changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Only the warning label text changes, no behavior is altered."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "It only changes the wording of an existing warning message, and no behaviour changes."
+   }
+  },
+  {
+   "id": "t035",
+   "title": "Dockerfile label typo",
+   "label_tier": 0,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 0,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing a typo in a Dockerfile label is a presentation-only edit with no behavior changes."
+   },
+   "sonnet": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "Fixing a typo in a Dockerfile label metadata field is a presentation-only text correction with no behavior change."
+   },
+   "opus": {
+    "tier": 0,
+    "sensitive": false,
+    "reason": "It only fixes a typo in the Dockerfile's maintainer label, which is metadata, so no build or runtime behaviour changes."
+   }
+  },
+  {
+   "id": "t036",
+   "title": "DST date range bug",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bug fix in an existing app's date range handling, not a presentation edit or new feature."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded bug fix to existing date-range logic in an existing reports feature."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This fixes a bug in how an existing reports page splits a date range into days."
+   }
+  },
+  {
+   "id": "t037",
+   "title": "Company name validation",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded change to existing code that adds a validation rule to a form field\u2014exactly the tier-1 example provided."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a bounded validation rule with inline error to an existing signup form is a small change to existing behaviour."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds a validation rule to an existing form field, which is a small behaviour change inside an existing app."
+   }
+  },
+  {
+   "id": "t038",
+   "title": "CSV export quoting",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix to existing CSV export function that improperly handles commas in field values."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded bug fix to existing CSV export logic (proper quoting), not a new build or presentation-only change."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix to CSV field quoting in an existing export feature, bounded behaviour change."
+   }
+  },
+  {
+   "id": "t039",
+   "title": "Copy link button",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Small feature addition to an existing app that changes behavior but is bounded in scope."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a copy-link button with clipboard behavior and a toast is a small bounded feature addition to an existing app, not just styling."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds a small new behaviour (clipboard copy plus toast) inside an existing app, not just presentation."
+   }
+  },
+  {
+   "id": "t040",
+   "title": "Consolidate date helpers",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Consolidating duplicate date formatting helpers into one and updating call sites is a bounded refactor within an existing app."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Consolidating duplicate date-formatting helpers and updating call sites is a bounded refactor inside an existing app with no new capability."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "The task merges three existing helpers into one and updates their callers. That is a contained refactor of existing code, not a new build, though it does touch several files."
+   }
+  },
+  {
+   "id": "t041",
+   "title": "Search tokenizer for product codes",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded change to search tokenization behavior in an existing app\u2014a small feature addition with clear scope."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a tokenizer for hyphenated product codes is a bounded behavior change within an existing search feature."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It adds a tokenizer to an existing search index, a bounded change that alters how searches match."
+   }
+  },
+  {
+   "id": "t042",
+   "title": "Skip cleanup on weekends",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded behavior change to an existing job: adding a weekend skip check to the cleanup routine."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a small bounded logic change (add a weekday check) to an existing cleanup job, not a new build or presentation-only tweak."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It adds a small weekday check to an existing cleanup job, which changes behaviour in a bounded way."
+   }
+  },
+  {
+   "id": "t043",
+   "title": "Orders pagination off by one",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded bug fix to existing pagination logic; an off-by-one error in offset calculation."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded bug fix (off-by-one in pagination offset) within an existing endpoint."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It is a bounded fix to an off-by-one pagination offset bug in an existing endpoint."
+   }
+  },
+  {
+   "id": "t044",
+   "title": "Large image upload crash",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix to existing image upload code: preventing crash on large files and displaying an error message is a bounded behavioral change."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded bug fix adding validation/error handling for large file uploads in an existing app."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix in an existing app: handle oversized image uploads gracefully with an error message instead of crashing."
+   }
+  },
+  {
+   "id": "t045",
+   "title": "Sort projects by last updated",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a sort option to an existing projects list is a bounded feature addition within an existing app."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a sort-by-last-updated option to an existing projects list is a bounded feature addition to existing code."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds a sort option inside an existing projects list, which is a bounded behaviour change."
+   }
+  },
+  {
+   "id": "t046",
+   "title": "Webhook retries",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This adds a small feature (retry logic with exponential backoff) to an existing app's webhook delivery mechanism, which is a bounded behavior change, not a major architectural restructuring."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding retry/backoff logic with logging to an existing webhook delivery feature is a bounded behavior change, not a new build."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds bounded retry-with-backoff behaviour and logging to an existing webhook delivery path."
+   }
+  },
+  {
+   "id": "t047",
+   "title": "Remember-me keyboard focus",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix to existing code with bounded scope: making the keyboard-accessible focus for a checkbox on an existing login page."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Fixing tab focus order for a checkbox is a bounded behavioral bug fix, not just styling."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Making the checkbox reachable with Tab changes keyboard behaviour in existing code, so it is a bounded bug fix rather than a presentation-only edit."
+   }
+  },
+  {
+   "id": "t048",
+   "title": "JSON output for status",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a --json output flag to an existing CLI command is a bounded feature change that modifies behavior without being substantial or cross-cutting."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded addition of an output flag to an existing CLI command, not a new build."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds a small output-format feature to an existing CLI command, changing its behaviour in a bounded way."
+   }
+  },
+  {
+   "id": "t049",
+   "title": "Inject clock in rate limiter",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Refactoring an existing rate limiter to accept injectable dependencies and fixing its tests is a bounded behavior change to existing code."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded refactor of an existing rate limiter to inject a clock and fix flaky tests, not a new build."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded refactor of an existing TokenBucket to inject a clock plus test fixes; small behaviour-affecting change within existing code."
+   }
+  },
+  {
+   "id": "t050",
+   "title": "Invoice date locale",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded behavior change to existing invoice PDF generation: fixing date locale formatting for specific customers without adding new apps or major features."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded bug fix to existing date formatting logic in an existing app."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Making invoice dates follow the account locale is a small behaviour change in an existing app, not just a wording or styling edit."
+   }
+  },
+  {
+   "id": "t051",
+   "title": "Strip BOM in nightly ETL",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix to an existing ETL app: bounded change that modifies behavior by stripping UTF-8 BOM on CSV read."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded bug fix to existing ETL parsing logic, not a new build or presentation-only change."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a bounded bug fix that changes how the existing ETL reads its input."
+   }
+  },
+  {
+   "id": "t052",
+   "title": "Archived filter on tasks API",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a query parameter filter to an existing API endpoint is a bounded behavioral change\u2014a small feature within an existing app."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding an optional query filter to an existing endpoint is a small bounded behavior change."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds a small query filter to an existing endpoint, changing default listing behaviour."
+   }
+  },
+  {
+   "id": "t053",
+   "title": "Dead-letter poison messages",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bug fix for existing Kafka consumer: adds retry logic and dead-letter routing for poison messages within an existing app."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded fix to existing consumer error-handling logic (retry then DLQ), not a new service or major feature."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded behaviour change to an existing consumer: add retry count and publish to an existing DLQ topic."
+   }
+  },
+  {
+   "id": "t054",
+   "title": "Debounce search input",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Bounded behavior change to existing code: a performance optimization (debouncing) applied to an existing search feature."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Debouncing a search input and cancelling in-flight requests is a bounded behavior change to existing code, not a new feature or app."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded behaviour change to an existing search input: a 300ms debounce plus cancelling in-flight requests."
+   }
+  },
+  {
+   "id": "t055",
+   "title": "Rename auth folder",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A small refactor reorganizing code structure (folder rename + import fixes) within an existing app with no behavioral changes."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "It's a bounded rename/refactor touching imports with no behavior change, but it's still a mechanical code change rather than pure styling."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "This is a small refactor across existing code: it moves a folder and rewrites imports, with no new behaviour. Broken imports could still break the app, so it needs more care than a presentation-only edit."
+   }
+  },
+  {
+   "id": "t056",
+   "title": "Request ID in billing logs",
+   "label_tier": 1,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A bounded change to existing billing service code that adds request ID logging to error lines for improved correlation and debugging."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a request id to error log lines is a small bounded change to existing logging behavior."
+   },
+   "opus": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adds the request id to the billing service's error logs, a bounded observability change to an existing app."
+   }
+  },
+  {
+   "id": "t057",
+   "title": "Weekly issues digest",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Creating a new automation service/script that integrates with GitHub API and email systems represents substantial new behavior and infrastructure."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "A small standalone script pulling GitHub issues and emailing a digest is a bounded, self-contained task rather than a new app or a trivial cosmetic edit."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It is a new standalone script that runs on a schedule and sends email, not a change to existing code, though its scope is small."
+   }
+  },
+  {
+   "id": "t058",
+   "title": "Recipe cost calculator",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new recipe cost calculator app from scratch with ingredient management, recipe composition, and cost calculations is a new build with substantial new behavior."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new multi-entity application (ingredients, recipes, costing, pricing logic) rather than a bounded edit to existing code."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It builds a new app from scratch: ingredient and recipe data models, cost calculations and live price updates."
+   }
+  },
+  {
+   "id": "t059",
+   "title": "On-call Slack bot",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Creating a new Slack bot service that integrates with PagerDuty is a new service/application, which falls under tier 2."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new Slack bot service integrating with PagerDuty is a new build, not a bounded change to existing code."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new Slack bot service that integrates with PagerDuty, so it is a new build."
+   }
+  },
+  {
+   "id": "t060",
+   "title": "Callbacks to async/await",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a substantial cross-cutting rewrite of the reporting module affecting all callers throughout the codebase, not a small bounded fix."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "A full rewrite of the reporting module's async model that ripples to every caller is a cross-cutting refactor, not a bounded change."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "It rewrites a whole module and updates every caller across the codebase, which is a cross-cutting refactor."
+   }
+  },
+  {
+   "id": "t061",
+   "title": "Offline mode for inspections app",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Offline-first with local queuing, sync, and conflict resolution is a major feature requiring substantial architectural changes, not a small bounded feature."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Offline queuing, sync, and conflict resolution across a mobile app is substantial new cross-cutting behavior, not a bounded fix."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "The task adds a local edit queue, background sync and conflict resolution between inspectors, which is a major new feature across the app and its sync path."
+   }
+  },
+  {
+   "id": "t062",
+   "title": "OpenAPI breaking-change CLI",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new CLI tool is a new application/build, which constitutes substantial new behaviour and falls under tier 2."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is a new standalone CLI tool/build, not a bounded change to existing code."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new CLI tool from scratch that diffs OpenAPI specs is a new build."
+   }
+  },
+  {
+   "id": "t063",
+   "title": "Clickstream pipeline",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This is building a new analytics pipeline with duckdb ingestion, metric computations (DAU, funnel conversion), and a dashboard\u2014substantial new infrastructure rather than a modification to existing code."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "This builds a new data pipeline, DuckDB ingestion/analytics layer, and dashboard from scratch, not a bounded change to existing code."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Builds a new ingestion pipeline, metrics computation and dashboard, which is substantial new behaviour."
+   }
+  },
+  {
+   "id": "t064",
+   "title": "Internationalise the app",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Internationalization is a cross-cutting refactor that touches many files to extract strings, adds a language switcher component, and introduces new system-level behavior for multi-language support."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Extracting all strings, adding a language switcher, and shipping two new locales is a cross-cutting change touching most of the UI, not a bounded fix."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Pulling every user-facing string out of the app, adding an i18n layer with a language switcher, and shipping two locales is a cross-cutting change with new behaviour, not a copy edit."
+   }
+  },
+  {
+   "id": "t065",
+   "title": "Public status page",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Building a new status page component with incident history tracking is substantial new behavior, not a modification to existing code."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "A new public-facing status page fed by health checks with 90 days of incident history is a new module/feature, not a small bounded change."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "A new public-facing page plus 90-day incident history fed from health checks is a new feature/module, not a bounded change."
+   }
+  },
+  {
+   "id": "t066",
+   "title": "Swap charting library",
+   "label_tier": 2,
+   "label_sensitive": false,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Replacing a charting library across all dashboards is a cross-cutting refactor affecting multiple components systematically."
+   },
+   "sonnet": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "A cross-cutting refactor replacing the charting library across all dashboards touches many components even though visual output is unchanged."
+   },
+   "opus": {
+    "tier": 2,
+    "sensitive": false,
+    "reason": "Swapping out the charting library on every dashboard is a refactor that touches the whole app, not a bounded fix, even though the look stays the same."
+   }
+  },
+  {
+   "id": "t067",
+   "title": "Google sign-in",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding Google sign-in capability changes authentication, which is a sensitive surface that requires tier 3 rigor."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding Google sign-in to an existing app is a bounded feature addition, not a new build or a rewrite."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding Google sign-in changes authentication, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t068",
+   "title": "Stripe key storage",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "The task modifies how API keys (a sensitive credential) are stored and managed, which is explicitly a sensitive surface."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Moving a Stripe API key out of config.py into secure storage is a credentials/secrets handling change."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Moving the Stripe API key out of config.py into safer storage changes how a secret is handled, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t069",
+   "title": "Admin users page",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding a new admin-only page listing users is a bounded, small feature within an existing app."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding a bounded new page to an existing app, backed by existing user/activity data, is a small feature not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "The new page lists every user's activity and must be restricted to admins, so it adds an access-control rule."
+   }
+  },
+  {
+   "id": "t070",
+   "title": "Authenticator 2FA",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This modifies the authentication surface by adding two-factor authentication (TOTP) with recovery codes to user accounts."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding TOTP-based 2FA with recovery codes is substantial new authentication behavior, not a small bounded fix."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding TOTP two-factor authentication and recovery codes changes the authentication flow."
+   }
+  },
+  {
+   "id": "t071",
+   "title": "Mid-cycle upgrade proration",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Bounded feature adding mid-cycle upgrade proration logic to existing billing system"
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It's a bounded behavior change (proration calculation and immediate charge timing) inside an existing billing feature, not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Changing when and how much a customer is charged on upgrade touches billing and payments."
+   }
+  },
+  {
+   "id": "t072",
+   "title": "Customer region backfill",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This task changes sensitive surfaces: it modifies database schema by adding a column and performs a data migration by backfilling all existing customer rows."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding a column and backfilling it is a bounded change to an existing app's data model, not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding a column and backfilling it for every existing customer row is a schema change plus a data migration, and that counts as a sensitive surface."
+   }
+  },
+  {
+   "id": "t073",
+   "title": "Replicas and readiness probe",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Modifying k8s deployment manifests changes infrastructure, which is a sensitive surface."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It's a bounded config change to an existing deployment (replica count, readiness probe) rather than a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Editing Kubernetes deployment manifests changes deployment infrastructure, which counts as a sensitive surface."
+   }
+  },
+  {
+   "id": "t074",
+   "title": "Idle session expiry",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Modifying session expiry behavior directly changes a sensitive surface: authentication and session management."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Changing session expiry is a bounded fix but touches the session/auth mechanism directly."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding an idle timeout to an existing app changes session handling, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t075",
+   "title": "Encrypt notes at rest",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This task changes encryption and involves data migration of existing data by encrypting existing notes."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Encrypting notes at rest plus migrating existing stored notes changes a sensitive data/encryption surface."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It adds encryption at rest and migrates existing data, both sensitive surfaces."
+   }
+  },
+  {
+   "id": "t076",
+   "title": "Viewers cannot delete",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This task changes permissions and access control\u2014a sensitive surface\u2014by restricting project deletion to specific roles."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It's a bounded permission-check fix (restrict delete to editors/owners) inside an existing app."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Restricting project deletion by role changes access-control behaviour in an existing app."
+   }
+  },
+  {
+   "id": "t077",
+   "title": "DB password into Vault",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Bounded change to existing app that changes behavior: integrating credential rotation and vault-based secret management into existing startup flow."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Rotating a DB password and moving secret management to Vault touches the sensitive credentials/secrets surface."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Rotating the database password and moving it into a secrets vault changes how credentials are stored and loaded, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t078",
+   "title": "Refund actually refunds",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This task modifies payment processing by implementing actual refund transfers to customer cards, which changes a sensitive surface (payments/invoicing)."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Bug fix inside an existing refund flow to actually process the payment reversal, not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Making refunds actually return money means calling the payment provider, which touches payments."
+   }
+  },
+  {
+   "id": "t079",
+   "title": "Argon2 password hashing",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This changes password hashing and encryption, which are sensitive surfaces per the definition."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Changing the password hashing algorithm and adding transparent hash migration on login is a sensitive-surface change, which forces tier 3."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It changes how passwords are hashed and rewrites stored credential hashes when users log in."
+   }
+  },
+  {
+   "id": "t080",
+   "title": "Open Postgres to VPN",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Changes infrastructure and access control by opening database network access via Terraform security group rules."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It modifies a security group/firewall rule in Terraform, a sensitive infra surface."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "The Terraform change adds an ingress rule to a security group, which changes infrastructure and network access control."
+   }
+  },
+  {
+   "id": "t081",
+   "title": "Invite teammates with roles",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Assigning roles (viewer/editor/admin) directly changes permissions and access control, a sensitive surface."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adds role-based invite functionality to an existing app, a bounded feature addition."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It adds role-based invitations, which grant workspace access and so touch a sensitive surface."
+   }
+  },
+  {
+   "id": "t082",
+   "title": "Split name column",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "The task performs a schema change to existing data by splitting a column and dropping the original, which is explicitly listed as a sensitive surface."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It's a bounded data transformation and column change to an existing app's schema, not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It is a data migration that rewrites a column for every existing user and drops the old one, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t083",
+   "title": "Magic links never expire",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This modifies magic link authentication to add expiration and single-use constraints, changing how the authentication system works."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding expiration and single-use enforcement to magic-link sign-in tokens changes authentication logic."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding expiry and single-use enforcement to magic-link sign-in changes how authentication works."
+   }
+  },
+  {
+   "id": "t084",
+   "title": "Share publicly toggle",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adds a bounded feature (public share toggle) to an existing app with real behavior changes but no new service or major rewrite."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding a share toggle is a bounded feature addition to an existing document app, not a new app or major rewrite."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Public link sharing without login changes who can access documents, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t085",
+   "title": "Manual approval for prod deploys",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Modifies deployment infrastructure by requiring manual approval for production deployments"
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It's a bounded change to an existing CI/CD workflow adding an approval gate, not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Changes the deployment pipeline, which is a sensitive surface."
+   }
+  },
+  {
+   "id": "t086",
+   "title": "Sales tax at checkout",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 1,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding sales tax calculation changes the final amount billed to customers, which is a sensitive payment/billing surface."
+   },
+   "sonnet": {
+    "tier": 1,
+    "sensitive": false,
+    "reason": "Adding sales tax calculation to an existing checkout flow is a bounded feature addition, not a new build."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Adding sales tax changes the checkout total the customer is charged, which is a payments and billing surface."
+   }
+  },
+  {
+   "id": "t087",
+   "title": "Expense reimbursement app",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": true,
+   "keyword": {
+    "tier": 2,
+    "sensitive": false
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Building a new app with explicit permissions and access control requirements (employees cannot see others' claims, manager approval gates exports)."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "This is a new multi-role application with submission, approval, and export workflows, not a bounded change to existing code."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "It is a new app, and it builds role-based access control and a bank-payment export, which are sensitive surfaces."
+   }
+  },
+  {
+   "id": "t088",
+   "title": "Regenerate API key",
+   "label_tier": 3,
+   "label_sensitive": true,
+   "ambiguous": false,
+   "keyword": {
+    "tier": 3,
+    "sensitive": true
+   },
+   "haiku": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "A bounded change to an existing app that adds functional behavior: masking API keys in the UI and implementing a regenerate button that revokes old keys and creates new ones."
+   },
+   "sonnet": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Bounded change to an existing settings page: masking display logic plus a regenerate/revoke action, not a new app or module."
+   },
+   "opus": {
+    "tier": 3,
+    "sensitive": true,
+    "reason": "Regenerating API keys and revoking the old key changes how credentials work, which makes this a sensitive-surface task."
+   }
+  }
+ ]
+}

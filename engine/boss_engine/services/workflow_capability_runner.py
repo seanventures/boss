@@ -1236,6 +1236,17 @@ def execute_step(
         except agent_steps.AgentStepError as error:
             raise CapabilityExecutionError(str(error)) from error
 
+    # A question with its answers named up front — see services/typed_decisions.py. It binds no
+    # capability either, so it is checked before the capability lookup for the same reason.
+    if binding.get("typed_decision"):
+        from . import typed_decisions
+
+        state = _resolve_inputs(binding.get("inputs") or {}, context).get("state")
+        try:
+            return typed_decisions.run_step(getattr(ctx, "settings", None), binding, state)
+        except Exception as error:  # noqa: BLE001 — the step records the sentence
+            raise CapabilityExecutionError(f"typed decision failed: {error}") from error
+
     # A step the customer defined. Checked first because it is the only kind that has no
     # capability key at all — falling through to the capability lookup would report it as an
     # unknown capability, which is true and useless.

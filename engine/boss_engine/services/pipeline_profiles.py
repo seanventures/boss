@@ -306,6 +306,69 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
     return clamped
 
 
+# The same four tiers infer_risk_tier picks between, described by what they cost, so a model
+# judges the work rather than the vocabulary. Kept beside the keyword version because the two
+# must mean the same thing: evals/task_rigor measures one against the other.
+def _rigor_questions():
+    from .typed_decisions import Question
+
+    return [
+        Question(
+            key="tier",
+            instructions="How much rigor does this software task need?",
+            options={
+                "0": "Presentation-only edit to code that already exists: styling, colours, "
+                     "spacing, wording, labels, icons, typos. No behaviour changes.",
+                "1": "Bounded change to existing code that does change behaviour: a bug fix, "
+                     "a small feature inside an existing app, a validation rule, a small refactor.",
+                "2": "A new build or substantial new behaviour: a new app, service or module, "
+                     "a major feature, a cross-cutting refactor or a rewrite.",
+                "3": "Changes a sensitive surface (see the sensitive question).",
+            },
+        ),
+        Question(
+            key="sensitive",
+            instructions=(
+                "Does this task actually change authentication or sessions, passwords, "
+                "credentials, secrets or API keys, payments, billing or invoicing, encryption, "
+                "data migrations or schema changes to existing data, deployment or "
+                "infrastructure, or permissions and access control? Mentioning one of those "
+                "words is not changing it: restyling a login button is 'no'."
+            ),
+            options={"yes": "It changes a sensitive surface.", "no": "It does not."},
+        ),
+    ]
+
+
+def model_risk_tier(spec: dict, profile: dict, decider) -> dict:
+    """infer_risk_tier, judged by a model instead of keyword lists.
+
+    Same precedence and the same safety floor: an explicit tier still wins, and a task the model
+    calls sensitive never runs below tier 2 whatever the profile says. Returns the clamped tier
+    plus the raw judgement, so a caller can log why and fall back when the model fails.
+    """
+    haystack = _task_haystack(spec)
+    existing = _is_incremental_change("", spec)  # only the structural signals, not the wording
+    context = haystack + ("\n\n(This modifies an app that already exists.)" if existing else "")
+    batch = decider.decide(context, _rigor_questions())
+    tier_d, sens_d = batch.decisions.get("tier"), batch.decisions.get("sensitive")
+    ok = bool(tier_d and tier_d.answer is not None and sens_d and sens_d.answer is not None)
+    sensitive = bool(sens_d and sens_d.answer == "yes")
+    explicit = spec.get("risk_tier")
+    if isinstance(explicit, int) and 0 <= explicit <= 3:
+        tier = explicit
+    elif not ok:
+        tier = infer_risk_tier(spec, profile)  # the model failed; the keyword answer stands
+    elif sensitive:
+        tier = 3
+    else:
+        tier = min(int(tier_d.answer), 2)
+    clamped = max(int(profile.get("tier_floor", 0)), min(int(profile.get("tier_cap", 3)), tier))
+    if sensitive:
+        clamped = max(clamped, 2)
+    return {"tier": clamped, "raw_tier": tier, "sensitive": sensitive, "ok": ok, "batch": batch}
+
+
 def model_for_step(profile: dict, step: str) -> str:
     """Which model class (low_cost|strong) a step should use under this profile."""
     routing = profile.get("model", {}) or {}
