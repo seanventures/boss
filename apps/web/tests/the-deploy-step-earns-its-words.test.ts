@@ -156,15 +156,20 @@ describe("an explanation sits on the thing it explains", () => {
     expect(UI).toContain('label="How setting a target works"');
     expect(UI).toContain('label="What stopping does"');
     expect(UI).toContain('label="What restarting does"');
+    expect(UI).toContain('label="What removing does"');
   });
 });
 
 describe("the footer is a row of actions, not a column of essays", () => {
   it("each button carries its own explanation", () => {
     expect(UI).toContain('data-testid="dw-run-actions"');
-    // Five since stopping became possible: re-check, stop, stop-and-run-again, run again,
-    // and build-on-this-research.
-    expect(UI.split('className="dw-run-action"').length - 1).toBe(5);
+    // Six since a finished run became removable: re-check, stop, stop-and-run-again, run
+    // again, build-on-this-research, and remove.
+    const actions = UI.split('className="dw-run-action"').length - 1;
+    expect(actions).toBe(6);
+    // THE POINT OF THE COUNT IS THAT EACH ONE EXPLAINS ITSELF, not the number. A new action
+    // that arrives without an `Explain` beside it is the thing this is guarding against.
+    expect(UI.split("<Explain label=").length - 1).toBeGreaterThanOrEqual(actions);
   });
 
   it("and none of them is followed by a permanent paragraph", () => {

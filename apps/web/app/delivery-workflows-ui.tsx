@@ -13,7 +13,8 @@ import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
-import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
+import { inputsWithTheDirective, missingRequired, workflowInputFields }
+  from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { RunReportPanel } from "./run-report-ui";
 
@@ -947,6 +948,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onStop={(run) => act("Stop", "stop", {
             run_id: run.id, reason: "stopped by the operator from the console",
           })}
+          onDelete={async (run) => {
+            // ASKED, BECAUSE IT CANNOT BE UNDONE. The only irreversible thing on this screen.
+            if (!window.confirm(
+              `Remove this ${run.workflow_name} run for good?\n\n`
+              + "Its steps and history go with it. Anything it produced — files, issues, "
+              + "anything published — is untouched. This cannot be undone.")) return;
+            setBusy("Remove");
+            setNotice(null);
+            try {
+              const query = new URLSearchParams({
+                project_id: projectId, actor, run_id: run.id,
+              });
+              const response = await fetch(`/api/delivery-workflows?${query}`,
+                                           { method: "DELETE" });
+              const body = await response.json().catch(() => ({}));
+              setNotice(response.ok
+                ? "Removed."
+                : `Remove — ${(body as { error?: string }).error ?? response.status}`);
+              if (response.ok) { setOpenRun(null); await load(); }
+            } finally {
+              setBusy(null);
+            }
+          }}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
@@ -1527,13 +1551,22 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
     (w) => w.workflow_key === draft.workflowKey)?.input_schema;
   const declaredInputs = workflowInputFields(selectedWorkflowSchema);
 
+  // WHAT WILL ACTUALLY BE SENT, worked out once and used for the guard, the review and the
+  // start — three places that disagreed. The operator's directive stands in for a single blank
+  // prose input rather than being asked for twice; see `inputsWithTheDirective`.
+  const inputsToSend = inputsWithTheDirective(declaredInputs, draft.inputs, draft.directive);
+  const stillBlank = missingRequired(declaredInputs, inputsToSend);
+
+  // `??` WAS WRONG HERE AND IT COST A RUN. `blockingReason` returns "" for "nothing is
+  // blocking", and "" is neither null nor undefined, so the right-hand side never ran and this
+  // whole check was dead code: a required input left blank sailed past the form and was refused
+  // by the runtime instead, as `WorkflowValidationError: this workflow needs 1 input(s) it was
+  // not given: instructions` under a button that had looked perfectly ready to press.
   const blocked = blockingReason(step, draft, declaredInputs.length > 0)
     // A required input still blank blocks the start, and says which one — the run would be
     // refused by the runtime anyway, and being told at the form is the difference between a
     // correction and a failed run.
-    ?? (missingRequired(declaredInputs, draft.inputs).length
-        ? `Needs ${missingRequired(declaredInputs, draft.inputs).join(", ")}`
-        : null);
+    || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "");
 
   const start = async () => {
     // WHAT THIS RUN IS CALLED, when the operator wrote no brief.
@@ -1572,7 +1605,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
           // WHAT THIS WORKFLOW DECLARED IT NEEDS. from_input resolves any field name, so a
           // step binding `video_url` reads it straight from here. Only filled-in values are
           // sent: an empty string would read further down as a deliberate choice of empty.
-          ...suppliedInputs(workflowInputFields(selectedWorkflowSchema), draft.inputs),
+          ...inputsToSend,
         },
       });
       if (!r.ok) { setError(r.error ?? "Could not start it."); return; }
@@ -1660,7 +1693,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
                 // it is the same "Start with defaults" the footer offers, from the keyboard.
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
-                  if (!blockingReason(0, draft)) void start();
+                  if (!blocked) void start();
                 }
               }}
             />
@@ -1979,6 +2012,27 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
                 </select>
               </div>
             </dd>
+            {/* WHAT THE WORKFLOW WILL BE GIVEN. The review listed the brief, the path, the
+                repository and the agents, and said nothing about the fields the run is
+                actually started from — so an operator whose directive is standing in for the
+                instruction could not see that it was. */}
+            {declaredInputs.length ? (
+              <>
+                <dt>It will be given</dt>
+                <dd data-testid="dw-review-inputs">
+                  <ul>
+                    {declaredInputs
+                      .filter((f) => inputsToSend[f.name])
+                      .map((f) => (
+                        <li key={f.name}>
+                          <span className="detail">{f.label}: </span>
+                          {inputsToSend[f.name]}
+                        </li>
+                      ))}
+                  </ul>
+                </dd>
+              </>
+            ) : null}
             {criteriaFrom(draft).length ? (
               <>
                 <dt>Done when</dt>
@@ -2017,7 +2071,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
         {step < STEPS.length - 1 ? (
           <>
             <button type="button" className="linklike" data-testid="dw-wiz-start-now"
-                    disabled={busy || !!blockingReason(0, draft)}
+                    disabled={busy || !!blocked}
                     onClick={() => void start()}>
               {busy ? "Starting…" : "Start with defaults"}
             </button>
@@ -2027,7 +2081,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
           </>
         ) : (
           <button type="button" className="cap-btn primary" data-testid="dw-new-start"
-                  disabled={busy || !!blockingReason(0, draft)}
+                  disabled={busy || !!blocked}
                   onClick={() => void start()}>
             {busy ? "Starting…" : "Start the project"}
           </button>
@@ -2092,7 +2146,8 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onStop, onStopAndRerun, onBuildOnThis, onRecheck,
+                   onRetryStep, onRerun, onStop, onDelete, onStopAndRerun, onBuildOnThis,
+                   onRecheck,
                    onSetTarget, onPrepareTarget,
                    onRunPreview,
                    onBound, projectId, actor, roles,
@@ -2112,6 +2167,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   onRerun: (run: Run) => void;
   /** Stop a live run: cancels the work it started, not only its bookkeeping. */
   onStop: (run: Run) => void;
+  onDelete: (run: Run) => void;
   /** Stop it and start the same workflow again on the same directive, in that order. */
   onStopAndRerun: (run: Run) => void;
   onBuildOnThis: (run: Run) => void;
@@ -2256,6 +2312,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
                         onStop={() => onStop(run)}
+                        onDelete={() => onDelete(run)}
                         onStopAndRerun={() => onStopAndRerun(run)}
                         onBuildOnThis={() => onBuildOnThis(run)}
                         busy={busy}
@@ -2373,7 +2430,7 @@ export function decidedButNotMoved(step: RunStep): string {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onStop,
+function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onStop, onDelete,
                    onStopAndRerun, onBuildOnThis, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
@@ -2385,6 +2442,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
   onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
   /** Stop a live run — the work it started, not only its bookkeeping. */
   onStop: () => void;
+  onDelete: () => void;
   /** Stop it and start the same workflow again from the beginning, in that order. */
   onStopAndRerun: () => void;
   onBuildOnThis: () => void;
@@ -2678,16 +2736,35 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
             </span>
           </>
         ) : (
-          <span className="dw-run-action">
-            <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
-                    data-testid="dw-rerun">
-              {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
-            </button>
-            <Explain label="What running it again does">
-              Starts {run.workflow_name} again on the same directive — its own research, its own
-              panel, its own build. The existing run is left as it is.
-            </Explain>
-          </span>
+          <>
+            <span className="dw-run-action">
+              <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
+                      data-testid="dw-rerun">
+                {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
+              </button>
+              <Explain label="What running it again does">
+                Starts {run.workflow_name} again on the same directive — its own research, its
+                own panel, its own build. The existing run is left as it is.
+              </Explain>
+            </span>
+            {/* GETTING RID OF IT. There was no way to remove a run at all: stopping leaves the
+                row, and a run that failed is already finished, so stopping one did nothing.
+                Building one workflow left eighteen on this screen with no way to clear any of
+                them. Offered only on a run that is over — a run still going is stopped first,
+                because deleting the record while the work carries on is the failure that once
+                cost a production database. */}
+            <span className="dw-run-action">
+              <button type="button" className="cap-btn dw-stop" disabled={!!busy}
+                      data-testid="dw-delete-run" onClick={onDelete}>
+                {busy === "Remove" ? "Removing…" : "Remove this run"}
+              </button>
+              <Explain label="What removing does">
+                Takes this run off the screen for good, with its steps and its history. Nothing
+                it produced is touched — files it wrote, issues it opened and anything it
+                published stay exactly where they are. It cannot be undone.
+              </Explain>
+            </span>
+          </>
         )}
         {/* THE ANSWER TO "I DON'T WANT TO PAY FOR THAT RESEARCH TWICE".
             Offered only where it means something: a finished run that actually produced a

@@ -3257,6 +3257,58 @@ def resume_run(
     return advance_run(connection, project_id, run_id)
 
 
+#: Every column that points at a run and does NOT cascade. They are all nullable, so a deleted
+#: run leaves the panel or studio record it belonged to intact, holding nothing instead of a
+#: dangling id. Listed here rather than discovered at DELETE time, because the first anyone would
+#: hear of a missing one is a foreign key violation in front of an operator.
+POINTS_AT_A_RUN = (
+    ("workflow_runs", "parent_run_id"),
+    ("workflow_step_runs", "child_workflow_run_id"),
+    ("panel_runs", "workflow_run_id"),
+    ("agent_studio_runs", "workflow_run_id"),
+    ("agent_group_runs", "workflow_run_id"),
+)
+
+
+def delete_run(connection: Connection, project_id: str, run_id: str, actor: str) -> dict[str, Any]:
+    """Remove a finished run and everything it owns.
+
+    WHY THIS EXISTS. There was no way to get rid of a run at all. Cancelling stops the work and
+    leaves the row, and a deadlettered run is already terminal, so cancelling one does nothing —
+    the operator is simply stuck with it. Eighteen runs from building one workflow filled the
+    console: "lots of workflows shows error and waiting… please clean up the mess please."
+
+    A run that is still going is NOT deleted, it is refused. Deleting the bookkeeping while the
+    work carries on is the failure `cancel_run` documents above it, one table further down. Cancel
+    it first, which stops the work, and then it can be removed.
+
+    The steps, migrations and compensation rows go with it by cascade. The records that merely
+    POINT at it — a panel, a studio run — are kept and their reference cleared: they are somebody
+    else's rows, and deleting them because they mention this one would be the tidy-up destroying
+    more than it was asked to.
+    """
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] not in TERMINAL_RUN_STATES and run["status"] != "cancelled":
+        raise WorkflowError(
+            f"That run is {run['status']}, and work that is still going cannot be deleted. "
+            "Cancel it first — that stops the work — and then it can be removed.")
+
+    for table, column in POINTS_AT_A_RUN:
+        connection.execute(
+            text(f"UPDATE {table} SET {column} = NULL WHERE {column} = :run_id"),
+            {"run_id": run_id},
+        )
+    # Recorded BEFORE the row goes, so the event has something to say about what was removed.
+    emit_event(
+        connection, project_id, "workflow.run_deleted", actor, "workflow_run", run_id,
+        {"status": run["status"], "workflow_definition_id": run["workflow_definition_id"]},
+    )
+    connection.execute(text("DELETE FROM workflow_runs WHERE id = :id"), {"id": run_id})
+    return {"run_id": run_id, "deleted": True, "was": run["status"]}
+
+
 def cancel_run(
     connection: Connection,
     project_id: str,

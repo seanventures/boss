@@ -22504,6 +22504,27 @@ def save_delivery_workflow(payload: dict) -> dict:
         return {"version": version}
 
 
+@app.delete("/v1/delivery-workflows/runs/{run_id}")
+def delete_delivery_workflow_run(run_id: str, project_id: str,
+                                 actor: str = "operator") -> dict:
+    """Remove a finished run from the console.
+
+    There was no way to get rid of a run at all. Cancelling stops the work and leaves the row,
+    and a deadlettered run is already terminal — so cancelling one does nothing and the operator
+    is stuck looking at it. Building one workflow left eighteen of them on the screen.
+
+    A run that is still going is refused, with what to do instead. See `workflows.delete_run`.
+    """
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
+        try:
+            return workflow_runtime.delete_run(connection, project_id, run_id, actor)
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.delete("/v1/delivery-workflows/{definition_id}")
 def delete_delivery_workflow(definition_id: str, project_id: str,
                              actor: str = "operator") -> dict:

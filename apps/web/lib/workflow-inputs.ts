@@ -107,3 +107,29 @@ export function missingRequired(
     .filter((f) => f.required && !(values[f.name] ?? "").trim())
     .map((f) => f.label);
 }
+
+/**
+ * The directive standing in for a workflow's one prose input, when the operator left it blank.
+ *
+ * "Can you please follow the prompt in this file <link> and produce the outcome" went in the
+ * Building box, and the run was refused: `this workflow needs 1 input(s) it was not given:
+ * instructions`. The operator HAD said what they wanted. They said it in the box the form put
+ * in front of them first, and were then asked to say it again in a field further in.
+ *
+ * That is the same double-entry that made `video_url` a required field — a link in one box and
+ * the instruction in another, failing the start of a run that had said everything it needed.
+ *
+ * ONLY WHEN THERE IS NO AMBIGUITY: exactly one required field is still blank and it takes
+ * prose. Two blank fields and there is no telling which the directive was meant for, so it asks.
+ */
+export function inputsWithTheDirective(
+  fields: WorkflowInputField[], values: Record<string, string>, directive: string,
+): Record<string, string> {
+  const supplied = suppliedInputs(fields, values);
+  const blank = fields.filter((f) => f.required && !supplied[f.name]);
+  const text = directive.trim();
+  if (blank.length !== 1 || !text) return supplied;
+  const [only] = blank;
+  if (only.kind !== "multiline" && only.kind !== "text") return supplied;
+  return { ...supplied, [only.name]: text };
+}

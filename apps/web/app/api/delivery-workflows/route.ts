@@ -281,6 +281,18 @@ export async function DELETE(req: Request) {
   const key = params.get("step_key")?.trim() ?? "";
   const actor = params.get("actor")?.trim() || "operator";
   const scheduleId = params.get("schedule_id")?.trim() ?? "";
+  // REMOVING A FINISHED RUN. A DELETE verb rather than another POST action, for the reason
+  // given above the step delete: an action name is a string, and a typo in one must not be
+  // able to destroy something.
+  const runId = params.get("run_id")?.trim() ?? "";
+  if (runId) {
+    if (!project) {
+      return NextResponse.json({ error: "project_id is required" }, { status: 400 });
+    }
+    return proxyDelete(
+      `/v1/delivery-workflows/runs/${encodeURIComponent(runId)}`
+        + `?project_id=${encodeURIComponent(project)}&actor=${encodeURIComponent(actor)}`);
+  }
   if (scheduleId) {
     if (!project) {
       return NextResponse.json({ error: "project_id is required" }, { status: 400 });

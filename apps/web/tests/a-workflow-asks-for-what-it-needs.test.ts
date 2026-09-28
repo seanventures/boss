@@ -1,8 +1,20 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
+import { blockingReason } from "../app/delivery-workflows-ui";
 import {
-  missingRequired, suppliedInputs, workflowInputFields,
+  inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields,
 } from "../lib/workflow-inputs";
+
+const UI_SRC = readFileSync(
+  new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+/** A draft with nothing in it, for the reasons `blockingReason` gives back. */
+const EMPTY: Parameters<typeof blockingReason>[1] = {
+  title: "", directive: "", audience: "", criteria: [], links: [],
+  workflowKey: "", repository: "", agents: [], inputs: {},
+};
 
 /**
  * The start form renders FROM the workflow's declaration, so a workflow whose steps read
@@ -85,5 +97,81 @@ describe("a workflow asks for what it needs", () => {
     const fields = workflowInputFields(JSON_SCHEMA);
     expect(missingRequired(fields, {})).toEqual(["Video to publish"]);
     expect(missingRequired(fields, { video_url: "https://x" })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The guard that never ran
+// ---------------------------------------------------------------------------
+// "Can you please follow the prompt in this file <link> and produce the outcome" went in the
+// Building box, the operator pressed Start the project, and the RUNTIME refused it:
+//
+//     WorkflowValidationError: this workflow needs 1 input(s) it was not given: instructions
+//
+// The form had a check for exactly this. It was written with `??`, and `blockingReason` returns
+// "" rather than null when nothing is blocking — so the right-hand side never evaluated and the
+// check was dead code under a button that looked ready to press.
+describe("a required input left blank", () => {
+  const UI = readFileSync(new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("is caught by the form rather than by the runtime", () => {
+    expect(UI).toContain("|| (stillBlank.length ? `Needs ${stillBlank.join(\", \")}` : \"\")");
+    expect(UI).not.toContain("?? (missingRequired(");
+  });
+
+  it("disables the start buttons, not just the message", () => {
+    expect(UI).not.toContain("disabled={busy || !!blockingReason(0, draft)}");
+    const starts = UI.match(/disabled=\{busy \|\| !!blocked\}/g) ?? [];
+    expect(starts.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("blockingReason really does return an empty string, which is why ?? was wrong", () => {
+    expect(blockingReason(0, { ...EMPTY, directive: "a".repeat(40) })).toBe("");
+    expect(blockingReason(1, EMPTY)).toBe("");
+  });
+});
+
+describe("the directive stands in for a single blank prose input", () => {
+  const FIELDS = workflowInputFields({
+    required: ["instructions"],
+    properties: {
+      instructions: { title: "What you want done", format: "textarea" },
+      video_url: { title: "Video link" },
+    },
+  });
+
+  it("is used when the operator wrote it once, in the first box", () => {
+    const out = inputsWithTheDirective(FIELDS, {}, "Follow the prompt in this file and publish");
+    expect(out.instructions).toBe("Follow the prompt in this file and publish");
+  });
+
+  it("does not overwrite what the operator actually typed in the field", () => {
+    const out = inputsWithTheDirective(
+      FIELDS, { instructions: "Keep 3:42 to 4:50" }, "something else entirely");
+    expect(out.instructions).toBe("Keep 3:42 to 4:50");
+  });
+
+  it("declines when two required fields are blank, because it cannot tell which", () => {
+    const two = workflowInputFields({
+      required: ["instructions", "channel"],
+      properties: { instructions: { format: "textarea" }, channel: {} },
+    });
+    expect(inputsWithTheDirective(two, {}, "a directive")).toEqual({});
+  });
+
+  it("declines for a field that does not take prose", () => {
+    const numeric = workflowInputFields({
+      required: ["seconds"], properties: { seconds: { type: "number" } },
+    });
+    expect(inputsWithTheDirective(numeric, {}, "a directive")).toEqual({});
+  });
+
+  it("sends nothing extra when there is no directive", () => {
+    expect(inputsWithTheDirective(FIELDS, {}, "   ")).toEqual({});
+  });
+
+  it("is what gets sent, and what the review shows", () => {
+    expect(UI_SRC).toContain("...inputsToSend,");
+    expect(UI_SRC).toContain('data-testid="dw-review-inputs"');
   });
 });
