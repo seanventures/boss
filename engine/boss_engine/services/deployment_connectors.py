@@ -779,7 +779,7 @@ class SSHContainerConnector:
         # no operation for these kinds, so there can be no policy approval or expected
         # ResourceReceipt for the host write. Keep Community read/plan paths available, but
         # stop every execution entrypoint here before credentials or SSH are touched.
-        if str(getattr(settings, "boss_edition", "community")).strip().lower() == "community":
+        if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
             return {"status": "blocked", "problems": [
                 "Community SSH deployment is disabled until it uses an approved "
                 "Resource Plane ChangeSet, budget reservation, and ResourceReceipt"

@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
@@ -11,12 +12,13 @@ from boss_engine.services import delivery_pipeline, deploy_service, deployment_c
 HOME = "boss-dogfood"
 
 
+@pytest.mark.parametrize("edition", ["community", "oss", "local"])
 def test_community_ssh_deploy_never_bootstraps_or_writes_host(
-    engine, monkeypatch,
+    engine, monkeypatch, edition,
 ):
     connector = deployment_connectors.SSHContainerConnector()
     effects = []
-    monkeypatch.setattr(api_main.settings, "boss_edition", "community")
+    monkeypatch.setattr(api_main.settings, "boss_edition", edition)
     monkeypatch.setattr(
         connector, "validate", lambda *_args: effects.append("validate") or []
     )
@@ -45,13 +47,14 @@ def test_community_ssh_deploy_never_bootstraps_or_writes_host(
     assert effects == []
 
 
+@pytest.mark.parametrize("edition", ["community", "oss", "local"])
 def test_community_ssh_plan_records_blocked_decision_before_build(
-    client, engine, monkeypatch,
+    client, engine, monkeypatch, edition,
 ):
     suffix = uuid4().hex[:10]
     key = f"deploy-plan-key-{suffix}"
     target_id = f"deptgt_plan_{suffix}"
-    monkeypatch.setattr(api_main.settings, "boss_edition", "community")
+    monkeypatch.setattr(api_main.settings, "boss_edition", edition)
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
     monkeypatch.setattr(api_main.settings, "api_keys", key)
     monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:ceo")

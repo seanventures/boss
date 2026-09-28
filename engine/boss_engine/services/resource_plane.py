@@ -2414,7 +2414,7 @@ class ResourcePlaneService:
         rollback_plan = self._deployment_rollback_plan(target)
         if (
             str(getattr(self.settings, "boss_edition", "community")).strip().lower()
-            == "community"
+            in {"community", "oss", "local"}
             and str(target["target_kind"]).strip().lower() in {"ssh", "container"}
         ):
             # These connectors currently produce no Resource Plane operation, so a
