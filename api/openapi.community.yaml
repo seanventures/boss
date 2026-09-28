@@ -1597,9 +1597,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/OrgOnboardBody'
         required: true
       responses:
         '201':
@@ -4139,9 +4137,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentTargetCreateBody'
       responses:
         '201':
           description: Successful Response
@@ -4207,9 +4203,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentTargetUpdateBody'
       responses:
         '200':
           description: Successful Response
@@ -4239,9 +4233,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentTargetTeardownBody'
       responses:
         '200':
           description: Successful Response
@@ -4271,9 +4263,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentTargetPurgeBody'
       responses:
         '200':
           description: Successful Response
@@ -4358,9 +4348,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/SecretPutBody'
       responses:
         '201':
           description: Successful Response
@@ -4382,9 +4370,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/SecretKeypairBody'
         required: true
       responses:
         '201':
@@ -4480,9 +4466,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/TargetSecretBindBody'
       responses:
         '200':
           description: Successful Response
@@ -4674,9 +4658,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ObservabilityStackDeployBody'
         required: true
       responses:
         '200':
@@ -4849,9 +4831,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ManualDeployBody'
         required: true
       responses:
         '200':
@@ -4910,9 +4890,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentHostRegisterBody'
       responses:
         '200':
           description: Successful Response
@@ -4955,9 +4933,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentHostUpdateBody'
       responses:
         '200':
           description: Successful Response
@@ -5034,9 +5010,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentHostAdoptKeyBody'
       responses:
         '200':
           description: Successful Response
@@ -5225,9 +5199,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentHostAttachBody'
       responses:
         '200':
           description: Successful Response
@@ -5254,9 +5226,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/DeploymentHostBackfillBody'
         required: true
       responses:
         '200':
@@ -5294,9 +5264,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/AutoDeployBody'
       responses:
         '200':
           description: Successful Response
@@ -5447,9 +5415,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/DeploymentPromoteBody'
       responses:
         '200':
           description: Successful Response
@@ -16462,9 +16428,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ProviderUsageIngestBody'
         required: true
       responses:
         '201':
@@ -16490,9 +16454,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/ProviderUsageSyncBody'
         required: true
       responses:
         '200':
@@ -18051,9 +18013,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
-              title: Payload
+              $ref: '#/components/schemas/ProjectSettingBody'
       responses:
         '200':
           description: Successful Response
@@ -30324,7 +30284,7 @@ paths:
   /v1/delivery/first-deploy:
     post:
       summary: Create Deployment Endpoint
-      description: 'Deploy a successful build to an existing target — the FIRST deployment.
+      description: 'Plan a successful build''s first deployment to an existing target.
 
 
         BOSS could create hosts and targets and could redeploy, but nothing could perform a
@@ -30348,9 +30308,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/FirstDeployBody'
         required: true
       responses:
         '200':
@@ -30410,9 +30368,7 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
-              type: object
-              title: Payload
+              $ref: '#/components/schemas/DecisionModelKeyBody'
         required: true
       responses:
         '201':
@@ -32459,6 +32415,28 @@ components:
       - actor_binding_required
       - message
       title: AuthSessionResponse
+    AutoDeployBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        auto_deploy:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Auto Deploy
+        paused:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Paused
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      title: AutoDeployBody
     AutonomyChangeSummary:
       properties:
         id:
@@ -36339,6 +36317,34 @@ components:
       - project_id
       - items
       title: DecisionInboxResponse
+    DecisionModelKeyBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        api_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Key
+          writeOnly: true
+        accept_database_fallback:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Accept Database Fallback
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: DecisionModelKeyBody
     DeliveryBotIdentityUpsertRequest:
       properties:
         project_id:
@@ -36808,6 +36814,210 @@ components:
       - project_id
       - environment
       title: DeploymentEnvironmentPolicyUpsertRequest
+    DeploymentHostAdoptKeyBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        private_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Private Key
+          writeOnly: true
+        backend:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Backend
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      - private_key
+      title: DeploymentHostAdoptKeyBody
+    DeploymentHostAttachBody:
+      properties:
+        target_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - target_id
+      - actor
+      title: DeploymentHostAttachBody
+    DeploymentHostBackfillBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - actor
+      title: DeploymentHostBackfillBody
+    DeploymentHostRegisterBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        address:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Address
+        ssh_user:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh User
+        ssh_port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Ssh Port
+        arch:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Arch
+        labels:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Labels
+        port_min:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Port Min
+        port_max:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Port Max
+        max_apps:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Apps
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        admin_identity_file:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Admin Identity File
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      - address
+      - actor
+      title: DeploymentHostRegisterBody
+    DeploymentHostUpdateBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        address:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Address
+        ssh_user:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh User
+        ssh_port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Ssh Port
+        arch:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Arch
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        admin_identity_file:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Admin Identity File
+        max_apps:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Apps
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      title: DeploymentHostUpdateBody
+    DeploymentPromoteBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Note
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      title: DeploymentPromoteBody
     DeploymentPromotionAdvanceRequest:
       properties:
         actor:
@@ -37392,6 +37602,115 @@ components:
       - created_at
       - updated_at
       title: DeploymentRunSummary
+    DeploymentTargetCreateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Id
+        app_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Name
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        environment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Environment
+        target_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Kind
+        target_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Ref
+        app_port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: App Port
+        app_entry:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Entry
+        repo_owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo Owner
+        publishable_ports:
+          anyOf:
+          - type: string
+          - type: integer
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Publishable Ports
+        domains:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Domains
+        secret_refs:
+          anyOf:
+          - items: {}
+            type: array
+          - type: 'null'
+          title: Secret Refs
+        health_checks:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Health Checks
+        scheme:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scheme
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - app_name
+      - repo
+      - environment
+      - target_kind
+      - target_ref
+      - actor
+      title: DeploymentTargetCreateBody
     DeploymentTargetCreateRequest:
       properties:
         project_id:
@@ -37484,6 +37803,24 @@ components:
       - limit
       - offset
       title: DeploymentTargetListResponse
+    DeploymentTargetPurgeBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        confirm:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Confirm
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      - confirm
+      title: DeploymentTargetPurgeBody
     DeploymentTargetSummary:
       properties:
         id:
@@ -37579,6 +37916,119 @@ components:
       - created_at
       - updated_at
       title: DeploymentTargetSummary
+    DeploymentTargetTeardownBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        stop_only:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Stop Only
+        confirm:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Confirm
+        include_data:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Include Data
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      title: DeploymentTargetTeardownBody
+    DeploymentTargetUpdateBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        target_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Ref
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        environment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Environment
+        app_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Name
+        domains:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Domains
+        health_checks:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Health Checks
+        secret_refs:
+          anyOf:
+          - items: {}
+            type: array
+          - type: 'null'
+          title: Secret Refs
+        required_resources:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Required Resources
+        app_port:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: App Port
+        app_entry:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Entry
+        repo_owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo Owner
+        publishable_ports:
+          anyOf:
+          - type: string
+          - type: integer
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Publishable Ports
+      additionalProperties: true
+      type: object
+      required:
+      - actor
+      title: DeploymentTargetUpdateBody
     DesignPromptRequest:
       properties:
         title:
@@ -40118,6 +40568,51 @@ components:
       - provider
       - cost_usd_micros
       title: FinopsTopResource
+    FirstDeployBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        environment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Environment
+        target_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Id
+        expected_cost_usd_micros:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Expected Cost Usd Micros
+        reservation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reservation Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - run_id
+      - actor
+      title: FirstDeployBody
     FlowTickRequest:
       properties:
         project_id:
@@ -46245,6 +46740,60 @@ components:
       - total_calls
       - total_cost_usd_micros
       title: LlmCallSummaryResponse
+    ManualDeployBody:
+      properties:
+        target_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        code_task_run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code Task Run Id
+        ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ref
+        commit_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Commit Ref
+        expected_cost_usd_micros:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Expected Cost Usd Micros
+        reservation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reservation Id
+        plan_only:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Plan Only
+        wait:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Wait
+      additionalProperties: true
+      type: object
+      required:
+      - target_id
+      - actor
+      title: ManualDeployBody
     McpServerRegisterRequest:
       properties:
         project_id:
@@ -48145,6 +48694,35 @@ components:
       type: object
       title: MultiCloudSkillDescribeRequest
       description: Describe multi-cloud skill(s) from the product catalog + Resource Plane registry.
+    ObservabilityStackDeployBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        host_target_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Host Target Id
+        ports:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Ports
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - host_target_id
+      title: ObservabilityStackDeployBody
     OncallNotifyRequest:
       properties:
         project_id:
@@ -48744,6 +49322,18 @@ components:
       - member_id
       - display_name
       title: OrgMemberUpsertRequest
+    OrgOnboardBody:
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+      additionalProperties: true
+      type: object
+      required:
+      - name
+      title: OrgOnboardBody
     OutboxDeliveryResponse:
       properties:
         status:
@@ -50447,6 +51037,29 @@ components:
       - member_id
       - display_name
       title: ProjectMemberUpsertRequest
+    ProjectSettingBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        value:
+          anyOf:
+          - type: string
+          - type: integer
+          - type: 'null'
+          title: Value
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      title: ProjectSettingBody
     ProjectSummary:
       properties:
         id:
@@ -51382,6 +51995,111 @@ components:
       - target
       title: ProviderSloUpsertRequest
       description: Create or update a provider SLO definition (BOSS-241).
+    ProviderUsageIngestBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+        operation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Operation
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+        quantity:
+          anyOf:
+          - type: number
+          - type: string
+          - type: 'null'
+          title: Quantity
+        unit:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Unit
+        provider_account_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Account Id
+        cost_usd_micros:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Cost Usd Micros
+        resource_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Resource Ref
+        worker_instance_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Worker Instance Id
+        receipt_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Receipt Id
+        source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider
+      - operation
+      title: ProviderUsageIngestBody
+    ProviderUsageSyncBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        provider_account_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Account Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - provider_account_id
+      title: ProviderUsageSyncBody
     PublicationGuardRequest:
       properties:
         project_id:
@@ -55131,6 +55849,104 @@ components:
           default: green
       type: object
       title: SchedulePreferenceRequest
+    SecretKeypairBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        algorithm:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Algorithm
+        backend:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Backend
+        scope_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope Type
+        scope_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope Id
+        comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Comment
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      title: SecretKeypairBody
+    SecretPutBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        value:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Value
+          writeOnly: true
+        secret_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Secret Kind
+        backend:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Backend
+        scope_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope Type
+        scope_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      - value
+      title: SecretPutBody
     SecretRefCreateRequest:
       properties:
         project_id:
@@ -56118,6 +56934,35 @@ components:
       - reason
       - dedupe_key
       title: SurfaceTransferRequest
+    TargetSecretBindBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        secret_ref_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Secret Ref Id
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - name
+      - secret_ref_id
+      title: TargetSecretBindBody
     TaskCreateRequest:
       properties:
         project_id:

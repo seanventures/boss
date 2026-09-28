@@ -47,6 +47,7 @@
     "scripts/tests/test_api_validation_redaction.py",
     "scripts/tests/test_mcp_api_parity.py",
     "scripts/tests/test_typed_request_bodies.py",
+    "scripts/tests/test_typed_request_bodies_wave2.py",
     "scripts/tests/test_mcp_access.py",
     "scripts/tests/test_community_examples.py",
     "tools/",
@@ -226,7 +227,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "bc75f9b76939df9b9c40641200275cd44dd74e58938a94151b5d1f699344f5bc"
+    "sha256": "f1fdea8b901bdcdb39453db18dd5961925f236051dc43203ad87f886deeb3133"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
@@ -261,7 +262,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "352d8d8316e5d7dd3a168a4f3efe3a252955974be90988c5cd2a3a85f98e98a2",
-    "output_sha256": "76f2b4584b2d066b9a21c3aa9c16da18648f155df71c4ffdd7671cc8c5f4ca3c"
+    "source_sha256": "5a685ed261635ffae76a214429e919b8f4911ce458b3a2a84398ba3b3d9b9ffc",
+    "output_sha256": "8cc3d2610e6798c37298d053725fee8bcb426cc1313369d5ecd2ef8cb8d32420"
   }
 }

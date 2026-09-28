@@ -633,14 +633,36 @@ from .schemas import (
     LlmCallSummaryResponse,
 )
 from .request_bodies import (
+    AutoDeployBody,
     CodeTaskFeedbackBody,
     CodeTaskFollowUpBody,
     CodeTaskStartBody,
     CodeTaskSteerBody,
+    DecisionModelKeyBody,
+    DeploymentHostAdoptKeyBody,
+    DeploymentHostAttachBody,
+    DeploymentHostBackfillBody,
+    DeploymentHostRegisterBody,
+    DeploymentHostUpdateBody,
+    DeploymentPromoteBody,
+    DeploymentTargetCreateBody,
+    DeploymentTargetPurgeBody,
+    DeploymentTargetTeardownBody,
+    DeploymentTargetUpdateBody,
+    FirstDeployBody,
+    ManualDeployBody,
+    ObservabilityStackDeployBody,
+    OrgOnboardBody,
     PrdDecomposeBody,
     ProjectAgentsBody,
     ProjectBody,
+    ProjectSettingBody,
+    ProviderUsageIngestBody,
+    ProviderUsageSyncBody,
     RoleSkillBody,
+    SecretKeypairBody,
+    SecretPutBody,
+    TargetSecretBindBody,
     WebAppBuildBody,
     WorkflowApplyBody,
     WorkflowCreateBody,
@@ -4174,10 +4196,11 @@ def list_orgs():
 
 
 @app.post("/v1/orgs", status_code=201)
-def onboard_org_endpoint(payload: dict):
+def onboard_org_endpoint(payload: OrgOnboardBody):
     """Onboard a new organization: create org → workspace → project and seed it
     with the common defaults (budget policy, members, packs, agent modules,
     entitlement sources, MCP servers). No auth yet — this is the admin action."""
+    payload = payload.payload()
     name = str(payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="Organization name is required.")
@@ -7025,11 +7048,12 @@ def _deployment_target_write_actor(payload: Optional[dict]) -> str:
 
 
 @app.post("/v1/deployment-targets", status_code=201)
-def create_deployment_target_endpoint(payload: dict):
+def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     """Register where an app is deployed. This is the whole of onboarding.
 
     Both existing targets were inserted by a hand-run script; that is the step this replaces.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.core import make_id
@@ -7127,8 +7151,9 @@ def create_deployment_target_endpoint(payload: dict):
 
 
 @app.patch("/v1/deployment-targets/{target_id}")
-def update_deployment_target_endpoint(target_id: str, payload: dict):
+def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetUpdateBody):
     """Change a target in place — port, domain, health check, status, auto-deploy."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = _deployment_target_write_actor(payload)
@@ -7222,8 +7247,9 @@ def retire_deployment_target_endpoint(target_id: str, actor: str):
 
 
 @app.post("/v1/deployment-targets/{target_id}/teardown")
-def teardown_deployment_target_endpoint(target_id: str, payload: dict):
+def teardown_deployment_target_endpoint(target_id: str, payload: DeploymentTargetTeardownBody):
     """Refuse direct host teardown until it uses the approved Resource Plane flow."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = _deployment_target_write_actor(payload)
@@ -7249,8 +7275,9 @@ def teardown_deployment_target_endpoint(target_id: str, payload: dict):
 
 
 @app.post("/v1/deployment-targets/{target_id}/purge")
-def purge_deployment_target_endpoint(target_id: str, payload: dict):
+def purge_deployment_target_endpoint(target_id: str, payload: DeploymentTargetPurgeBody):
     """Refuse history erasure until an approved, recoverable purge flow exists."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = _deployment_target_write_actor(payload)
@@ -7349,8 +7376,9 @@ def list_secrets_endpoint(project_id: str):
 
 
 @app.post("/v1/secrets", status_code=201)
-def put_secret_endpoint(payload: dict):
+def put_secret_endpoint(payload: SecretPutBody):
     """Upload a value: it is written THROUGH to the backend and not retained by BOSS."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secret_backends import SecretUnavailable
@@ -7377,8 +7405,9 @@ def put_secret_endpoint(payload: dict):
 
 
 @app.post("/v1/secrets/keypair", status_code=201)
-def generate_keypair_endpoint(payload: dict):
+def generate_keypair_endpoint(payload: SecretKeypairBody):
     """Generate a keypair. The private half goes to the backend; only the PUBLIC half returns."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secret_backends import SecretUnavailable
@@ -7438,8 +7467,9 @@ def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
 
 
 @app.post("/v1/deployment-targets/{target_id}/secrets")
-def bind_secret_endpoint(target_id: str, payload: dict):
+def bind_secret_endpoint(target_id: str, payload: TargetSecretBindBody):
     """Point one of a target's declared requirements at a stored secret."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secrets_service import bind_secret_to_target
@@ -7606,12 +7636,13 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
 
 
 @app.post("/v1/observability/stack/deploy")
-def deploy_observability_stack_endpoint(payload: dict):
+def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
     """Render the collector/Prometheus/Grafana stack from the registry and put it on the host.
 
     Re-running is how a newly onboarded app gets a dashboard: the scrape config is regenerated
     from `deployment_targets` every time, so the two cannot drift.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.observability_stack import deploy_stack
@@ -7741,13 +7772,14 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
 
 
 @app.post("/v1/delivery/deploy")
-def delivery_deploy_endpoint(payload: dict):
+def delivery_deploy_endpoint(payload: ManualDeployBody):
     """Plan a governed deployment of a target at a chosen ref.
 
     The manual half of the trigger story: automatic on merge, this for everything else
     (shipping a hotfix, re-shipping after a host fix, deploying a target that was onboarded
     after its last merge).
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.resource_plane import ResourcePlaneService
@@ -7915,7 +7947,7 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
 
 
 @app.patch("/v1/deployment-hosts/{host_id}")
-def update_deployment_host_endpoint(host_id: str, payload: dict):
+def update_deployment_host_endpoint(host_id: str, payload: DeploymentHostUpdateBody):
     """Change a registered host's connection details after the fact.
 
     `admin_identity_file` above all: BOSS renders the key-install command with the
@@ -7925,6 +7957,7 @@ def update_deployment_host_endpoint(host_id: str, payload: dict):
     remedy was to delete the host and start over. A field you cannot fix is a field you
     have to get right first time, which nobody does.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.deployment_fleet import get_host, install_command_for
@@ -7961,12 +7994,13 @@ def update_deployment_host_endpoint(host_id: str, payload: dict):
 
 
 @app.post("/v1/deployment-hosts")
-def register_deployment_host_endpoint(payload: dict):
+def register_deployment_host_endpoint(payload: DeploymentHostRegisterBody):
     """Record a VM. Touches nothing on the machine — status starts at `registered`.
 
     Nothing may be scheduled here until `/verify` has actually connected, so a typo in the
     address surfaces now rather than as a failed deployment later.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = str(payload.get("project_id") or "").strip()
@@ -8046,13 +8080,14 @@ def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] 
 
 
 @app.post("/v1/deployment-hosts/{host_id}/adopt-key")
-def adopt_deployment_host_key_endpoint(host_id: str, payload: dict):
+def adopt_deployment_host_key_endpoint(host_id: str, payload: DeploymentHostAdoptKeyBody):
     """PATH 1 — the customer brings a key that already works on the host.
 
     The private half goes straight through to the secret backend and is never retained here;
     only a reference and a fingerprint are kept. This is the common case, and it needs no
     install step at all — the key is already authorised on the box.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = str(payload.get("actor") or "").strip()
@@ -8206,8 +8241,9 @@ def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
 
 
 @app.post("/v1/deployment-hosts/{host_id}/attach")
-def attach_target_to_host_endpoint(host_id: str, payload: dict):
+def attach_target_to_host_endpoint(host_id: str, payload: DeploymentHostAttachBody):
     """Point an app at this host, deriving target_ref so the two cannot drift."""
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     target_id = str(payload.get("target_id") or "").strip()
@@ -8230,12 +8266,13 @@ def attach_target_to_host_endpoint(host_id: str, payload: dict):
 
 
 @app.post("/v1/deployment-hosts/backfill")
-def backfill_deployment_hosts_endpoint(payload: dict):
+def backfill_deployment_hosts_endpoint(payload: DeploymentHostBackfillBody):
     """Create one host per distinct target_ref and re-point existing targets at it.
 
     Idempotent, and never edits a target that already has a host_id — so the fleet table
     arrives without a flag day.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     project_id = str(payload.get("project_id") or "").strip()
@@ -8252,13 +8289,14 @@ def backfill_deployment_hosts_endpoint(payload: dict):
 
 
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")
-def set_auto_deploy_endpoint(target_id: str, payload: dict):
+def set_auto_deploy_endpoint(target_id: str, payload: AutoDeployBody):
     """Turn deploy-on-merge on/off, or pause it.
 
     `paused` is separate from `auto_deploy` on purpose: during an incident an operator wants
     automation to stop without losing the configuration that says this target is normally
     automatic — and without having to remember to turn it back on correctly.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = _deployment_target_write_actor(payload)
@@ -8433,7 +8471,7 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
 
 
 @app.post("/v1/deployments/{deployment_run_id}/promote")
-def promote_deployment_endpoint(deployment_run_id: str, payload: dict):
+def promote_deployment_endpoint(deployment_run_id: str, payload: DeploymentPromoteBody):
     """Promote a SUCCEEDED staging deployment to production — the second human gate.
 
     Reuses PromotionOrchestrator rather than running a rollout here: promotion already has
@@ -8443,6 +8481,7 @@ def promote_deployment_endpoint(deployment_run_id: str, payload: dict):
     Refuses to promote a run that did not succeed. Promoting a failed build is the single most
     expensive mistake this endpoint could make easy.
     """
+    payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = str(payload.get("actor") or "").strip()
@@ -12158,7 +12197,7 @@ def refresh_health_snapshot(
 
 
 @app.post("/v1/delivery/first-deploy")
-def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
+def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
     """Plan a successful build's first deployment to an existing target.
 
     BOSS could create hosts and targets and could redeploy, but nothing could perform a
@@ -12171,6 +12210,7 @@ def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
     FastAPI first-match meant an onboarding payload without run_id returned 400, and a payload
     that also had run_id would *deploy* instead of creating a destination.
     """
+    payload = payload.payload()
     from boss_engine.services.delivery_pipeline import deploy_build
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -14861,10 +14901,11 @@ def setup_decision_model_status(project_id: str) -> dict:
 
 
 @app.post("/v1/setup/decision-model/key", status_code=201)
-def setup_store_decision_key(payload: dict) -> dict:
+def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
     """Hand BOSS a TypeSafe key. It is proved with one tiny decision before it is stored, and
     storing it switches this project's decisions to Jev (Claude still answers when Jev is
     unsure). Optional: BOSS decides on the Claude subscription without it."""
+    payload = payload.payload()
     from .services.setup_service import (
         SecretFallbackNotAccepted,
         SetupError,
@@ -18063,8 +18104,9 @@ def provider_usage_summary(
 
 
 @app.post("/v1/provider-usage/ingest", status_code=201)
-def ingest_provider_usage(payload: dict) -> dict:
+def ingest_provider_usage(payload: ProviderUsageIngestBody) -> dict:
     """Record a usage event (control plane or adapter instrumentation)."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "system").strip()
     provider = str(payload.get("provider") or "").strip()
@@ -18105,8 +18147,9 @@ def ingest_provider_usage(payload: dict) -> dict:
 
 
 @app.post("/v1/provider-usage/sync")
-def sync_provider_usage(payload: dict) -> dict:
+def sync_provider_usage(payload: ProviderUsageSyncBody) -> dict:
     """Sync inventory/billing for a provider account and mirror costs into usage ledger."""
+    payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "ceo").strip()
     provider_account_id = str(payload.get("provider_account_id") or "").strip()
@@ -19644,8 +19687,9 @@ def get_project_settings(project_id: str) -> dict:
 
 
 @app.put("/v1/settings/{key}")
-def put_project_setting(key: str, payload: dict) -> dict:
+def put_project_setting(key: str, payload: ProjectSettingBody) -> dict:
     """Set one knob, or hand it back to the deployment default by sending no value."""
+    payload = payload.payload()
     from boss_engine.services import project_settings as ps
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
