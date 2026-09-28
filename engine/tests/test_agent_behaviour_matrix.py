@@ -536,11 +536,14 @@ def test_the_chat_does_not_revalidate_the_whole_console():
 def test_ask_boss_uses_the_consoles_standard_header():
     """"This looks a little different from other formats on the page." It was a bespoke card
     with its own radius, gradient and type scale; it now uses the same eyebrow/title/meta
-    header and cap-badge vocabulary as the Meeting room."""
+    header as the Meeting room. Status is shown only while work is running, so this header
+    does not need the Meeting room's permanent status badge or duration metadata."""
     src = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
     for cls in ("mr-header", "mr-header-main", "mr-header-meta", "mr-title",
-                "eyebrow", "cap-badge tone-", "mr-meta-item", "mr-avatar tone-"):
+                "eyebrow", "mr-avatar tone-"):
         assert cls in src, f"not using the shared primitive: {cls}"
+    assert '<header className="mr-header askboss-head">' in src
+    assert '<div className="mr-header-meta" role="status">' in src
 
 
 # --------------------------------------------------------------------------- #
@@ -759,7 +762,6 @@ def test_build_starts_a_prd_panel_not_a_plan_artifact():
 def test_build_reports_success_and_failure():
     """The old action returned void, so a failure and a success looked identical: "Working",
     then nothing, forever."""
-    import re
     hero = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
     i = hero.index("const assign = useCallback")
     body = hero[i:i + 1400]
@@ -777,14 +779,19 @@ def test_the_landing_panel_shows_started_work_not_the_event_log():
     """"These don't make real sense to me." The panel was the raw event stream — worker
     heartbeats, leased jobs, budget reservations released. All true, none of it actionable, and
     it crowded out the only question an operator has after pressing Build: what is it doing and
-    where do I look?"""
-    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
-    assert 'aria-label="In flight"' in src
-    assert "cc-flight-stage" in src, "no stage is shown"
-    i = src.index('aria-label="In flight"')
-    panel = src[i:i + 2200]
-    assert "AreaLink" in panel and "item.area" in panel, "rows do not route to the stage"
-    assert "heartbeat" not in panel
+    where do I look? The Enterprise page now renders a live CoordinationPanel; Community
+    still uses the original In flight panel."""
+    page = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    panel = pathlib.Path("apps/web/app/coordination-ui.tsx").read_text(encoding="utf-8")
+    community = pathlib.Path("apps/web/app/page-community.tsx").read_text(encoding="utf-8")
+    assert "<CoordinationPanel" in page
+    assert "reconcileRecentWork(inFlight, tasks.items)" in page
+    assert 'aria-label="Recent work"' in panel
+    assert "snapshot.inFlight.map((item)" in panel
+    assert "item.stage" in panel and "item.status" in panel
+    assert "area=work&task=" in panel, "task rows do not open their trace"
+    assert "<AreaLink" in panel and "area={item.area}" in panel
+    assert 'aria-label="In flight"' in community
 
 
 def test_in_flight_only_uses_columns_that_exist():

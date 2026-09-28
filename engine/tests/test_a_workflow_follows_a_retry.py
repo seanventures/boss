@@ -125,11 +125,20 @@ class TestWhatCountsAsTheSameWork:
         assert "cancelled" not in body.split("r.status IN")[1][:60]
         assert "'failed'" not in body.split("r.status IN")[1][:60]
 
-    def test_following_a_completed_run_still_checks_for_a_pull_request(self):
-        """Re-parking hands it to the ordinary terminal path, which refuses a build that opened
-        no PR. The recovery must not become a way around that."""
+    def test_following_a_completed_run_honors_the_inner_build_verdict(self):
+        """A completed retry reaches the ordinary terminal path. Completion without a PR is
+        valid for intermediate decomposition slices and open_pr=false runs; a blocked or failed
+        build still fails the step. The inner pipeline owns that verdict."""
         body = inspect.getsource(runner.resume_awaited)
-        assert 'if kind == "code_task" and not evidence.get("pull_request_url")' in body
+        success = body.split("if status in ok_states:", 1)[1].split(
+            "elif status in bad_states", 1
+        )[0]
+        assert "_terminal_evidence(connection, kind, awaited_id)" in success
+        assert "workflows.force_complete_waiting_step(" in success
+        assert "workflows.force_fail_waiting_step(" not in success
+        assert "workflows.force_fail_waiting_step(" in body.split(
+            "elif status in bad_states:", 1
+        )[1]
 
     def test_the_awaited_run_is_never_its_own_successor(self):
         body = inspect.getsource(runner._successor_attempt)
