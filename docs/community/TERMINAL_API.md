@@ -11,8 +11,12 @@ directory. It opens the terminal inside the API container using the install's
 configured API key and project; no host Python setup is needed.
 
 Conversational text goes to `/v1/metatron/session`. The built-in commands are
-`/goals`, `/watch`, `/overwatch`, and `/drive [auto|go]`. Use `/ops` to see
+`/goals`, `/watch`, `/overwatch`, and `/drive [auto|go]`. Use `/projects` to list
+projects returned by the API and `/project ID` to select one. Use `/ops` to see
 product domains exposed by the running API, `/ops TASK` to search operations,
+or `/ops * --page N` to browse every operation in pages of 25. Domain searches
+also accept `--page N`. Interactive output shows concise rows; one-shot `--json`
+returns the same page with counts and stable operation IDs. Use
 `/describe OPERATION_ID` to inspect parameters and request body, and
 `/op OPERATION_ID [JSON]` to invoke one. The operation ID is derived from HTTP
 method and path, so it remains unique even when the API framework assigns
@@ -24,16 +28,22 @@ An `/op` JSON argument has three optional keys: `path`, `query`, and `body`.
 Path and query are JSON objects. The terminal checks path placeholders and
 declared query names before sending a request. If an operation declares a
 `project_id` query parameter, the active project is inserted when omitted.
-Write bodies must supply their own `project_id` when the API requires it. Use
-`/project ID` to change the active project; this also clears the prior
+For a typed JSON request body that declares `project_id`, `/op` inserts the
+selected project when the provided body omits that field. An explicit
+`project_id` is preserved, and the API validates authorization for that
+project. Other required body fields must still be supplied. `/describe` lists
+typed fields, choices, and nested required keys where the API schema provides
+them. `/project ID` also clears the prior
 Metatron conversation thread. The API checks access and policy on every call.
 
 ```text
 metatron> /ops
+metatron> /projects
 metatron> /ops tasks
+metatron> /ops * --page 2
 metatron> /describe get_v1_tasks_339c8c60
 metatron> /op get_v1_tasks_339c8c60
-metatron> /op post_v1_tasks_54d40d0b {"body":{"project_id":"boss-dogfood","title":"Plan launch","dedupe_key":"launch-plan-1"}}
+metatron> /op post_v1_tasks_54d40d0b {"body":{"title":"Plan launch","dedupe_key":"launch-plan-1"}}
 metatron> /project another-project
 ```
 

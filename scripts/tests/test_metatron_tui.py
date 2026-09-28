@@ -574,6 +574,42 @@ def test_catalog_search_and_describe_use_live_capabilities():
     ]
 
 
+def test_project_list_shows_available_ids_before_switching():
+    opener = FakeOpener([(200, {"items": [
+        {"id": "boss-dogfood", "name": "BOSS", "org_name": "Goldeneye", "workspace_name": "Ops"},
+        {"id": "partner-one", "name": "Partner One", "org_name": "Goldeneye", "workspace_name": "Ops"},
+    ]})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    command = tui.parse_line("/projects")
+    assert command.kind == "projects"
+    result = client.dispatch(command)
+    assert result["active_project_id"] == "boss-dogfood"
+    assert [item["id"] for item in result["items"]] == ["boss-dogfood", "partner-one"]
+    rendered = client.render(command, result)
+    assert "* boss-dogfood: BOSS" in rendered
+    assert "/project ID" in rendered
+    assert SECRET not in rendered
+    assert opener.calls[0]["url"].endswith("/v1/projects")
+
+
+def test_operation_search_pages_every_live_route_without_truncating_json():
+    paths = {f"/v1/records/{index}": {"get": {"summary": f"Read record {index}"}} for index in range(60)}
+    routes = [{"method": "GET", "path": path} for path in paths]
+    catalog = {"domains": [{"id": "core", "title": "Core", "route_count": 60, "routes": routes}]}
+    opener = FakeOpener([(200, catalog), (200, {"paths": paths})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    first = client.dispatch(tui.parse_line("/ops *"))
+    second = client.dispatch(tui.parse_line("/ops core --page 2"))
+    third = client.dispatch(tui.parse_line("/ops * --page=3"))
+    assert [page["shown_count"] for page in (first, second, third)] == [25, 25, 10]
+    assert all(page["count"] == 60 and page["pages"] == 3 for page in (first, second, third))
+    assert len({item["operation_id"] for page in (first, second, third) for item in page["operations"]}) == 60
+    assert "Next: /ops * --page 2" in client.render(tui.parse_line("/ops *"), first)
+    assert client.dispatch(tui.parse_line("/ops core --page 4"))["__command_error__"] is True
+    assert client.dispatch(tui.parse_line("/ops core --page 0"))["__command_error__"] is True
+    assert len(opener.calls) == 2  # Search pages reuse the live catalog and schema.
+
+
 def test_stable_operation_aliases_disambiguate_duplicate_runtime_ids():
     records = tui.operation_records(_openapi())
     tasks = [record for record in records if record["path"] == "/v1/tasks"]
@@ -600,6 +636,75 @@ def test_operation_invocation_uses_api_key_and_project_query_without_bypass():
     assert opener.calls[2]["method"] == "POST"
     assert opener.calls[2]["body"] == {"project_id": "boss-dogfood", "title": "Plan"}
     assert all(call["headers"]["x-boss-api-key"] == SECRET for call in opener.calls)
+
+
+def test_operation_autofills_selected_project_only_for_declared_json_field():
+    opener = FakeOpener([
+        (200, _openapi()),
+        (200, {"id": "task-2"}),
+        (200, {"id": "task-3"}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    create_id = next(
+        record["operation_id"] for record in tui.operation_records(_openapi())
+        if record["method"] == "POST" and record["path"] == "/v1/tasks"
+    )
+    client.dispatch(tui.parse_line("/project selected-project"))
+    created = client.dispatch(tui.parse_line(f'/op {create_id} {{"body":{{"title":"Plan"}}}}'))
+    explicit = client.dispatch(tui.parse_line(
+        f'/op {create_id} {{"body":{{"project_id":"another-project","title":"Plan"}}}}'
+    ))
+    assert created["id"] == "task-2"
+    assert explicit["id"] == "task-3"
+    assert opener.calls[1]["body"] == {"project_id": "selected-project", "title": "Plan"}
+    assert opener.calls[2]["body"] == {"project_id": "another-project", "title": "Plan"}
+    assert "selected project_id" in client.handle(tui.parse_line(f"/describe {create_id}"))
+
+
+def test_operation_does_not_invent_project_for_ambiguous_body_union():
+    document = {"paths": {"/v1/sample": {"post": {
+        "requestBody": {"required": True, "content": {"application/json": {"schema": {
+            "oneOf": [
+                {"type": "object", "properties": {"project_id": {"type": "string"}}},
+                {"type": "object", "properties": {"name": {"type": "string"}}},
+            ]
+        }}}},
+    }}}}
+    alias = tui.operation_records(document)[0]["operation_id"]
+    opener = FakeOpener([(200, document), (200, {"status": "accepted"})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    result = client.dispatch(tui.parse_line(f'/op {alias} {{"body":{{"name":"sample"}}}}'))
+    assert result["status"] == "accepted"
+    assert opener.calls[1]["body"] == {"name": "sample"}
+
+
+def test_description_resolves_nullable_body_refs_and_nested_field_hints():
+    document = {"paths": {"/v1/sample": {"post": {
+        "requestBody": {"required": True, "content": {"application/json": {"schema": {
+            "anyOf": [{"$ref": "#/components/schemas/Sample"}, {"type": "null"}],
+        }}}},
+    }}}, "components": {"schemas": {
+        "Sample": {"type": "object", "required": ["project_id", "settings"], "properties": {
+            "project_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "mode": {"type": "string", "enum": ["plan", "apply"]},
+            "settings": {"$ref": "#/components/schemas/Settings"},
+        }},
+        "Settings": {"type": "object", "required": ["reason"], "properties": {
+            "reason": {"type": "string"},
+        }},
+    }}}
+    alias = tui.operation_records(document)[0]["operation_id"]
+    opener = FakeOpener([(200, document)])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    detail = client.dispatch(tui.parse_line(f"/describe {alias}"))
+    assert detail["auto_filled_body_fields"] == ["project_id"]
+    assert {field["name"] for field in detail["body_fields"] if field["required"]} == {
+        "project_id", "settings",
+    }
+    rendered = client.render(tui.parse_line(f"/describe {alias}"), detail)
+    assert "project_id: string, required" in rendered
+    assert "choices=['plan', 'apply']" in rendered
+    assert "required keys=['reason']" in rendered
 
 
 def test_operation_rejects_bad_arguments_before_an_effect():

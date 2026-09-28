@@ -37,13 +37,15 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 DEFAULT_PROJECT_ID = "boss-dogfood"
 DEFAULT_ACTOR = "executive_console"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+OPS_PAGE_SIZE = 25
 
 HELP_TEXT = (
-    "Slash commands: /watch  /overwatch  /drive [auto|go]  /goals  /project [ID]  /quit\n"
-    "API commands: /ops [domain or search]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
+    "Slash commands: /watch  /overwatch  /drive [auto|go]  /goals  /projects  /project [ID]  /quit\n"
+    "API commands: /ops [domain or search|*] [--page N]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
     "Fallback: /api METHOD /v1/path [JSON]\n"
     "Type naturally to POST /v1/metatron/session.\n"
     "Use /ops to discover live API operations; /op accepts JSON with path, query, and body keys.\n"
+    "For typed JSON writes, /op inserts the selected project_id when the body omits it.\n"
     "The API enforces project, permission, edition, approval, budget, and receipt rules.\n"
     "/overwatch runs observe→measure→validate→apply-safe→verify.\n"
     "'go' or '/drive auto' applies only moves that pass validation."
@@ -205,6 +207,8 @@ def parse_line(line: str) -> Command:
         return Command(kind="overwatch")
     if lowered == "/goals":
         return Command(kind="goals")
+    if lowered == "/projects":
+        return Command(kind="projects")
     if lowered == "/project" or lowered.startswith("/project "):
         return Command(kind="project", message=raw.partition(" ")[2].strip())
     if lowered == "/ops" or lowered.startswith("/ops "):
@@ -307,6 +311,83 @@ def format_payload(payload: Any) -> str:
     return json.dumps(payload, indent=2, default=str)
 
 
+def format_ops(payload: Mapping[str, Any]) -> str:
+    if "domains" in payload:
+        lines = [f"Project: {payload['active_project_id']}", "API domains:"]
+        for domain in payload["domains"]:
+            lines.append(f"  {domain['id']:<18} {domain['route_count']:>3}  {domain.get('title') or ''}".rstrip())
+        lines.append(str(payload["hint"]))
+        return "\n".join(lines)
+    lines = [
+        f"{payload['count']} matches for {payload['search']!r} "
+        f"(page {payload['page']}/{payload['pages']}):"
+    ]
+    for operation in payload["operations"]:
+        alias = operation["operation_id"] or f"/api {operation['method']} {operation['path']}"
+        lines.append(f"  {alias}  {operation['method']} {operation['path']}")
+        summary = str(operation.get("summary") or "").strip()
+        if summary:
+            lines.append(f"    {summary}")
+        if not operation["terminal_invokable"]:
+            lines.append(f"    Limit: {operation.get('limitation') or 'not addressable by /op'}")
+    if payload["page"] < payload["pages"]:
+        lines.append(f"Next: /ops {payload['search']} --page {payload['page'] + 1}")
+    lines.append("Use /describe OPERATION_ID to inspect fields before /op.")
+    return "\n".join(lines)
+
+
+def format_description(payload: Mapping[str, Any]) -> str:
+    lines = [
+        f"{payload['method']} {payload['path']}",
+        f"Operation: {payload['operation_id']}",
+    ]
+    if payload.get("summary"):
+        lines.append(str(payload["summary"]))
+    if payload.get("description"):
+        lines.append(str(payload["description"]).strip())
+    parameters = payload.get("parameters") or []
+    if parameters:
+        lines.append("Parameters:")
+        for parameter in parameters:
+            required = "required" if parameter.get("required") else "optional"
+            kind = _field_type(parameter.get("schema") or {})
+            lines.append(f"  {parameter.get('in')} {parameter.get('name')}: {kind}, {required}")
+    body_fields = payload.get("body_fields") or []
+    if body_fields:
+        lines.append("JSON body fields:")
+        for field in body_fields:
+            required = "required" if field["required"] else "optional"
+            detail = f"  {field['name']}: {field['type']}, {required}"
+            if field.get("enum"):
+                detail += f", choices={field['enum']}"
+            if field.get("required_children"):
+                detail += f", required keys={field['required_children']}"
+            if field.get("description"):
+                detail += f" — {field['description']}"
+            lines.append(detail)
+    if payload.get("auto_filled_body_fields"):
+        lines.append("The selected project_id is inserted into a JSON body when omitted.")
+    if not payload["terminal_invokable"]:
+        lines.append(f"Limit: {payload['limitation']}")
+    lines.extend((f"Example: {payload['example']}", str(payload["access_note"])))
+    return "\n".join(lines)
+
+
+def format_projects(payload: Mapping[str, Any]) -> str:
+    lines = [f"Projects returned by the API (active: {payload['active_project_id']}):"]
+    for project in payload["items"]:
+        if not isinstance(project, dict):
+            continue
+        mark = "*" if project.get("id") == payload["active_project_id"] else " "
+        label = project.get("name") or project.get("slug") or project.get("id")
+        location = " / ".join(str(value) for value in (
+            project.get("org_name"), project.get("workspace_name")
+        ) if value)
+        lines.append(f"{mark} {project.get('id')}: {label}" + (f" ({location})" if location else ""))
+    lines.append("Use /project ID to select a project for subsequent commands.")
+    return "\n".join(lines)
+
+
 def operation_records(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Enumerate the running server's OpenAPI operations, including gaps."""
     paths = document.get("paths")
@@ -372,27 +453,72 @@ def _query_value(value: Any) -> str:
     return str(value)
 
 
+def _object_schema(
+    document: Mapping[str, Any], schema: Any, seen: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Resolve a bounded object shape for help and safe project defaults."""
+    if not isinstance(schema, dict):
+        return {}
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/components/schemas/") and ref not in seen:
+        name = ref.rsplit("/", 1)[-1]
+        target = (document.get("components") or {}).get("schemas", {}).get(name)
+        return _object_schema(document, target, seen | {ref})
+    if "allOf" in schema:
+        parts = [_object_schema(document, part, seen) for part in schema["allOf"]]
+        properties = dict(schema.get("properties") or {})
+        required = set(schema.get("required") or [])
+        for part in parts:
+            properties.update(part.get("properties") or {})
+            required.update(part.get("required") or [])
+        return {"properties": properties, "required": sorted(required)}
+    for variant_key in ("anyOf", "oneOf"):
+        if variant_key in schema:
+            candidates = [
+                resolved for part in schema[variant_key]
+                if (resolved := _object_schema(document, part, seen)).get("properties")
+            ]
+            # A union of multiple objects is ambiguous. Never infer fields
+            # or add a project to a branch the caller did not select.
+            return candidates[0] if len(candidates) == 1 else {}
+    return schema
+
+
+def _field_type(field: Mapping[str, Any]) -> str:
+    if isinstance(field.get("type"), str):
+        return str(field["type"])
+    if isinstance(field.get("$ref"), str):
+        return str(field["$ref"]).rsplit("/", 1)[-1]
+    for key in ("anyOf", "oneOf"):
+        if isinstance(field.get(key), list):
+            variants = sorted({
+                _field_type(part) for part in field[key]
+                if isinstance(part, dict) and part.get("type") != "null"
+            })
+            if variants:
+                return " | ".join(variants)
+    return "composite"
+
+
 def _body_fields(document: Mapping[str, Any], request_body: Mapping[str, Any]) -> list[dict[str, Any]]:
     content = request_body.get("content") or {}
     media = content.get("application/json") or {}
-    schema = media.get("schema") or {}
-    ref = schema.get("$ref")
-    if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
-        name = ref.rsplit("/", 1)[-1]
-        schema = (document.get("components") or {}).get("schemas", {}).get(name, schema)
-    if not isinstance(schema, dict):
-        return []
+    schema = _object_schema(document, media.get("schema") or {})
     required = set(schema.get("required") or [])
-    return [
-        {
+    fields: list[dict[str, Any]] = []
+    for name, field in (schema.get("properties") or {}).items():
+        if not isinstance(field, dict):
+            continue
+        nested = _object_schema(document, field)
+        fields.append({
             "name": name,
             "required": name in required,
-            "type": field.get("type") or ("reference" if field.get("$ref") else "composite"),
+            "type": _field_type(field),
             "description": field.get("description") or "",
-        }
-        for name, field in (schema.get("properties") or {}).items()
-        if isinstance(field, dict)
-    ]
+            "enum": field.get("enum") if isinstance(field.get("enum"), list) else [],
+            "required_children": sorted(nested.get("required") or []),
+        })
+    return fields
 
 
 def _request_path(
@@ -558,6 +684,14 @@ class MetatronClient:
         query = urlencode({"project_id": self.project_id})
         return self.request("GET", f"/v1/metatron/goals?{query}")
 
+    def projects(self) -> Any:
+        payload = self.request("GET", "/v1/projects")
+        if isinstance(payload, dict) and payload.get("__http_error__"):
+            return payload
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            return _command_error("the API did not return a project list")
+        return {"active_project_id": self.project_id, "items": payload["items"]}
+
     def project(self, project_id: str) -> dict[str, Any]:
         if project_id:
             if (
@@ -609,21 +743,30 @@ class MetatronClient:
         catalog = self._catalog()
         if catalog.get("__http_error__") or catalog.get("__command_error__"):
             return catalog
+        page = 1
+        if "--page" in term:
+            match = re.search(r"(?:^|\s)--page(?:=|\s+)([1-9][0-9]{0,5})\s*$", term)
+            if not match:
+                return _command_error("usage: /ops [domain or search|*] [--page N], with N >= 1")
+            page = int(match.group(1))
+            term = term[:match.start()].strip()
         if not term:
+            if page != 1:
+                return _command_error("use /ops * --page N to browse all operations")
             return {
                 "active_project_id": self.project_id,
                 "domains": [
                     {"id": d.get("id"), "title": d.get("title"), "route_count": d.get("route_count")}
                     for d in catalog["domains"] if isinstance(d, dict) and d.get("route_count")
                 ],
-                "hint": "Use /ops DOMAIN or /ops SEARCH, then /describe OPERATION_ID and /op OPERATION_ID [JSON].",
+                "hint": "Use /ops DOMAIN, /ops SEARCH, or /ops * --page N; then /describe OPERATION_ID and /op OPERATION_ID [JSON].",
             }
         records = self._records()
         if isinstance(records, dict):
             return records
         domain_map = self._domain_map(catalog)
         documented_keys = {_route_key(item["method"], item["path"]) for item in records}
-        needle = term.casefold()
+        needle = "" if term == "*" else term.casefold()
         matches = []
         for operation in records:
             domain = domain_map.get(_route_key(operation["method"], operation["path"]), "other")
@@ -654,7 +797,13 @@ class MetatronClient:
                     "limitation": "use /api METHOD /v1/path [JSON]",
                 })
         matches.sort(key=lambda item: (item["domain"], item["path"], item["method"]))
-        return {"search": term, "count": len(matches), "operations": matches,
+        pages = max(1, (len(matches) + OPS_PAGE_SIZE - 1) // OPS_PAGE_SIZE)
+        if page > pages:
+            return _command_error(f"page {page} is past the last page ({pages})")
+        shown = matches[(page - 1) * OPS_PAGE_SIZE:page * OPS_PAGE_SIZE]
+        return {"search": term, "count": len(matches), "shown_count": len(shown),
+                "page": page, "pages": pages, "page_size": OPS_PAGE_SIZE,
+                "operations": shown,
                 "access_note": "The API applies edition, permission, and policy checks when invoked."}
 
     def describe(self, operation_id: str) -> dict[str, Any]:
@@ -691,6 +840,7 @@ class MetatronClient:
             "parameters": operation["parameters"],
             "request_body": operation["request_body"],
             "body_fields": body_fields,
+            "auto_filled_body_fields": ["project_id"] if any(field["name"] == "project_id" for field in body_fields) else [],
             "terminal_invokable": operation["addressable"],
             "limitation": operation["limitation"],
             "example": f"/op {operation_id} {json.dumps(example_args, separators=(',', ':'))}" if example_args else f"/op {operation_id}",
@@ -729,6 +879,10 @@ class MetatronClient:
             )
         except ValueError as exc:
             return _command_error(str(exc))
+        if isinstance(body, dict) and "project_id" not in body:
+            fields = _body_fields(self._openapi_document or {}, operation["request_body"])
+            if any(field["name"] == "project_id" for field in fields):
+                body = {"project_id": self.project_id, **body}
         return self.request(operation["method"], path, body)
 
     def coverage(self) -> dict[str, Any]:
@@ -792,6 +946,8 @@ class MetatronClient:
             payload = self.drive(auto=command.auto)
         elif command.kind == "goals":
             payload = self.goals()
+        elif command.kind == "projects":
+            payload = self.projects()
         elif command.kind == "project":
             payload = self.project(command.message)
         elif command.kind == "ops":
@@ -810,6 +966,9 @@ class MetatronClient:
 
     def handle(self, command: Command) -> str:
         payload = self.dispatch(command)
+        return self.render(command, payload)
+
+    def render(self, command: Command, payload: Any) -> str:
         if payload is None:
             return ""
         if isinstance(payload, dict) and payload.get("__command_error__"):
@@ -824,7 +983,13 @@ class MetatronClient:
                 f"  raw API: {payload['raw_api_invokable']}\n"
                 "Access is checked by the API on invocation; use --exec '/coverage' --json for every route."
             )
-        if command.kind in {"api", "ops", "describe", "op", "project"}:
+        if command.kind == "ops" and isinstance(payload, dict):
+            return redact(format_ops(payload), self.config.api_key)
+        if command.kind == "describe" and isinstance(payload, dict):
+            return redact(format_description(payload), self.config.api_key)
+        if command.kind == "projects" and isinstance(payload, dict):
+            return redact(format_projects(payload), self.config.api_key)
+        if command.kind in {"api", "op", "project"}:
             return redact(json.dumps(payload, indent=2, default=str), self.config.api_key)
         return redact(format_payload(payload), self.config.api_key)
 
@@ -891,21 +1056,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         payload = client.dispatch(command)
         if isinstance(payload, dict) and payload.get("__command_error__"):
-            print(f"error: {payload['message']}", file=sys.stderr)
+            print(client.render(command, payload), file=sys.stderr)
         elif isinstance(payload, dict) and payload.get("__http_error__"):
-            print(f"HTTP {payload.get('status')}: {payload.get('body') or ''}", file=sys.stderr)
+            print(client.render(command, payload), file=sys.stderr)
         else:
-            if command.kind == "coverage" and isinstance(payload, dict):
-                print(
-                    f"discovered: {payload['discovered_operations']}  "
-                    f"operation IDs: {payload['operation_id_invokable']}  "
-                    f"raw API: {payload['raw_api_invokable']}\n"
-                    "Access is checked by the API on invocation; use --json for every route."
-                )
-            elif command.kind in {"api", "ops", "describe", "op", "project"}:
-                print(redact(json.dumps(payload, indent=2, default=str), config.api_key))
-            else:
-                print(redact(format_payload(payload), config.api_key))
+            print(client.render(command, payload))
     if isinstance(payload, dict) and payload.get("__command_error__"):
         return 2
     if isinstance(payload, dict) and payload.get("__http_error__"):

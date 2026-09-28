@@ -9,10 +9,14 @@ currently running edition and image.
 ## Mapping method
 
 The terminal fetches `/v1/meta/api-catalog` and `/openapi.json` from the same
-API origin as its ordinary requests. `/ops` lists domains and searches their
-operations. `/describe` shows each operation's method, path, parameters,
-request body, and an example with required fields. `/op` accepts a stable
+API origin as its ordinary requests. `/projects` lists projects returned by the
+API key. `/ops` lists domains and searches their operations, with `/ops *
+--page N` providing complete paged discovery. `/describe` shows each
+operation's method, path, parameters, typed body fields, and an example with
+required fields. `/op` accepts a stable
 method-and-path operation ID and JSON `path`, `query`, and `body` arguments.
+It inserts the selected project into a typed JSON body when `project_id` is
+declared and omitted; an explicit value is preserved for API authorization.
 `/api METHOD /v1/path [JSON]` remains the fallback for a mounted route missing
 from OpenAPI. Both invocation paths use the same API key, project scope, and
 server enforcement as direct HTTP clients.
@@ -63,8 +67,8 @@ falls into the catalog's “Other” domain.
 
 | Workflow | Discover | Invoke through the TUI | Governing server boundary |
 | --- | --- | --- | --- |
-| Pick a project and inspect work | `/project ID`, `/ops tasks` | `/op get_v1_tasks_339c8c60` | Project membership and task visibility |
-| Create auditable work | `/describe post_v1_tasks_54d40d0b` | `/op post_v1_tasks_54d40d0b {"body":{"project_id":"ID","title":"Title","dedupe_key":"unique-key"}}` | Task creation, event and dedupe rules |
+| Pick a project and inspect work | `/projects`, `/project ID`, `/ops tasks` | `/op get_v1_tasks_339c8c60` | Project membership and task visibility |
+| Create auditable work | `/describe post_v1_tasks_54d40d0b` | `/op post_v1_tasks_54d40d0b {"body":{"title":"Title","dedupe_key":"unique-key"}}` | Task creation, event and dedupe rules |
 | Start and inspect workflows | `/ops workflow-runs` | Invoke listed create/read/run operations | Version pinning, lease and approval state |
 | Author an agent | `/ops agent-studio` | Invoke listed definition/version/validate/publish operations | Project permissions, validation and publication |
 | Control spend | `/ops budget` | Invoke quote/status/reserve/consume/release operations | Budget Governor and reservation rules |
@@ -82,8 +86,9 @@ through their status, receipt, and event endpoints.
 
 - `scripts/tests/test_metatron_tui.py` checks all 982 Community snapshot
   operations and verifies every `/v1/` operation has a unique, addressable
-  terminal alias. It checks project selection, parameter validation, duplicate
-  FastAPI IDs, server-authenticated requests, and catalog-only route reporting.
+  terminal alias. It checks project discovery/selection, paged operation
+  search, typed-body project defaults, parameter validation, duplicate FastAPI
+  IDs, server-authenticated requests, and catalog-only route reporting.
 - `/coverage --json` (one-shot mode) enumerates every route from the *running*
   API's OpenAPI and catalog with `source`, `terminal_invokable`,
   `raw_api_invokable`, and `edition_policy_access`. The last field is
