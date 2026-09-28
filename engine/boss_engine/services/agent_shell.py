@@ -39,6 +39,25 @@ WORKSPACE_ROOT = Path(os.getenv("BOSS_AGENT_WORKSPACE_ROOT", "/tmp/boss-agent-ws
 COMMAND_TIMEOUT_SECONDS = int(os.getenv("BOSS_AGENT_SHELL_TIMEOUT", "90"))
 OUTPUT_CHAR_CAP = 20_000
 
+# The coding agent needs its own model credential; this console shell does not. Keep the
+# shared deny-by-default filter, then narrow it again for `sh -lc` so a model cannot read
+# ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN with `env` and send it over the network.
+# These are process/toolchain settings only, never provider or control-plane credentials.
+_SHELL_ENV_KEYS = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "TMPDIR", "TERM", "TZ",
+    "HOSTNAME", "CI", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE",
+    "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
+    "GIT_TERMINAL_PROMPT", "npm_config_cache", "PLAYWRIGHT_BROWSERS_PATH",
+    "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+})
+
+
+def _shell_environment(workspace: Path) -> dict[str, str]:
+    inherited = agent_environment(
+        os.environ, {"HOME": str(workspace), "GIT_TERMINAL_PROMPT": "0"},
+    )
+    return {name: value for name, value in inherited.items() if name in _SHELL_ENV_KEYS}
+
 # Refused by name. Each is either irreversible or reaches beyond the throwaway checkout.
 _REFUSED = (
     (r"\bgit\s+push\b", "git push — publishing goes through BOSS's governed tools, not the shell"),
@@ -137,7 +156,7 @@ def run_in_workspace(workspace: Path, command: str, cwd: Optional[str] = None) -
     if not target.is_dir():
         return {"error": f"no such directory in the workspace: {cwd}", "exit_code": None}
 
-    # A clean environment: the child gets no BOSS credentials to find.
+    # A clean environment: the child gets neither control-plane nor model credentials.
     #
     # THIS USED TO BE A DENYLIST ON THE NAME — anything matching TOKEN|SECRET|KEY|PASSWORD|
     # CREDENTIAL was dropped — and it read as though it worked. DATABASE_URL contains none of
@@ -147,9 +166,7 @@ def run_in_workspace(workspace: Path, command: str, cwd: Optional[str] = None) -
     #
     # Deny by default instead, from the same list the agent subprocess uses. A denylist has to
     # predict the next dangerous name; an allow list does not.
-    env = agent_environment(
-        os.environ, {"HOME": str(workspace), "GIT_TERMINAL_PROMPT": "0"},
-    )
+    env = _shell_environment(workspace)
 
     try:
         proc = subprocess.run(

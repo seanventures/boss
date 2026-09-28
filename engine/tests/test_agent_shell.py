@@ -103,6 +103,30 @@ def test_the_child_does_not_inherit_the_control_plane_dsn(workspace, monkeypatch
     assert "BOSS_API_KEY" not in out["stdout"]
 
 
+def test_the_console_shell_does_not_inherit_model_credentials(workspace, monkeypatch):
+    """The coding agent needs model access; a console shell can use it to exfiltrate.
+
+    A model invoking paid-edition `run_shell` can run `env` and reach the network. The
+    shared code-agent allowlist intentionally admits these keys, so the shell needs a
+    narrower second filter even when an operator configured an extra allowed name.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-secret")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-test-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://boss:secret@localhost/boss")
+    monkeypatch.setenv("BOSS_AGENT_ENV_ALLOW", "MY_TOOL_MODE,ANTHROPIC_API_KEY")
+    monkeypatch.setenv("MY_TOOL_MODE", "operator-opt-in")
+
+    out = run_in_workspace(workspace, "env")
+
+    assert out["exit_code"] == 0
+    for name in (
+        "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "DATABASE_URL", "MY_TOOL_MODE",
+    ):
+        assert name not in out["stdout"]
+    assert f"HOME={workspace}" in out["stdout"]
+    assert "GIT_TERMINAL_PROMPT=0" in out["stdout"]
+
+
 def test_cwd_cannot_walk_into_a_sibling_via_path_prefix(workspace):
     """`startswith` treats `/tmp/ws-evil` as inside `/tmp/ws`.
 
