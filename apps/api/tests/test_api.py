@@ -16319,6 +16319,19 @@ def test_queue_deployment_job_is_leasable_and_completion_passes_through(client):
 
 
 def test_deployment_blocks_without_github_credentials(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO decisions (id, project_id, question, recommendation, status) "
+                "VALUES ('dec_deploy_missing_github', 'boss-dogfood', "
+                "'Approve sandbox deployment', CAST(:recommendation AS jsonb), 'approved')"
+            ),
+            {"recommendation": json.dumps({
+                "action": "review_deployment",
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                "merged_sha": "merge-sha-42", "environment": "staging",
+            })},
+        )
     previous = api_main.software_factory.settings.github_token
     api_main.software_factory.settings.github_token = None
     try:
@@ -16537,6 +16550,18 @@ def test_deployment_healthcheck_failure_creates_blocking_decision(client, engine
 
 
 def test_merge_blocks_without_github_credentials(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO decisions (id, project_id, question, recommendation, status) "
+                "VALUES ('dec_merge_missing_github', 'boss-dogfood', "
+                "'Approve sandbox merge', CAST(:recommendation AS jsonb), 'approved')"
+            ),
+            {"recommendation": json.dumps({
+                "action": "review_pull_request",
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            })},
+        )
     previous = api_main.software_factory.settings.github_token
     api_main.software_factory.settings.github_token = None
     try:

@@ -1186,6 +1186,39 @@ class SoftwareFactoryService:
                 {},
             )
 
+    def _require_approved_effect_decision(
+        self,
+        connection: Any,
+        project_id: str,
+        decision_id: str,
+        action: str,
+        **expected: str,
+    ) -> None:
+        """Fence a GitHub write to the exact approved project decision and target."""
+        row = connection.execute(
+            sql(
+                """
+                SELECT status, recommendation
+                FROM decisions
+                WHERE id = :decision_id AND project_id = :project_id
+                FOR UPDATE
+                """
+            ),
+            {"decision_id": decision_id, "project_id": project_id},
+        ).mappings().first()
+        if not row or row["status"] != "approved":
+            raise ValueError("An approved project decision is required before the GitHub effect.")
+        recommendation = row["recommendation"] or {}
+        if recommendation.get("action") != action:
+            raise ValueError("The approved decision does not authorize this GitHub action.")
+        for key, value in expected.items():
+            if recommendation.get(key) != value:
+                raise ValueError(f"The approved decision does not match {key}.")
+        if action == "review_deployment" and expected.get("environment", "").lower().startswith("prod"):
+            rollback_plan = recommendation.get("rollback_plan")
+            if not isinstance(rollback_plan, str) or not rollback_plan.strip():
+                raise ValueError("Production deployment approval requires a rollback plan.")
+
     def _complete_task(
         self,
         connection: Any,
@@ -2239,6 +2272,12 @@ class SoftwareFactoryService:
                 "merged_sha": result.get("merged_sha"),
             }
 
+        self._require_approved_effect_decision(
+            connection, project_id, decision_id, "review_pull_request",
+            pull_request_url=pull_request_url,
+        )
+        if not pull_request_url.rstrip("/").endswith(f"/pull/{pull_request_number}"):
+            raise ValueError("The pull request number does not match the approved URL.")
         recovered_from_stale_base = False
         try:
             merge = self.github.merge_pull_request(pull_request_number, title)
@@ -2507,6 +2546,14 @@ class SoftwareFactoryService:
                 "merged_sha": result.get("merged_sha"),
             }
 
+        if environment != self.settings.sandbox_deploy_environment:
+            raise ValueError("Deployment environment does not match the configured sandbox target.")
+        self._require_approved_effect_decision(
+            connection, project_id, decision_id, "review_deployment",
+            pull_request_url=pull_request_url,
+            merged_sha=merged_sha,
+            environment=environment,
+        )
         try:
             deployment = self.github.create_deployment(
                 merged_sha,
