@@ -5305,9 +5305,11 @@ def start_code_task_endpoint(payload: dict):
     if not project_id:
         raise HTTPException(status_code=422, detail="project_id is required.")
     simulated = bool(payload.get("simulated"))
+    actor = str(payload.get("actor") or current_api_principal.get() or "ceo")
     from .services.code_task_service import start_code_task
     try:
         with begin(engine) as c:
+            require_project_actor(c, project_id, actor, "workflow_execute")
             run_id = start_code_task(
                 c, project_id=project_id, task_id=payload.get("task_id"),
                 title=payload.get("title") or "Code task",
@@ -5367,7 +5369,7 @@ def start_code_task_endpoint(payload: dict):
                     c,
                     settings=settings,
                     project_id=project_id,
-                    actor=str(payload.get("actor") or "executive_console"),
+                    actor=actor,
                     prd=str(payload.get("instructions") or payload.get("title") or "Official factory run"),
                     title=f"Captain swarm — {payload.get('title') or 'official'}",
                     attach_run_id=run_id,

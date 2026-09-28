@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
-from boss_engine.services import secrets_service
+from boss_engine.services import code_task_service, secrets_service
 
 
 PROJECT = "boss-dogfood"
@@ -353,3 +353,40 @@ def test_event_subscription_writes_require_integration_grant(
     assert client.delete(
         path, headers=_auth("ceo-key"), params={"project_id": PROJECT}
     ).status_code == 204
+
+
+def test_code_task_enqueue_requires_execution_grant_in_target_project(
+    client, engine, scoped_operator, monkeypatch,
+):
+    calls = []
+
+    def fake_start(_connection, **kwargs):
+        calls.append(kwargs["project_id"])
+        return "crun_ga_authority"
+
+    monkeypatch.setattr(code_task_service, "start_code_task", fake_start)
+    payload = {"project_id": PROJECT, "title": "GA authority", "actor": "coo"}
+    denied = client.post("/v1/code-tasks", headers=_auth("coo-key"), json=payload)
+    assert denied.status_code == 403, denied.text
+    assert calls == []
+
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_runner",
+            display_name="GA runner", member_type="human", role_keys=[],
+            permissions=["workflow_execute"], actor="ceo",
+        )
+    cross_project = client.post(
+        "/v1/code-tasks", headers=_auth("runner-key"),
+        json={**payload, "project_id": scoped_operator, "actor": "ga_runner"},
+    )
+    assert cross_project.status_code == 403, cross_project.text
+    assert calls == []
+
+    allowed = client.post(
+        "/v1/code-tasks", headers=_auth("ceo-key"),
+        json={**payload, "actor": "ceo"},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["status"] == "queued"
+    assert calls == [PROJECT]

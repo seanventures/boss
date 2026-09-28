@@ -83,6 +83,9 @@ Always pass a real project-scoped actor on writes (seed creates `ceo`, `system`,
 | **ops** | `/v1/reliability`, `/dashboard`, `/qa`, `/diag` | OpenAPI + ROUTE_INDEX |
 | **meta** | `/v1/meta/*`, `/v1/capabilities`, `/health` | this file |
 
+Starting a code task with `POST /v1/code-tasks` requires `workflow_execute` in the target
+project, including for a simulated run.
+
 Live domain grouping is also returned by the catalog endpoint (source of truth for agents).
 
 ---
