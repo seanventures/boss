@@ -166,10 +166,12 @@ def test_every_skill_file_is_reachable_from_some_edition():
     only because a project-authored skill of the same name shadowed it. The built-in was
     invisible the whole time.
     """
+    import json
     import pathlib
     import yaml
 
-    root = pathlib.Path(__file__).resolve().parents[2] / "packages" / "specpack"
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    root = repo / "packages" / "specpack"
 
     def bundles_of(pack_id: str, seen: set[str] | None = None) -> set[str]:
         seen = seen or set()
@@ -189,7 +191,28 @@ def test_every_skill_file_is_reachable_from_some_edition():
     for pack in (root / "packs").glob("*.yaml"):
         reachable |= bundles_of(pack.stem)
 
-    #: KNOWN AND PRE-EXISTING. Four skill bundles ship in the repo and are in no pack, so no
+    # The private source tree also holds reviewed Community variants of two installed bundles.
+    # Export replaces github.yaml and software_factory.yaml with these files and removes their
+    # *.community source names; installing the variants as extra bundles here would expose
+    # duplicate skill ids instead of fixing reachability.
+    export_sources: set[str] = set()
+    export_manifest = repo / "scripts" / "community_export_manifest.json"
+    if export_manifest.is_file():
+        # The export tool and its manifest do not ship in the public tree. There, the reviewed
+        # source variants have already replaced their destinations and no exception is needed.
+        manifest = json.loads(export_manifest.read_text())
+        for rewrite in manifest.get("specpack_export_rewrites", []):
+            source = pathlib.Path(rewrite["source"])
+            destination = pathlib.Path(rewrite["destination"])
+            if source.parent != pathlib.Path("packages/specpack/skills"):
+                continue
+            assert destination.parent == source.parent
+            assert destination.stem in reachable, f"export target {destination} is not installed"
+            assert source.stem not in reachable, f"export source {source} is installed twice"
+            if (repo / source).is_file():
+                export_sources.add(source.stem)
+
+    #: KNOWN AND PRE-EXISTING. Three skill bundles ship in the repo and are in no pack, so no
     #: edition can see them. Listed rather than deleted from the assertion, because the
     #: assertion found them and that is what it is for — and because each is a decision
     #: somebody should make deliberately (ship it, or remove the file) rather than a bug to
@@ -199,7 +222,7 @@ def test_every_skill_file_is_reachable_from_some_edition():
     KNOWN_ORPHANS = {"agent_toolchain", "infra_do", "slack"}
 
     on_disk = {p.stem for p in (root / "skills").glob("*.yaml")}
-    orphans = sorted(on_disk - reachable - KNOWN_ORPHANS)
+    orphans = sorted(on_disk - reachable - KNOWN_ORPHANS - export_sources)
     assert not orphans, (
         f"these skill files are in no pack, so no edition's catalogue includes them: {orphans}. "
         "Add the bundle to a pack's installs.skills — community_edition if every edition "
@@ -209,3 +232,31 @@ def test_every_skill_file_is_reachable_from_some_edition():
     # from it, not left as cover for the next one.
     adopted = sorted(KNOWN_ORPHANS & reachable)
     assert not adopted, f"these are now in a pack and can leave KNOWN_ORPHANS: {adopted}"
+
+
+def test_community_catalog_exposes_the_opt_in_mobile_skill_once():
+    """Pack reachability must match the project catalog the operator can actually assign."""
+    import pathlib
+    from types import SimpleNamespace
+
+    from boss_engine.config import get_settings
+    from boss_engine.services.entitlements import EntitlementBrokerService
+
+    class EmptyProjectSkills:
+        def execute(self, *_args, **_kwargs):
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "packages" / "specpack"
+    settings = get_settings().model_copy(update={
+        "boss_edition": "community", "specpack_root": root,
+    })
+    skills = EntitlementBrokerService(settings).list_skills(
+        "project", connection=EmptyProjectSkills()
+    )
+    mobile = [skill for skill in skills if skill["id"] == "mobile.device.execute"]
+    assert len(mobile) == 1
+    assert mobile[0]["on_demand"] is True
+    assert mobile[0]["policy"]["requires_lease"] is True
+    # Source-only export variants must not duplicate the installed monorepo bundles.
+    assert sum(skill["id"] == "github.create_pr_real" for skill in skills) == 1
+    assert sum(skill["id"] == "software_factory.codex_pr_proposal" for skill in skills) == 1

@@ -56,6 +56,8 @@ installs:
   # not a framework. Nobody holds it by default: `allowed_callers` is empty, so it is reachable
   # only by being given to an agent on purpose, and it refuses to run at all without a real
   # container boundary.
+  # The mobile device skill is on-demand and still requires a leased job plus an explicitly
+  # enabled trusted device host. Listing it makes that opt-in capability visible in the catalog.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
-           mattermost, youtube, video, meeting_ops, email, agent_code]
+           mattermost, youtube, video, meeting_ops, email, agent_code, mobile]
 status: active  # Independent product; Cloud is opt-in via Easy Connect

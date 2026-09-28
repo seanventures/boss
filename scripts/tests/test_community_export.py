@@ -254,15 +254,17 @@ def test_community_test_boundary_preserves_shared_fixtures() -> None:
         assert not export.matching_rule(path, manifest["exclude"])
         assert not any(marker in (export.ROOT / path).read_bytes() for marker in export.PRIVATE_MARKERS)
 
-    paid_only = (
+    source_only = (
         "apps/api/tests/test_account_connect_integration.py",
         "apps/api/tests/test_cloud_product.py",
         "apps/web/tests/commercial-enterprise.test.ts",
         "apps/web/tests/edition-visibility.test.ts",
         "apps/worker/tests/test_external_rollout_readiness.py",
         "engine/tests/test_community_specpack_boundary.py",
+        # The operator's private fork-promotion helper is not included in Community.
+        "engine/tests/test_promoting_a_fork_pull_request.py",
     )
-    assert all(path in manifest["exclude"] for path in paid_only)
+    assert all(path in manifest["exclude"] for path in source_only)
 
     rewrite = manifest["test_conftest_export_rewrite"]
     source = (export.ROOT / rewrite["source"]).read_bytes()

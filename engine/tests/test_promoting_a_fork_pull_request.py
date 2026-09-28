@@ -5,9 +5,9 @@ easy because we have access to boss repo of both using my account right?"
 
 Access is not symmetric, and the asymmetry is permanent rather than a gap to close:
 
-    example-org/boss       private
+    seanheiney/boss        private
     paramg on upstream    push: true  (collaborator)
-    BOSS's own token      404 on example-org/boss
+    BOSS's own token      404 on seanheiney/boss
 
 A fine-grained token's resource owner is the person who issues it, so it cannot be scoped to a
 repository owned by another user account — and the upstream repository being private means
@@ -19,7 +19,7 @@ opened on the fork becomes a pull request a human opens upstream. Nothing in her
 """
 from __future__ import annotations
 
-import inspect
+import ast
 import pathlib
 
 SCRIPT = pathlib.Path("scripts/promote_fork.py")
@@ -98,6 +98,14 @@ def test_and_says_which_credential_it_is_using_when_gh_is_missing():
 
 def test_the_fork_and_upstream_are_named_once():
     """Two spellings of a repository name is how a promotion lands in the wrong place."""
-    source = _source()
-    assert source.count('FORK = "paramg/boss"') == 1
-    assert source.count('UPSTREAM = "example-org/boss"') == 1
+    assignments: dict[str, list[str]] = {"FORK": [], "UPSTREAM": []}
+    for node in ast.walk(ast.parse(_source())):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in assignments:
+                assignments[target.id].append(ast.literal_eval(node.value))
+    assert assignments == {
+        "FORK": ["paramg/boss"],
+        "UPSTREAM": ["seanheiney/boss"],
+    }

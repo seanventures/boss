@@ -94,6 +94,7 @@
     "apps/web/tests/providerops.test.ts",
     "apps/worker/tests/test_external_rollout_readiness.py",
     "engine/tests/test_community_specpack_boundary.py",
+    "engine/tests/test_promoting_a_fork_pull_request.py",
     "engine/tests/test_receipt_discipline.py",
     "engine/boss_engine/services/cloud_product.py",
     "engine/boss_engine/services/commercial.py",
