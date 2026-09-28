@@ -1814,6 +1814,8 @@ def test_timeout_approve_on_a_work_step_still_runs_the_tool(eng, project, monkey
 
     assert meeting.calls, "policy approved the step and the tool still never ran"
     assert meeting.calls[0]["args"] == {"directive": "Build it"}
-    assert steps["m"]["status"] == "succeeded"
+    # The meeting tool starts asynchronous work. The step must wait for its
+    # recorded meeting run instead of claiming the meeting already finished.
+    assert steps["m"]["status"] == "waiting"
     assert steps["m"]["output"]["meeting_run_id"] == "mrun_sla"
-    assert released["performed"][0]["outcome"] == "succeeded"
+    assert released["performed"][0]["outcome"] == "awaiting"
