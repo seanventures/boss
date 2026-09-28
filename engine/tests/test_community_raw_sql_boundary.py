@@ -18,7 +18,7 @@ class _NoDatabase:
         raise AssertionError("raw SQL reached the database")
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unrecognized"])
 def test_community_registries_hide_raw_sql_but_direct_invocation_still_blocks(edition):
     discuss = build_discuss_read_registry(edition=edition)
     assert "query_db" not in discuss.names()
@@ -40,7 +40,7 @@ def test_community_registries_hide_raw_sql_but_direct_invocation_still_blocks(ed
     assert ctx.calls == 0
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unrecognized"])
 def test_legacy_agent_query_db_blocks_before_execute(edition):
     class Connection:
         def execute(self, *args, **kwargs):

@@ -71,12 +71,13 @@ class TestItWillNotRunOnTheModelsSayS0:
 
 class TestTheFlagIsTheOuterGate:
     def test_community_refuses_even_with_flag_and_confirmation(self):
-        out = build_default_registry().invoke(
-            "run_on_host", _Ctx(True, "community"), project_id="p", actor="ceo",
-            args={"host": "h", "command": "docker ps"}, operator_confirmed=True,
-        )
-        assert out["ok"] is False
-        assert "Community host shell" in out["error"]
+        for edition in ("community", "oss", "local", "unrecognized"):
+            out = build_default_registry().invoke(
+                "run_on_host", _Ctx(True, edition), project_id="p", actor="ceo",
+                args={"host": "h", "command": "docker ps"}, operator_confirmed=True,
+            )
+            assert out["ok"] is False
+            assert "Community host shell" in out["error"]
 
     def test_disabled_refuses_even_with_confirmation(self):
         out = build_default_registry().invoke(

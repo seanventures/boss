@@ -35,13 +35,14 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}
+_PAID_EFFECT_EDITIONS = frozenset({
+    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
+})
 
 
 def _community_raw_sql_disabled(settings: Any) -> bool:
     """Raw SQL has no tenant fence or domain policy and is unsafe in Community."""
-    return str(getattr(settings, "boss_edition", "community")).strip().lower() in {
-        "community", "oss", "local",
-    }
+    return str(getattr(settings, "boss_edition", "community")).strip().lower() not in _PAID_EFFECT_EDITIONS
 
 
 # ===========================================================================
@@ -5451,9 +5452,7 @@ def _register_image_tools(reg: ToolRegistry) -> None:
         import urllib.request
 
         settings = ctx.settings
-        if str(getattr(settings, "boss_edition", "community")).strip().lower() in {
-            "community", "oss", "local",
-        }:
+        if _community_raw_sql_disabled(settings):
             return {"ok": False, "error": "Community image generation is paused until "
                     "provider spend has a budget reservation and receipt."}
         base = str(getattr(settings, "openai_base_url", "") or "").rstrip("/")
@@ -6133,8 +6132,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                                _ssh_key_file)
         from ..services.secret_backends import resolve_target_secret
 
-        edition = str(getattr(ctx.settings, "boss_edition", "community")).strip().lower()
-        if edition in {"community", "oss", "local"}:
+        if _community_raw_sql_disabled(ctx.settings):
             return {
                 "ok": False,
                 "error": "Community host shell is disabled until commands use an approved "
@@ -6573,7 +6571,7 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     for spec in admitted:
         if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
             continue
-        if (edition is not None and edition.strip().lower() in {"community", "oss", "local"}
+        if (edition is not None and edition.strip().lower() not in _PAID_EFFECT_EDITIONS
                 and spec.name in {"query_db", "write_db", "generate_image"}):
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})

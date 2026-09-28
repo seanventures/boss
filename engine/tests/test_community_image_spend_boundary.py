@@ -9,7 +9,7 @@ import pytest
 from boss_engine.tools.builtin import build_default_registry, build_discuss_read_registry
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unrecognized"])
 def test_image_generation_stops_before_network_or_file_effect(monkeypatch, edition):
     def unexpected(*_args, **_kwargs):
         raise AssertionError("provider or file effect started")

@@ -512,8 +512,8 @@ def _query_rejection(sql: str) -> Optional[str]:
 
 
 def _tool_query_db(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
-    if str(getattr(settings, "boss_edition", "community")).strip().lower() in {
-        "community", "oss", "local",
+    if str(getattr(settings, "boss_edition", "community")).strip().lower() not in {
+        "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
     }:
         return {"error": "Unrestricted SQL reads are unavailable in Community. "
                 "Use the project-scoped read tools."}
