@@ -20,6 +20,7 @@ type ClientStatus = {
   redirect_uri?: string;
   client_id_hint?: string;
   callback_path?: string;
+  installation_default_redirect_uri?: string | null;
 };
 
 type Channel = {
@@ -493,7 +494,8 @@ function ClientPane({ status, form, setForm, busy, channelCount, onSave, onConne
           <button type="button"
                   className={ready ? "as-button secondary" : "as-button"}
                   data-testid="channel-client-save"
-                  disabled={busy || !form.client_id.trim() || !form.client_secret.trim()}
+                  disabled={busy || !form.client_id.trim() || !form.client_secret.trim()
+                    || !form.redirect_uri.trim()}
                   onClick={onSave}>
             {busy ? "Saving…" : ready ? "Replace this client" : "Save client"}
           </button>
@@ -503,12 +505,7 @@ function ClientPane({ status, form, setForm, busy, channelCount, onSave, onConne
   );
 }
 
-/** What to register with Google, when nothing has been stored yet. */
+/** Use the callback URL configured by the API; guessing a host can point at the wrong server. */
 function defaultRedirect(status: ClientStatus): string {
-  if (typeof window === "undefined") return "";
-  const path = status.callback_path || "/v1/channels/youtube/callback";
-  // The API host, not the console's: the callback is an API route, and sending Google to the
-  // web origin produces a 404 after consent — the most confusing possible failure, because the
-  // authorisation itself succeeded.
-  return `https://boss-api.local.sean.network${path}`;
+  return status.installation_default_redirect_uri?.trim() ?? "";
 }
