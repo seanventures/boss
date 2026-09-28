@@ -30,16 +30,19 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts \
     && chown -R boss:boss /home/boss /var/lib/boss/artifacts \
     && chmod 700 /home/boss/.codex /home/boss/.claude \
-    && npm install -g @anthropic-ai/claude-code @openai/codex \
+    && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 \
     && npm cache clean --force \
-    && npx -y playwright install --with-deps chromium \
-    && chmod -R a+rX /opt/pw-browsers \
     && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
+
+# Download the browser revision matched to the pinned Python Playwright package.
+RUN python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/pw-browsers \
+    && rm -rf /var/lib/apt/lists/*
 
 # These are the Community runtime directories. The reviewed export tree omits
 # private modules inside shared directories; the dedicated ignore file also
@@ -67,6 +70,8 @@ ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
 RUN chown -R boss:boss /app /var/lib/boss/artifacts
 USER boss
+# Fail the build if the installed browser cannot launch as the runtime user.
+RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
 
 FROM python-runtime AS api
 EXPOSE 8000
