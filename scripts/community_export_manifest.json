@@ -43,6 +43,7 @@
     "scripts/seed_demo.py",
     "scripts/wait_for_postgres.py",
     "scripts/tests/test_metatron_tui.py",
+    "scripts/tests/test_api_validation_redaction.py",
     "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
@@ -221,7 +222,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "7c6680966a134bbfa760f534c1cd0185656b3120a7e6e72f655238481697b6ac"
+    "sha256": "22c7607a463e19e589352f46b34ef87b16f5e7734c79c45406717f17bf86cd08"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
@@ -256,7 +257,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "43908b5dc7ce2a5709ef39e6e1888fbc0cb51bd3ddd78c103a650ac0daaee424",
-    "output_sha256": "aa7feafeae145b2e9dc61ba7411c11ec06cc089bc93962f57c3a4396a87f374d"
+    "source_sha256": "75df33962ce0bdb006966ae87e0f57b066dd8d3258baf50718cdb7fe47ab8617",
+    "output_sha256": "5e112fdbb661467bc44b9ff49e6f5a85afff2980d5a432e9b60704ecce913166"
   }
 }
