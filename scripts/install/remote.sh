@@ -36,6 +36,7 @@ ALL_SERVICES=0
 PROVIDER=""
 MODEL_API_KEY=""
 MODEL_NAME=""
+MODEL_BASE_URL=""
 PROJECT_ID="boss-dogfood"
 SUB_TOKEN=""
 SECRET_STORE=""
@@ -92,8 +93,10 @@ options:
                        fix something in the engine.
   --all-services       update: rebuild every service
   --provider NAME      model: openrouter | openai | anthropic | custom
-  --api-key KEY        model: the provider key to store
+  --api-key KEY        model: provider key (visible in process listings; prefer hidden prompt)
+                       Omit to enter it at a hidden prompt or pipe one line on stdin.
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
+  --base-url URL       model: required for a custom OpenAI-compatible provider
   --project ID         model/env: project id (default boss-dogfood)
   --secret-store WHICH install: database (default, 4 containers) or infisical (6 containers,
                        ~400MB more, a real secret store). Both stay on the server
@@ -109,7 +112,7 @@ examples:
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key smoke
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key tunnel
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key \
-      model --provider openrouter --api-key sk-or-... --model anthropic/claude-sonnet-4.5
+      model --provider openrouter --model anthropic/claude-sonnet-4.5
   claude setup-token | scripts/install/remote.sh --host root@192.0.2.202 \
       --key ~/.config/boss/deploy_key subscription --provider claude_code
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key uninstall --yes
@@ -129,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --provider) PROVIDER="${2:-}"; shift 2 ;;
     --api-key) MODEL_API_KEY="${2:-}"; shift 2 ;;
     --model) MODEL_NAME="${2:-}"; shift 2 ;;
+    --base-url) MODEL_BASE_URL="${2:-}"; shift 2 ;;
     --project) PROJECT_ID="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
     --key) KEY="${2:-}"; shift 2 ;;
@@ -270,7 +274,7 @@ cmd_install() {
   say "API       http://127.0.0.1:${API_PORT} after connecting the tunnel"
   printf "\n${B}What next${N}\n\n"
   say "Check it:        ${D}remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
-  say "An API key:      ${D}remote.sh --host $HOST${KEY:+ --key $KEY} model --provider openrouter --api-key KEY${N}"
+  say "An API key:      ${D}remote.sh --host $HOST${KEY:+ --key $KEY} model --provider openrouter${N} (hidden prompt)"
   say "A subscription:  ${D}claude setup-token | remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider claude_code${N}"
   say "Shell variables: ${D}eval \"\$(remote.sh --host $HOST${KEY:+ --key $KEY} env)\"${N}"
   printf "\n"
@@ -483,17 +487,28 @@ cmd_smoke() {
 # The server can already reach its own API and already holds its own key. So it does the work.
 cmd_model() {
   [[ -n "$PROVIDER" ]] || die "--provider is required (openrouter | openai | anthropic | custom)"
-  [[ -n "$MODEL_API_KEY" ]] || die "--api-key is required"
+  if [[ -z "$MODEL_API_KEY" ]]; then
+    if [[ -t 0 && -r /dev/tty ]]; then
+      read -r -s -p 'Provider API key (hidden): ' MODEL_API_KEY </dev/tty || true
+      printf '\n' >/dev/tty
+    else
+      IFS= read -r MODEL_API_KEY || true
+    fi
+  fi
+  [[ -n "$MODEL_API_KEY" ]] || die "provider API key is required; enter it at the hidden prompt or pipe one line on stdin"
+  [[ "$PROVIDER" != custom || -n "$MODEL_BASE_URL" ]] || die "--base-url is required for a custom provider"
   head_ "Connecting a model on $HOST"
   preflight
 
   local payload
-  payload="$(PROJ="$PROJECT_ID" PROV="$PROVIDER" AKEY="$MODEL_API_KEY" MNAME="$MODEL_NAME" \
+  payload="$(PROJ="$PROJECT_ID" PROV="$PROVIDER" AKEY="$MODEL_API_KEY" MNAME="$MODEL_NAME" MBASE="$MODEL_BASE_URL" \
     python3 -c 'import json,os
 p={"project_id":os.environ["PROJ"],"actor":"ceo","provider":os.environ["PROV"],
    "api_key":os.environ["AKEY"]}
 m=os.environ.get("MNAME")
 if m: p["model"]=m
+base=os.environ.get("MBASE")
+if base: p["base_url"]=base
 print(json.dumps(p))')" || die "could not build the request"
 
   say "provider: $PROVIDER${MODEL_NAME:+   model: $MODEL_NAME}   project: $PROJECT_ID"
@@ -508,15 +523,23 @@ print(json.dumps(p))')" || die "could not build the request"
   " 2>&1)" || true
 
   if [[ "$out" == *NOKEY* ]]; then die "no BOSS_API_KEY in $DIR/.env on $HOST — is BOSS installed there?"; fi
-  # The API verifies the key against the provider before storing it, so its reply is the answer.
-  if printf '%s' "$out" | grep -q '"ok": *true\|"status": *"connected"\|"provider"'; then
-    ok "stored and verified"
-    printf '%s\n' "$out" | head -c 400 | sed 's/^/      /'
-    printf "\n"
+  # Community records a key without a live paid model call. A provider name
+  # in an error is not evidence of a successful connection.
+  local result
+  result="$(printf '%s' "$out" | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    print((data.get("verification_state") or "stored") if data.get("ok") is True else "")
+except (ValueError, TypeError):
+    pass' 2>/dev/null)"
+  if [[ -n "$result" ]]; then
+    if [[ "$result" == verified ]]; then
+      ok "model key stored and provider verified"
+    else
+      ok "model key stored; live provider call has not been verified"
+    fi
   else
-    warn "the API refused it:"
-    printf '%s\n' "$out" | head -c 600 | sed 's/^/      /'
-    printf "\n"
+    warn "the API did not accept the model connection; inspect setup status and API logs"
     return 1
   fi
 }
@@ -566,7 +589,7 @@ echo "STORE:$STORE"
 case "$STORE" in *secret_store_fallback_not_accepted*) exit 0 ;; esac
 CONNECT=$(curl -sS -X POST "$B/v1/setup/coding-agents/connect" \
   -H "x-boss-api-key: $K" -H 'Content-Type: application/json' \
-  -d "{\"project_id\":\"$PROJ\",\"actor\":\"ceo\",\"provider\":\"$PROV\"}" || true)
+  -d "{\"project_id\":\"$PROJ\",\"actor\":\"ceo\",\"provider\":\"$PROV\",\"prove\":false}" || true)
 echo "CONNECT:$CONNECT"
 EOS
   encoded=$(printf '%s' "$remote_script" | base64 | tr -d '\n')
@@ -581,14 +604,29 @@ EOS
     say  "  credential in its database. Re-run with --accept-database-fallback to allow it."
     return 1
   fi
-  # `connect` proves the credential with a real turn before saying yes, so its reply is the
-  # answer — not the store call, which only says the bytes were written somewhere.
-  if printf '%s' "$out" | sed -n 's/^CONNECT://p' | grep -q '"ok": *true'; then
-    ok "stored and proved with a real turn"
-    printf '%s\n' "$out" | sed -n 's/^CONNECT://p' | head -c 400 | sed 's/^/      /'; printf "\n"
+  if ! printf '%s' "$out" | sed -n 's/^STORE://p' | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+except (ValueError, TypeError):
+    sys.exit(1)
+sys.exit(0 if data.get("ok") is True else 1)' 2>/dev/null; then
+    warn "BOSS did not store the subscription credential; inspect API logs"
+    return 1
+  fi
+  # Community cannot run the live proof safely yet. The first governed job
+  # must establish whether the recorded subscription can actually work.
+  if printf '%s' "$out" | sed -n 's/^CONNECT://p' | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+except (ValueError, TypeError):
+    sys.exit(1)
+sys.exit(0 if data.get("ok") is True and data.get("connected") is True
+         and data.get("entitlement_recorded") is True
+         and isinstance(data.get("proof"), dict)
+         and data["proof"].get("skipped") is True else 1)' 2>/dev/null; then
+    ok "subscription recorded; live model turn remains unverified"
   else
-    warn "it did not connect:"
-    printf '%s\n' "$out" | head -c 700 | sed 's/^/      /'; printf "\n"
+    warn "the subscription was not fully recorded; inspect BOSS setup status and API logs"
     return 1
   fi
 }

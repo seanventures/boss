@@ -6,18 +6,20 @@ umask 077
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 REF="${BOSS_REPO_REF:-main}"
 BACKUP_DIR=""
-NO_WEB=0
+WEB_MODE=""
 DRY_RUN=0
 
 usage() {
   cat <<'EOF'
 Usage: upgrade.sh [--dir INSTALL_DIR] [--ref BRANCH] [--backup-dir PATH]
-                  [--no-web] [--dry-run]
+                  [--web | --no-web] [--dry-run]
 
 Fetch a fast-forward update, back up .env/Postgres/artifacts, then run the
 fetched installer. Existing credentials and data volumes are retained.
 The backup path is printed before any source or container change.
-For installs originally made with --no-web, repeat --no-web here.
+The installer remembers whether Mission Control was enabled. For installs
+created before that setting was recorded, pass --no-web once to keep it off.
+Use --web or --no-web to change the existing choice deliberately.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -25,7 +27,9 @@ while [[ $# -gt 0 ]]; do
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
     --ref) REF="${2:?--ref needs a branch}"; shift 2 ;;
     --backup-dir) BACKUP_DIR="${2:?--backup-dir needs a path}"; shift 2 ;;
-    --no-web) NO_WEB=1; shift ;;
+    --no-web|--web)
+      [[ -z "$WEB_MODE" ]] || { echo 'Choose only one of --web and --no-web.' >&2; exit 2; }
+      WEB_MODE="$1"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
@@ -68,7 +72,7 @@ printf 'Private recovery backup: %s\n' "$BACKUP"
 # The fetched installer performs its own fast-forward and credential-preserving
 # rerun. Execute that version so new installer fixes apply during this upgrade.
 install_args=(--dir "$INSTALL_DIR" --ref "$REF" --yes --skip-model-key)
-[[ "$NO_WEB" -eq 1 ]] && install_args+=(--no-web)
+[[ -n "$WEB_MODE" ]] && install_args+=("$WEB_MODE")
 if ! bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
   echo "Upgrade failed. Recovery backup: $BACKUP" >&2
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2

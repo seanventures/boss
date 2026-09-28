@@ -372,8 +372,8 @@ Full detail — subscriptions on a server, manual install, troubleshooting:
 
 BOSS spends models in **three** places and they are configured separately: **builds** (writing
 and reviewing code), **the panel** (the meeting that writes your PRD), and **the chat** (asking
-BOSS questions). One subscription or one API key covers all three — but an install that sets
-only builds has a panel and a chat that cannot answer.
+BOSS questions). A supported credential can be assigned to more than one role, but an install
+that configures only builds has a panel and a chat that cannot answer.
 
 Find your row. Each links to the section of [SETUP.md](SETUP.md) with the
 exact commands:
@@ -396,12 +396,14 @@ the server's own credentials rather than making you find them:
 
 ```bash
 ./scripts/install/remote.sh --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
-  model --provider PROVIDER --api-key YOUR_KEY --model MODEL_NAME
+  model --provider PROVIDER --model MODEL_NAME
 ```
 
 `PROVIDER` is `openrouter`, `openai`, `anthropic` or `custom`; `MODEL_NAME` is optional.
-The key is verified against the provider before it is stored, so a bad one comes back as
-`that key was rejected` and nothing is saved.
+The command asks for the key privately. For `custom`, also pass `--base-url URL`.
+Community records the key without a live provider call; the first governed model job must
+prove that it works. See [model connections](docs/community/MODEL_CONNECTIONS.md) for the
+current provider paths and limits.
 
 Once something is connected, [choose which model fills which
 role](SETUP.md#choose-a-model-per-role) — implementer, reviewer, hard problems,

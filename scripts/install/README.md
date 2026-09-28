@@ -39,8 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
 7. Verifies Community edition + ProviderOps surface
 
 On rerun, both API credentials and any operator-added API keys, the database password,
-model keys, secret-store encryption key, console login, public URL, and port settings are retained. Use the lifecycle
+model keys, secret-store encryption key, console login, public URL, port settings,
+Mission Control choice, and secret-store choice are retained. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
+For an older headless install, pass `--no-web` once to record that choice;
+use `--web` to enable it later.
+If you choose Infisical and it cannot be provisioned, the installer reports an
+incomplete install. The next rerun keeps that choice and retries it rather than
+silently switching to database credential storage.
 
 The owner key (`BOSS_API_KEY`) is bound to the `ceo` member and powers Mission
 Control and local CLI commands. The worker key (`BOSS_WORKER_API_KEY`) is bound
@@ -48,9 +54,9 @@ to the seeded `system` member. Keep it private to the worker container; it can
 claim and settle leased jobs. Existing single-key installs receive a new worker
 key on the next installer rerun or upgrade without rotating the owner key.
 
-If the installer added your account to the Docker group, sign out and back in
-before running the `docker compose` commands in this guide. The current login
-session does not gain new group membership automatically.
+The installer does not add your account to the root-equivalent Docker group.
+On a Linux host where only the administrator can access Docker, run Compose
+with `sudo` or grant Docker access deliberately through your host policy.
 
 Mission Control has a separate single-operator password and signed session secret,
 generated on first install and stored only in the private `.env`. The password is
@@ -102,14 +108,17 @@ grok login --device-auth
 
 `--discover-subscriptions` only checks status; it sends no credentials. For
 Claude or Codex, an explicit `--connect-claude` or `--connect-codex` stores the
-official CLI credential through BOSS's credential endpoint and runs a real,
-read-only proof in BOSS's container. For Claude, run `claude setup-token` in a
-VM terminal so its official prompts remain visible; the installer accepts the
+official CLI credential through BOSS's credential endpoint and records the
+connection. Community does not run a live proof turn during setup; model use
+remains unverified until a governed job succeeds. For Claude, run `claude setup-token`
+in a VM terminal so its official prompts remain visible; the installer accepts the
 token through a hidden terminal prompt or `CLAUDE_CODE_OAUTH_TOKEN` environment
 variable. Codex uses its CLI auth JSON, read only from the current VM user's
 private file. BOSS never prints either credential. A database-backed install asks you to add
 `--accept-database-fallback` before a subscription credential can be stored in
 Postgres; the `--secret-store infisical` option provisions a dedicated store.
+See [model connections](../../docs/community/MODEL_CONNECTIONS.md) for the supported paths
+and limits of each provider.
 
 Grok's device session is tied to the Unix account and home that runs BOSS.
 A login under the SSH admin account does not authenticate the containers.
@@ -263,7 +272,8 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 ```bash
 ./scripts/install/upgrade.sh --dir "$PWD"                   # fast-forward and back up first
 ./scripts/install/upgrade.sh --dir "$PWD" --dry-run         # inspect source change
-./scripts/install/upgrade.sh --dir "$PWD" --no-web          # if originally installed without web
+./scripts/install/upgrade.sh --dir "$PWD" --no-web          # record older headless installs once
+./scripts/install/upgrade.sh --dir "$PWD" --web             # deliberately enable the console
 ```
 
 A default `~/boss` install can use the one-line upgrade below:

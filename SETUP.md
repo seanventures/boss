@@ -351,25 +351,27 @@ and sign in inside.
 | `anthropic` | `claude-sonnet-4-5` | <https://console.anthropic.com/settings/keys> |
 | `custom` | yours | your endpoint — also pass `"base_url"` |
 
-**Console:** Setup → Model → pick provider → paste key → Verify and save. **Or:**
+**Console:** Setup → Model → pick provider → paste key → Save. **Or, from a shell:**
 
 ```bash
-curl -X POST "${BOSS_API:?}/v1/setup/model" \
-  -H "x-boss-api-key: ${BOSS_API_KEY:?}" -H 'Content-Type: application/json' -d '{
-  "project_id": "boss-dogfood", "actor": "ceo",
-  "provider": "openrouter", "api_key": "sk-or-your-key-here",
-  "model": "anthropic/claude-sonnet-4.5"
-}'
+read -r -s -p 'OpenRouter API key: ' MODEL_KEY </dev/tty; echo
+MODEL_KEY="$MODEL_KEY" python3 -c 'import json,os
+print(json.dumps({"project_id":"boss-dogfood","actor":"ceo",
+  "provider":"openrouter","api_key":os.environ["MODEL_KEY"],
+  "model":"anthropic/claude-sonnet-4.5"}))' |
+  curl -sS -X POST "${BOSS_API:?}/v1/setup/model" \
+    -H "x-boss-api-key: ${BOSS_API_KEY:?}" -H 'Content-Type: application/json' \
+    --data-binary @-
+unset MODEL_KEY
 ```
 
-The key is verified before it is stored. Nothing is saved when it fails, so fix and retry.
+Community stores the key without a live provider call and returns
+`"verification_state":"unverified"`. A saved key does not prove that the provider
+will answer. The first governed model job must establish that. See the
+[model connection matrix](docs/community/MODEL_CONNECTIONS.md) for the supported paths.
 
 | You get | Means |
 |---|---|
-| `422` · that key was rejected | Key wrong or truncated. |
-| `422` · not allowed to use that model | Try the example model for that provider. |
-| `422` · no model called … | Wrong model name or base URL. |
-| `422` · rate-limiting right now | The key works. Retry shortly. |
 | `409` · is a subscription, not an API key | Go to B or C. |
 | `400` · a base URL is required | Add `"base_url"` for `custom`. |
 
@@ -479,16 +481,17 @@ Then **Connect** in the console, or:
 ```bash
 curl -X POST "${BOSS_API:?}/v1/setup/coding-agents/connect" \
   -H "x-boss-api-key: ${BOSS_API_KEY:?}" -H 'Content-Type: application/json' \
-  -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"codex"}'
+  -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"codex","prove":false}'
 ```
 
-Success runs a real Codex turn before saying yes:
+In Community, success records the connection without a live Codex turn:
 
 ```json
 {
   "ok": true,
   "detected": { "authenticated": true, "auth_detail": "Logged in using ChatGPT" },
-  "proof": { "ok": true, "replied": "BOSS_OK" }
+  "proof": { "ok": true, "skipped": true },
+  "entitlement_recorded": true
 }
 ```
 
@@ -521,9 +524,9 @@ which is easiest depends on what you have open, not on where BOSS is running.
 **1. The console** — works for any install, nothing to set up.
 
 Setup → Step two → Provider **Claude Code subscription** → paste it into *Token from
-`claude setup-token`* → **Store and connect**. BOSS writes it to this install's secret store,
-keeps a reference rather than the value, and proves it with one real turn. No restart and
-nothing to put in a file.
+`claude setup-token`* → **Store and connect**. BOSS writes it to this install's secret store
+and keeps a reference rather than the value. Community records the connection without a
+live proof turn. No restart and nothing to put in a file.
 
 **2. One command — when BOSS is on a server you reach over SSH.**
 
@@ -555,11 +558,11 @@ That stores it. It does not connect it, so do that too:
 ```bash
 curl -sS -X POST "$BOSS_API/v1/setup/coding-agents/connect" \
   -H "x-boss-api-key: $BOSS_API_KEY" -H 'Content-Type: application/json' \
-  -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"claude_code"}'
+  -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"claude_code","prove":false}'
 ```
 
-`connect` runs a real turn before it reports success — so "connected" means a model actually
-answered, not that a credential was written somewhere.
+`connect` checks and records the CLI connection. In Community, "connected" does not mean
+that a model has answered; the first governed job must establish that.
 
 ---
 

@@ -52,6 +52,7 @@ die()      { ui_err "$*"; exit 1; }
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 ASSUME_YES=0
 WITH_WEB=1
+WEB_EXPLICIT=0
 NONINTERACTIVE=0
 SKIP_MODEL_KEY=0
 OPENAI_KEY_PRESET="${OPENAI_API_KEY:-}"
@@ -111,6 +112,7 @@ Options:
   --anthropic-key KEY     Anthropic API key (optional)
   --github-token TOKEN    GitHub token for Software Factory (optional)
   --no-web                Skip Mission Control web console
+  --web                   Enable Mission Control on an install previously made without it
   --public-url URL        Browser-reachable API URL when using a reverse proxy
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
@@ -159,7 +161,8 @@ while [[ $# -gt 0 ]]; do
     --openai-key) OPENAI_KEY_PRESET="$2"; shift 2 ;;
     --anthropic-key) ANTHROPIC_KEY_PRESET="$2"; shift 2 ;;
     --github-token) GITHUB_TOKEN_PRESET="$2"; shift 2 ;;
-    --no-web) WITH_WEB=0; shift ;;
+    --no-web) WITH_WEB=0; WEB_EXPLICIT=1; shift ;;
+    --web) WITH_WEB=1; WEB_EXPLICIT=1; shift ;;
     --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
     --bind-address) die "--bind-address is no longer supported; Community binds API/web to loopback. Use an SSH tunnel or HTTPS reverse proxy." ;;
     --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
@@ -371,6 +374,17 @@ if [[ "$ASSUME_YES" -eq 0 ]]; then
 fi
 ui_ok "Install dir: $INSTALL_DIR"
 
+# A noninteractive reinstall or upgrade must retain the service profile chosen on the
+# first run. Without this marker, `upgrade.sh --yes` silently added the web build to a
+# headless install; on a small VM that can exhaust memory before the API is refreshed.
+# Existing installs made before this marker can still use --no-web once to record it.
+if [[ "$WEB_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]]; then
+  case "$(grep -m 1 '^BOSS_COMMUNITY_WEB_ENABLED=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)" in
+    0) WITH_WEB=0 ;;
+    1) WITH_WEB=1 ;;
+  esac
+fi
+
 OPENAI_KEY="$OPENAI_KEY_PRESET"
 if [[ -z "$OPENAI_KEY" && "$SKIP_MODEL_KEY" -eq 0 ]]; then
   if [[ "$NONINTERACTIVE" -eq 1 ]]; then
@@ -392,7 +406,9 @@ ANTHROPIC_KEY="$ANTHROPIC_KEY_PRESET"
 GITHUB_TOKEN="$GITHUB_TOKEN_PRESET"
 
 if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
-  prompt "Install Mission Control web console? (Y/n)" "Y"
+  _web_default=Y
+  [[ "$WITH_WEB" -eq 0 ]] && _web_default=N
+  prompt "Install Mission Control web console? (Y/n)" "$_web_default"
   case "$(printf '%s' "$REPLY" | tr '[:upper:]' '[:lower:]')" in
     n|no) WITH_WEB=0 ;;
     *) WITH_WEB=1 ;;
@@ -411,8 +427,15 @@ fi
 # -y, then started the stack without the secrets profile. The token detection is outside the
 # interactive block so a non-interactive update keeps the store it already provisioned. An
 # explicit --secret-store still wins, including an explicit database.
-if [[ "$SECRET_STORE_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]] && grep -qs '^BOSS_INFISICAL_TOKEN=.' "$INSTALL_DIR/.env"; then
-  SECRET_STORE="infisical"
+if [[ "$SECRET_STORE_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]]; then
+  _prior_store="$(grep -m 1 '^BOSS_COMMUNITY_SECRET_STORE=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+  case "$_prior_store" in
+    database|infisical) SECRET_STORE="$_prior_store" ;;
+    *)
+      if grep -qs '^BOSS_INFISICAL_TOKEN=.' "$INSTALL_DIR/.env"; then
+        SECRET_STORE="infisical"
+      fi ;;
+  esac
 fi
 if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
   echo ""
@@ -580,6 +603,8 @@ BOSS_DEFAULT_PROJECT_ID=boss-dogfood
 BOSS_API_PORT=${API_PORT}
 BOSS_WEB_PORT=${WEB_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
+BOSS_COMMUNITY_WEB_ENABLED=${WITH_WEB}
+BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
 NEXT_PUBLIC_BOSS_API_URL=${PUBLIC_API_URL}
 NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
@@ -726,16 +751,13 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
       # shellcheck disable=SC2086
       ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
         $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate api </dev/null >/dev/null 2>&1 \
-        || ui_warn "could not restart API — it may not see the secret store yet"
+        || die "could not restart API with the provisioned secret store; installation is incomplete"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
     else
-      # NOT FATAL, and not silent. BOSS falls back through its store chain to the database, so
-      # the install works; the operator just has the leaner arrangement they did not pick.
-      ui_warn "The secret store did not provision. BOSS will use its database instead."
-      ui_warn "  Retry: sh scripts/install/bootstrap_infisical.sh $ENV_FILE"
+      die "The selected secret store did not provision. BOSS may be running with database fallback; installation is incomplete. Retry: sh scripts/install/bootstrap_infisical.sh $ENV_FILE"
     fi
   else
-    ui_warn "bootstrap_infisical.sh is missing — falling back to the database store"
+    die "bootstrap_infisical.sh is missing; selected secret store cannot be provisioned"
   fi
 fi
 
@@ -786,6 +808,12 @@ rm -f "$SEED_ERR"
 # shellcheck disable=SC2086
 ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null
+if [[ "$WITH_WEB" -eq 0 ]]; then
+  # Switching an existing install to headless must stop a previously running
+  # console. Compose does not stop services omitted from the active profile.
+  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    --profile web stop web </dev/null
+fi
 ui_ok "Containers started"
 
 # ---- post checks -----------------------------------------------------------
@@ -863,5 +891,6 @@ echo "  cd $INSTALL_DIR && docker compose -f scripts/install/community-compose.y
 echo ""
 echo -e "${MUTED}Docs: https://github.com/seanventures/boss#readme${NC}"
 echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
+echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
 echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
 echo ""

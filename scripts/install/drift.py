@@ -27,10 +27,12 @@ Values are printed only for settings that cannot hold a credential. Everything e
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+ENV_FILE = Path(os.environ.get("BOSS_ENV_FILE") or REPO / ".env")
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "engine"))
 
@@ -53,7 +55,7 @@ def stock_settings() -> Settings:
     """Settings as a brand-new install sees them: no .env, and no inherited environment.
 
     `Settings(_env_file=None)` is NOT enough, and getting this wrong makes the tool lie in the
-    one place it matters. checkup.sh sources .env before calling this, and a container has the
+    one place it matters. checkup.sh reads .env as data, and a container has the
     variables exported outright -- in both cases `_env_file=None` still reads os.environ, so
     "stock" comes back identical to "here" and the report cheerfully announces no drift.
     """
@@ -101,7 +103,7 @@ def shown(name: str, value) -> str:
 def main() -> int:
     show_all = "--all" in sys.argv
 
-    here = Settings()  # reads .env and the environment, exactly as the API does
+    here = Settings(_env_file=ENV_FILE if ENV_FILE.is_file() else None)
     stock = stock_settings()
 
     differences = []
@@ -127,7 +129,15 @@ def main() -> int:
     else:
         print(f"  {GREEN}identical to a stock install{OFF}")
 
-    unread = unread_boss_variables(os.environ)
+    # Include names from .env without executing its values in a shell. The API
+    # and worker read the same file through their settings loader.
+    file_names = {}
+    if ENV_FILE.is_file():
+        for line in ENV_FILE.read_text().splitlines():
+            match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", line)
+            if match:
+                file_names[match.group(1)] = ""
+    unread = unread_boss_variables({**file_names, **os.environ})
     print()
     if unread:
         print(

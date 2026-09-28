@@ -108,9 +108,9 @@ def connect(api_url: str, api_key: str, provider: str) -> None:
             result = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
         # Do not echo a response body: a provider error could contain private data.
-        raise RuntimeError(f"BOSS proof refused {provider}: HTTP {exc.code}") from None
+        raise RuntimeError(f"BOSS connection refused {provider}: HTTP {exc.code}") from None
     except (OSError, ValueError) as exc:
-        raise RuntimeError(f"BOSS proof could not finish for {provider}") from exc
+        raise RuntimeError(f"BOSS connection check could not finish for {provider}") from exc
     if not result.get("connected") or not result.get("entitlement_recorded"):
         raise RuntimeError(f"BOSS did not record the {provider} connection")
     proof = result.get("proof")

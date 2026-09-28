@@ -37,7 +37,20 @@ for arg in "$@"; do
 done
 
 ENV_FILE="${BOSS_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env}"
-[ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
+# .env is Docker data, not shell code. A model key or operator-added value may
+# contain shell metacharacters; sourcing it would execute them on the host.
+env_value() {
+  local key="$1"
+  [ -f "$ENV_FILE" ] || return 0
+  grep -m 1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true
+}
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL; do
+  if [ -z "${!key:-}" ]; then
+    value="$(env_value "$key")"
+    [ -z "$value" ] || printf -v "$key" '%s' "$value"
+  fi
+done
+export BOSS_ENV_FILE="$ENV_FILE"
 
 API_PORT="${BOSS_API_PORT:-8000}"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
