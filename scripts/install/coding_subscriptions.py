@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discover VM coding CLIs; transfer a subscription only on an explicit request.
+"""Discover VM coding CLIs; record a subscription only on an explicit request.
 
 The installer and worker run in different containers/accounts. Host login discovery is
 informational. Claude's official setup token and Codex's own auth file can be imported
@@ -94,10 +94,13 @@ def claude_credential() -> str:
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
+    # Community cannot run an unmetered CLI proof turn from setup. The credential is
+    # restored and the CLI login is checked by BOSS, but the first governed job must
+    # establish whether this subscription can actually answer.
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/v1/setup/coding-agents/connect", method="POST",
         data=json.dumps({"project_id": "boss-dogfood", "actor": "ceo",
-                         "provider": provider, "prove": True}).encode(),
+                         "provider": provider, "prove": False}).encode(),
         headers={"x-boss-api-key": api_key, "Content-Type": "application/json"},
     )
     try:
@@ -108,9 +111,12 @@ def connect(api_url: str, api_key: str, provider: str) -> None:
         raise RuntimeError(f"BOSS proof refused {provider}: HTTP {exc.code}") from None
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"BOSS proof could not finish for {provider}") from exc
-    if not result.get("connected"):
-        raise RuntimeError(f"BOSS did not report {provider} connected")
-    print(f"  {provider}: connected and proved by BOSS")
+    if not result.get("connected") or not result.get("entitlement_recorded"):
+        raise RuntimeError(f"BOSS did not record the {provider} connection")
+    proof = result.get("proof")
+    if not isinstance(proof, dict) or proof.get("skipped") is not True:
+        raise RuntimeError(f"BOSS returned an unexpected {provider} proof state")
+    print(f"  {provider}: connection recorded; model use remains unverified")
 
 
 def main() -> int:
