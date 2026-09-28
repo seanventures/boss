@@ -24,7 +24,7 @@ To install the official Claude Code, Codex CLI, and Grok Build tools too:
 curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash -s -- --install-coding-clis
 ```
 
-Authenticate each provider on the VM under the runtime user after installation. An existing laptop subscription does not automatically authenticate the VM. The [installer guide](scripts/install/README.md) covers supported credential import, login checks, ports, and recovery.
+Authenticate each provider on the VM under the runtime user after installation. An existing laptop subscription does not automatically authenticate the VM. The [model connection guide](docs/community/MODEL_CONNECTIONS.md) shows which paths the installer can configure and which still need setup. The [installer guide](scripts/install/README.md) covers credential import, login checks, ports, and recovery.
 
 ## Use BOSS
 

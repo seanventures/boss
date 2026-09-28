@@ -9,7 +9,8 @@ optional.
 
 The root `README.md` has the one-line installer, SSH access, upgrade, and
 uninstall commands. `scripts/install/README.md` covers credentials and
-recovery. See [Features](FEATURES.md) for the current Community scope.
+recovery. See [model connections](MODEL_CONNECTIONS.md) for supported provider
+paths and [Features](FEATURES.md) for the current Community scope.
 
 In the console, **Agent work** shows recent activity by role. **Team
 structure** holds a planned role layout and separately shows actual handoffs.

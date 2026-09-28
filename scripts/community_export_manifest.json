@@ -50,6 +50,7 @@
     "scripts/tests/test_typed_request_bodies_wave2.py",
     "scripts/tests/test_typed_request_bodies_wave3.py",
     "scripts/tests/test_mcp_access.py",
+    "scripts/tests/test_installer_lifecycle_safety.py",
     "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
