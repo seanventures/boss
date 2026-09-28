@@ -9777,7 +9777,10 @@ def start_discovery_endpoint(payload: dict):
     title = (payload.get("title") or seed[:120] or "Discovery").strip()
     if not seed:
         raise HTTPException(status_code=400, detail="seed (the idea/problem to research) is required")
-    project_id = payload.get("project_id") or "boss-dogfood"
+    project_id = payload.get("project_id") or settings.default_project_id
+    actor = str(current_api_principal.get() or payload.get("actor") or "executive_console").strip()
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
     from .services.discovery_service import start_discovery
     run_id = start_discovery(
         project_id=project_id, title=title, seed=seed,
@@ -9804,8 +9807,9 @@ def get_discovery_endpoint(run_id: str):
     from .services.discovery_service import load_discovery_run
     with begin(engine) as c:
         run = load_discovery_run(c, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="discovery run not found")
+        if run is None:
+            raise HTTPException(status_code=404, detail="discovery run not found")
+        require_project_reader(c, run["project_id"])
     return run
 
 
@@ -9822,6 +9826,8 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
         run = load_discovery_run(connection, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="discovery run not found")
+        actor = str(current_api_principal.get() or payload.get("actor") or "executive_console").strip()
+        require_project_actor(connection, run["project_id"], actor, "task_create")
         outcomes = (run.get("state") or {}).get("candidate_outcomes") or []
         if idx < 0 or idx >= len(outcomes):
             raise HTTPException(status_code=400, detail="outcome_index out of range")
@@ -9855,7 +9861,9 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
             connection, project_id, "model", settings.plan_budget_usd_micros * 4,
             "PRD meeting promoted from Discovery.", 120,
         )
-        reservation_id = reservation.get("reservation_id") if reservation.get("status") == "reserved" else None
+        if reservation.get("status") != "reserved":
+            raise HTTPException(status_code=409, detail=reservation.get("message") or "Meeting budget denied")
+        reservation_id = reservation["reservation_id"]
         meeting_run_id = start_meeting_run(
             connection, project_id=project_id, task_id=task_id, directive=directive, url=None,
             constraints={}, role_keys=None, finalize_ctx={"reservation_id": reservation_id},
@@ -9877,7 +9885,7 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
 
 
 @app.post("/v1/discoveries/{run_id}/deepen")
-def deepen_discovery_endpoint(run_id: str):
+def deepen_discovery_endpoint(run_id: str, payload: Optional[dict] = None):
     """Spawn a deeper second pass on a discovery's seed: a multi-source parallel scout sweep
     (competitor/pain/demand/timing) for a richer, more-cited dossier. Returns the new run_id."""
     if not database_is_reachable(engine):
@@ -9885,8 +9893,10 @@ def deepen_discovery_endpoint(run_id: str):
     from .services.discovery_service import load_discovery_run, start_discovery
     with begin(engine) as c:
         parent = load_discovery_run(c, run_id)
-    if parent is None:
-        raise HTTPException(status_code=404, detail="discovery run not found")
+        if parent is None:
+            raise HTTPException(status_code=404, detail="discovery run not found")
+        actor = str(current_api_principal.get() or (payload or {}).get("actor") or "executive_console").strip()
+        require_project_actor(c, parent["project_id"], actor, "workflow_execute")
     new_id = start_discovery(
         project_id=parent["project_id"], title=f"[deep] {parent['title']}"[:300],
         seed=parent["seed"] or "", context=parent["context"] or "",
