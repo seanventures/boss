@@ -1,11 +1,10 @@
 # Community dependency and notice review — BOSS-300 / BOSS-293
 
-**Status (2026-09-28): interim image inventory; PF-1 and PF-4 remain open.**
-The source checkout and the first x86 Linux export candidate were inspected.
-That candidate failed first-install completion and has since changed. Source
-`29daa8ca` has a zero-blocker 1,816-file export and passed its clean x86 image
-run. These findings are review inputs, not third-party notice clearance
-or a legal compatibility decision. Re-run against the final built images.
+**Status (2026-09-28): frozen-image inventory complete; PF-1 and PF-4 remain open.**
+The source checkout and interim x86 Linux candidates were inspected. Frozen
+source `1a8102a2` has a zero-blocker 1,845-file export and passed first install
+on a pristine x86 VM. These findings are review inputs, not third-party notice
+clearance or a legal compatibility decision.
 
 ## Evidence collected
 
@@ -86,6 +85,36 @@ The interim Debian inventory found a copyright text for every installed
 package (354 API, 88 web). The `qrcode-terminal` metadata omission is resolved
 to a present Apache-2.0 text in the inspected Node base image. Neither result
 substitutes for checking the final rebuilt images.
+
+## Frozen x86 image inventory (`1a8102a2`, review still open)
+
+The clean VM rebuilt the default Community API, worker and web images from the
+frozen export. Their local image IDs are API
+`sha256:b39f7e594bcc59c0f636b28ed66abacf3234ee4e07efc929485493fa2f869c5f`,
+worker `sha256:be6ff73f12695e2a6b38bf9e8d289a38f0bccc83d4b01608e401a26f6bb7ac06`,
+and web `sha256:7fe7bbaf085468da6b96b94d2d18bc0f41387836df9b65e46dcacab6db7540c1`.
+The default local PostgreSQL image ID is
+`sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea`.
+These are local image identities, not registry digests or immutable release
+tags.
+
+The [sanitized VM qualification report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-1a8102/qualification-report.md)
+and [exact final-image inventory](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-1a8102/qa-final-image/summary.json)
+record the build and package observations. The API and worker each have 59 Python distributions; the web runtime has
+103 unique pnpm packages. Globally installed npm inventories contain 207 API
+and 204 web entries. Debian inventories contain 354 API and 88 web packages,
+with zero unresolved `/usr/share/doc/*/copyright` paths in the reviewed
+inventory. The API/worker and web images contain the root Apache `LICENSE`;
+the API/worker contain the copied Node license. Linux sharp-libvips glibc and
+musl 1.2.4 packages are present. The optional Redis and Infisical secrets
+profile was not pulled or inventoried in this default-install run. Exact
+inventory artifacts and terms review must accompany the VM qualification
+report; these counts alone do not close the notice gate.
+
+After safe uninstall/reinstall, rebuilt API, worker and web images had
+different local IDs, but their package inventories were byte-identical to the
+first-install inventories. The optional profile and actual CLI authentication
+were not exercised. The next source candidate will need its own image inventory.
 
 The remaining file-level gaps are more specific: the inspected prebuilt
 `sharp-libvips` package roots have a README listing bundled libraries but no

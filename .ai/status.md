@@ -10,21 +10,26 @@
   the integration branch, 13 are patch-equivalent, and the remaining draft
   changes are reworked or superseded. Canaries #174/#191 need separate
   disposition. Do not close the older PRs before #280 is pushed and merged.
-- The integrated engine suite passed against a disposable PostgreSQL 16
-  database: 5,092 passed, 13 skipped, one expected failure. The web suite
-  passed 2,454 tests with one skip; its production build passed. These are
-  source-tree checks, not final exported-image or live QA proof.
+- Frozen source `1a8102a2eb7945afda64f72fb18906c134541bdd` passed the full
+  engine suite against disposable PostgreSQL 16: 5,167 passed, 128 skipped,
+  one expected failure. The web suite passed 2,455 tests with one skip; lint,
+  type check, production build, generated-doc check and strict docs build
+  passed. These are source-tree checks, not live release-commit QA proof.
 - A security review reproduced cross-project writes through MCP server and
   secret routes using a low-permission authenticated principal. Project-scoped
   authority now covers those gaps and job enqueue, with focused tests. Plane
   writes have durable receipts and HTTPS verifies certificates by default.
-- Source `29daa8ca` produced a 1,816-file export with zero mechanical
-  blockers. The proposed local one-root history has zero Gitleaks findings and
-  11 unverified, zero verified TruffleHog fixture/identifier detections. Its
-  interim clean x86 VM run passed; the final exact-source repeat is pending.
+- The frozen source produced a 1,845-file export with zero mechanical blockers.
+  Its proposed local new-root commit `bb16111b` has zero Gitleaks tree/history
+  findings and 11 unverified, zero verified TruffleHog fixture/identifier
+  detections. Its exact clean x86 VM full installer lifecycle passed, including
+  rerun, backup/restore, upgrade, and safe uninstall/reinstall. A first-run
+  system canary incorrectly appears as customer Agent work; BOSS-438 is fixing
+  the view while preserving its audit trail. TUI and MCP coverage workstreams
+  are also active. Their next source candidate will need requalification.
   Third-party terms, private-history credential disposition, release-commit
-  proof and public controls remain open. Keep PR
-  #280 draft and the target repository private.
+  proof and public controls remain open. Keep PR #280 draft and the target
+  repository private.
 
 ## 2026-09-28 BOSS-300 Community Apache decision (integration in progress)
 

@@ -10,18 +10,30 @@
   superseded. Retain #174/#191 canaries pending their own disposition; defer
   closing superseded PRs until #280 is current and merged.
 - Community source includes 34 agent YAML definitions and five opt-in example
-  workflows. The integration engine suite passed 5,092 tests with 13 skips
-  and one expected failure on disposable PostgreSQL 16; web passed 2,454 with
-  one skip and built for production. Focused project-authorization and Plane
-  tests pass after the security repairs; the final clean-VM run is pending the
-  frozen export.
+  workflows. Frozen code source `1a8102a2eb7945afda64f72fb18906c134541bdd`
+  passed 5,167 engine tests with 128 skips and one expected failure on
+  disposable PostgreSQL 16; web passed 2,455 with one skip, lint/type checks,
+  and a production build. Focused authority, installer, exporter, TUI/example
+  and OpenAPI checks passed. The exact clean Ubuntu 24.04 x86 VM lifecycle
+  passed, including first install, rerun, backup/restore, same-tree upgrade,
+  and safe uninstall/reinstall. See the sanitized
+  [report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-1a8102/qualification-report.md).
 - Project-scoped API authority now covers the reproduced MCP, secrets, and job
   enqueue gaps plus related routes. Plane writes use durable effect receipts,
-  and HTTPS verification is the default. Source `29daa8ca` produced a
-  1,816-file export with zero mechanical blockers. Its proposed local new-root
-  history passed Gitleaks tree/history scans; TruffleHog found 11 unverified
-  fixture/identifier detections and zero verified findings. No export has been
-  pushed to the Community target.
+  and HTTPS verification is the default. The frozen source produced a
+  1,845-file export with zero mechanical blockers. Its proposed local new-root
+  commit `bb16111b` passed Gitleaks tree/history scans; TruffleHog found 11
+  unverified fixture/identifier detections and zero verified findings. Its
+  full clean-VM lifecycle passed. No export has been pushed to the Community
+  target. The target is still private and empty; GitHub Actions are disabled,
+  while branch protection and secret scanning cannot yet be evidenced on its
+  current private plan.
+- BOSS-438 follow-up is isolating the process-manager system canary from the
+  customer Agent work and Team structure aggregates without suppressing its
+  audit records or real unregistered roles. BOSS-430 and BOSS-429 are building
+  TUI and MCP operation coverage against the mounted API. All three changes
+  will need integration, export, tests, and exact-VM requalification; do not
+  treat the passed `1a8102a2` VM as proof for a later source.
 - Counsel reference `01049940` covers the first-party Apache decision. It
   does not close third-party redistribution, private-history credential
   disposition, fresh-VM, exact-release QA, partner, or public-visibility gates in

@@ -2,10 +2,12 @@
 
 **Target:** `seanventures/boss` (created empty and private on 2026-09-24).
 **Source:** private `seanheiney/boss` monorepo.
-**Status (2026-09-28):** interim source `29daa8ca` produced a 1,816-file candidate with
-zero mechanical blockers and passed a clean x86 VM lifecycle. New security changes
-require a fresh exact export and VM repeat; no code has been
-pushed to the target. The public flip is blocked by the
+**Status (2026-09-28):** frozen source
+`1a8102a2eb7945afda64f72fb18906c134541bdd` produced a 1,845-file
+candidate with zero mechanical blockers. Its full installer lifecycle passed
+on a pristine Ubuntu 24.04 x86_64 VM. A first-run system-canary presentation
+repair is being prepared on BOSS-438, so the next candidate will need its own
+qualification. No code has been pushed to the target. The public flip is blocked by the
 [release checklist](PUBLIC_FLIP_CHECKLIST.md).
 
 ## Product and license boundary
@@ -18,10 +20,10 @@ The Community product contract is in [`BOSS_COMMUNITY_EDITION_SPEC.md`](../produ
 
 | Surface | Community candidate | Boundary work before export |
 |---|---|---|
-| Runtime | `engine/`, Community API and worker code, migrations | The Community entrypoint, OpenAPI and schema are split and checksum-pinned. Project-scoped write/read authority, Plane effect receipts, and verified Plane TLS are integrated. Interim exported runtime acceptance passed; security fixes and a final repeat remain. Preserve durable tasks, policy, receipts, ProviderOps, self-hosted SSO, and the self-hosted Goldeneye control plane. |
-| Web | Community Mission Control, project/organization management, tasks, decisions, live coordination | The Community root route and API client are split from paid source. The integrated source web suite and production build pass. Verify the final export build and runtime. |
+| Runtime | `engine/`, Community API and worker code, migrations | The Community entrypoint, OpenAPI and schema are split and checksum-pinned. Project-scoped write/read authority, Plane effect receipts, and verified Plane TLS are integrated. Frozen-source tests and exported-image API/worker runtime probes passed; a planned follow-up will require requalification. Preserve durable tasks, policy, receipts, ProviderOps, self-hosted SSO, and the self-hosted Goldeneye control plane. |
+| Web | Community Mission Control, project/organization management, tasks, decisions, live coordination | The Community root route and API client are split from paid source. The frozen-source web suite, lint/type check and production build pass; the final exported console loaded authenticated Team structure, Agent Studio, Agent work and Workflow Catalogue screens in the VM. First-run organization remains a UX follow-up. |
 | Packages | API client, Community specpack, Community workflows/policies/roles and examples | The Community pack uses Apache-2.0 and omits the private commercial packaging policy. Five optional examples now declare console inputs and stored defaults; the sales and video handoffs were repaired. Package metadata and third-party notices still need final review. |
-| Installer | VM bootstrap, Compose, official coding CLIs, Community docs | The source-tree and interim `29daa8ca` export passed the clean x86 VM lifecycle. Repeat on the final exact export after the security changes. |
+| Installer | VM bootstrap, Compose, official coding CLIs, Community docs | The source-tree and interim export passed the clean x86 VM lifecycle. Frozen export first install, rerun, backup/scratch restore, same-tree upgrade, safe uninstall/reinstall, health, edition, authentication, loopback ports and owner/worker key separation passed on a fresh x86 VM. Grok CLI was verified on the host; Claude/Codex in the API image. No CLI authentication or model call was exercised. |
 | Operations | Public README, contributing/issue forms, security policy, license and applicable notices | The root `LICENSE` is checksum-pinned in the export. Finish third-party terms, public-reference, private-host and reachable-history reviews. |
 
 Known paid/private candidates to exclude or refactor are `apps/account_connect/`, `apps/api/app/adapters_enterprise/`, hosted Account Connect and marketplace routes, Cloud billing/managed-worker code, `engine/boss_engine/services/cloud_product.py`, Enterprise cluster/support code, `packages/specpack/packs/enterprise_edition.yaml`, and private production Goldeneye deployment material. This is an **inspection list**, not an exhaustive allowlist. The standalone Goldeneye kit and self-hosted `/v1/goldeneye/*` control plane are Community per [`GOLDENEYE_PAAS.md`](../product/GOLDENEYE_PAAS.md); they require private-reference and dependency review, not blanket exclusion. Self-hosted SSO, ProviderOps, and the core governed runtime are also Community despite some `enterprise` names in route and object paths; classification must follow behavior, not filenames.
@@ -44,11 +46,29 @@ unverified fixture/identifier detections and zero verified findings. The
 sanitized disposition is in the private task artifact
 `community-history-scan-29daa8ca.md`. This local history has not been pushed.
 
+The frozen `1a8102a2` candidate selected 1,845 files with zero mechanical
+blockers. Its local new-root commit is
+`bb16111b6a01cb28f2a61a8b41ac0affa7f75c31` (tree
+`b3eff8e199e785281b6cabc7721bba188e189fd0`); only one commit is
+reachable. Gitleaks found zero findings in the export tree and reachable
+history. TruffleHog, with verification disabled, produced 11 unverified,
+zero verified synthetic fixture/identifier detections. The sanitized private
+review is `/tmp/boss-community-ga-final-1a8102a2/history-scan-summary.md`.
+This history is local only and is not publication approval.
+
 The interim VM run passed first install, rerun with preserved secrets, backup
 and restore, same-tree upgrade, safe uninstall and reinstall, API authentication
 and edition checks, TUI/MCP reads, the default browser flow, and five optional
 example dry runs. It is evidence for the installer design, not qualification of
 the later security changes. A new exact source export must repeat the VM run.
+
+The frozen `1a8102a2` export passed the same full lifecycle in a pristine
+Ubuntu 24.04.5 x86_64 KVM guest. The sanitized [qualification report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-1a8102/qualification-report.md)
+includes phase checks, image identities, TUI/MCP/API reads, seven authenticated
+console screenshots, and five example dry runs. It also records a first-run
+system canary that appears in customer Agent work. BOSS-438 will repair that
+presentation without suppressing audit history, and the resulting source must
+be exported and qualified again before publication.
 
 A separate Gitleaks scan of all 3,113 private-source commits found 13
 historical matches. Four are values in a removed environment backup under

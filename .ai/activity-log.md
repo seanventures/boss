@@ -1,5 +1,29 @@
 # BOSS Autonomous Activity Log
 
+## 2026-09-28 — Codex — BOSS-293 frozen Community source and release controls
+
+- Froze private source code at `1a8102a2eb7945afda64f72fb18906c134541bdd`
+  for final qualification. Full engine 5,167 passed/128 skipped/one expected
+  failure; web 2,455 passed/one skipped, lint/type check and production build
+  passed. Strict docs and generated contract checks passed.
+- Exported 1,845 selected files with no mechanical blockers. Proposed local
+  new-root commit `bb16111b` passed Gitleaks tree/history scans; independent
+  TruffleHog review found 11 unverified fixture/identifier detections and zero
+  verified findings. The local history has not been pushed.
+- The exact export passed the full installer lifecycle on a pristine Ubuntu
+  24.04 x86_64 VM: first install, rerun with identity/data preservation,
+  backup/scratch restore, same-tree upgrade, safe uninstall/reinstall, API/web
+  health, TUI/MCP reads, and five sample dry runs. Image package inventories
+  were collected; third-party legal review remains open.
+- First-run VM UI exposed five system-canary role keys as unregistered customer
+  work. BOSS-438 is implementing a narrow fix in an isolated worktree. BOSS-430
+  and BOSS-429 separately began full TUI and MCP operation mapping; later
+  candidates need their own export and VM evidence.
+- Disabled GitHub Actions on the empty private Community target and verified
+  the setting. GitHub rejects branch protection/rulesets on the current
+  private plan; secret scanning remains disabled. PF-8 needs an owner-approved
+  control path before publication. No visibility or code push occurred.
+
 ## 2026-09-28 — Codex — BOSS-293 interim Community export and final preparation
 
 - Integrated project-scoped API authorization, Plane effect receipts and
