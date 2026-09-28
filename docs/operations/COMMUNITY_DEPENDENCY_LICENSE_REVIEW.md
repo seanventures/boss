@@ -49,7 +49,13 @@ are retained outside the proposed public tree.
   Claude Code 2.1.197 (`SEE LICENSE IN README.md`) and Codex 0.158.0
   (Apache-2.0). The Claude README points to commercial terms. Both API and
   web global npm trees contain `qrcode-terminal` without a license metadata
-  field. Review CLI redistribution and missing metadata with counsel.
+  field. The inspected Node 20 base image does include that package's
+  Apache-2.0 `LICENSE` at
+  `/usr/local/lib/node_modules/npm/node_modules/qrcode-terminal/LICENSE`
+  (SHA-256 `b3c7a2fadb2515b8106eae58439a4b9c0581a4eaa88d6a265701f8d4dd7dadb8`).
+  A blank metadata field is therefore not proof that its license text is
+  absent. Confirm the path in final images and review CLI redistribution with
+  counsel.
 - The API image has 354 Debian packages and the web image 88. Installed
   `/usr/share/doc/*/copyright` files resolve for all inventoried packages.
   API Debian `ffmpeg` 5.1.9 reports GPL version 2 or later and an
@@ -64,8 +70,29 @@ The integration source now copies the Node distribution license alongside its
 binary. The Community Dockerfile also copies the reviewed root Apache-2.0
 `LICENSE` into the API/worker and web runtime images. Verify those paths in the
 final built images; source-level checks do not prove an image was rebuilt.
+The inspected local `caniuse-lite` package root includes its CC-BY-4.0
+`LICENSE`; verify that package's attribution and exact final-image path.
 These additions do not resolve the separate third-party terms and notice
 review below.
+
+The interim Debian inventory found a copyright text for every installed
+package (354 API, 88 web). The `qrcode-terminal` metadata omission is resolved
+to a present Apache-2.0 text in the inspected Node base image. Neither result
+substitutes for checking the final rebuilt images.
+
+The remaining file-level gaps are more specific: the inspected prebuilt
+`sharp-libvips` package roots have a README listing bundled libraries but no
+separate `LICENSE`, `COPYING`, or `THIRD-PARTY-NOTICES` file; the inspected
+Playwright full Chromium tree has only a Widevine license in its browser
+directory, while the headless-shell and ffmpeg trees have their own notices.
+Identify the correct versioned notice texts and their distribution path before
+declaring the image notice set complete.
+
+Counsel still needs to dispose of Claude Code CLI redistribution terms, the
+Debian GPL-enabled ffmpeg build and any related source duties, the bundled
+native libraries in `psycopg-binary` and `sharp-libvips`, CC-BY attribution for
+`caniuse-lite`, and the Playwright browser notice set. Codex CLI Apache
+metadata alone does not settle its bundled native dependencies.
 
 Package metadata and notice-path searches do not establish redistribution
 rights, source-offer compliance, or completeness for bundled native binaries.
