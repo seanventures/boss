@@ -38,11 +38,12 @@ client shim for static resources, CSS URLs, `srcset`, fetch/XHR, history API,
 EventSource, WebSockets, and dynamically inserted elements. Redirect `Location`
 headers are rebased; non-HTML response bytes are passed through unchanged.
 
-`GET /v1/previews/<id>/logs` streams startup logs as SSE. Failed starts carry a
-classified failure kind and a concrete next action. The preview-injected
-feedback control captures the current app route and selected element, then
-creates a confirmation-gated feedback proposal. Only an authenticated operator
-confirmation dispatches a budgeted governed retry.
+`GET /v1/previews/<id>/logs` streams startup logs as SSE to an authenticated
+project member. The console's preview-logs proxy supplies the API credential.
+Failed starts carry a classified failure kind and a concrete next action. The
+preview-injected feedback control captures the current app route and selected
+element, then creates a confirmation-gated feedback proposal. Only an
+authenticated operator confirmation dispatches a budgeted governed retry.
 
 ## Retained-rootfs console boundary
 

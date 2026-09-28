@@ -1445,12 +1445,12 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or settings.oidc_enabled
         or settings.enterprise_saml_enabled
     )
-    # The preview reverse-proxy (/v1/previews/<id>/web/...) is browser-facing and must work
-    # without the API key — it's gated by the unguessable preview id + the preview TTL.
+    # The browser-facing preview proxy and injected feedback are capability-gated by the
+    # unguessable preview id and TTL. Startup logs require API auth and project membership.
     _parts = request.url.path.split("/")
-    is_preview_web = (
+    is_preview_capability = (
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews"
-        and _parts[4] in {"web", "feedback", "logs"}
+        and _parts[4] in {"web", "feedback"}
     )
     is_inbound_webhook = (
         len(_parts) >= 5
@@ -1495,7 +1495,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
-        or is_preview_web
+        or is_preview_capability
         or is_inbound_webhook
         or is_github_webhook
         or is_channel_callback
@@ -1745,6 +1745,30 @@ def require_project_reader(connection, project_id: str) -> None:
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
         record_policy_denial(project_id, principal, "project_read", str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+def require_code_task_reader(connection, run_id: str) -> str:
+    """Authorize against the stored project before reading run details or transcripts."""
+    project_id = connection.execute(
+        text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+        {"run_id": run_id},
+    ).scalar()
+    if project_id is None:
+        raise HTTPException(status_code=404, detail="code task not found")
+    require_project_reader(connection, project_id)
+    return str(project_id)
+
+
+def require_preview_reader(connection, preview_id: str) -> str:
+    """Authorize against the stored project before reading preview gates or logs."""
+    project_id = connection.execute(
+        text("SELECT project_id FROM app_previews WHERE id = :preview_id"),
+        {"preview_id": preview_id},
+    ).scalar()
+    if project_id is None:
+        raise HTTPException(status_code=404, detail="preview not found")
+    require_project_reader(connection, project_id)
+    return str(project_id)
 
 
 def require_decision_actor_binding(
@@ -6541,6 +6565,8 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
     feed while `implement` is still going: which files it is touching, how many lines it has
     written, and whether it is exploring or editing. Read-only; never affects the run."""
     from .services.live_activity import live_activity, live_activity_text
+    with begin(engine) as connection:
+        require_code_task_reader(connection, run_id)
     if fmt == "text":
         return PlainTextResponse(live_activity_text(run_id, limit=limit))
     return live_activity(run_id, limit=limit)
@@ -6711,6 +6737,7 @@ def code_task_activity_endpoint(run_id: str):
     from boss_engine.services.llm_telemetry import canonical_role, role_for_stage
 
     with begin(engine) as connection:
+        require_code_task_reader(connection, run_id)
         rows = connection.execute(
             text(
                 """
@@ -8481,6 +8508,8 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
 @app.get("/v1/code-tasks/{run_id}/feedback")
 def get_code_task_feedback_endpoint(run_id: str):
     from .services.feedback_agent import get_feedback_thread
+    with begin(engine) as connection:
+        require_code_task_reader(connection, run_id)
     try:
         return get_feedback_thread(engine, run_id)
     except ValueError as exc:
@@ -8871,14 +8900,6 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
             "next": "Deploy it once from here; after that a merged change ships by itself."}
 
 
-def _project_of_run(run_id: str) -> str:
-    """The project a code-task run belongs to, for scoping a deployment lookup to it."""
-    with begin(engine) as connection:
-        return str(connection.execute(
-            text("SELECT project_id FROM code_task_runs WHERE id = :r"),
-            {"r": run_id}).scalar() or "")
-
-
 @app.get("/v1/code-tasks/{run_id}/deployments")
 def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                                        app_name: Optional[str] = None):
@@ -8896,6 +8917,7 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
+        run_project = require_code_task_reader(connection, run_id)
         rows = connection.execute(
             # deployment_target_id is returned so the card can UNBIND, not only retry. The
             # console had no way to undo a binding at all — DELETE /v1/deployment-targets/{id}
@@ -8926,7 +8948,7 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                  # is why this is identity equality within one project and not a LIKE.
                  "WHERE r.project_id = :p "
                  "ORDER BY r.created_at DESC LIMIT 200"),
-            {"p": _project_of_run(run_id)}).mappings().all()
+            {"p": run_project}).mappings().all()
     from boss_engine.services.naming import identity_key as _identity_key
 
     _wanted = _identity_key(app_name) if app_name else ""
@@ -8978,14 +9000,13 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
         # row was newest. The name is the identity here — but identity is the collapsed form,
         # which is the whole reason that function exists.
         _wanted_target = _identity_key(app_name)
-        _project = _project_of_run(run_id)
         with begin(engine) as connection:
             for row in connection.execute(
                 text("SELECT t.id AS target_id, t.app_name, h.name FROM deployment_targets t "
                      "JOIN deployment_hosts h ON h.id = t.host_id "
                      "WHERE t.project_id = :p AND t.status = 'active' "
                      "ORDER BY t.created_at DESC"),
-                {"p": _project}).mappings().all():
+                {"p": run_project}).mappings().all():
                 if _identity_key(str(row["app_name"] or "")) != _wanted_target:
                     continue
                 linked_host = row["name"]
@@ -9062,6 +9083,8 @@ def list_previews_endpoint(project_id: Optional[str] = None, limit: int = 50):
 def preview_logs_endpoint(preview_id: str, stream: bool = True):
     """Tail classified preview startup logs; SSE clients receive live updates."""
     from .services.preview_service import preview_log_snapshot, stream_preview_logs
+    with begin(engine) as connection:
+        require_preview_reader(connection, preview_id)
     try:
         if not stream:
             return preview_log_snapshot(engine, preview_id)
@@ -9176,6 +9199,7 @@ def preview_gate_endpoint(preview_id: str):
     from boss_engine.services.preview_approval import describe_gate
 
     with begin(engine) as connection:
+        require_preview_reader(connection, preview_id)
         found = describe_gate(connection, preview_id=preview_id)
         if not found:
             raise HTTPException(status_code=404, detail="no such preview")
@@ -9431,6 +9455,7 @@ def get_code_task_endpoint(run_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.code_task_service import load_code_task_run
     with begin(engine) as c:
+        require_code_task_reader(c, run_id)
         run = load_code_task_run(c, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="code task not found")
