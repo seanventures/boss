@@ -316,6 +316,9 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
         deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
         if not deployment_run_id:
             return {"status": "failed", "reason": f"could not plan a deployment: {planned}"}
+        if planned.get("status") in {"failed", "blocked"}:
+            return {"status": "blocked", "deployment_run_id": deployment_run_id,
+                    "reason": planned.get("failure_reason") or "Deployment policy blocked this run"}
         c.execute(sql("UPDATE deployment_runs SET trigger = 'operator' WHERE id = :i"),
                   {"i": deployment_run_id})
         emit_event(c, project_id, "delivery.requested", actor, "code_task_run", run_id,
@@ -436,6 +439,14 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                     actor=actor,
                 )
                 deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
+                if planned.get("status") in {"failed", "blocked"}:
+                    planned_runs.append({
+                        "status": "gated", "environment": target["environment"],
+                        "target_id": target["id"], "app_name": target.get("app_name"),
+                        "deployment_run_id": deployment_run_id,
+                        "reason": planned.get("failure_reason") or "Deployment policy blocked this run",
+                    })
+                    continue
                 emit_event(c, project_id, "delivery.deployment_planned", actor,
                            "code_task_run", run_id,
                            {"deployment_run_id": deployment_run_id,
@@ -542,6 +553,10 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
             actor=actor,
         )
         new_id = planned.get("deployment_run_id") or planned.get("id")
+        if planned.get("status") in {"failed", "blocked"}:
+            return {"status": "blocked", "deployment_run_id": new_id,
+                    "reason": planned.get("failure_reason") or "Deployment policy blocked this run",
+                    "redeploy_of": deployment_run_id}
         # Say WHY this run exists. Without it the row reads as a manual deploy nobody remembers
         # asking for, and "why did this deploy?" — the question `trigger` was added to answer —
         # goes back to being unanswerable.
@@ -744,6 +759,12 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
                         {"i": deployment_run_id}).mappings().first()
         if not row:
             return {"status": "not_found", "deployment_run_id": deployment_run_id}
+        if row["status"] in {"failed", "blocked"}:
+            # Planning may have created an auditable refusal rather than a runnable job.
+            # The merge, manual, and redeploy callers all converge here; none may build or
+            # touch a host after a policy denial.
+            return {"status": "blocked", "deployment_run_id": deployment_run_id,
+                    "reason": row.get("failure_reason") or "Deployment policy blocked this run"}
         trow = c.execute(sql("SELECT * FROM deployment_targets WHERE id = :t"),
                          {"t": row["deployment_target_id"]}).mappings().first()
         if not trow:

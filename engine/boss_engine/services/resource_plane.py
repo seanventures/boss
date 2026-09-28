@@ -2412,6 +2412,38 @@ class ResourcePlaneService:
             return self._get_deployment_run(connection, project_id, deployment_run_id)
 
         rollback_plan = self._deployment_rollback_plan(target)
+        if (
+            str(getattr(self.settings, "boss_edition", "community")).strip().lower()
+            == "community"
+            and str(target["target_kind"]).strip().lower() in {"ssh", "container"}
+        ):
+            # These connectors currently produce no Resource Plane operation, so a
+            # runnable deployment would have no approved ChangeSet or expected
+            # ResourceReceipt. Record the refusal before acquiring a surface or building.
+            return self._record_blocked_deployment_run(
+                connection,
+                project_id=project_id,
+                target=target,
+                commit_ref=commit_ref,
+                release_packet=release_packet or {},
+                rollback_plan=rollback_plan,
+                actor=actor,
+                title="Community host deployment requires a governed ChangeSet",
+                recommendation={
+                    "action": "implement_governed_host_deployment",
+                    "deployment_target_id": deployment_target_id,
+                    "required": ["ChangeSet", "approval", "budget_reservation",
+                                 "ResourceReceipt"],
+                },
+                evidence={"target_kind": target["target_kind"],
+                          "environment": target["environment"]},
+                reason_code="community_host_deployment_unavailable",
+                failure_reason=(
+                    "Community host deployment is disabled until a policy-guarded "
+                    "ChangeSet, budget reservation, approval, and ResourceReceipt exist."
+                ),
+                event_reason="community_host_deployment_unavailable",
+            )
         rollout_policy = self._deployment_rollout_policy_for_target(
             connection,
             project_id,

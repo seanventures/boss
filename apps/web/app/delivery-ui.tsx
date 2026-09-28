@@ -431,11 +431,12 @@ export function SandboxDeployFlagNotice({ enabled }: { enabled?: boolean }) {
  * The card says the same things in the order they are asked: what this app is, how far the
  * last change got, what you can do about it, and where it lives.
  */
-function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
+function DeliveryTargetCard({ target, stage, shipped, onChanged, communityEdition }: {
   target: Target;
   stage?: Stage;
   shipped: boolean;
   onChanged: () => void;
+  communityEdition: boolean;
 }) {
   // A stage only exists for a deployment that came from a code task with a PR. An operator
   // pressing Deploy creates a deployment_run and no stage, so this read null and the card
@@ -519,12 +520,15 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
       <span className="mr-meeting-title">{target.app_name}</span>
       <p className="detail" style={{ margin: "2px 0 0" }}>
         {target.repo} · {target.target_kind} · {target.target_ref}
-        {target.auto_deploy ? " · deploys on merge" : ""}
+        {target.auto_deploy
+          ? communityEdition ? " · auto deploy configured (paused)" : " · deploys on merge"
+          : ""}
         {target.paused ? " · paused" : ""}
       </p>
       <Spine nodes={nodes} large label={`Delivery progress for ${target.app_name}`} />
       <div className="ct-actions">
-        <TargetControls target={target as never} shipped={shipped} onChanged={onChanged} />
+        <TargetControls target={target as never} shipped={shipped}
+                        onChanged={onChanged} communityEdition={communityEdition} />
       </div>
       <div className="ct-card-foot">
         <span className="detail">{target.repo_owner ? `${target.repo_owner}/` : ""}{target.repo}</span>
@@ -538,8 +542,10 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
   );
 }
 
-export function DeliveryPipeline({ initial, secrets, deployments }: {
+export function DeliveryPipeline({ initial, secrets, deployments,
+                                   communityEdition = true }: {
   initial?: Pipeline | null; secrets?: SecretsView | null; deployments?: any;
+  communityEdition?: boolean;
 }) {
   // The panel owns its data.
   //
@@ -577,8 +583,11 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
         <section className="ct-block">
           <div className="ct-block-title">Nothing deploys yet</div>
           <p className="detail" style={{ marginTop: 0 }}>
-            Start with a machine: register a host, let BOSS onboard it, then point an app at
-            it. Merged PRs deploy nowhere until an app has a target.
+            {communityEdition
+              ? "Register a destination for an app. Community host deployment is paused until "
+                + "approval and recovery steps are ready."
+              : "Start with a machine: register a host, let BOSS onboard it, then point an "
+                + "app at it. Merged PRs deploy nowhere until an app has a target."}
           </p>
           <SandboxDeployFlagNotice enabled={data.sandbox_deploy_enabled} />
         </section>
@@ -633,6 +642,7 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
                   .localeCompare(a.finished_at || a.started_at || ""))[0]}
               shipped={everShipped.has(t.app_name)}
               onChanged={reload}
+              communityEdition={communityEdition}
             />
           ))}
         </div>
@@ -648,11 +658,16 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
           can only inspect through the API is a credential nobody can debug at 2am. But none of
           it belongs in the path of someone shipping a change either. */}
       <details className="dm-advanced">
-        <summary className="detail">Advanced — credentials, manual deploy, per-app onboarding</summary>
+        <summary className="detail">
+          Advanced — credentials, per-app registration{communityEdition ? "" : ", manual deploy"}
+        </summary>
         <div style={{ display: "grid", gap: 18, marginTop: 12 }}>
           {/* Still the right tool for the FIRST deploy of an app that merged before it had a
               target — BugBox is exactly that. Not the everyday path. */}
-          <div><DeployWizard targets={(data.targets || []) as any} /></div>
+          {communityEdition
+            ? <div className="detail">Community host deployment is paused until its
+                approval and recovery steps are ready.</div>
+            : <div><DeployWizard targets={(data.targets || []) as any} /></div>}
           <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
           <SecretsPanel initial={secrets} />
         </div>

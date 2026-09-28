@@ -52,15 +52,14 @@ class DeploymentConnector(Protocol):
              ref: Optional[str] = None) -> dict: ...
     def _ensure_port(self, engine, settings: Settings, target: dict,
                      connection=None) -> dict:
-        """Give this target a port nothing else on the host is using, and remember it.
+        """Keep a declared port and domain aligned without changing the host.
 
         The onboarding form says "blank = BOSS picks", and nothing did the picking: an undeclared
         port fell through to the 8080 default, which is occupied on the first real host and made
         `docker run` fail on external connectivity. A default is a guess about someone else's
         machine, and here it was a wrong one.
 
-        Bootstrap already knows how to read the host's listeners and choose a free port; this
-        reuses it rather than adding a second port-selection rule that could disagree.
+        Direct host bootstrap is disabled until Resource Plane can record its effects.
         """
         # Two separate obligations, and conflating them hid the second: a target may already
         # KNOW its port while its domain still fails to name it. Returning early on the first
@@ -68,10 +67,7 @@ class DeploymentConnector(Protocol):
         # is another service entirely, so the console linked to somebody else's app.
         chosen = _app_port(target, default=0)
         if not chosen:
-            report = self.bootstrap(target, settings, connection)
-            chosen = report.get("suggested_port")
-            if not chosen:
-                return target
+            return target
 
         resources = [r for r in (target.get("required_resources") or [])
                      if not (isinstance(r, dict) and r.get("kind") == "app_port")]
@@ -730,15 +726,14 @@ class SSHContainerConnector:
     # -- apply ------------------------------------------------------------------
     def _ensure_port(self, engine, settings: Settings, target: dict,
                      connection=None) -> dict:
-        """Give this target a port nothing else on the host is using, and remember it.
+        """Keep a declared port and domain aligned without changing the host.
 
         The onboarding form says "blank = BOSS picks", and nothing did the picking: an undeclared
         port fell through to the 8080 default, which is occupied on the first real host and made
         `docker run` fail on external connectivity. A default is a guess about someone else's
         machine, and here it was a wrong one.
 
-        Bootstrap already knows how to read the host's listeners and choose a free port; this
-        reuses it rather than adding a second port-selection rule that could disagree.
+        Direct host bootstrap is disabled until Resource Plane can record its effects.
         """
         # Two separate obligations, and conflating them hid the second: a target may already
         # KNOW its port while its domain still fails to name it. Returning early on the first
@@ -746,10 +741,7 @@ class SSHContainerConnector:
         # is another service entirely, so the console linked to somebody else's app.
         chosen = _app_port(target, default=0)
         if not chosen:
-            report = self.bootstrap(target, settings, connection)
-            chosen = report.get("suggested_port")
-            if not chosen:
-                return target
+            return target
 
         resources = [r for r in (target.get("required_resources") or [])
                      if not (isinstance(r, dict) and r.get("kind") == "app_port")]
@@ -783,12 +775,26 @@ class SSHContainerConnector:
         two disagree as soon as the PR merges, and deploying the branch while recording the ref
         made the console report a build that was not the one running.
         """
+        # SSH/container deployments bypass Resource Plane ChangeSets: the planner returns
+        # no operation for these kinds, so there can be no policy approval or expected
+        # ResourceReceipt for the host write. Keep Community read/plan paths available, but
+        # stop every execution entrypoint here before credentials or SSH are touched.
+        if str(getattr(settings, "boss_edition", "community")).strip().lower() == "community":
+            return {"status": "blocked", "problems": [
+                "Community SSH deployment is disabled until it uses an approved "
+                "Resource Plane ChangeSet, budget reservation, and ResourceReceipt"
+            ]}
         from ..db import begin
 
         with begin(engine) as c:
             problems = self.validate(target, settings, c)
         if problems:
             return {"status": "blocked", "problems": problems}
+        if not _app_port(target, default=0):
+            return {"status": "blocked", "problems": [
+                "app_port is required before deployment; automatic host bootstrap is "
+                "disabled until it has a Resource Plane ChangeSet and receipt"
+            ]}
 
         # Resolved at the moment of use and handed straight to the deploy; never
         # stored, logged, or written into the run record.

@@ -2750,7 +2750,7 @@ export async function updateTargetAction(targetId: string,
     const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
       method: "PATCH",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
+      body: JSON.stringify({ ...patch, actor: CONSOLE_ACTOR }),
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
@@ -2766,7 +2766,7 @@ export async function reactivateTargetAction(targetId: string): Promise<any> {
     const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
       method: "PATCH",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "active" }),
+      body: JSON.stringify({ status: "active", actor: CONSOLE_ACTOR }),
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
@@ -2823,7 +2823,7 @@ export async function bindSecretAction(targetId: string, name: string,
 /** Have BOSS prepare the host: deploy directory, docker check, and a free port. */
 export async function bootstrapTargetAction(targetId: string, applyPort = true): Promise<any> {
   return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/bootstrap`,
-              { apply_port: applyPort });
+              { apply_port: applyPort, actor: CONSOLE_ACTOR });
 }
 
 export async function preflightTargetAction(targetId: string): Promise<any> {
@@ -2833,7 +2833,8 @@ export async function preflightTargetAction(targetId: string): Promise<any> {
 
 export async function setAutoDeployAction(targetId: string,
                                           input: { auto_deploy?: boolean; paused?: boolean }): Promise<any> {
-  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/auto-deploy`, input);
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/auto-deploy`,
+              { ...input, actor: CONSOLE_ACTOR });
 }
 
 /** Deploy a target at a chosen ref without waiting for a merge. */

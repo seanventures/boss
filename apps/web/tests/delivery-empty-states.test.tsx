@@ -130,7 +130,8 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
     // a target names the host it deploys to — so the honest first step is registering a
     // machine, not registering an app.
     expect(markup).toContain("Nothing deploys yet");
-    expect(markup).toContain("Onboard an app");
+    expect(markup).toContain("Register deployment target");
+    expect(markup).toContain("Community host deployment is paused");
     // THE DEADLOCK THIS GUARDS: the Hosts wizard was added only to the configured branch, so
     // it appeared once a deployment target already existed — unreachable on a fresh install,
     // which is exactly when it is needed. An empty state must contain the thing that ends it.
@@ -144,10 +145,8 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
     expect(markup).toContain('data-testid="sandbox-deploy-disabled"');
   });
 
-  it("shows deploy machinery only after a target is configured", () => {
-    const markup = html(
-      <DeliveryPipeline
-        initial={{
+  it("keeps Community host execution gated when a target is configured", () => {
+    const configured = {
           project_id: "boss-dogfood",
           stages: [],
           targets: [{
@@ -161,19 +160,34 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
           }],
           configured: true,
           sandbox_deploy_enabled: true,
-        }}
+    };
+    const markup = html(
+      <DeliveryPipeline
+        initial={configured}
         secrets={{ project_id: "boss-dogfood", secrets: [] }}
         deployments={{ deployments: [] }}
       />,
     );
     expect(markup).toContain('data-empty-state="configured"');
-    expect(markup).toContain("Deploy an app");
+    expect(markup).not.toContain("Deploy an app");
+    expect(markup).toContain("Community host deployment is paused");
+    expect(markup).toContain('title="Community host deployment awaits approval');
     // Renamed from "Deployment targets": the section answers "which app runs where", and a
     // host is now a first-class thing an app is pointed AT. The assertion still guards the
     // same property — the deploy machinery appears once a target exists.
     expect(markup).toContain("Apps and where they deploy");
     expect(markup).toContain("demo");
     expect(markup).not.toContain('data-testid="sandbox-deploy-disabled"');
+
+    const enterpriseMarkup = html(
+      <DeliveryPipeline
+        initial={configured}
+        secrets={{ project_id: "boss-dogfood", secrets: [] }}
+        deployments={{ deployments: [] }}
+        communityEdition={false}
+      />,
+    );
+    expect(enterpriseMarkup).toContain("Deploy an app");
   });
 
   it("SandboxDeployFlagNotice only renders when the flag is known false", () => {

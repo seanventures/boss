@@ -1,33 +1,24 @@
 "use client";
 
 /**
- * Managing delivery: onboard an app, hold its credentials, decide when it ships.
+ * Managing delivery: register app destinations and hold their credential references.
  *
- * Everything here replaces a step someone previously ran by hand — hand-written SQL to register
- * a target, `ssh-keygen` in a terminal, `mkdir`/`chown` over SSH, hunting for a free port, and
- * a curl to start the deployment. The wizard is ordered the way onboarding actually fails:
- * credentials before hosts, hosts before ports, and a live preflight before anyone is told it
- * worked.
- *
- * Two rules the UI enforces rather than merely documents:
- *   - a secret VALUE is never displayed, and the only key material ever shown is a PUBLIC half;
- *   - the wizard will not call itself finished while preflight still reports problems, because
- *     discovering a missing credential by watching a deployment fail is the exact experience
- *     this is meant to remove.
+ * Target registration remains available while direct host preparation, Community deployment,
+ * and destructive history actions await approved and recoverable workflows. A secret VALUE is
+ * never displayed; the only key material shown is a public half.
  */
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
-  bindSecretAction, bootstrapTargetAction, createTargetAction, deployObservabilityAction,
+  bindSecretAction, createTargetAction, deployObservabilityAction,
   getDeliveryDefaultsAction, listRefsAction, listRepoAppsAction, listReposAction,
   updateTargetAction,
-  purgeTargetAction,
   deployTargetAction,
-  generateKeypairAction, preflightTargetAction, putSecretAction, reactivateTargetAction,
+  generateKeypairAction, putSecretAction,
   setAutoDeployAction,
-  teardownTargetAction, verifySecretAction,
+  verifySecretAction,
 } from "./actions";
 import {
   adoptHostKeyAction, generateHostKeyAction, installHostKeyAction,
@@ -139,8 +130,8 @@ function missingFields(required: Record<string, unknown>): string[] {
  *
  * `busy` disables it too — a second click during a deploy would start a second deploy.
  */
-function ActionButton({ busy, label, busyLabel, danger, onClick, title, style }: {
-  busy?: boolean; label: string; busyLabel?: string; danger?: boolean;
+function ActionButton({ busy, label, busyLabel, danger, disabled, onClick, title, style }: {
+  busy?: boolean; label: string; busyLabel?: string; danger?: boolean; disabled?: boolean;
   onClick: () => void; title?: string; style?: React.CSSProperties;
 }) {
   const [secs, setSecs] = useState(0);
@@ -153,12 +144,13 @@ function ActionButton({ busy, label, busyLabel, danger, onClick, title, style }:
   return (
     <button
       title={title}
-      disabled={!!busy}
+      disabled={!!busy || !!disabled}
       onClick={onClick}
       style={{
         ...btn,
         ...(danger ? { borderColor: "rgba(248,81,73,.5)", color: "#f85149" } : {}),
         ...(busy ? { opacity: 0.75, cursor: "progress" } : {}),
+        ...(disabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
         display: "inline-flex", alignItems: "center", gap: 6,
         ...(style || {}),
       }}>
@@ -494,9 +486,7 @@ export function MonitoringPanel({ initial, hostTargetId, compact = false }: {
 export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const [open, setOpen] = useState(false);
   const { busy, run: perform } = useBusyAction();
-  const pending = !!busy;
   const [step, setStep] = useState(1);
-  const [deployRunId, setDeployRunId] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   // What BOSS is configured to clone. Shown rather than assumed: the form used to take a bare
   // repo NAME and silently prepend an owner from config, so nothing on screen said which
@@ -524,13 +514,12 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     return () => { live = false; };
   }, []);
   const [targetId, setTargetId] = useState<string | null>(null);
-  const [preflight, setPreflight] = useState<{ ready: boolean; problems: string[] } | null>(null);
 
   const [form, setForm] = useState({
     app_name: "", repo: "", environment: "staging", target_kind: "ssh",
     target_ref: "", domain: "", scheme: "http", app_port: "", app_entry: "",
     publishable_ports: "",
-    secret_ref_id: "", auto_deploy: false,
+    secret_ref_id: "",
   });
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const say = (line: string) => setLog((l) => [...l, line]);
@@ -581,65 +570,10 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     setStep(2);
   }); };
 
-  const bootstrap = () => { void perform("Preparing host", async () => {
-    if (!targetId) return;
-    // Save the pool FIRST: bootstrap is what reads it, so a value typed on this step has to
-    // reach the target before the host is asked to choose a port.
-    if (form.publishable_ports) {
-      const patched: any = await updateTargetAction(targetId,
-        { publishable_ports: form.publishable_ports });
-      say(patched?.error
-        ? `could not record the published ports: ${patched.error}`
-        : `published ports recorded: ${form.publishable_ports}`);
-    }
-    say("preparing the host…");
-    const out = await bootstrapTargetAction(targetId, true);
-    if (out?.error) { say(`failed: ${out.error}`); return; }
-    (out.changed || []).forEach((c: string) => say(`✓ ${c}`));
-    (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
-    if (out.applied_port) say(`port ${out.applied_port} written to the target`);
-    setStep(3);
-  }); };
-
-  const check = () => { void perform("Running preflight", async () => {
-    if (!targetId) return;
-    say("preflight…");
-    const out = await preflightTargetAction(targetId);
-    setPreflight(out);
-    (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
-    if (out.ready) say("✓ ready to deploy");
-  }); };
-
-  /** Record the trigger choice, then ship it — the thing the operator came here to do. */
-  const deployNow = () => { void perform("Deploying", async () => {
-    if (!targetId) return;
-    if (form.auto_deploy) {
-      await setAutoDeployAction(targetId, { auto_deploy: true });
-      say("auto-deploy on: merges to this repo will ship automatically");
-    }
-    say("deploying…");
-    const out: any = await deployTargetAction(targetId);
-    if (out?.error || !out?.deployment_run_id) {
-      say(`failed to start: ${out?.error || "no deployment was started"}`);
-      return;
-    }
-    // Asynchronous: watch it rather than wait for it.
-    setDeployRunId(out.deployment_run_id);
-  }); };
-
-  const finish = () => { void perform("Finishing", async () => {
-    if (!targetId) return;
-    if (form.auto_deploy) {
-      await setAutoDeployAction(targetId, { auto_deploy: true });
-      say("auto-deploy on: merges to this repo will ship automatically");
-    }
-    say("onboarded — use Deploy to ship it now");
-  }); };
-
   if (!open) {
     return (
       <button style={{ ...btn, padding: "6px 14px" }} onClick={() => setOpen(true)}>
-        + Onboard an app
+        + Register deployment target
       </button>
     );
   }
@@ -647,8 +581,8 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   return (
     <section className="ct-block">
       <div className="ct-block-title">
-        Onboard an app{" "}
-        <span className="detail" style={{ fontSize: 12 }}>step {step} of 4</span>
+        Register deployment target{" "}
+        <span className="detail" style={{ fontSize: 12 }}>step {step} of 2</span>
       </div>
 
       {step === 1 && (
@@ -671,7 +605,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
               <span className="dm-field-label">environment</span>
               <select style={input} value={form.environment}
                       onChange={(e) => set("environment", e.target.value)}>
-                <option value="staging">staging (deploys automatically)</option>
+                <option value="staging">staging</option>
                 <option value="dev">dev</option>
                 <option value="preview">preview</option>
                 <option value="production">production (human-gated)</option>
@@ -701,13 +635,11 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
                 <option value="https">https</option>
               </select>
             </label>
-            <Field label="port (blank = BOSS picks)" value={form.app_port}
-                   onChange={(e) => set("app_port", e.target.value)} placeholder="auto" />
-            {/* Free on the host is not the same as reachable from the internet. Without this,
-                BOSS picks a port the cloud firewall drops: the app runs, the health check times
-                out, and nothing in the failure names the security group. */}
+            <Field label="port (required for deployment)" value={form.app_port}
+                   onChange={(e) => set("app_port", e.target.value)} placeholder="3010" />
+            {/* A declared app port still needs to be reachable through the host firewall. */}
             <Field label="ports this host publishes (optional)"
-                   title="Comma-separated, ranges allowed — e.g. 3003,4000,10000-10001. BOSS will only pick from these."
+                   title="Comma-separated, ranges allowed — e.g. 3003,4000,10000-10001."
                    value={form.publishable_ports}
                    onChange={(e) => set("publishable_ports", e.target.value)}
                    placeholder="3003,4000,10000-10001" />
@@ -782,95 +714,20 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
       {step === 2 && (
         <div style={{ display: "grid", gap: 10 }}>
           <div className="detail">
-            BOSS will create the deploy directory, confirm docker, and choose the port.
-            {form.publishable_ports
-              ? <> It will pick only from <code>{form.publishable_ports}</code>.</>
-              : <> With no published ports declared it takes the first one FREE on the host —
-                  free is not the same as reachable, and a port your firewall blocks gives a
-                  running app whose health check times out.</>}
-          </div>
-          {/* The field is repeated here, and repeated on purpose. It belongs on step 1 with the
-              rest of the destination, but it is CONSUMED here — and someone who left it blank
-              only finds out two steps later, when the health check times out on a port the
-              security group never allowed. Fixable at the moment it matters. */}
-          <Field label="ports this host publishes (optional)"
-                 value={form.publishable_ports}
-                 placeholder="3003,3005,4000,10000-10001"
-                 title="Comma-separated, ranges allowed. BOSS will only choose from these."
-                 onChange={(e) => set("publishable_ports", e.target.value)} />
-          <div>
-            <ActionButton label="Prepare host →" busyLabel="Preparing host"
-                          busy={busy === "Preparing host"} onClick={bootstrap} />
-          </div>
-        </div>
-      )}
-
-      {step === 3 && (
-        <div style={{ display: "grid", gap: 10 }}>
-          <div className="detail">
-            Preflight resolves the credential, reaches the host, and checks the deploy
-            directory — everything that would otherwise fail mid-deployment.
+            Target <code>{targetId}</code> saved. Host preparation is paused until BOSS can approve the change,
+            record what happened, and provide recovery steps. Set the app port on the target;
+            BOSS will not pick one on the host automatically.
           </div>
           <div>
-            <ActionButton label="Run preflight" busyLabel="Running preflight"
-                          busy={busy === "Running preflight"} onClick={check} />
-            <button style={{ ...btn, marginLeft: 8, opacity: preflight?.ready ? 1 : 0.65 }}
-                    disabled={pending}
-                    onClick={() => {
-                      // Same rule as Destroy: the click explains itself. A disabled button
-                      // that only speaks through a tooltip reads as a broken one.
-                      if (!preflight?.ready) {
-                        say(preflight
-                          ? "preflight still reports problems — fix those first"
-                          : "run preflight first");
-                        return;
-                      }
-                      setStep(4);
-                    }}>
-              Continue →
+            <button style={{ ...btn, opacity: 0.5, cursor: "not-allowed" }} disabled
+                    title="Host preparation awaits approval and recovery steps">
+              Prepare host unavailable
             </button>
+            <button style={{ ...btn, marginLeft: 8 }} onClick={() => setOpen(false)}>Done</button>
           </div>
         </div>
       )}
 
-      {step === 4 && (
-        <div style={{ display: "grid", gap: 10 }}>
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-            <input type="checkbox" checked={form.auto_deploy}
-                   onChange={(e) => set("auto_deploy", e.target.checked)} />
-            Deploy automatically when a PR merges to <code>{form.repo}</code>
-          </label>
-          <div className="detail" style={{ fontSize: 12 }}>
-            Off by default. You can turn it on later, and pause it during an incident without
-            losing the setting.
-          </div>
-          {/* The last step of "Onboard an app" used to be a checkbox and Finish — which recorded
-              the trigger, printed "use Deploy to ship it now", and left the operator with a
-              registered destination and nothing running, hunting for a button in the table
-              below. A wizard whose last step is an instruction to go somewhere else has not
-              finished. Deploying is the point; it belongs here. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <ActionButton label="Deploy now →" busyLabel="Starting"
-                          busy={busy === "Deploying"} onClick={deployNow} />
-            <button style={btn} disabled={pending} onClick={finish}>
-              Finish without deploying
-            </button>
-            <button style={btn} onClick={() => setOpen(false)}>Close</button>
-          </div>
-          {deployRunId && (
-            <div style={{ marginTop: 4 }}><LiveDeployment runId={deployRunId} /></div>
-          )}
-        </div>
-      )}
-
-      {busy && <div style={{ marginTop: 10 }}><Working label={busy} /></div>}
-
-      {log.length > 0 && (
-        <pre style={{ marginTop: 12, fontSize: 11, background: "rgba(255,255,255,.04)",
-                      padding: 10, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>
-          {log.join("\n")}
-        </pre>
-      )}
     </section>
   );
 }
@@ -878,27 +735,17 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
 // --------------------------------------------------------------------------- //
 // Per-target trigger controls
 // --------------------------------------------------------------------------- //
-/** Removing an app. Kept behind a disclosure and a typed name, because a destructive action
- *  reachable by one click is a destructive action taken by accident. */
-
 /**
  * Run one action, and tell the truth about it while it runs.
  *
  * Two obligations that were being met separately and therefore inconsistently:
  *
  *   1. FEEDBACK STARTS ON THE CLICK. These handlers used `useTransition`, and a state update
- *      made inside a transition is low priority — React is free to defer exactly the render
- *      that would show the spinner. So `Destroy + data`, which takes ten to thirty seconds of
- *      SSH, sat there looking like a dead button and then finished. The busy flag is now set
- *      OUTSIDE any transition, so the first paint after the click already shows it.
+ *      made inside a transition is low priority. The busy flag is set outside a transition,
+ *      so the first paint after a click shows progress.
  *
- *   2. THE PAGE REFRESHES AFTER. Every panel here is server-rendered from the API, so
- *      destroying a target changed the database and left the table showing it as active. A
- *      console that needs a manual reload to tell the truth is a console you cannot trust.
+ *   2. THE PAGE REFRESHES AFTER. Every panel here is server-rendered from the API;
  *      `router.refresh()` re-runs the server component with fresh data.
- *
- * Refreshing in `finally`: a failed destroy may still have removed the container, and showing
- * the pre-click state after a partial failure is the worse of the two wrongs.
  */
 function useBusyAction(onChanged?: () => void | Promise<void>) {
   const router = useRouter();
@@ -919,86 +766,25 @@ function useBusyAction(onChanged?: () => void | Promise<void>) {
   return { busy, run };
 }
 
-function TeardownControls({ target, onChanged }: {
-  target: { id: string; app_name: string }; onChanged?: () => void | Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [confirm, setConfirm] = useState("");
-  const [withData, setWithData] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  // Which action is in flight, so the indicator says "Destroying" rather than a generic
-  // "working" that could mean either verb.
-  const { busy, run: perform } = useBusyAction(onChanged);
-  const pending = !!busy;
-
-  const run = async (mode: "stop" | "destroy") => {
-    // Validate on CLICK rather than by disabling the button. A disabled control that explains
-    // itself only in a tooltip is indistinguishable from a broken one: the click does nothing
-    // and says nothing, which is exactly how this read the first time someone used it.
-    if (mode === "destroy" && confirm !== target.app_name) {
-      setMsg(`type “${target.app_name}” in the box to confirm — this is deliberate friction, `
-             + `because removing the wrong app is not undoable`);
-      return;
-    }
-    setMsg(null);
-    const label = mode === "stop" ? "Stopping"
-      : (withData ? "Destroying + data" : "Destroying");
-    const out: any = await perform(label, () => teardownTargetAction(target.id, {
-      stop_only: mode === "stop",
-      include_data: mode === "destroy" && withData,
-      confirm: mode === "stop" ? undefined : confirm,
-    }));
-    if (out?.error) { setMsg(`failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 160)}`); return; }
-    const freed = out.reclaimed_kb ? `${(out.reclaimed_kb / 1024).toFixed(1)} MB reclaimed` : "";
-    setMsg(`${(out.removed || []).join("; ")}${freed ? ` — ${freed}` : ""}`
-      + (out.data_kept_kb ? ` (data kept: ${(out.data_kept_kb / 1024).toFixed(1)} MB)` : ""));
-    setConfirm("");
-  };
-
-  if (!open) {
-    return <button style={{ ...btn, borderColor: "rgba(248,81,73,.4)" }}
-                   onClick={() => setOpen(true)}>Remove…</button>;
-  }
-  return (
-    <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <ActionButton label="Stop" busyLabel="Stopping" busy={busy === "Stopping"}
-                    title="Stop the container; files and data stay, so a redeploy brings it back"
-                    onClick={() => run("stop")} />
-      <input style={{ ...input, minWidth: 130 }} value={confirm}
-             placeholder={`type ${target.app_name}`}
-             onChange={(e) => setConfirm(e.target.value)} />
-      <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12 }}>
-        <input type="checkbox" checked={withData}
-               onChange={(e) => setWithData(e.target.checked)} />
-        also delete data
-      </label>
-      {/* Not disabled for a missing confirmation: the click is what surfaces the reason. It IS
-          disabled while running, so a second click cannot fire a second teardown. */}
-      <ActionButton danger busy={!!busy && busy !== "Stopping"}
-                    label={withData ? "Destroy + data" : "Destroy"}
-                    busyLabel={withData ? "Destroying + data" : "Destroying"}
-                    style={{ opacity: confirm === target.app_name ? 1 : 0.65 }}
-                    onClick={() => run("destroy")} />
-      <button style={btn} disabled={pending} onClick={() => setOpen(false)}>Cancel</button>
-      {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
-    </span>
-  );
+function TeardownControls() {
+  return <span className="detail" style={{ fontSize: 12 }}
+               title="Host removal awaits approval and recovery steps">
+    Host removal unavailable until the approval flow is ready
+  </span>;
 }
 
-export function TargetControls({ target, shipped, onChanged }: {
+export function TargetControls({ target, shipped, onChanged, communityEdition = true }: {
   shipped?: boolean;
   onChanged?: () => void | Promise<void>;
+  communityEdition?: boolean;
   target: { id: string; app_name: string; status?: string; repo?: string;
             repo_owner?: string | null; auto_deploy?: boolean; paused?: boolean };
 }) {
   const [state, setState] = useState({ auto: !!target.auto_deploy, paused: !!target.paused });
   const [msg, setMsg] = useState<string | null>(null);
-  // Feedback set outside any transition, and the page refreshed after — see useBusyAction.
-  // "Delete permanently" and "Destroy + data" both read as dead buttons without this: they do
-  // ten to thirty seconds of SSH work with the old state still on screen when they finish.
+  // Feedback starts on the click and the page refreshes after — see useBusyAction.
   const { busy, run: perform } = useBusyAction(onChanged);
   const pending = !!busy;
-  const [confirm, setConfirm] = useState("");
   const [ref, setRef] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   // Branches for THIS target's repo, so "which build" is a choice rather than a memory test.
@@ -1021,57 +807,17 @@ export function TargetControls({ target, shipped, onChanged }: {
     if (!ref && d?.default_branch) setRef(d.default_branch);
   };
 
-  // A retired target cannot be deployed — the API refuses with 409 — so deploy controls would
-  // only fail. But it is NOT gone: destroy retires rather than deletes, so the credential
-  // binding, port, domain and health check all survive. Bringing it back is one click, not a
-  // second trip through onboarding, and telling someone to re-enter what BOSS already knows is
-  // how a "safe" delete becomes one nobody dares use.
+  // Retired targets keep their configuration and deployment history. Direct host setup and
+  // history deletion are paused until their approved, recoverable workflows are available.
   if (target.status && target.status !== "active") {
     return (
       <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <span className="detail" style={{ fontSize: 12 }}>
           {target.status} — its configuration is kept
         </span>
-        <ActionButton label="Restore" busyLabel="Restoring" busy={busy === "Restoring"}
-                title="Reactivate, re-prepare the host, and deploy again"
-                onClick={() => { setMsg(null); void perform("Restoring", async () => {
-                  const back: any = await reactivateTargetAction(target.id);
-                  if (back?.error) { setMsg(`failed: ${back.error}`); return; }
-                  // The host directories went with the destroy, so they have to be recreated
-                  // before anything can be transferred into them.
-                  const boot: any = await bootstrapTargetAction(target.id, false);
-                  if (boot?.error || boot?.problems?.length) {
-                    setMsg(`restored, but the host needs attention: `
-                           + `${boot?.error || boot.problems.join("; ")}`);
-                    return;
-                  }
-                  setMsg("restored and host prepared — press Deploy to ship it again");
-                }); }} />
-        {/* Restore reuses the configuration and history; delete throws both away so the name
-            is free again. Both are offered because "start from scratch" is a legitimate intent
-            that restore cannot express. */}
-        <input style={{ ...input, minWidth: 130 }} value={confirm}
-               placeholder={`type ${target.app_name}`}
-               onChange={(e) => setConfirm(e.target.value)} />
-        <ActionButton danger label="Delete permanently" busyLabel="Deleting"
-                busy={busy === "Deleting"}
-                style={{ opacity: confirm === target.app_name ? 1 : 0.65 }}
-                title="Delete this target and its deployment history so the name can be reused"
-                onClick={() => {
-                  if (confirm !== target.app_name) {
-                    setMsg(`type “${target.app_name}” to delete it permanently — its deployment `
-                           + `history goes with it`);
-                    return;
-                  }
-                  setMsg(null);
-                  void perform("Deleting", async () => {
-                  const out: any = await purgeTargetAction(target.id, confirm);
-                  setMsg(out?.error
-                    ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 180)}`
-                    : `deleted — ${out.deployment_runs_deleted} run(s) and `
-                      + `${out.health_samples_deleted} health sample(s) removed. The name is free.`);
-                  }); }} />
-        {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
+        <span className="detail" style={{ fontSize: 12 }}>
+          Restore and permanent deletion are paused until approval and recovery steps are ready.
+        </span>
       </span>
     );
   }
@@ -1088,9 +834,9 @@ export function TargetControls({ target, shipped, onChanged }: {
    <div style={{ display: "grid", gap: 8 }}>
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <input type="checkbox" checked={state.auto} disabled={pending}
+        <input type="checkbox" checked={state.auto} disabled={pending || communityEdition}
                onChange={(e) => toggle({ auto_deploy: e.target.checked })} />
-        deploy on merge
+        {communityEdition ? "deploy on merge (paused in Community)" : "deploy on merge"}
       </label>
       <label style={{ display: "flex", gap: 6, alignItems: "center",
                       color: state.paused ? "#d29922" : undefined }}>
@@ -1112,9 +858,12 @@ export function TargetControls({ target, shipped, onChanged }: {
           what is there — a new run, so the previous one keeps its history — and calling that
           "Deploy" invites the question "is there a redeploy somewhere else?". There is not. */}
       <ActionButton label={shipped ? "Redeploy" : "Deploy"} busyLabel="Starting"
-              title={shipped
-                ? "Ship this target again — a new deployment run at the branch or sha above"
-                : "Ship this target for the first time"}
+              disabled={communityEdition}
+              title={communityEdition
+                ? "Community host deployment awaits approval and recovery steps"
+                : shipped
+                  ? "Ship this target again — a new deployment run at the branch or sha above"
+                  : "Ship this target for the first time"}
               busy={busy === "Deploying"}
               onClick={() => { setMsg(null); setRunId(null);
                 void perform("Deploying", async () => {
@@ -1125,7 +874,10 @@ export function TargetControls({ target, shipped, onChanged }: {
                   }
                   setRunId(out.deployment_run_id);
                 }); }} />
-      <TeardownControls target={target} onChanged={onChanged} />
+      <TeardownControls />
+      {communityEdition && <span className="detail">
+        Community deployment is paused until approval and recovery steps are ready.
+      </span>}
       {msg && <span className="detail">{msg}</span>}
     </div>
     {runId && (

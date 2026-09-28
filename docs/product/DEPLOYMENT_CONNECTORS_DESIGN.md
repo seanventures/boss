@@ -3,6 +3,23 @@
 **Status:** SSH/container connector **built and proven in production**; others not built
 **Written:** 2026-08-05 · **First real deployment:** 2026-08-05
 
+**Community release gate (2026-09-28):** The direct deployment-target bootstrap,
+teardown, and purge API actions are disabled. Bootstrap creates host directories over SSH;
+teardown removes host resources; purge deletes deployment history. Those endpoints do not yet
+run through an approved Resource Plane ChangeSet with the required budget, rollback, and
+receipt records. Target creation, configuration changes, and auto-deploy settings remain
+available to project members with `providerops_manage`. Re-enable direct host or history
+effects only after the policy-guarded workflow and its tests are in place.
+The SSH connector also refuses a deployment with no declared `app_port`; it no longer runs
+bootstrap implicitly to choose a port. The console labels these host and history controls as
+unavailable while this gate is active.
+Community SSH/container execution is also disabled at the connector boundary, including
+targets with a declared port. The current deployment planner does not create a ChangeSet or
+expected ResourceReceipt for those kinds. A policy-guarded release workflow is required to
+restore this capability; Community GA must describe it as unavailable until then.
+The planner records a blocked deployment run and decision before build or host access, and the
+connector independently refuses execution if an older run reaches it.
+
 ---
 
 ## 1. The shape of the problem

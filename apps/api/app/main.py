@@ -6927,6 +6927,14 @@ def _same_name(typed: Any, stored: Any) -> bool:
     return norm(typed) == norm(stored)
 
 
+def _deployment_target_write_actor(payload: Optional[dict]) -> str:
+    """Do not let a target write silently become an unbound 'operator' action."""
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    return actor
+
+
 @app.post("/v1/deployment-targets", status_code=201)
 def create_deployment_target_endpoint(payload: dict):
     """Register where an app is deployed. This is the whole of onboarding.
@@ -6943,6 +6951,7 @@ def create_deployment_target_endpoint(payload: dict):
     # " nqueens-app", a target no lookup finds, and a destroy confirmation that can never match
     # because nobody types the space. Normalising once here beats every later reader guessing.
     payload = {k: (v.strip() if isinstance(v, str) else v) for k, v in payload.items()}
+    actor = _deployment_target_write_actor(payload)
 
     required = ("project_id", "app_name", "repo", "environment", "target_kind", "target_ref")
     for field in required:
@@ -6980,6 +6989,9 @@ def create_deployment_target_endpoint(payload: dict):
 
     target_id = payload.get("id") or make_id("deptgt")
     with begin(engine) as connection:
+        require_project_actor(
+            connection, payload["project_id"], actor, "providerops_manage"
+        )
         # deployment_targets is UNIQUE (project_id, app_name, environment). Onboarding a name
         # that already exists — including one that was RETIRED rather than deleted — otherwise
         # surfaced as a 500, which tells an operator nothing about the one field they need to
@@ -7017,7 +7029,7 @@ def create_deployment_target_endpoint(payload: dict):
                              or [{"kind": "http", "path": "/", "expect": 200,
                                   "scheme": payload.get("scheme") or "https"}]),
             "status": payload.get("status") or "active",
-            "by": str(payload.get("actor") or "operator"),
+            "by": actor,
         })
         row = connection.execute(
             text("SELECT * FROM deployment_targets WHERE id=:i"), {"i": target_id}
@@ -7030,6 +7042,7 @@ def update_deployment_target_endpoint(target_id: str, payload: dict):
     """Change a target in place — port, domain, health check, status, auto-deploy."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = _deployment_target_write_actor(payload)
     sets, params = [], {"i": target_id}
     for field, column in (("target_ref", "target_ref"), ("status", "status"),
                           ("environment", "environment"), ("app_name", "app_name")):
@@ -7054,16 +7067,10 @@ def update_deployment_target_endpoint(target_id: str, payload: dict):
         "publishable_ports": payload.get("publishable_ports"),
     }
     explicit = payload.get("required_resources")
-    if explicit is not None or any(v is not None for v in resource_updates.values()):
-        with begin(engine) as c:
-            current = c.execute(
-                text("SELECT required_resources FROM deployment_targets WHERE id=:i"),
-                {"i": target_id}).scalar()
-        base = explicit if explicit is not None else current
-        sets.append("required_resources = CAST(:rr AS JSONB)")
-        params["rr"] = json.dumps(merge_target_resources(base, resource_updates))
-
-    if not sets:
+    updates_resources = explicit is not None or any(
+        v is not None for v in resource_updates.values()
+    )
+    if not sets and not updates_resources:
         # Naming what WAS sent, because the previous version accepted a body full of fields it
         # did not understand and returned 200 — a PATCH that quietly changes nothing is worse
         # than one that refuses.
@@ -7073,9 +7080,23 @@ def update_deployment_target_endpoint(target_id: str, payload: dict):
             f"repo_owner, publishable_ports. Received: {sorted(payload)}"))
 
     with begin(engine) as connection:
+        target = connection.execute(
+            text("SELECT project_id, required_resources FROM deployment_targets "
+                 "WHERE id=:i FOR UPDATE"), {"i": target_id}
+        ).mappings().first()
+        if not target:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        require_project_actor(
+            connection, target["project_id"], actor, "providerops_manage"
+        )
+        if updates_resources:
+            base = explicit if explicit is not None else target["required_resources"]
+            sets.append("required_resources = CAST(:rr AS JSONB)")
+            params["rr"] = json.dumps(merge_target_resources(base, resource_updates))
         result = connection.execute(
             text(f"UPDATE deployment_targets SET {', '.join(sets)}, updated_at = now() "
-                 f"WHERE id = :i"), params)
+                 f"WHERE id = :i AND project_id = :p"),
+            {**params, "p": target["project_id"]})
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="no such deployment target")
         row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
@@ -7113,94 +7134,46 @@ def retire_deployment_target_endpoint(target_id: str, actor: str):
 
 @app.post("/v1/deployment-targets/{target_id}/teardown")
 def teardown_deployment_target_endpoint(target_id: str, payload: dict):
-    """Remove a deployed app from its host and report the space reclaimed.
-
-    Three levels, because "remove the app" means different things at different moments:
-      stop_only=true      container goes, files stay — reversible by a redeploy
-      (default)           container + release directories; DATA SURVIVES
-      include_data=true   also the data directory — the only irreversible one
-
-    Requires `confirm` to equal the app name. A destructive action reached by a single click is
-    a destructive action taken by accident, and the operator naming the app is the cheapest
-    possible proof they meant this one.
-    """
+    """Refuse direct host teardown until it uses the approved Resource Plane flow."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.core import emit_event
-    from .services.deployment_connectors import connector_for
-
-    include_data = bool(payload.get("include_data"))
-    stop_only = bool(payload.get("stop_only"))
-    actor = str(payload.get("actor") or "operator")
-
+    actor = _deployment_target_write_actor(payload)
     with begin(engine) as connection:
         row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
                                  {"i": target_id}).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="no such deployment target")
         target = dict(row)
-
-        # Compare trimmed on BOTH sides: a name stored with a stray space (registered before
-        # the create endpoint normalised its input) is otherwise impossible to confirm, because
-        # nobody types a leading space and no UI shows one.
-        if not stop_only and not _same_name(payload.get("confirm"), target["app_name"]):
+        require_project_actor(
+            connection, target["project_id"], actor, "providerops_manage"
+        )
+        if not payload.get("stop_only") and not _same_name(payload.get("confirm"),
+                                                            target["app_name"]):
             raise HTTPException(
                 status_code=428,
                 detail=(f"confirm must equal the app name {target['app_name']!r} to remove it"
-                        f"{' INCLUDING ITS DATA' if include_data else ''}"))
-
-        conn = connector_for(target)
-        if conn is None:
-            raise HTTPException(status_code=422, detail="no connector for this target_kind")
-
-        report = conn.destroy(target, settings, connection,
-                              include_data=include_data, stop_only=stop_only)
-
-        # Recorded whether or not it succeeded: a teardown that was refused is exactly the
-        # event someone will go looking for later.
-        emit_event(connection, target["project_id"],
-                   "delivery.torn_down" if report.get("ok") else "delivery.teardown_refused",
-                   actor, "deployment_target", target_id,
-                   {"removed": report.get("removed"), "refused": report.get("refused"),
-                    "include_data": include_data, "stop_only": stop_only,
-                    "reclaimed_kb": report.get("reclaimed_kb")})
-
-        # A destroyed app is not a deployable one. Retiring the target stops auto-deploy from
-        # quietly resurrecting it on the next merge.
-        if report.get("ok") and not stop_only:
-            connection.execute(
-                text("UPDATE deployment_targets SET status='retired', auto_deploy=false, "
-                     "updated_at=now() WHERE id=:i"), {"i": target_id})
-            report["target_status"] = "retired"
-
-    if report.get("refused"):
-        raise HTTPException(status_code=409, detail=report)
-    return report
+                        f"{' INCLUDING ITS DATA' if payload.get('include_data') else ''}"))
+    raise HTTPException(status_code=409, detail=(
+        "Direct teardown is disabled. Submit an approved Resource Plane ChangeSet with "
+        "a rollback plan, budget reservation, and ResourceReceipt before host removal."
+    ))
 
 
 @app.post("/v1/deployment-targets/{target_id}/purge")
 def purge_deployment_target_endpoint(target_id: str, payload: dict):
-    """Delete a target and its records outright, so the name can be reused.
-
-    DELETE retires rather than deletes, because deployment runs and health samples reference a
-    target and erasing them destroys the history of everything ever shipped there. That is the
-    right default — but it left "I want to start over" with no route except restoring the thing
-    you were trying to be rid of.
-
-    So: purge is a separate, explicit act. It requires the app name typed, and it refuses while
-    the target is still ACTIVE — tear it down first, so nobody deletes the records of an app
-    that is still running and then wonders why the host has a container nothing knows about.
-    """
+    """Refuse history erasure until an approved, recoverable purge flow exists."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.core import emit_event
-
+    actor = _deployment_target_write_actor(payload)
     with begin(engine) as connection:
         row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
                                  {"i": target_id}).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="no such deployment target")
         target = dict(row)
+        require_project_actor(
+            connection, target["project_id"], actor, "providerops_manage"
+        )
 
         if not _same_name(payload.get("confirm"), target["app_name"]):
             raise HTTPException(status_code=428, detail=(
@@ -7211,76 +7184,32 @@ def purge_deployment_target_endpoint(target_id: str, payload: dict):
                 f"{target['app_name']} is still active. Remove the deployment first (Stop or "
                 f"Destroy), then delete — otherwise the host keeps a container that no target "
                 f"describes."))
-
-        samples = connection.execute(
-            text("DELETE FROM deployment_health_samples WHERE deployment_target_id=:i"),
-            {"i": target_id}).rowcount
-        runs = connection.execute(
-            text("DELETE FROM deployment_runs WHERE deployment_target_id=:i"),
-            {"i": target_id}).rowcount
-        connection.execute(text("DELETE FROM deployment_targets WHERE id=:i"), {"i": target_id})
-
-        # Recorded BEFORE the row is gone is impossible, so it is recorded after — but the event
-        # keeps the name and counts, which is the whole point of an audit trail for a delete.
-        emit_event(connection, target["project_id"], "delivery.target_purged",
-                   str(payload.get("actor") or "operator"), "deployment_target", target_id,
-                   {"app_name": target["app_name"], "environment": target["environment"],
-                    "deployment_runs_deleted": runs, "health_samples_deleted": samples})
-
-    return {"target_id": target_id, "app_name": target["app_name"], "deleted": True,
-            "deployment_runs_deleted": runs, "health_samples_deleted": samples}
+    raise HTTPException(status_code=409, detail=(
+        "Direct purge is disabled. Use an approved flow with a rollback or archive plan "
+        "and an audit receipt before deleting deployment history."
+    ))
 
 
 @app.post("/v1/deployment-targets/{target_id}/bootstrap")
 def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict] = None):
-    """Have BOSS prepare the host: deploy directory, docker check, and a free port.
-
-    These were manual SSH steps for the first two apps. Idempotent and non-destructive — on a
-    shared host, anything it would remove belongs to someone else.
-    """
+    """Refuse direct SSH host writes until Resource Plane records the operation."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.deployment_connectors import connector_for
-
-    apply_port = bool((payload or {}).get("apply_port", True))
+    actor = _deployment_target_write_actor(payload)
     with begin(engine) as connection:
-        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
-                                 {"i": target_id}).mappings().first()
+        row = connection.execute(
+            text("SELECT project_id FROM deployment_targets WHERE id=:i"),
+            {"i": target_id},
+        ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="no such deployment target")
-        target = dict(row)
-        conn = connector_for(target)
-        if conn is None:
-            raise HTTPException(status_code=422, detail="no connector for this target_kind")
-        report = conn.bootstrap(target, settings, connection)
-
-        # Write the chosen port back, so the operator does not have to copy it by hand — which
-        # is exactly the transcription step that produced the 8080 collision.
-        if apply_port and report.get("suggested_port"):
-            connection.execute(
-                text("UPDATE deployment_targets SET required_resources = CAST(:rr AS JSONB), "
-                     "updated_at = now() WHERE id = :i"),
-                {"rr": json.dumps(merge_target_resources(
-                    target.get("required_resources"),
-                    {"app_port": str(report["suggested_port"])})),
-                 "i": target_id})
-            report["applied_port"] = report["suggested_port"]
-            # And point the URL at that port. Writing the port without fixing the domain left
-            # the console showing a bare IP (redacted here as `198.51.100.139`)
-            # between onboarding and the first deploy — which is port 80, where
-            # an unrelated product on this host answers 200. The rule
-            # already existed in the connector; only the connector ran it, and the connector
-            # does not run until you deploy.
-            from .services.deployment_connectors import _split_ref, domain_with_port
-            _u, host, _p = _split_ref(target.get("target_ref", ""))
-            fixed = domain_with_port((target.get("domains") or [None])[0], host,
-                                     report["suggested_port"])
-            if fixed:
-                connection.execute(
-                    text("UPDATE deployment_targets SET domains = CAST(:d AS JSONB) "
-                         "WHERE id = :i"), {"d": json.dumps([fixed]), "i": target_id})
-                report["domain"] = fixed
-    return report
+        require_project_actor(
+            connection, row["project_id"], actor, "providerops_manage"
+        )
+    raise HTTPException(status_code=409, detail=(
+        "Direct host bootstrap is disabled. Submit a Resource Plane ChangeSet with "
+        "a budget reservation and ResourceReceipt before changing the host."
+    ))
 
 
 # --------------------------------------------------------------------------- #
@@ -7805,6 +7734,13 @@ def delivery_deploy_endpoint(payload: dict):
         connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
                            {"i": run_id})
 
+    if planned.get("status") in {"failed", "blocked"}:
+        # The blocked run and decision were committed above. Do not launch a worker for a
+        # deployment the planner has already refused.
+        raise HTTPException(
+            status_code=409,
+            detail=planned.get("failure_reason") or "Deployment policy blocked this run.",
+        )
     if payload.get("plan_only"):
         return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual"}
 
@@ -8185,6 +8121,7 @@ def set_auto_deploy_endpoint(target_id: str, payload: dict):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = _deployment_target_write_actor(payload)
     sets, params = [], {"i": target_id}
     if payload.get("auto_deploy") is not None:
         sets.append("auto_deploy = :a")
@@ -8196,9 +8133,19 @@ def set_auto_deploy_endpoint(target_id: str, payload: dict):
         raise HTTPException(status_code=422, detail="auto_deploy or paused is required")
 
     with begin(engine) as connection:
+        target = connection.execute(
+            text("SELECT project_id FROM deployment_targets WHERE id=:i FOR UPDATE"),
+            {"i": target_id},
+        ).mappings().first()
+        if not target:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        require_project_actor(
+            connection, target["project_id"], actor, "providerops_manage"
+        )
         result = connection.execute(
             text(f"UPDATE deployment_targets SET {', '.join(sets)}, updated_at=now() "
-                 f"WHERE id=:i"), params)
+                 f"WHERE id=:i AND project_id=:p"),
+            {**params, "p": target["project_id"]})
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="no such deployment target")
         row = connection.execute(

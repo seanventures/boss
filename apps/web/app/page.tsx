@@ -7044,13 +7044,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">CI/CD</span>
               <h2>
                 {deliveryPipeline && !deliveryPipeline.error && !deliveryPipeline.configured
-                  ? "No deployment targets yet — onboard an app to unlock deploy."
-                  : "From a merged PR to a running deployment — and where it stopped."}
+                  ? "No deployment targets yet — register an app destination."
+                  : communityEdition
+                    ? "Deployment destinations and history — host execution is paused."
+                    : "From a merged PR to a running deployment — and where it stopped."}
               </h2>
             </div>
           </div>
           <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
-                            deployments={recentDeployments} />
+                            deployments={recentDeployments}
+                            communityEdition={communityEdition} />
         </section>
         ) : null}
 
