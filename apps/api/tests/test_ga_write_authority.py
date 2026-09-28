@@ -15,16 +15,39 @@ PROJECT = "boss-dogfood"
 @pytest.fixture
 def authenticated_keys(monkeypatch):
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
-    monkeypatch.setattr(api_main.settings, "api_keys", "ceo-key,coo-key,release-key,runner-key")
+    monkeypatch.setattr(
+        api_main.settings, "api_keys", "ceo-key,coo-key,release-key,runner-key,operator-key"
+    )
     monkeypatch.setattr(
         api_main.settings,
         "api_key_principals",
-        "ceo-key:ceo,coo-key:coo,release-key:release_manager,runner-key:ga_runner",
+        "ceo-key:ceo,coo-key:coo,release-key:release_manager,"
+        "runner-key:ga_runner,operator-key:ga_operator",
     )
 
 
 def _auth(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
+
+
+@pytest.fixture
+def scoped_operator(engine, authenticated_keys):
+    other_project = f"ga-other-{uuid4().hex[:8]}"
+    with engine.begin() as connection:
+        workspace_id = connection.execute(text(
+            "SELECT workspace_id FROM projects WHERE id = :project"
+        ), {"project": PROJECT}).scalar_one()
+        connection.execute(text(
+            "INSERT INTO projects (id, workspace_id, name, slug) "
+            "VALUES (:id, :workspace, 'Other', :id)"
+        ), {"id": other_project, "workspace": workspace_id})
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_operator",
+            display_name="Scoped GA operator", member_type="human", role_keys=[],
+            permissions=["integration_manage", "providerops_manage", "budget_manage"],
+            actor="ceo",
+        )
+    return other_project
 
 
 def test_mcp_registry_mutations_require_pack_manage(client, authenticated_keys):
@@ -229,3 +252,104 @@ def test_direct_job_enqueue_requires_execution_and_effect_grants(
     allowed = client.post("/v1/jobs", headers=_auth("ceo-key"), json=base)
     assert allowed.status_code == 201, allowed.text
     assert allowed.json()["project_id"] == PROJECT
+
+
+def test_settings_and_budget_writes_require_project_grants(
+    client, scoped_operator, monkeypatch,
+):
+    other_project = scoped_operator
+    setting_path = "/v1/settings/code_agent_max_concurrency"
+    setting = {"project_id": PROJECT, "actor": "coo", "value": 2}
+    assert client.put(setting_path, headers=_auth("coo-key"), json=setting).status_code == 403
+    assert client.put(
+        setting_path, headers=_auth("operator-key"),
+        json={**setting, "project_id": other_project, "actor": "ga_operator"},
+    ).status_code == 403
+    assert client.put(
+        setting_path, headers=_auth("ceo-key"), json={**setting, "actor": "ceo"}
+    ).status_code == 200
+
+    intensity = {"scope_id": PROJECT, "intensity": 90, "actor": "coo"}
+    assert client.post(
+        "/v1/budget/set_intensity", headers=_auth("coo-key"), json=intensity
+    ).status_code == 403
+    assert client.post(
+        "/v1/budget/set_intensity", headers=_auth("operator-key"),
+        json={**intensity, "scope_id": other_project, "actor": "ga_operator"},
+    ).status_code == 403
+    assert client.post(
+        "/v1/budget/set_intensity", headers=_auth("ceo-key"),
+        json={**intensity, "actor": "ceo"},
+    ).status_code == 200
+
+    calls = []
+
+    def reserve(_connection, *_args):
+        calls.append("reserve")
+        return {"status": "reserved", "reservation_id": "bres_demo",
+                "budget_state": "green", "message": "reserved"}
+
+    def release(_connection, *_args):
+        calls.append("release")
+        return {"status": "released", "reservation_id": "bres_demo",
+                "budget_state": "green", "message": "released"}
+
+    monkeypatch.setattr(api_main.budget, "reserve", reserve)
+    monkeypatch.setattr(api_main.budget, "release", release)
+    request = {"project_id": PROJECT, "category": "model", "amount_usd_micros": 1,
+               "reason": "GA authority"}
+    release_request = {"project_id": PROJECT, "reservation_id": "bres_demo",
+                       "reason": "GA authority"}
+    assert client.post(
+        "/v1/budget/reserve", headers=_auth("coo-key"), json=request
+    ).status_code == 403
+    assert client.post(
+        "/v1/budget/reserve", headers=_auth("operator-key"),
+        json={**request, "project_id": other_project},
+    ).status_code == 403
+    assert client.post(
+        "/v1/budget/release", headers=_auth("coo-key"), json=release_request
+    ).status_code == 403
+    assert calls == []
+    assert client.post(
+        "/v1/budget/reserve", headers=_auth("ceo-key"), json=request
+    ).status_code == 201
+    assert client.post(
+        "/v1/budget/release", headers=_auth("ceo-key"), json=release_request
+    ).status_code == 200
+    assert calls == ["reserve", "release"]
+
+
+def test_event_subscription_writes_require_integration_grant(
+    client, scoped_operator,
+):
+    payload = {"project_id": PROJECT, "event_type": "ga.authority.*",
+               "sink_kind": "job", "sink_ref": "docs.update", "actor": "coo"}
+    assert client.post(
+        "/v1/event-subscriptions", headers=_auth("coo-key"), json=payload
+    ).status_code == 403
+    assert client.post(
+        "/v1/event-subscriptions", headers=_auth("operator-key"),
+        json={**payload, "project_id": scoped_operator, "actor": "ga_operator"},
+    ).status_code == 403
+
+    created = client.post(
+        "/v1/event-subscriptions", headers=_auth("ceo-key"),
+        json={**payload, "actor": "ceo"},
+    )
+    assert created.status_code == 201, created.text
+    path = f"/v1/event-subscriptions/{created.json()['id']}"
+    assert client.patch(
+        path, headers=_auth("coo-key"),
+        json={"project_id": PROJECT, "enabled": False, "actor": "coo"},
+    ).status_code == 403
+    assert client.delete(
+        path, headers=_auth("coo-key"), params={"project_id": PROJECT}
+    ).status_code == 403
+    assert client.patch(
+        path, headers=_auth("ceo-key"),
+        json={"project_id": PROJECT, "enabled": False},
+    ).status_code == 200
+    assert client.delete(
+        path, headers=_auth("ceo-key"), params={"project_id": PROJECT}
+    ).status_code == 204

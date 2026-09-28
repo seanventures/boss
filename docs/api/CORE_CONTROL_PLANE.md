@@ -227,10 +227,13 @@ Amounts are **USD micros** (1 USD = 1_000_000 micros).
 | `GET` | `/v1/budget/insights?project_id=` | Cost-save insights |
 | `GET` | `/v1/budget/forecast` | Forecast helpers |
 | `POST` | `/v1/budget/quote` | Dry-run affordability |
-| `POST` | `/v1/budget/reserve` | Hold funds |
+| `POST` | `/v1/budget/reserve` | Hold funds (`budget_manage`) |
 | `POST` | `/v1/budget/consume` | Settle with receipt |
-| `POST` | `/v1/budget/release` | Release unused hold |
-| `POST` | `/v1/budget/set_intensity` | CEO intensity 0–100 |
+| `POST` | `/v1/budget/release` | Release unused hold (`budget_manage`) |
+| `POST` | `/v1/budget/set_intensity` | CEO intensity 0–100 (`budget_manage`) |
+
+Project settings writes require `providerops_manage`. Creating, changing, or deleting an event
+subscription requires `integration_manage` in that project.
 
 ### Status
 

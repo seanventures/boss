@@ -4525,6 +4525,8 @@ def create_event_subscription_route(
     payload: EventSubscriptionCreateRequest,
 ) -> EventSubscriptionSummary:
     with begin(engine) as connection:
+        actor = current_api_principal.get() or payload.actor
+        require_project_actor(connection, payload.project_id, actor, "integration_manage")
         try:
             result = create_event_subscription(
                 connection,
@@ -4535,7 +4537,7 @@ def create_event_subscription_route(
                 data_boundary=payload.data_boundary,
                 enabled=payload.enabled,
                 config=payload.config,
-                actor=payload.actor,
+                actor=actor,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -4551,6 +4553,8 @@ def update_event_subscription_route(
     payload: EventSubscriptionUpdateRequest,
 ) -> EventSubscriptionSummary:
     with begin(engine) as connection:
+        actor = current_api_principal.get() or payload.actor
+        require_project_actor(connection, payload.project_id, actor, "integration_manage")
         try:
             result = update_event_subscription(
                 connection,
@@ -4562,7 +4566,7 @@ def update_event_subscription_route(
                 data_boundary=payload.data_boundary,
                 enabled=payload.enabled,
                 config=payload.config,
-                actor=payload.actor,
+                actor=actor,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -4578,6 +4582,8 @@ def delete_event_subscription_route(
     actor: str = "system",
 ):
     with begin(engine) as connection:
+        actor = current_api_principal.get() or actor
+        require_project_actor(connection, project_id, actor, "integration_manage")
         deleted = delete_event_subscription(
             connection,
             project_id,
@@ -18926,8 +18932,9 @@ def put_project_setting(key: str, payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
-    actor = str(payload.get("actor") or "operator")
+    actor = str(payload.get("actor") or current_api_principal.get() or "executive_console")
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
         if payload.get("value") in (None, ""):
             ps.clear_one(connection, project_id, key)
             return {"key": key, "value": getattr(settings, ps.KNOBS.get(key, {}).get("attr", ""),
@@ -18949,6 +18956,7 @@ def budget_set_intensity(payload: BudgetSetIntensityRequest) -> dict:
     if payload.scope_type != "project":
         raise HTTPException(status_code=400, detail="Only project scope is supported.")
     with begin(engine) as connection:
+        require_project_actor(connection, payload.scope_id, payload.actor, "budget_manage")
         result = budget.set_intensity(
             connection, payload.scope_type, payload.scope_id, payload.intensity, payload.actor
         )
@@ -19114,6 +19122,8 @@ def quote_budget(payload: BudgetQuoteRequest) -> BudgetQuoteResponse:
 @app.post("/v1/budget/reserve", response_model=BudgetReserveResponse, status_code=201)
 def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
     with begin(engine) as connection:
+        actor = current_api_principal.get() or "ceo"
+        require_project_actor(connection, payload.project_id, actor, "budget_manage")
         result = budget.reserve(
             connection,
             payload.project_id,
@@ -19130,6 +19140,8 @@ def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
 @app.post("/v1/budget/release", response_model=BudgetReleaseResponse)
 def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
     with begin(engine) as connection:
+        actor = current_api_principal.get() or "ceo"
+        require_project_actor(connection, payload.project_id, actor, "budget_manage")
         result = budget.release(
             connection,
             payload.project_id,
