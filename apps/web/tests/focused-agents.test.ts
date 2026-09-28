@@ -60,7 +60,7 @@ describe("Focused agents island", () => {
     expect(markup).toContain('data-testid="focused-agents"');
     expect(markup).toContain('data-testid="focused-agents-builder"');
     expect(markup).toContain("Create and start");
-    expect(markup).toContain("always-on");
+    expect(markup).toContain("always on");
     expect(markup).toContain("preview_keeper");
     expect(markup).toContain("launch factory job");
     expect(markup).toContain("Create and start");

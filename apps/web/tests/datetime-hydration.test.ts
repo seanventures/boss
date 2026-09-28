@@ -112,6 +112,7 @@ describe("datetime helpers are hydration-safe", () => {
       "pipeline-ui.tsx",
       "org-gate.tsx",
       "page.tsx",
+      "page-community.tsx",
       "client-relative-time.tsx",
     ];
     for (const file of files) {
@@ -143,6 +144,8 @@ describe("datetime helpers are hydration-safe", () => {
       "actions.ts",
       "api/debug-api/route.ts",
       "page.tsx",
+      // Community's page is a server component; the count is computed before hydration.
+      "page-community.tsx",
     ]);
     const files: string[] = [];
     const walk = (dir: string) => {

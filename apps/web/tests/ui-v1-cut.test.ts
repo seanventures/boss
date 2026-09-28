@@ -20,7 +20,6 @@ const HIDDEN_FROM_COMMUNITY_NAV = [
   // this database and nobody used it — and its idea is now what the one BOSS Agent area does.
   // The AreaId union keeps the name so an old `?area=metatron` bookmark still resolves rather
   // than dropping the operator on the organisation picker.
-  "studio",
   "sandboxes",
   "github",
   "ops",
@@ -53,6 +52,7 @@ const HIDDEN_FROM_COMMUNITY_NAV = [
  * has not been shown it.
  */
 const RESTORED_TO_COMMUNITY_NAV = [
+  "studio",
   "discovery",
   "meetings",
   "delivery",   // the "CI/CD" nav entry — id and label differ, and cutting it by id would

@@ -7538,6 +7538,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: transparent;
 }
 .org-node:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.org-node[data-placed="true"] { box-shadow: inset 2px 0 var(--accent); }
 .org-node-identity { display: grid; gap: 2px; min-width: 0; padding-left: calc(var(--org-depth, 0) * 15px); }
 .org-node:not([data-root="true"]) .org-node-identity { border-left: 1px solid var(--border-strong); }
 .org-node-parent { font-size: 12px; color: var(--muted); }

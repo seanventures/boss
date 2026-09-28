@@ -89,13 +89,13 @@ describe("no button is left to the browser's default chrome", () => {
   });
 
   it("the ASK button in particular — this is the one that shipped", () => {
-    const ask = rulesFor("roster-ask");
+    const ask = rulesFor("roster-actions");
     expect(ask.length).toBeGreaterThan(0);
     expect(ask.some((body) => /\bbackground\s*:/.test(body))).toBe(true);
   });
 
   it("ASK reads as pressable rather than as a disabled control", () => {
-    const base = rulesFor("roster-ask").join("\n");
+    const base = rulesFor("roster-actions").join("\n");
     expect(base).toContain("cursor: pointer");
     // Grey-on-dark was the whole complaint: it took its colour from --muted, which is the
     // console's colour for text that does not matter.
@@ -104,7 +104,7 @@ describe("no button is left to the browser's default chrome", () => {
 
   it("and is visible to a keyboard, on a dark card", () => {
     // The default focus ring is a thin black outline — invisible against this background.
-    const focus = CSS.slice(CSS.indexOf(".roster-ask:focus-visible"));
-    expect(focus.slice(0, 140)).toContain("outline:");
+    const focus = CSS.slice(CSS.indexOf(".roster-actions button:focus-visible"));
+    expect(focus.slice(0, 200)).toContain("outline:");
   });
 });

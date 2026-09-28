@@ -26,9 +26,9 @@ describe("the Run group order", () => {
       "delivery_workflows",  // Workflow
       "workforce",           // Agents
       "org_chart",
+      "studio",              // Agent definitions
       "decisions",           // Approvals
       "delivery",            // Infra
-      "monitoring",          // Observability
     ]);
   });
 
@@ -54,7 +54,7 @@ describe("the Run group order", () => {
 
 describe("the renamed areas", () => {
   it.each([
-    ["workforce", "Agents"],
+    ["workforce", "Agent work"],
     ["delivery", "Infra"],
     ["delivery_workflows", "Workflow"],
     ["code_tasks", "Projects"],

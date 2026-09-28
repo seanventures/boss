@@ -88,16 +88,16 @@ describe("the loaders that showed 404 on every load", () => {
     expect(raw, `these are still ungated: ${raw.map((m) => m[0].trim())}`).toHaveLength(0);
   });
 
-  it("agent-modules.ts gates the marketplace calls but not its own", () => {
-    const src = read("agent-modules.ts");
+  it("the paid marketplace loader gates its calls without masking Community module errors", () => {
+    const src = read("agent-modules-paid.ts");
     expect(src).toContain("editionOptionalList(client.listHostedMarketplaceListings");
     expect(src).toContain("editionOptionalList(client.listHostedMarketplaceSyncRuns");
     // Its OWN endpoints return 200; gating them would hide a genuine failure of this feature.
-    expect(src).toContain("client.listAgentModules(resolvedProjectId),");
+    expect(read("agent-modules.ts")).toContain("client.listAgentModules(resolvedProjectId),");
   });
 
   it("the rule lives in one module, not copied per loader", () => {
-    for (const f of ["enterprise.ts", "agent-modules.ts"]) {
+    for (const f of ["enterprise.ts", "agent-modules-paid.ts"]) {
       expect(read(f)).toContain('from "./edition-gating"');
     }
   });
