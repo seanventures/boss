@@ -69,7 +69,8 @@ def main() -> None:
         raise SystemExit(1)
     chosen = [e for e in EXAMPLES if not wanted or e[0] in wanted]
 
-    print(f"\n  Installing {len(chosen)} example{'' if len(chosen) == 1 else 's'} "
+    action = "Checking" if args.dry_run else "Installing"
+    print(f"\n  {action} {len(chosen)} example{'' if len(chosen) == 1 else 's'} "
           f"into {args.project} on {args.api}")
     if args.dry_run:
         print("  DRY RUN — nothing will be changed.")
@@ -117,7 +118,8 @@ def main() -> None:
             failed.append((name, reason, needs))
         print()
 
-    print(f"  {len(installed)} installed" + (f", {len(failed)} skipped" if failed else ""))
+    outcome = "checked" if args.dry_run else "installed"
+    print(f"  {len(installed)} {outcome}" + (f", {len(failed)} skipped" if failed else ""))
     if installed and not args.dry_run:
         print("  Delivery → Yours, in the console.")
     if failed:
@@ -129,12 +131,15 @@ def main() -> None:
             print(f"    {name}")
             print(f"      {reason}")
             print(f"      (this example also needs: {needs})")
-        print("\n  Fix those and run this again — anything already installed is reused,")
-        print("  not duplicated.")
+        if args.dry_run:
+            print("\n  Fix those and check again before installing.")
+        else:
+            print("\n  Fix those and run this again — anything already installed is reused,")
+            print("  not duplicated.")
     print()
     # A partial install is a real outcome and not an error: it is what somebody with a tracker
     # and no SMTP should get. Only a total failure is worth a non-zero exit.
-    raise SystemExit(0 if installed or args.dry_run else 1)
+    raise SystemExit(0 if installed else 1)
 
 
 if __name__ == "__main__":
