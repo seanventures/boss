@@ -254,6 +254,32 @@ def test_direct_job_enqueue_requires_execution_and_effect_grants(
     assert allowed.json()["project_id"] == PROJECT
 
 
+def test_worker_autoscaling_requires_project_infra_grant(client, authenticated_keys):
+    policy = {
+        "project_id": PROJECT,
+        "actor": "ceo",
+        "pool_key": f"ga-authority-{uuid4().hex[:8]}",
+        "kind": "local",
+        "max_workers": 1,
+    }
+    denied = client.put(
+        "/v1/worker-autoscaling/policies",
+        headers=_auth("coo-key"), json=policy,
+    )
+    assert denied.status_code == 403, denied.text
+    assert client.post(
+        "/v1/worker-autoscaling/apply", headers=_auth("coo-key"),
+        json={"project_id": PROJECT, "actor": "ceo", "pool_key": policy["pool_key"]},
+    ).status_code == 403
+    assert client.get(
+        "/v1/worker-autoscaling/policies", headers=_auth("coo-key"),
+        params={"project_id": PROJECT},
+    ).status_code == 403
+    assert client.put(
+        "/v1/worker-autoscaling/policies", headers=_auth("ceo-key"), json=policy,
+    ).status_code == 200
+
+
 def test_settings_and_budget_writes_require_project_grants(
     client, scoped_operator, monkeypatch,
 ):

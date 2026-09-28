@@ -41,6 +41,16 @@ def _service() -> WorkerAutoscalingService:
     )
 
 
+def _authorize(connection, project_id: str, actor: str, permission: str) -> str:
+    # The HTTP principal, when present, is the authority and the audit actor.
+    # Keep the explicit actor for local, unauthenticated development calls.
+    from apps.api.app.main import current_api_principal, require_project_actor
+
+    checked_actor = current_api_principal.get() or actor
+    require_project_actor(connection, project_id, checked_actor, permission)
+    return checked_actor
+
+
 class PolicyUpsertRequest(BaseModel):
     project_id: str
     actor: str = "system"
@@ -78,6 +88,7 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
+            _authorize(connection, project_id, "executive_console", "providerops_manage")
             ready = svc.ensure_tables(connection)
             items = svc.list_policies(connection, project_id)
             return {
@@ -103,11 +114,12 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
 def upsert_policy(payload: PolicyUpsertRequest) -> dict[str, Any]:
     svc = _service()
     with begin(get_engine()) as connection:
+        actor = _authorize(connection, payload.project_id, payload.actor, "infra_provision")
         try:
             policy = svc.upsert_policy(
                 connection,
                 project_id=payload.project_id,
-                actor=payload.actor,
+                actor=actor,
                 pool_key=payload.pool_key,
                 enabled=payload.enabled,
                 min_workers=payload.min_workers,
@@ -128,11 +140,12 @@ def upsert_policy(payload: PolicyUpsertRequest) -> dict[str, Any]:
 def evaluate(payload: EvaluateRequest) -> dict[str, Any]:
     svc = _service()
     with begin(get_engine()) as connection:
+        actor = _authorize(connection, payload.project_id, payload.actor, "providerops_manage")
         try:
             return svc.evaluate(
                 connection,
                 project_id=payload.project_id,
-                actor=payload.actor,
+                actor=actor,
                 pool_key=payload.pool_key,
                 persist_history=payload.persist_history,
             )
@@ -145,11 +158,12 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
     """Evaluate + request elastic capacity (simulated/real per fabric gates)."""
     svc = _service()
     with begin(get_engine()) as connection:
+        actor = _authorize(connection, payload.project_id, payload.actor, "infra_provision")
         try:
             return svc.apply(
                 connection,
                 project_id=payload.project_id,
-                actor=payload.actor,
+                actor=actor,
                 pool_key=payload.pool_key,
                 force=payload.force,
                 auto_reconcile=payload.auto_reconcile,
@@ -165,6 +179,7 @@ def status(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
+            _authorize(connection, project_id, "executive_console", "providerops_manage")
             svc.ensure_tables(connection)
             return svc.status(connection, project_id)
     except ProgrammingError as error:
@@ -201,6 +216,7 @@ def history(
     svc = _service()
     try:
         with begin(get_engine()) as connection:
+            _authorize(connection, project_id, "executive_console", "providerops_manage")
             svc.ensure_tables(connection)
             items = svc.history(
                 connection, project_id, pool_key=pool_key, limit=limit
