@@ -56,4 +56,4 @@ Prefer small, reviewable PRs with tests for state machines and budget/receipt pa
 
 ## License
 
-Packaging license is under active legal review (`license_candidate` in the community pack). Do not invent a final public license statement beyond what is published with a release.
+The product owner confirmed counsel approval for Apache License 2.0 for the reviewed BOSS Community export (reference `01049940`). The public repository is not published yet; see the [licensing decision](../operations/OSS_LICENSING_DECISION.md) and [public release checklist](../operations/PUBLIC_FLIP_CHECKLIST.md) for remaining gates.

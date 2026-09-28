@@ -713,6 +713,12 @@ BOSS should be open enough to create trust, adoption, extensibility, and develop
 
 Licensing posture:
 
+The 2026-09-28 product and counsel decision selects Apache License 2.0 for
+the reviewed full Community export at `seanventures/boss` (counsel reference
+`01049940`). See [OSS_LICENSING_DECISION.md](../operations/OSS_LICENSING_DECISION.md)
+for the exact scope and remaining publication gates. The candidate options
+below record the earlier product analysis and do not override that decision.
+
 - Be honest about "open source".
 - If commercial use or competitive hosting is restricted, do not call that restricted part open source.
 - True open-source Community should use an OSI-compatible license.

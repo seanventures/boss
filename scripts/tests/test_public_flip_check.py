@@ -85,14 +85,12 @@ def test_security_reporting_accepts_mailbox_without_placeholder():
 
 
 def _write_kit(tmp_path: Path, *, status: str, reporting: str) -> Path:
-    (tmp_path / "docs/planning/oss-readiness").mkdir(parents=True)
     (tmp_path / "docs/operations").mkdir(parents=True)
-    (tmp_path / "engine").mkdir(parents=True)
-    (tmp_path / "docs/planning/oss-readiness/DECISION-oss-licensing-strategy.md").write_text(
+    (tmp_path / "docs/operations/OSS_LICENSING_DECISION.md").write_text(
         f"> **Status: {status} — test fixture.**\n",
         encoding="utf-8",
     )
-    (tmp_path / "engine/SECURITY.md").write_text(reporting, encoding="utf-8")
+    (tmp_path / "SECURITY.md").write_text(reporting, encoding="utf-8")
     (tmp_path / "docs/operations/COMMUNITY_GA_CLAIMS_FREEZE.md").write_text(
         "## Allowed claims\n\n- x\n\n## Forbidden claims\n\n- y\n",
         encoding="utf-8",
@@ -112,7 +110,7 @@ def test_evaluate_fails_when_license_undecided_even_if_mechanical_pass(tmp_path:
     )
     report = flip.evaluate(tmp_path, tracked=[".env.example", "README.md"])
     assert report["license_status"] == flip.UNDECIDED
-    assert report["ready"] is False
+    assert report["mechanical_pass"] is False
     assert report["verdict"] == "BLOCKED"
     by_id = {c["id"]: c for c in report["checks"]}
     assert by_id["license_decision"]["ok"] is False
@@ -129,12 +127,12 @@ def test_evaluate_fails_on_committed_env_even_if_license_decided(tmp_path: Path)
     )
     report = flip.evaluate(tmp_path, tracked=[".env", "README.md"])
     assert report["license_status"] == flip.DECIDED
-    assert report["ready"] is False
+    assert report["mechanical_pass"] is False
     by_id = {c["id"]: c for c in report["checks"]}
     assert by_id["no_committed_env"]["ok"] is False
 
 
-def test_evaluate_ready_only_when_all_gates_green(tmp_path: Path):
+def test_evaluate_mechanical_pass_does_not_claim_public_readiness(tmp_path: Path):
     _write_kit(
         tmp_path,
         status="DECIDED",
@@ -142,19 +140,21 @@ def test_evaluate_ready_only_when_all_gates_green(tmp_path: Path):
     )
     report = flip.evaluate(tmp_path, tracked=[".env.example"])
     assert report["license_status"] == flip.DECIDED
-    assert report["ready"] is True
-    assert report["verdict"] == "READY"
+    assert report["mechanical_pass"] is True
+    assert report["verdict"] == "MECHANICAL_PASS"
+    assert "ready" not in report
+    assert "does not authorize publication" in report["note"]
 
 
-def test_repo_tree_is_currently_blocked_on_license():
-    """Honest repo-state test: BOSS-300 is still OPEN, so the check must fail."""
+def test_repo_tree_has_recorded_license_decision_only():
+    """The local mechanical subset passes; BOSS-293 release gates remain open."""
     report = flip.evaluate(ROOT)
-    assert report["license_status"] == flip.UNDECIDED
-    assert report["ready"] is False
+    assert report["license_status"] == flip.DECIDED
+    assert report["mechanical_pass"] is True
     by_id = {c["id"]: c for c in report["checks"]}
-    assert by_id["license_decision"]["ok"] is False
+    assert by_id["license_decision"]["ok"] is True
     assert by_id["security_md_exists"]["ok"] is True
     assert by_id["claims_freeze"]["ok"] is True
     assert by_id["public_flip_checklist"]["ok"] is True
     assert by_id["no_committed_env"]["ok"] is True
-    assert by_id["security_private_reporting"]["ok"] is False
+    assert by_id["security_private_reporting"]["ok"] is True

@@ -1,5 +1,16 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-09-28 BOSS-300 Community Apache decision (integration in progress)
+
+- Product owner confirmed counsel approval for Apache License 2.0 for the
+  reviewed full Community export at `seanventures/boss`, reference `01049940`.
+- `ai/codex/boss-300-apache-decision` records the decision, aligns the Community
+  pack and release checklist, and makes `public-flip-check` report only its
+  mechanical subset. BOSS-300 stays In Progress until implementation is merged.
+- The target remains private and empty. BOSS-293 still needs the exact export,
+  reachable-history review, clean VM acceptance, live QA and claims evidence.
+
+
 ## 2026-09-24 Community feedback and public-release preparation
 
 - `ai/codex/community-feedback-public` is scoped to BOSS-431 contributor intake,
