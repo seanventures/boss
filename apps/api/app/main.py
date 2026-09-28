@@ -15373,6 +15373,12 @@ def setup_model_endpoint(payload: dict) -> dict:
         raise HTTPException(status_code=400,
                             detail=f"unknown provider {provider!r}; "
                                    f"one of: {', '.join(sorted(PROVIDERS))}")
+    if spec.get("kind") == "decision":
+        # Jev cannot write code, so it is never saved as a model to build with.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{spec['label']} decides, it does not build — save its key with "
+                    "/v1/setup/decision-model/key."))
     if spec.get("kind") == "subscription":
         # NOT A REFUSAL, A REDIRECT. BOSS's own policy is that a subscription is authenticated
         # through its provider's login, never by a pasted credential — so the wizard says where

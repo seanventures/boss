@@ -64,6 +64,19 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "kind": "api_key",
         "note": "LiteLLM, Ollama, vLLM, Groq, Together, or your own proxy.",
     },
+    # A KEY THAT IS NOT FOR BUILDING. Jev answers multiple-choice decisions and cannot write
+    # code, so it must never become the model a build runs on — but this list is where an
+    # operator looks for "where do I paste a key", and leaving it out sent them hunting. Listed
+    # with its own kind; the wizard sends it to /v1/setup/decision-model/key, and /v1/setup/model
+    # refuses it.
+    "typesafe": {
+        "label": "TypeSafe Jev — workflow decisions only",
+        "api": "typesafe",
+        "kind": "decision",
+        "key_url": "https://console.typesafe.ai/keys",
+        "note": "Answers the multiple-choice decisions in workflows, billed to your own TypeSafe "
+                "account. It does not write code, so it does not replace the model above.",
+    },
     # SUBSCRIPTIONS ARE NOT KEYS, and BOSS already refuses to pretend otherwise: a subscription
     # source whose kind is an official CLI must be authenticated through a connection session
     # (see _requires_official_oauth). Listed here so the wizard can OFFER them and route to that
@@ -982,6 +995,10 @@ def decision_model_status(connection, settings: Settings, project_id: str) -> di
         # Said out loud, because otherwise "typesafe" on the dropdown and Claude in the logs
         # looks like the setting being ignored.
         "effective_backend": ("typesafe" if backend == "typesafe" and has_key else "claude"),
+        # WHERE CLAUDE IS NOT INSTALLED THE API MODEL DECIDES. The worker, which runs workflow
+        # steps, ships no `claude` binary; saying "Claude on your subscription" there named a
+        # model that was not the one answering.
+        "worker_fallback": "the install's API model",
         "key_url": "https://console.typesafe.ai",
     }
 

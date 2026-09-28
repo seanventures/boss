@@ -521,6 +521,9 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
 
   const chosen = providers.find((p) => p.provider === provider);
   const subscription = chosen?.kind === "subscription";
+  // TypeSafe is in this list because it is where people look for a key box — but it is a
+  // decision model, not a model to build with, so it gets its own small form and endpoint.
+  const decisionKey = chosen?.kind === "decision";
 
   // ASK THE MACHINE, DO NOT ASK THE OPERATOR. A subscription is an OAuth session the CLI
   // holds; there is no credential to type, so the only honest question is whether the CLI is
@@ -647,7 +650,10 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
             ))}
           </select>
         </label>
-        {subscription ? null : (
+        {decisionKey ? (
+          <DecisionKeyForm projectId={projectId} actor={actor} note={chosen?.note}
+                           keyUrl={chosen?.key_url} />
+        ) : subscription ? null : (
           <>
             <label className="setup-field">
               <span>API key</span>
@@ -984,22 +990,15 @@ type DecisionStatus = {
  * and billed to the operator's own TypeSafe account, so it is offered, never assumed: the card
  * says which one is actually deciding, because "typesafe" chosen with no key still means Claude.
  */
-function DecisionModel({ projectId, actor }: { projectId: string; actor: string }) {
-  const [status, setStatus] = useState<DecisionStatus | null>(null);
+function DecisionKeyForm(
+  { projectId, actor, note, keyUrl, hasKey, onSaved }:
+  { projectId: string; actor: string; note?: string; keyUrl?: string; hasKey?: boolean;
+    onSaved?: () => void },
+) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [acceptFallback, setAcceptFallback] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(
-        `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
-        { cache: "no-store" });
-      if (r.ok) setStatus((await r.json()) as DecisionStatus);
-    } catch { setStatus(null); }
-  }, [projectId]);
-  useEffect(() => { void load(); }, [load]);
 
   const save = useCallback(async () => {
     if (busy || !key.trim()) return;
@@ -1022,51 +1021,84 @@ function DecisionModel({ projectId, actor }: { projectId: string; actor: string 
                           + `${String(r.data?.latency_ms ?? "?")} ms. Workflow decisions on this `
                           + `project now go to Jev, and to Claude when Jev is unsure.` }
       : { ok: false, text: r.error ?? "could not save the key" });
-    await load();
-  }, [busy, key, acceptFallback, projectId, actor, load]);
-
-  const deciding = status?.effective_backend === "typesafe"
-    ? `TypeSafe Jev (${status.typesafe_model}), with Claude as the second opinion`
-    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} on your subscription`;
+    if (r.ok) onSaved?.();
+  }, [busy, key, acceptFallback, projectId, actor, onSaved]);
 
   return (
-    <article className="stack-card" data-testid="setup-decision-model">
-      <div className="section-head">
-        <div>
-          <h2 className="eyebrow">Decision model</h2>
-          <p className="detail">
-            Answers the multiple-choice questions in workflows — which branch to take, which
-            team gets a ticket. Now deciding: <strong>{status ? deciding : "…"}</strong>.
-            {status?.backend === "typesafe" && !status.typesafe_key
-              ? " TypeSafe is selected but no key is saved, so Claude is deciding." : ""}
-          </p>
-          <p className="detail">
-            Optional: <a href={status?.key_url ?? "https://console.typesafe.ai"} target="_blank"
-            rel="noreferrer">TypeSafe&apos;s Jev</a> answers in well under a second for a
-            fraction of a cent, billed to your own TypeSafe account. BOSS proves the key with
-            one tiny decision before saving it.
-          </p>
-        </div>
-      </div>
-      <div className="setup-form">
-        <label className="setup-field">
-          <span>
-            TypeSafe API key{status?.typesafe_key ? " — one is already saved; pasting replaces it" : ""}
-          </span>
-          <input type="password" value={key} autoComplete="off" spellCheck={false}
-                 data-testid="setup-decision-key" placeholder="ts_…"
-                 onChange={(e) => setKey(e.target.value)} />
-        </label>
-        <button type="button" className="cap-btn primary" disabled={busy || !key.trim()}
-                data-testid="setup-decision-key-submit" onClick={() => void save()}>
-          {busy ? "Checking…" : "Save key"}
-        </button>
-      </div>
+    <>
+      {note ? (
+        <p className="detail">
+          {note}{keyUrl ? <> Create a key at <a href={keyUrl} target="_blank"
+          rel="noreferrer">{keyUrl.replace("https://", "")}</a>.</> : null}
+        </p>
+      ) : null}
+      <label className="setup-field">
+        <span>TypeSafe API key{hasKey ? " — one is already saved; pasting replaces it" : ""}</span>
+        <input type="password" value={key} autoComplete="off" spellCheck={false}
+               data-testid="setup-decision-key" placeholder="ts_…"
+               onChange={(e) => setKey(e.target.value)} />
+      </label>
+      <button type="button" className="cap-btn primary" disabled={busy || !key.trim()}
+              data-testid="setup-decision-key-submit" onClick={() => void save()}>
+        {busy ? "Checking…" : "Verify and save"}
+      </button>
       {result ? (
         <p className={result.ok ? "setup-ok" : "setup-bad"} data-testid="setup-decision-result">
           {result.text}
         </p>
       ) : null}
+    </>
+  );
+}
+
+/**
+ * Who answers the multiple-choice questions — a workflow's typed_decision step picking a branch.
+ *
+ * Claude by default. TypeSafe's Jev is OPTIONAL and billed to the operator's own TypeSafe
+ * account, so it is offered, never assumed: the card says which one is actually deciding,
+ * because "typesafe" chosen with no key still means Claude.
+ */
+function DecisionModel({ projectId, actor }: { projectId: string; actor: string }) {
+  const [status, setStatus] = useState<DecisionStatus | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" });
+      if (r.ok) setStatus((await r.json()) as DecisionStatus);
+    } catch { setStatus(null); }
+  }, [projectId]);
+  useEffect(() => { void load(); }, [load]);
+
+  const deciding = status?.effective_backend === "typesafe"
+    ? `TypeSafe Jev (${status.typesafe_model}), with Claude as the second opinion`
+    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} where it is installed, `
+      + `and this install's API model on the worker`;
+
+  return (
+    <article className="stack-card" data-testid="setup-decision-model">
+      <div className="section-head">
+        <div>
+          {/* Not "Decision model": the dropdown above already carries that name, and two
+              sections with one heading is how the key box went unfound. */}
+          <h2 className="eyebrow">TypeSafe Jev key (optional)</h2>
+          <p className="detail">
+            Workflow decisions — which branch to take, which team gets a ticket — are now
+            answered by: <strong>{status ? deciding : "…"}</strong>.
+            {status?.backend === "typesafe" && !status.typesafe_key
+              ? " TypeSafe is selected but no key is saved, so it is not deciding yet." : ""}
+          </p>
+        </div>
+      </div>
+      <div className="setup-form">
+        <DecisionKeyForm projectId={projectId} actor={actor} hasKey={status?.typesafe_key}
+                         keyUrl={status?.key_url ?? "https://console.typesafe.ai/keys"}
+                         note={"Jev answers in well under a second for a fraction of a cent, "
+                               + "billed to your own TypeSafe account. BOSS proves the key "
+                               + "with one tiny decision before saving it."}
+                         onSaved={() => void load()} />
+      </div>
     </article>
   );
 }
