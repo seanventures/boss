@@ -20,7 +20,10 @@ or a LIKE.
 from __future__ import annotations
 
 import inspect
-import pathlib
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from boss_engine.services.naming import identity_key
 
@@ -58,7 +61,8 @@ class TestAnAppsAttemptsAreSeveralRuns:
 
     def test_the_lookup_stays_inside_one_project(self):
         body = _endpoint()
-        assert "_project_of_run(run_id)" in body
+        assert "require_code_task_reader(connection, run_id)" in body
+        assert '"WHERE r.project_id = :p "' in body
 
     def test_the_limit_still_applies_after_filtering(self):
         """Scanning wider must not hand the card two hundred rows."""
@@ -86,13 +90,33 @@ class TestTheHostLookupWasWorseThanItLooked:
 
 
 class TestTheHelperItLeansOn:
-    def test_the_project_of_a_run_is_looked_up_once(self):
-        main = pathlib.Path("apps/api/app/main.py").read_text()
-        assert "def _project_of_run(run_id: str) -> str:" in main
-        assert "SELECT project_id FROM code_task_runs WHERE id = :r" in main
+    def test_the_project_of_a_run_is_looked_up_once(self, monkeypatch):
+        from apps.api.app import main as module
+
+        class Connection:
+            calls = []
+
+            def execute(self, statement, params):
+                self.calls.append((str(statement), params))
+                return SimpleNamespace(scalar=lambda: "project-one")
+
+        seen = []
+        monkeypatch.setattr(module, "require_project_reader", lambda _c, p: seen.append(p))
+        connection = Connection()
+        assert module.require_code_task_reader(connection, "run-one") == "project-one"
+        assert len(connection.calls) == 1
+        assert "SELECT project_id FROM code_task_runs WHERE id = :run_id" in connection.calls[0][0]
+        assert connection.calls[0][1] == {"run_id": "run-one"}
+        assert seen == ["project-one"]
 
     def test_a_missing_run_yields_no_project_rather_than_raising(self):
-        """A card for a run that has been cleaned up should render empty, not 500."""
-        main = pathlib.Path("apps/api/app/main.py").read_text()
-        i = main.index("def _project_of_run")
-        assert 'or ""' in main[i:i + 400]
+        """A removed run is reported as not found before any deployment lookup."""
+        from apps.api.app import main as module
+
+        class Connection:
+            def execute(self, _statement, _params):
+                return SimpleNamespace(scalar=lambda: None)
+
+        with pytest.raises(HTTPException) as error:
+            module.require_code_task_reader(Connection(), "missing-run")
+        assert error.value.status_code == 404
