@@ -99,6 +99,8 @@ def test_an_unsure_fast_answer_is_asked_again():
     both = SecondOpinionDecider(TypeSafeDecider(_TS, client=_Client(_jev("no", 0.4))), careful, 0.7)
     batch = both.decide("store the stripe key in vault", Q)
     assert batch.decisions["sensitive"].answer == "yes" and batch.usage["escalated"] == ["sensitive"]
+    # Jev's overruled answer is kept, so "how often is it right alone?" stays answerable.
+    assert batch.usage["first_opinion"]["sensitive"] == {"answer": "no", "confidence": 0.4}
 
 
 def test_a_confident_fast_answer_is_not():
