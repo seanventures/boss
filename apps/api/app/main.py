@@ -21316,6 +21316,12 @@ def list_delivery_custom_steps(project_id: str) -> dict:
     }
 
 
+def _delivery_workflow_actor(payload: Optional[dict] = None, actor: Optional[str] = None) -> str:
+    """Attribute console workflow writes to the authenticated project member."""
+    claimed = actor if actor is not None else (payload or {}).get("actor")
+    return str(current_api_principal.get() or claimed or "executive_console").strip()
+
+
 @app.post("/v1/delivery-workflows/custom-steps")
 def create_delivery_custom_step(payload: dict) -> dict:
     """Define a step. The risk tier is NOT accepted from the caller — it is resolved from
@@ -21325,8 +21331,10 @@ def create_delivery_custom_step(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    actor = _delivery_workflow_actor(payload)
     try:
         with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_manage")
             return custom_steps.create(
                 connection,
                 project_id=project_id,
@@ -21340,7 +21348,7 @@ def create_delivery_custom_step(payload: dict) -> dict:
                 knowledge=str(payload.get("knowledge") or ""),
                 produces=payload.get("produces"),
                 step_key=payload.get("step_key") or None,
-                actor=str(payload.get("actor") or "operator"),
+                actor=actor,
             )
     except custom_steps.CustomStepError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -21360,6 +21368,7 @@ def update_delivery_custom_step(step_key: str, payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    actor = _delivery_workflow_actor(payload)
     # Only the fields actually sent are applied; anything absent keeps its current value, which
     # is what makes a rename safe to send on its own.
     optional = {
@@ -21370,19 +21379,22 @@ def update_delivery_custom_step(step_key: str, payload: dict) -> dict:
     }
     try:
         with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_manage")
             return custom_steps.update(
                 connection, project_id=project_id, step_key=step_key,
-                actor=str(payload.get("actor") or "operator"), **optional)
+                actor=actor, **optional)
     except custom_steps.CustomStepError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.delete("/v1/delivery-workflows/custom-steps/{step_key}")
-def delete_delivery_custom_step(step_key: str, project_id: str, actor: str = "operator") -> dict:
+def delete_delivery_custom_step(step_key: str, project_id: str, actor: Optional[str] = None) -> dict:
     from boss_engine.services import workflow_custom_steps as custom_steps
 
     with begin(engine) as connection:
-        removed = custom_steps.delete(connection, project_id, step_key, actor)
+        resolved_actor = _delivery_workflow_actor(actor=actor)
+        require_project_actor(connection, project_id, resolved_actor, "workflow_manage")
+        removed = custom_steps.delete(connection, project_id, step_key, resolved_actor)
     if not removed:
         raise HTTPException(status_code=404, detail=f"no custom step '{step_key}'")
     return {"deleted": step_key}
@@ -21409,7 +21421,9 @@ def install_delivery_catalogue(payload: dict) -> dict:
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
-        return seed(connection, project_id, actor=str(payload.get("actor") or "boss"))
+        actor = _delivery_workflow_actor(payload)
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        return seed(connection, project_id, actor=actor)
 
 
 @app.post("/v1/delivery-workflows/apply")
@@ -21443,7 +21457,7 @@ def apply_delivery_workflow(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     workflow_key = str(payload.get("workflow_key") or "").strip()
     work_class = str(payload.get("work_class") or "").strip()
-    actor = str(payload.get("actor") or "operator").strip()
+    actor = _delivery_workflow_actor(payload)
     if not project_id or not workflow_key or not work_class:
         raise HTTPException(
             status_code=400,
@@ -21455,6 +21469,7 @@ def apply_delivery_workflow(payload: dict) -> dict:
             detail=f"work_class must be one of: {', '.join(WORK_CLASSES)}",
         )
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         row = connection.execute(
             text(
                 # `name` too: the confirmation this returns is read by a person standing in
@@ -21981,11 +21996,12 @@ def create_delivery_workflow(payload: dict) -> dict:
     """
     project_id = str(payload.get("project_id") or "").strip()
     name = str(payload.get("name") or "").strip()
-    actor = str(payload.get("actor") or "operator").strip()
+    actor = _delivery_workflow_actor(payload)
     if not project_id or not name:
         raise HTTPException(status_code=400, detail="project_id and name are required")
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         key = _free_workflow_key(connection, project_id, name)
         definition = workflow_runtime.create_definition(
             connection, project_id=project_id, workflow_key=key, name=name,
@@ -22006,13 +22022,14 @@ def fork_delivery_workflow(payload: dict) -> dict:
     source_key = str(payload.get("workflow_key") or "").strip()
     new_key = str(payload.get("new_key") or "").strip()
     new_name = str(payload.get("new_name") or "").strip()
-    actor = str(payload.get("actor") or "operator").strip()
+    actor = _delivery_workflow_actor(payload)
     if not project_id or not source_key:
         raise HTTPException(
             status_code=400, detail="project_id and workflow_key are required"
         )
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         # THE VERSION THAT RUNS, not the highest number. After a revert those differ, and
         # forking the abandoned spec makes "reset to the standard" restore the one the
         # operator just replaced.
@@ -22062,12 +22079,13 @@ def save_delivery_workflow(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     definition_id = str(payload.get("definition_id") or "").strip()
     spec = payload.get("spec")
-    actor = str(payload.get("actor") or "operator").strip()
+    actor = _delivery_workflow_actor(payload)
     if not project_id or not definition_id or not isinstance(spec, dict):
         raise HTTPException(
             status_code=400, detail="project_id, definition_id and spec are required"
         )
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         try:
             definition = workflow_runtime.require_namespace(
                 connection, project_id, definition_id, workflow_runtime.PRODUCT_NAMESPACE
@@ -22118,7 +22136,7 @@ def delete_delivery_workflow_run(run_id: str, project_id: str,
 
 @app.delete("/v1/delivery-workflows/{definition_id}")
 def delete_delivery_workflow(definition_id: str, project_id: str,
-                             actor: str = "operator") -> dict:
+                             actor: Optional[str] = None) -> dict:
     """Remove one of the customer's own workflows.
 
     Without this the picker only grows: every fork, import and mistake stays forever, and a
@@ -22129,6 +22147,8 @@ def delete_delivery_workflow(definition_id: str, project_id: str,
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
+        actor = _delivery_workflow_actor(actor=actor)
+        require_project_actor(connection, project_id, actor, "workflow_manage")
         try:
             return workflow_runtime.delete_definition(
                 connection, project_id, definition_id, actor)
@@ -22155,6 +22175,8 @@ def retry_delivery_step(run_id: str, payload: dict) -> dict:
     if not project_id or not step_id:
         raise HTTPException(status_code=400, detail="project_id and step_id are required")
     with begin(engine) as connection:
+        actor = _delivery_workflow_actor(payload)
+        require_project_actor(connection, project_id, actor, "workflow_execute")
         row = connection.execute(
             text("SELECT id, status FROM workflow_step_runs "
                  "WHERE workflow_run_id=:r AND project_id=:p AND step_id=:s "
@@ -22197,6 +22219,8 @@ def recheck_delivery_run(run_id: str, payload: dict) -> dict:
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
+        actor = _delivery_workflow_actor(payload)
+        require_project_actor(connection, project_id, actor, "workflow_execute")
         return recheck_run(connection, project_id=project_id, run_id=run_id,
                            requeue=bool(payload.get("requeue", True)))
 
@@ -22217,11 +22241,13 @@ def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     host_id = str(payload.get("host_id") or "").strip()
     environment = str(payload.get("environment") or "staging").strip()
-    actor = str(payload.get("actor") or "operator").strip()
+    actor = _delivery_workflow_actor(payload)
     if not project_id or not host_id:
         raise HTTPException(status_code=400, detail="project_id and host_id are required")
 
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
+        require_project_actor(connection, project_id, actor, "providerops_manage")
         run = connection.execute(
             text("SELECT input FROM workflow_runs WHERE id=:r AND project_id=:p"),
             {"r": run_id, "p": project_id},
@@ -22234,8 +22260,9 @@ def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
         repo = str(run_input.get("repository") or "").strip()
         if code_task_run_id and not repo:
             repo = connection.execute(
-                text("SELECT spec->>'repo' FROM code_task_runs WHERE id=:r"),
-                {"r": code_task_run_id},
+                text("SELECT spec->>'repo' FROM code_task_runs "
+                     "WHERE id=:r AND project_id=:p"),
+                {"r": code_task_run_id, "p": project_id},
             ).scalar() or ""
         if not app_name:
             raise HTTPException(status_code=422,
@@ -22410,6 +22437,23 @@ def set_delivery_run_input(run_id: str, payload: dict) -> dict:
             status_code=400,
             detail=f"nothing to set; allowed: {', '.join(sorted(ALLOWED))}")
     with begin(engine) as connection:
+        actor = _delivery_workflow_actor(payload)
+        require_project_actor(connection, project_id, actor, "workflow_execute")
+        if "target_id" in clean or "environment" in clean:
+            require_project_actor(connection, project_id, actor, "providerops_manage")
+        if "target_id" in clean:
+            target = connection.execute(
+                text("SELECT environment FROM deployment_targets "
+                     "WHERE id=:id AND project_id=:project_id"),
+                {"id": clean["target_id"], "project_id": project_id},
+            ).mappings().first()
+            if target is None:
+                raise HTTPException(status_code=404, detail="deployment target not found")
+            if "environment" in clean and clean["environment"] != target["environment"]:
+                raise HTTPException(
+                    status_code=422,
+                    detail="environment does not match deployment target",
+                )
         updated = connection.execute(
             text("UPDATE workflow_runs SET input = COALESCE(input,'{}'::jsonb) "
                  "|| CAST(:v AS JSONB), updated_at=now() "
@@ -22427,7 +22471,11 @@ def start_delivery_workflow(payload: dict) -> dict:
     project_id = str(payload.get("project_id") or "").strip()
     work_class = str(payload.get("work_class") or "").strip()
     workflow_key = str(payload.get("workflow_key") or "").strip()
-    actor = str(payload.get("actor") or "operator").strip()
+    actor = _delivery_workflow_actor(payload)
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
     # ADOPTION IS NOT SOMETHING A CALLER GETS TO ASSERT.
     #
@@ -22547,6 +22595,7 @@ def start_delivery_workflow(payload: dict) -> dict:
             raise HTTPException(status_code=409, detail=why_no_sample(str(wanted or "")))
         run_input = {**chosen, **run_input}
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
         version_id = None
         if workflow_key:
             # THE VERSION THAT RUNS. version DESC is the abandoned spec after a revert:
@@ -22610,6 +22659,7 @@ def run_delivery_capabilities(payload: dict) -> dict:
     from boss_engine.context import EngineContext
     from boss_engine.services import workflow_capability_runner
 
+    require_worker_principal()
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")

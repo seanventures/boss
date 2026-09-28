@@ -94,6 +94,12 @@ authentication is on. Manual documentation update enqueue and execution require
 `github_manage` in the specified project before they can create a GitHub pull
 request; execution additionally requires the configured worker principal.
 
+Delivery workflow authoring requires `workflow_manage`; starting, retrying, and
+changing a run requires `workflow_execute`. Choosing or changing a deployment
+target also requires `providerops_manage` and a target in the same project.
+The capability sweep requires the configured worker principal; the runner claims
+each ready step with a lease before execution.
+
 Live domain grouping is also returned by the catalog endpoint (source of truth for agents).
 
 ---
