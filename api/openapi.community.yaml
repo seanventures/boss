@@ -3490,7 +3490,7 @@ paths:
   /v1/investigations/{investigation_id}/db:
     post:
       summary: Investigation Db Endpoint
-      description: SQL for an investigation — SELECT always, writes when it was opened to fix something.
+      description: Legacy SQL callback; project-scoped investigations cannot run raw SQL.
       operationId: post_v1_investigations_investigation_id_db_739bd453
       parameters:
       - name: investigation_id
