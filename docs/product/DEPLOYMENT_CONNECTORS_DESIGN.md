@@ -19,6 +19,8 @@ expected ResourceReceipt for those kinds. A policy-guarded release workflow is r
 restore this capability; Community GA must describe it as unavailable until then.
 The planner records a blocked deployment run and decision before build or host access, and the
 connector independently refuses execution if an older run reaches it.
+The older code-task SSH endpoint still provides a read-only dry run; Community actuation is
+blocked there and at the shared `deploy_ssh` helper before any host call.
 
 ---
 

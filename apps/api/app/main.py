@@ -8639,6 +8639,13 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=404, detail=str(exc))
     if mode == "dry_run":
         return {"plan": plan, "markdown": render_plan_markdown(plan)}
+    if mode != "ssh":
+        raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
+    if str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}:
+        raise HTTPException(status_code=409, detail=(
+            "Community SSH deployment is disabled until it uses an approved Resource Plane "
+            "ChangeSet, budget reservation, and ResourceReceipt."
+        ))
 
     # mode == 'ssh' — actuate on a real host (Phase 2/3). Requires an explicit host, the SSH key,
     # and the outward gate; otherwise return the plan + the reason it's held (never touch a host).

@@ -69,6 +69,7 @@ def test_transfer_shell_cmd_quotes_user_host_so_injection_cannot_reach_shell():
 
 def test_deploy_ssh_rejects_malicious_host_before_any_subprocess(monkeypatch):
     settings = SimpleNamespace(
+        boss_edition="enterprise_self_hosted",
         ssh_host_deploy_allowed=True,
         ssh_host_private_key="-----BEGIN KEY-----\nabc\n-----END KEY-----",
     )
@@ -93,6 +94,7 @@ def test_deploy_ssh_rejects_malicious_host_before_any_subprocess(monkeypatch):
 def test_docker_run_failure_rolls_back_previous_build(monkeypatch):
     """After docker rm -f removes the live container, a failed docker run must restore dist.prev."""
     settings = SimpleNamespace(
+        boss_edition="enterprise_self_hosted",
         ssh_host_deploy_allowed=True,
         ssh_host_private_key="-----BEGIN KEY-----\nabc\n-----END KEY-----",
         github_token="",

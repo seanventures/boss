@@ -1,5 +1,6 @@
 """Deployment target writes must use stored project authority before any host effect."""
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,20 @@ from boss_engine.services import delivery_pipeline, deploy_service, deployment_c
 
 
 HOME = "boss-dogfood"
+
+
+@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+def test_direct_community_ssh_helper_blocks_before_host_calls(monkeypatch, edition):
+    effects = []
+    monkeypatch.setattr(
+        deploy_service, "_ssh", lambda *_args, **_kwargs: effects.append("ssh")
+    )
+    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=True)
+    with pytest.raises(PermissionError, match="Community SSH deployment"):
+        deploy_service.deploy_ssh(
+            object(), settings, "crun_direct", host="203.0.113.19", user="root"
+        )
+    assert effects == []
 
 
 @pytest.mark.parametrize("edition", ["community", "oss", "local"])
@@ -54,6 +69,7 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
     suffix = uuid4().hex[:10]
     key = f"deploy-plan-key-{suffix}"
     target_id = f"deptgt_plan_{suffix}"
+    code_run_id = f"crun_direct_{suffix}"
     monkeypatch.setattr(api_main.settings, "boss_edition", edition)
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
     monkeypatch.setattr(api_main.settings, "api_keys", key)
@@ -68,6 +84,13 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
             {"id": target_id, "project_id": HOME,
              "app_name": f"plan-{suffix}",
              "resources": '[{"kind":"app_port","name":"3010"}]'},
+        )
+        connection.execute(
+            text("INSERT INTO code_task_runs "
+                 "(id, project_id, title, status, phase, spec) VALUES "
+                 "(:id, :project_id, 'Direct deploy gate', 'completed', 'done', "
+                 "'{\"owner\":\"example\",\"repo\":\"example\"}'::jsonb)"),
+            {"id": code_run_id, "project_id": HOME},
         )
     effects = []
     monkeypatch.setattr(
@@ -98,6 +121,19 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
         engine, api_main.settings, run["id"], actor="ceo"
     )
     assert replay["status"] == "blocked"
+    direct = client.post(
+        f"/v1/code-tasks/{code_run_id}/deploy",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"actor": "ceo", "mode": "ssh", "host": "203.0.113.17"},
+    )
+    assert direct.status_code == 409, direct.text
+    assert "Community SSH deployment" in direct.text
+    invalid_mode = client.post(
+        f"/v1/code-tasks/{code_run_id}/deploy",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"actor": "ceo", "mode": "surprise", "host": "203.0.113.17"},
+    )
+    assert invalid_mode.status_code == 422, invalid_mode.text
     assert effects == []
 
 

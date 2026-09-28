@@ -708,6 +708,11 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
+    if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
+        raise PermissionError(
+            "Community SSH deployment is disabled until it uses an approved Resource Plane "
+            "ChangeSet, budget reservation, and ResourceReceipt"
+        )
     if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
         raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
     _validate_ssh_target(host, user)
