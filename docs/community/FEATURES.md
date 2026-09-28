@@ -70,6 +70,7 @@ fallback when no trusted CA is available.
 | Browser / automated test evidence | ✅ |
 | Deployment target metadata and recorded history | ✅ |
 | SSH workload planning and deployment | ◐ Paused in Community until its governed effect and recovery path is complete. SSH installation and console tunnels remain available. |
+| Agent host shell and host-backed preview sandboxes | ◐ Paused in Community until host changes have approved, budgeted, receipted execution. Simulated preview records remain available. |
 | Managed elastic worker fleets | ✦ Cloud (planned) |
 
 ## GitHub

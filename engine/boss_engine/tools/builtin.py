@@ -6080,8 +6080,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "run_on_host",
         "Run ANY command on a registered deployment host over SSH — restart or delete "
         "containers, edit files, install packages, inspect anything. This changes the machine. "
-        "Use inspect_host when you only need to look. Requires BOSS_AGENT_HOST_SHELL; without "
-        "it this refuses and only the read-only verbs are available.",
+        "Use inspect_host when you only need to look. Unavailable in Community until "
+        "host effects use the governed Resource Plane. Other editions also require "
+        "BOSS_AGENT_HOST_SHELL.",
         _obj({"host": {"type": "string", "description": "host name, id or address"},
               "command": {"type": "string", "description": "the shell command to run"},
               "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
@@ -6108,6 +6109,14 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                                _ssh_key_file)
         from ..services.secret_backends import resolve_target_secret
 
+        edition = str(getattr(ctx.settings, "boss_edition", "community")).strip().lower()
+        if edition in {"community", "oss", "local"}:
+            return {
+                "ok": False,
+                "error": "Community host shell is disabled until commands use an approved "
+                         "ChangeSet, budget reservation, and ResourceReceipt.",
+                "note": "inspect_host remains available for supported read-only commands.",
+            }
         if not getattr(ctx.settings, "agent_host_shell", False):
             return {"ok": False,
                     "error": "host shell is disabled (BOSS_AGENT_HOST_SHELL is not set).",

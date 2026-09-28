@@ -100,6 +100,7 @@ def test_reserve_list_status_heartbeat_release_simulated(client, engine):
 def test_reserve_without_host_fail_closed(client, monkeypatch):
     """Without simulate and without a host URL, reserve is 503 fail-closed."""
     settings = get_settings()
+    monkeypatch.setattr(settings, "boss_edition", "enterprise_self_hosted")
     monkeypatch.setattr(settings, "sandbox_agent_url", "", raising=False)
     # Ensure env simulate is off.
     monkeypatch.delenv("BOSS_PREVIEW_SANDBOX_SIMULATE", raising=False)
@@ -155,6 +156,7 @@ def test_expired_rows_reaped_on_list(client, engine):
 def test_host_reserve_requires_project_grant_before_command_or_env_forwarding(
     client, engine, monkeypatch, authenticated_preview_keys,
 ):
+    monkeypatch.setattr(get_settings(), "boss_edition", "enterprise_self_hosted")
     calls = []
 
     def fake_host_request(_self, method, path, body=None, **_kwargs):
@@ -218,6 +220,7 @@ def test_host_reserve_requires_project_grant_before_command_or_env_forwarding(
 def test_read_and_lifecycle_are_bound_to_actual_sandbox_project(
     client, engine, monkeypatch, authenticated_preview_keys,
 ):
+    monkeypatch.setattr(get_settings(), "boss_edition", "enterprise_self_hosted")
     calls = []
 
     def fake_host_request(_self, method, path, body=None, **_kwargs):
@@ -314,3 +317,61 @@ def test_read_and_lifecycle_are_bound_to_actual_sandbox_project(
     ]
     assert all("test-secret-value" not in response.text
                for response in (heartbeat, released))
+
+
+@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+def test_community_host_preview_effects_stop_before_host_or_row(
+    client, engine, monkeypatch, authenticated_preview_keys, edition,
+):
+    monkeypatch.setattr(get_settings(), "boss_edition", edition)
+    monkeypatch.delenv("BOSS_PREVIEW_SANDBOX_SIMULATE", raising=False)
+    effects = []
+    monkeypatch.setattr(
+        PreviewSandboxService, "_host_request",
+        lambda *_args, **_kwargs: effects.append("host") or {},
+    )
+    app_id = f"community-preview-{uuid4().hex[:8]}"
+    body = {"project_id": PID, "app_id": app_id, "actor": ACTOR,
+            "run_cmd": "python3 -m http.server", "simulate": False}
+    denied = client.post(
+        "/v1/preview-sandboxes", headers=_auth("ceo-key"), json=body,
+    )
+    assert denied.status_code == 409, denied.text
+    with engine.begin() as connection:
+        count = connection.execute(
+            text("SELECT count(*) FROM preview_sandboxes WHERE project_id=:p AND app_id=:a"),
+            {"p": PID, "a": app_id},
+        ).scalar_one()
+        assert count == 0
+        with pytest.raises(PermissionError, match="Community host-backed preview"):
+            PreviewSandboxService(get_settings()).reserve(
+                connection, project_id=PID, app_id=app_id, actor=ACTOR,
+                simulate=False,
+            )
+    assert effects == []
+
+    simulated = client.post(
+        "/v1/preview-sandboxes", headers=_auth("ceo-key"),
+        json={**body, "simulate": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    preview_id = simulated.json()["id"]
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE preview_sandboxes SET simulate=false WHERE id=:id"),
+            {"id": preview_id},
+        )
+    path = f"/v1/preview-sandboxes/{preview_id}"
+    for effect in ("heartbeat", "release"):
+        response = client.post(
+            f"{path}/{effect}", headers=_auth("ceo-key"),
+            json={"project_id": PID, "actor": ACTOR},
+        )
+        assert response.status_code == 409, response.text
+    with engine.begin() as connection:
+        status = connection.execute(
+            text("SELECT status FROM preview_sandboxes WHERE id=:id"),
+            {"id": preview_id},
+        ).scalar_one()
+    assert status == "running"
+    assert effects == []

@@ -22,8 +22,9 @@ from boss_engine.tools import build_default_registry, build_discuss_read_registr
 
 
 class _Settings:
-    def __init__(self, shell: bool):
+    def __init__(self, shell: bool, edition: str = "enterprise_self_hosted"):
         self.agent_host_shell = shell
+        self.boss_edition = edition
 
 
 class _Ctx:
@@ -32,8 +33,8 @@ class _Ctx:
 
     durable_workspace_configured = True
 
-    def __init__(self, shell: bool = True):
-        self.settings = _Settings(shell)
+    def __init__(self, shell: bool = True, edition: str = "enterprise_self_hosted"):
+        self.settings = _Settings(shell, edition)
 
     def begin(self):
         raise AssertionError(
@@ -69,6 +70,14 @@ class TestItWillNotRunOnTheModelsSayS0:
 
 
 class TestTheFlagIsTheOuterGate:
+    def test_community_refuses_even_with_flag_and_confirmation(self):
+        out = build_default_registry().invoke(
+            "run_on_host", _Ctx(True, "community"), project_id="p", actor="ceo",
+            args={"host": "h", "command": "docker ps"}, operator_confirmed=True,
+        )
+        assert out["ok"] is False
+        assert "Community host shell" in out["error"]
+
     def test_disabled_refuses_even_with_confirmation(self):
         out = build_default_registry().invoke(
             "run_on_host", _Ctx(False), project_id="p", actor="ceo",

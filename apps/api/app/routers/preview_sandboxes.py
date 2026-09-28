@@ -87,6 +87,8 @@ def reserve_preview_sandbox(payload: ReserveRequest) -> dict[str, Any]:
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
         # Host missing / unreachable — fail closed.
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -152,6 +154,8 @@ def heartbeat_preview_sandbox(
         detail = str(error)
         code = 404 if "not found" in detail else 422
         raise HTTPException(status_code=code, detail=detail) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
@@ -178,3 +182,5 @@ def release_preview_sandbox(
             )
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error

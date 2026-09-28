@@ -97,6 +97,14 @@ class PreviewSandboxService:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def _require_host_effect_allowed(self) -> None:
+        edition = str(getattr(self.settings, "boss_edition", "community")).strip().lower()
+        if edition in {"community", "oss", "local"}:
+            raise PermissionError(
+                "Community host-backed preview sandboxes are disabled until host "
+                "changes use an approved ChangeSet, budget reservation, and ResourceReceipt."
+            )
+
     def _host_base(self) -> str:
         return (self.settings.sandbox_agent_url or "").rstrip("/")
 
@@ -121,6 +129,8 @@ class PreviewSandboxService:
         *,
         timeout: float = 15.0,
     ) -> dict[str, Any]:
+        if method.upper() not in {"GET", "HEAD"}:
+            self._require_host_effect_allowed()
         base = self._host_base()
         if not base:
             raise RuntimeError(
@@ -164,6 +174,9 @@ class PreviewSandboxService:
         simulate: bool = False,
     ) -> dict[str, Any]:
         """Create or refresh a durable preview sandbox reservation."""
+        use_sim = self._simulate_enabled(simulate)
+        if not use_sim:
+            self._require_host_effect_allowed()
         _ensure_table(connection)
         project_id = (project_id or "").strip()
         app_id = (app_id or "").strip()
@@ -171,7 +184,6 @@ class PreviewSandboxService:
         if not project_id or not app_id or not actor:
             raise ValueError("project_id, app_id, and actor are required.")
         ttl_seconds = max(60, min(int(ttl_seconds), 7 * 24 * 3600))
-        use_sim = self._simulate_enabled(simulate)
         now = now_utc()
         expires = now + timedelta(seconds=ttl_seconds)
         preview_id = make_id("psb")
@@ -455,6 +467,7 @@ class PreviewSandboxService:
         expires = now + timedelta(seconds=ttl)
 
         if not row["simulate"]:
+            self._require_host_effect_allowed()
             app_id = row["app_id"]
             try:
                 self._host_request(
@@ -524,6 +537,7 @@ class PreviewSandboxService:
             return _serialize(row)
 
         if not row["simulate"]:
+            self._require_host_effect_allowed()
             try:
                 self._host_request(
                     "DELETE", f"/v1/sandbox/apps/{row['app_id']}"
