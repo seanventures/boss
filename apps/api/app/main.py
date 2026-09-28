@@ -15033,6 +15033,12 @@ def setup_model_endpoint(payload: open_bodies.ModelSetupBody) -> dict:
         raise HTTPException(status_code=400,
                             detail=f"unknown provider {provider!r}; "
                                    f"one of: {', '.join(sorted(PROVIDERS))}")
+    if spec.get("kind") == "decision":
+        # Jev cannot write code; its separate key path is paused by BOSS-451.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{spec['label']} decides, it does not build. BOSS-451 pauses "
+                    "decision-model key proof until model spend has durable controls."))
     if spec.get("kind") == "subscription":
         # NOT A REFUSAL, A REDIRECT. BOSS's own policy is that a subscription is authenticated
         # through its provider's login, never by a pasted credential — so the wizard says where

@@ -303,8 +303,9 @@ describe("choosing a model per role", () => {
     // to change a model would never think to look. The moment the question arises is straight
     // after connecting one.
     const SETUP = codeOnly("app/setup-ui.tsx");
-    expect(SETUP).toContain("SettingsKnobs");
-    expect(SETUP).toContain('only="choice"');
+    // A table since the stacked cards were "very difficult to go through" — one row per job,
+    // engine and model side by side. Still in Setup, beside the step that connects a model.
+    expect(SETUP).toContain("<RoleTable projectId={projectId} actor={actor} />");
     expect(SETUP).toContain("setup-role-models");
   });
 

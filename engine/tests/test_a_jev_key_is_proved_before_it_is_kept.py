@@ -73,3 +73,10 @@ def test_the_backend_knob_accepts_only_the_two_it_knows():
     assert project_settings.coerce("decision_backend", "TypeSafe") == "typesafe"
     with pytest.raises(ValueError):
         project_settings.coerce("decision_backend", "gpt")
+
+
+def test_jev_is_offered_where_keys_are_pasted_but_never_as_a_model_to_build_with():
+    from boss_engine.services.setup_service import provider_catalogue
+
+    jev = next(p for p in provider_catalogue() if p["provider"] == "typesafe")
+    assert jev["kind"] == "decision" and "decisions only" in jev["label"]

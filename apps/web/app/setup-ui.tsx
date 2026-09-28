@@ -16,7 +16,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
-import { SettingsKnobs } from "./settings-knobs-ui";
+import { RoleTable } from "./settings-knobs-ui";
 import { HelpTip } from "./help-tip";
 
 type Step = { id: string; title: string; done: boolean; detail: string;
@@ -533,6 +533,8 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
 
   const chosen = providers.find((p) => p.provider === provider);
   const subscription = chosen?.kind === "subscription";
+  // TypeSafe stays visible where people look for model keys; BOSS-451 holds its key proof.
+  const decisionKey = chosen?.kind === "decision";
 
   // ASK THE MACHINE, DO NOT ASK THE OPERATOR. A subscription is an OAuth session the CLI
   // holds; there is no credential to type, so the only honest question is whether the CLI is
@@ -674,7 +676,13 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
             ))}
           </select>
         </label>
-        {subscription ? null : (
+        {decisionKey ? (
+          <p className="detail" data-testid="setup-decision-key-hold">
+            TypeSafe Jev key setup is paused while BOSS adds budget and receipt tracking for
+            its live key proof. Your existing key is retained; new keys cannot be checked or
+            saved yet.
+          </p>
+        ) : subscription ? null : (
           <>
             <label className="setup-field">
               <span>API key</span>
@@ -864,7 +872,7 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
           )}
         </div>
       ) : null}
-      {chosen?.key_url ? (
+      {chosen?.key_url && !decisionKey ? (
         <p className="detail">
           Keys live at <a href={chosen.key_url} target="_blank" rel="noreferrer">{chosen.key_url}</a>.
         </p>
@@ -1005,7 +1013,7 @@ function RoleModels({ projectId, actor }: { projectId: string; actor: string }) 
           <p className="detail">Saved per project; applies on the next run.</p>
         </div>
       </div>
-      <SettingsKnobs projectId={projectId} actor={actor} only="choice" />
+      <RoleTable projectId={projectId} actor={actor} />
     </article>
   );
 }
@@ -1035,13 +1043,13 @@ function DecisionModel({ projectId }: { projectId: string }) {
 
   const configured = status?.configured_backend === "typesafe"
     ? `TypeSafe Jev (${status.typesafe_model}), with Claude as the second opinion`
-    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} on your subscription`;
+    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} where installed, or the configured API model on the worker`;
 
   return (
     <article className="stack-card" data-testid="setup-decision-model">
       <div className="section-head">
         <div>
-          <h2 className="eyebrow">Decision model</h2>
+          <h2 className="eyebrow">TypeSafe Jev decision model (paused)</h2>
           <p className="detail" data-testid="decision-model-hold">
             Automatic choice steps in workflows are paused while BOSS adds budget, lease,
             and receipt tracking for every model call. Existing steps stop with a recorded

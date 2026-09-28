@@ -60,7 +60,7 @@ describe("connecting a model", () => {
 
   it("a subscription gets an explanation, not a key box that would be rejected", () => {
     expect(UI).toContain('data-testid="setup-model-subscription"');
-    expect(UI).toContain("{subscription ? null : (");
+    expect(UI).toContain(") : subscription ? null : (");
   });
 
   it("and it describes what actually happens, not a flow that does not exist", () => {
