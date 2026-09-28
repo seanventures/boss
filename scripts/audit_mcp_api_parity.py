@@ -17,7 +17,8 @@ import sys
 import warnings
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "docs/community/mcp-api-capability-matrix.json"
+DEFAULT_OUTPUT = ROOT / "docs/operations/mcp-api-capability-matrix.private.json"
+COMMUNITY_OUTPUT = ROOT / "docs/community/mcp-api-capability-matrix.json"
 
 
 def mounted_rows(edition: str) -> list[dict]:
@@ -96,10 +97,27 @@ def build_matrix() -> dict:
     }
 
 
+def community_matrix(rows: list[dict]) -> dict:
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = row["mcp_status"]
+        counts[status] = counts.get(status, 0) + 1
+    return {
+        "version": 1,
+        "source": "mounted Community FastAPI app.openapi()",
+        "canonical_key": "method + path",
+        "edition": "community",
+        "operation_count": len(rows),
+        "counts": dict(sorted(counts.items())),
+        "operations": rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dump-edition", choices=("community", "enterprise"))
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--community-output", type=Path, default=COMMUNITY_OUTPUT)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-community", action="store_true",
                         help="Verify only mounted Community rows against the dual-edition matrix")
@@ -108,31 +126,33 @@ def main() -> int:
         print(json.dumps(mounted_rows(args.dump_edition), separators=(",", ":")))
         return 0
     if args.check_community:
-        if not args.output.is_file():
-            print(f"MCP API capability matrix is missing: {args.output}", file=sys.stderr)
+        if not args.community_output.is_file():
+            print(f"MCP API capability matrix is missing: {args.community_output}", file=sys.stderr)
             return 1
-        recorded = json.loads(args.output.read_text())
-        community_rows = mounted_rows("community")
-        recorded_rows = [row for row in recorded.get("operations", [])
-                         if row.get("edition") == "community_and_paid"]
-        if (len(community_rows) != recorded.get("community_operation_count")
-                or len(recorded_rows) != len(community_rows) or any(
-            {key: value for key, value in row.items() if key != "edition"} != expected
-            for row, expected in zip(recorded_rows, community_rows, strict=True)
-        )):
+        expected = json.dumps(community_matrix(mounted_rows("community")), indent=2) + "\n"
+        if args.community_output.read_text() != expected:
             print("MCP Community API capability matrix is stale", file=sys.stderr)
             return 1
-        print(f"MCP API parity: {len(community_rows)} Community operations accounted for")
+        print("MCP API parity: Community mounted operations accounted for")
         return 0
     matrix = build_matrix()
     rendered = json.dumps(matrix, indent=2, sort_keys=False) + "\n"
+    community_rows = [
+        {key: value for key, value in row.items() if key != "edition"}
+        for row in matrix["operations"] if row["edition"] == "community_and_paid"
+    ]
+    community_rendered = json.dumps(community_matrix(community_rows), indent=2) + "\n"
     if args.check:
-        if not args.output.is_file() or args.output.read_text() != rendered:
-            print(f"MCP API capability matrix is stale: {args.output}", file=sys.stderr)
+        if (not args.output.is_file() or args.output.read_text() != rendered
+                or not args.community_output.is_file()
+                or args.community_output.read_text() != community_rendered):
+            print("MCP API capability matrices are stale", file=sys.stderr)
             return 1
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered)
+        args.community_output.parent.mkdir(parents=True, exist_ok=True)
+        args.community_output.write_text(community_rendered)
     print(
         f"MCP API parity: {matrix['community_operation_count']} Community, "
         f"{matrix['enterprise_operation_count']} Enterprise operations accounted for"
