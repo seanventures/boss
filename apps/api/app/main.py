@@ -9860,6 +9860,19 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
                     "meeting_run_id": (existing[0].get("meeting_run_id")
                                        if existing else None),
                     "note": "this outcome was already promoted; returning the existing meeting"}
+        reservation = budget.reserve(
+            connection, project_id, "model", settings.plan_budget_usd_micros * 4,
+            "PRD meeting promoted from Discovery.", 120,
+        )
+        if reservation.get("status") != "reserved":
+            # Returning a response commits the governor's denial decision and event.
+            # Raising inside this transaction would silently roll both back.
+            return JSONResponse(
+                status_code=409,
+                content={"detail": reservation.get("message") or "Meeting budget denied",
+                         "decision_id": reservation.get("decision_id")},
+            )
+        reservation_id = reservation["reservation_id"]
         task = intake.create_task(
             connection, project_id=project_id,
             title=title, description=directive,
@@ -9869,13 +9882,6 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
             required_artifacts=["meeting_minutes"], data_boundary="internal",
         )
         task_id = task["task_id"]
-        reservation = budget.reserve(
-            connection, project_id, "model", settings.plan_budget_usd_micros * 4,
-            "PRD meeting promoted from Discovery.", 120,
-        )
-        if reservation.get("status") != "reserved":
-            raise HTTPException(status_code=409, detail=reservation.get("message") or "Meeting budget denied")
-        reservation_id = reservation["reservation_id"]
         meeting_run_id = start_meeting_run(
             connection, project_id=project_id, task_id=task_id, directive=directive, url=None,
             constraints={}, role_keys=None, finalize_ctx={"reservation_id": reservation_id},

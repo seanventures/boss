@@ -67,3 +67,43 @@ def test_discovery_reads_and_effects_require_stored_project_authority(
             json={"outcome_index": 0}, headers=headers,
         ).status_code == 403
     assert starts == []
+
+
+def test_denied_discovery_promotion_records_policy_and_creates_no_work(
+    client, engine, monkeypatch,
+):
+    suffix = uuid4().hex[:10]
+    run_id = f"drun_budget_{suffix}"
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO discovery_runs "
+                 "(id, project_id, status, phase, title, seed, state) "
+                 "VALUES (:id, 'boss-dogfood', 'completed', 'done', 'Budget test', "
+                 "'test', CAST(:state AS JSONB))"),
+            {"id": run_id,
+             "state": json.dumps({"candidate_outcomes": [{"outcome": "Build a test"}]})},
+        )
+
+    def deny_reservation(connection, project_id, *args, **kwargs):
+        api_main.emit_event(
+            connection, project_id, "budget.reservation_denied", "budget_governor",
+            "discovery_run", run_id, {"reason": "test cap"},
+        )
+        return {"status": "denied", "message": "Budget cap exceeded"}
+
+    monkeypatch.setattr(api_main.budget, "reserve", deny_reservation)
+    response = client.post(
+        f"/v1/discoveries/{run_id}/promote", json={"outcome_index": 0},
+    )
+    assert response.status_code == 409, response.text
+    with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT count(*) FROM events WHERE entity_id=:id "
+                 "AND event_type='budget.reservation_denied'"),
+            {"id": run_id},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT count(*) FROM tasks "
+                 "WHERE inputs->>'discovery_run_id'=:id"),
+            {"id": run_id},
+        ).scalar_one() == 0
