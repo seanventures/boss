@@ -15,6 +15,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, text
 
+from boss_engine.config import Settings
 from boss_engine.services import workflow_capability_runner as runner
 from boss_engine.services import workflow_custom_steps as custom_steps
 from boss_engine.services import workflows
@@ -284,7 +285,10 @@ def test_a_step_bound_to_a_disabled_skill_fails_closed(eng, project):
 class Ctx:
     def __init__(self, engine):
         self._engine = engine
-        self.settings = None
+        # The grant resolver constructs the entitlement broker with this context's settings.
+        # Passing None makes its fail-closed lookup return no spec, so a mocked skill invocation
+        # can appear to succeed without ever exercising the caller grant under test.
+        self.settings = Settings()
 
     def begin(self):
         return self._engine.begin()
