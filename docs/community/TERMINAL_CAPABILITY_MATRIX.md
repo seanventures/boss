@@ -10,11 +10,11 @@ currently running edition and image.
 
 The terminal fetches `/v1/meta/api-catalog` and `/openapi.json` from the same
 API origin as its ordinary requests. `/projects` lists projects returned by the
-API key. `/ops` lists domains and searches their operations, with `/ops *
---page N` providing complete paged discovery. `/describe` shows each
-operation's method, path, parameters, typed body fields, and an example with
-required fields. `/op` accepts a stable
-method-and-path operation ID and JSON `path`, `query`, and `body` arguments.
+API under its current authentication settings. `/ops` lists domains and
+searches their operations. `/ops * --page N` provides complete paged discovery.
+`/describe` shows each operation's method, path, parameters, typed body fields,
+and an example with required fields. `/op` accepts a stable method-and-path
+operation ID and JSON `path`, `query`, and `body` arguments.
 It inserts the selected project into a typed JSON body when `project_id` is
 declared and omitted; an explicit value is preserved for API authorization.
 `/api METHOD /v1/path [JSON]` remains the fallback for a mounted route missing

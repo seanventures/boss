@@ -33,8 +33,8 @@ selected project when the provided body omits that field. An explicit
 `project_id` is preserved, and the API validates authorization for that
 project. Other required body fields must still be supplied. `/describe` lists
 typed fields, choices, and nested required keys where the API schema provides
-them. `/project ID` also clears the prior
-Metatron conversation thread. The API checks access and policy on every call.
+them. `/project ID` also clears the prior Metatron conversation thread. The
+API checks access and policy on every call.
 
 ```text
 metatron> /ops
