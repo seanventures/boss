@@ -1,0 +1,7 @@
+[
+  {"name": "fastapi", "current_version": "0.115.12", "latest_version": "0.115.12"},
+  {"name": "uvicorn", "current_version": "0.34.3", "latest_version": "0.34.3"},
+  {"name": "starlette", "current_version": "0.40.0", "latest_version": "0.41.0"},
+  {"name": "pydantic", "current_version": "2.7.0", "latest_version": "2.9.2"},
+  {"name": "some-abandoned-lib", "current_version": "1.0.0", "latest_version": null}
+]
