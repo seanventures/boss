@@ -58,7 +58,7 @@ edited video out of there, both stopping for you.
 ## Running the setup script
 
 ```bash
-python3 examples/trend-to-content/setup.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY"
+python3 examples/trend-to-content/setup.py --api http://127.0.0.1:8000
 ```
 
 `--dry-run` first; safe to re-run.

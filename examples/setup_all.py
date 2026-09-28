@@ -81,7 +81,7 @@ def main() -> None:
     for name, what, needs in chosen:
         print(f"  ── {name} — {what}")
         command = [sys.executable, str(HERE / name / "setup.py"),
-                   "--api", args.api, "--key", args.key,
+                   "--api", args.api,
                    "--project", args.project, "--actor", args.actor]
         if args.no_agents:
             command.append("--no-agents")
@@ -90,7 +90,11 @@ def main() -> None:
         if args.schedule and name == "weekly-newsletter":
             command += ["--schedule", args.schedule]
 
-        result = subprocess.run(command, capture_output=True, text=True)
+        # A setup key belongs in the child environment, never in argv where a process
+        # listing on a shared machine can expose it while a slow API call runs.
+        child_env = os.environ.copy()
+        child_env["BOSS_API_KEY"] = args.key
+        result = subprocess.run(command, capture_output=True, text=True, env=child_env)
         if result.returncode == 0:
             for line in result.stdout.splitlines():
                 stripped = line.strip()

@@ -79,8 +79,7 @@ Without one, step 2 refuses with a message saying so rather than pretending to f
 
 ```bash
 python3 examples/meeting-to-tickets/setup.py \
-    --api  http://YOUR_HOST:8000 \
-    --key  "$BOSS_API_KEY" \
+    --api  http://127.0.0.1:8000 \
     --project YOUR_PROJECT \
     --actor   ceo
 ```

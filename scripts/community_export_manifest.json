@@ -43,6 +43,7 @@
     "scripts/tests/test_metatron_tui.py",
     "tools/",
     "docs/community/",
+    "examples/",
     "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md",
@@ -194,7 +195,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "96207d4954704b5297b4b1d227f83d65b74e7213e4aa6e1cf01cfbb4e9f39d57"
+    "sha256": "5fca923224bc070e870e6879c10a30424449c6e6c04a32e302566907802c2a0f"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",

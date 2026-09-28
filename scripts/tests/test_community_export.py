@@ -127,6 +127,19 @@ def test_public_issue_forms_are_exact_manifest_paths() -> None:
     ])
 
 
+def test_public_examples_are_included() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    assert "examples/" in manifest["include"]
+    for path in (
+        "examples/README.md",
+        "examples/_common.py",
+        "examples/setup_all.py",
+        "examples/weekly-newsletter/setup.py",
+    ):
+        assert export.matching_rule(path, manifest["include"])
+        assert not export.matching_rule(path, manifest["exclude"])
+
+
 def test_community_traceability_is_pinned_and_references_exported_files() -> None:
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
     export.validate_manifest(manifest)

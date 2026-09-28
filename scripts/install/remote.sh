@@ -585,12 +585,12 @@ EOS
 # For when you do want the shell variables — with the right key, which is the server's.
 cmd_env() {
   preflight
-  local key host
+  local key
   key="$(rshq "grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-")"
   [[ -n "$key" ]] || die "no BOSS_API_KEY in $DIR/.env on $HOST"
-  host="${HOST##*@}"
-  # Printed for `eval`, so it goes to stdout bare. It contains a secret; do not paste it about.
-  echo "export BOSS_API=http://${host}:${API_PORT}"
+  # The install binds its API to VM loopback. The laptop reaches it through `tunnel`,
+  # not over an unencrypted public port on the host.
+  echo "export BOSS_API=http://127.0.0.1:${API_PORT}"
   echo "export BOSS_API_KEY=${key}"
   # BOSS_PROJECT, NOT PROJECT. The example scripts read BOSS_PROJECT, so a bare `PROJECT`
   # exported nothing they look at — the output was correct and useless, which is worse than

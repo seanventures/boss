@@ -62,7 +62,8 @@ class Api:
             except json.JSONDecodeError:
                 return error.code, {"detail": raw}
         except urllib.error.URLError as error:
-            hint = ("       From your laptop the API is http://<host>:8000, not 127.0.0.1.")
+            hint = ("       For a VM install, start scripts/install/remote.sh tunnel "
+                    "and use http://127.0.0.1:8000 on your laptop.")
             if "CERTIFICATE_VERIFY" in str(error.reason):
                 # Say what it actually is. "cannot reach" sends somebody to check the server.
                 hint = ("       That is a certificate TRUST problem on this machine, not a\n"
@@ -107,19 +108,16 @@ HOW_TO_FIND_THE_KEY = """no API key.
   ON THE SERVER — run this there:
       grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2-
 
-  FROM YOUR LAPTOP, with BOSS on a server — this prints all three variables, ready to paste:
+  FROM YOUR LAPTOP, with BOSS on a server — start the SSH tunnel in another
+  terminal, then print the three export lines and paste them into this one:
+      scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key tunnel
       scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
-
-      Or apply them directly:
-      eval "$(scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env)"
 
   BOSS ON THIS MACHINE:
       grep '^BOSS_API_KEY=' .env | cut -d= -f2-
 
-  Then either export it:
-      export BOSS_API_KEY=<the value>
-  or pass it:
-      --key "<the value>"
+  Export it in BOSS_API_KEY. Avoid --key on the command line because arguments
+  can appear in process listings.
 
   The key is a secret. `env` prints it to your terminal, so do not paste that output
   into a chat or a ticket."""

@@ -65,10 +65,10 @@ success with nothing sent.
 
 ```bash
 # Build it
-python3 examples/weekly-newsletter/setup.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY"
+python3 examples/weekly-newsletter/setup.py --api http://127.0.0.1:8000
 
 # Build it AND have it arrive every Monday at 08:00 in your zone
-python3 examples/weekly-newsletter/setup.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY" \
+python3 examples/weekly-newsletter/setup.py --api http://127.0.0.1:8000 \
     --schedule Europe/London
 ```
 

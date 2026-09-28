@@ -107,16 +107,15 @@ because `drawtext` is not in the base filter set.
 
 ```bash
 python3 examples/video-workflow/setup.py \
-    --api  http://YOUR_HOST:8000 \
-    --key  "$BOSS_API_KEY" \
+    --api  http://127.0.0.1:8000 \
     --project YOUR_PROJECT \
     --actor   ceo
 ```
 
 | Parameter | What it is | Default |
 |---|---|---|
-| `--api` | Your BOSS API. From your laptop this is `http://<host>:8000`, **not** `127.0.0.1` | `http://127.0.0.1:8000` |
-| `--key` | `BOSS_API_KEY` from the install's `.env` | — (required) |
+| `--api` | Your BOSS API. On a remote VM, open the SSH tunnel described in [Examples](../README.md) first | `http://127.0.0.1:8000` |
+| `BOSS_API_KEY` | API key in your environment; keep it out of command arguments | required |
 | `--project` | Which project to build it in | `boss-dogfood` |
 | `--actor` | Who is doing this. Must be a principal your API key may act as — the API names the right one when it refuses | `ceo` |
 | `--no-agents` | Leave steps unassigned, so each runs as the workflow itself | off |

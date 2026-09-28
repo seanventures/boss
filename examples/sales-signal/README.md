@@ -60,7 +60,7 @@ says to write that rather than a generic email.
 ## Running the setup script
 
 ```bash
-python3 examples/sales-signal/setup.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY"
+python3 examples/sales-signal/setup.py --api http://127.0.0.1:8000
 ```
 
 Standard parameters — see [examples/README.md](../README.md). `--dry-run` first; safe to re-run.

@@ -32,6 +32,11 @@ Start in **Command Center** to submit a goal. Use **Approvals** for decisions an
 
 The console, [terminal and API](docs/community/TERMINAL_API.md), and MCP client use the same server-side permissions and audit trail. You can inspect or automate a task through any of them.
 
+For a guided start, [five example workflows](examples/README.md) show agents
+researching, preparing content, and handing external actions to a person for
+approval. The included role templates are definitions; nothing starts running
+when you install them.
+
 ## Keep it current
 
 From the installed checkout:

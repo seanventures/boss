@@ -21,38 +21,42 @@ examples/<name>/
 Every command below needs `BOSS_API_KEY`. It is generated when BOSS is installed and written to
 the install's `.env` — it is not shown again, so this is how to get it back.
 
-**BOSS on a server, and you are on your laptop** — this prints all three variables:
+**BOSS on a server, and you are on your laptop** — start an SSH tunnel in a
+separate terminal. The installer binds the API to the VM's loopback address.
+
+```bash
+scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key tunnel
+```
+
+In the terminal where you will run the examples, print the three export lines:
 
 ```bash
 scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
 ```
 
 ```
-export BOSS_API=http://YOUR_HOST:8000
+export BOSS_API=http://127.0.0.1:8000
 export BOSS_API_KEY=…
 export BOSS_PROJECT=boss-dogfood
 ```
 
-Paste those into your shell, or apply them in one step:
-
-```bash
-eval "$(scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env)"
-```
+Paste those lines into your shell while the tunnel is open. `env` prints a
+secret, so keep its output out of tickets and shared logs.
 
 **On the server itself:**
 
 ```bash
-grep '^BOSS_API_KEY=' /opt/boss/.env | cut -d= -f2-
+export BOSS_API_KEY="$(sed -n 's/^BOSS_API_KEY=//p' /opt/boss/.env)"
 ```
 
 **BOSS on this machine:**
 
 ```bash
-grep '^BOSS_API_KEY=' .env | cut -d= -f2-
+export BOSS_API_KEY="$(sed -n 's/^BOSS_API_KEY=//p' .env)"
 ```
 
-> The key is a secret and grants full API access. These commands print it to your terminal —
-> don't paste the output into a chat or a ticket. If it leaks, change `BOSS_API_KEY` in the
+> The key is a secret and grants full API access. Keep it in the environment,
+> not a `--key` argument or a ticket. If it leaks, change `BOSS_API_KEY` in the
 > install's `.env` and restart the API.
 
 Every script also prints this if you run it without a key.
@@ -62,7 +66,8 @@ Every script also prints this if you run it without a key.
 ## Install all of them at once
 
 ```bash
-python3 examples/setup_all.py --api http://YOUR_HOST:8000 --key "$BOSS_API_KEY"
+python3 examples/setup_all.py --dry-run
+python3 examples/setup_all.py
 ```
 
 | Option | What it does |
@@ -84,6 +89,11 @@ reused, not duplicated.
 ---
 
 ## Available
+
+The 34 YAML files in `packages/specpack/agents/` are **definitions** for common
+roles. They do not start an agent on install. The five workflows below show
+how to give agents specific work, skills, approvals, and schedules through the
+public API. Use `--dry-run` to inspect the changes before installing one.
 
 ### [video-workflow](video-workflow/) — edit a video and publish it
 
