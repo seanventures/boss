@@ -264,7 +264,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "8d4e509a85170125f725bfc95accacff4134d4bda0ab2447824b85eb04545ea1",
-    "output_sha256": "8eb89f24b7efd7d3290bb16f6caca9c322586cd41ce4ef6266c1c2ccb61ac368"
+    "source_sha256": "119415b9627e5308ca69abd9240d1078c30c6033397f7878d41cbaa4df1d52e2",
+    "output_sha256": "11a0a6b3ab57dd2dc5058c750253bf46db4322d1d28fd19e9da40fd4b8ddadb1"
   }
 }
