@@ -114,6 +114,14 @@ Goldeneye provides the platform values listed in `app.env.tmpl`. Before deploy,
 the operator must replace app-owned placeholders:
 
 - Required for production auth: `BOSS_API_KEYS`, `BOSS_API_KEY_PRINCIPALS`, `BOSS_API_KEY`, and `BOSS_WORKER_API_KEY`.
+- Required for Mission Control: independent, random `BOSS_CONSOLE_PASSWORD`
+  and `BOSS_CONSOLE_SESSION_SECRET` values of at least 32 characters each. The
+  web service refuses protected requests when either is missing or short. The
+  Goldeneye Compose profile fixes `BOSS_CONSOLE_PUBLIC_ORIGIN` to its tailnet
+  HTTPS hostname. Verify that Traefik overwrites incoming `Host`,
+  `X-Forwarded-Host`, and `X-Forwarded-Proto` and does not trust client-supplied
+  forwarding headers before redeploying. Follow `docs/community/CONSOLE_AUTH.md`
+  to check sign-in and mutation protection.
 - Required for real software-factory GitHub work: `BOSS_GITHUB_TOKEN` or the `BOSS_GITHUB_APP_*` values.
 - Required only when Account Connect is enabled: `AC_SERVICE_TOKEN` and, if not sharing `DATABASE_URL`, `AC_DATABASE_URL`.
 - Required only when provider writes are explicitly enabled: the relevant provider credentials such as `BOSS_DIGITALOCEAN_TOKEN`, `BOSS_CLOUDFLARE_API_TOKEN`, `BOSS_SUPABASE_ACCESS_TOKEN`, or `BOSS_SSH_HOST_PRIVATE_KEY`.

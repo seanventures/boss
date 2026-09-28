@@ -33,6 +33,9 @@ secrets:
     BOSS_API_KEY_PRINCIPALS: REPLACE_WITH_API_KEY_TO_MEMBER_MAPPING
     BOSS_API_KEY: REPLACE_WITH_WEB_API_KEY
     BOSS_WORKER_API_KEY: REPLACE_WITH_WORKER_API_KEY
+    # Keep empty until independently generated private values are provided.
+    BOSS_CONSOLE_PASSWORD: ""
+    BOSS_CONSOLE_SESSION_SECRET: ""
 
 safety:
   infraRealProvisionAllowed: false
@@ -67,6 +70,9 @@ api:
 web:
   replicas: 2
   publicApiUrl: http://boss-api.boss.svc.cluster.local:8000
+  # Set to the exact browser-facing HTTPS origin when exposing Mission Control.
+  # An empty origin rejects remote requests until the TLS ingress is configured.
+  publicOrigin: ""
   resources:
     requests:
       cpu: 250m

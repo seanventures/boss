@@ -86,6 +86,9 @@ services:
       BOSS_API_URL: ${BOSS_API_URL:-https://boss-api.local.sean.network}
       NEXT_PUBLIC_BOSS_PROJECT_ID: ${NEXT_PUBLIC_BOSS_PROJECT_ID:-boss-dogfood}
       BOSS_API_KEY: ${BOSS_API_KEY:-}
+      BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:?Set a unique 32+ character console password in .env}
+      BOSS_CONSOLE_SESSION_SECRET: ${BOSS_CONSOLE_SESSION_SECRET:?Set a unique 32+ character console session secret in .env}
+      BOSS_CONSOLE_PUBLIC_ORIGIN: https://boss.local.sean.network
     expose:
       - "3000"
     networks:

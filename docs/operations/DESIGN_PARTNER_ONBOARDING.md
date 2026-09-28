@@ -120,6 +120,11 @@ make dev
 `make dev` starts local Postgres (`infra/docker-compose.yml`), waits for it,
 then runs the web + API + worker via `pnpm dev`.
 
+Before the first run, copy `apps/web/.env.example` to the private
+`apps/web/.env.local` and set independent random values of at least 32
+characters for `BOSS_CONSOLE_PASSWORD` and `BOSS_CONSOLE_SESSION_SECRET`.
+Mission Control now requires this owner sign-in even on local development.
+
 Success:
 
 - Postgres accepts the seed

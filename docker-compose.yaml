@@ -78,6 +78,9 @@ services:
       BOSS_API_URL: ${BOSS_API_URL:-https://${BOSS_API_HOSTNAME:-boss-api.local.sean.network}}
       NEXT_PUBLIC_BOSS_PROJECT_ID: ${NEXT_PUBLIC_BOSS_PROJECT_ID:-boss-dogfood}
       BOSS_API_KEY: ${BOSS_API_KEY:-}
+      BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:?Set a unique 32+ character console password in app.env}
+      BOSS_CONSOLE_SESSION_SECRET: ${BOSS_CONSOLE_SESSION_SECRET:?Set a unique 32+ character console session secret in app.env}
+      BOSS_CONSOLE_PUBLIC_ORIGIN: https://${BOSS_ADMIN_HOSTNAME:-boss.local.sean.network}
     expose:
       - "3000"
     depends_on:

@@ -23,9 +23,17 @@ Before applying:
 
 1. Create a real Postgres database and set `DATABASE_URL` in a Secret named `boss-secrets`.
 2. Copy `base/secret-template.yaml`, replace every placeholder with real secret refs/values, and apply it yourself.
-3. Confirm the API keys in `BOSS_API_KEYS`, `BOSS_API_KEY`, and `BOSS_WORKER_API_KEY` line up with `BOSS_API_KEY_PRINCIPALS`.
-4. Run `make k8s-validate` and `make infra-validate`.
-5. Apply with your chosen overlay: `kubectl apply -k deploy/kubernetes/base`.
+3. Confirm the API keys in `BOSS_API_KEYS`, `BOSS_API_KEY`, and `BOSS_WORKER_API_KEY` line up with `BOSS_API_KEY_PRINCIPALS`. Add independent, random `BOSS_CONSOLE_PASSWORD` and `BOSS_CONSOLE_SESSION_SECRET` values of at least 32 characters each to `boss-secrets`.
+4. If exposing Mission Control remotely, set `BOSS_CONSOLE_PUBLIC_ORIGIN` in `base/configmap.yaml` to the exact browser-facing HTTPS origin. Configure a trusted TLS ingress to overwrite `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto` with that origin's host, host, and `https`. Keep the web and API services private; do not expose their HTTP ports directly.
+   The base NetworkPolicy allows BOSS pods only, so add a narrow overlay
+   permitting the trusted ingress controller to reach the web pod.
+5. Run `make k8s-validate` and `make infra-validate`.
+6. Apply with your chosen overlay: `kubectl apply -k deploy/kubernetes/base`.
+
+The empty default origin rejects remote requests. The web readiness probe expects
+an unauthenticated `/v1/projects` request to return 401; 503 keeps the pod out
+of service when the console credentials are missing or too short. Verify the
+deployed proxy and sign-in as described in `docs/community/CONSOLE_AUTH.md`.
 
 Do not apply production DNS, cloud provisioning credentials, model credentials, or provider write switches until the relevant BOSS policies, ChangeSets, approvals, BudgetReservations, and rollback plans are configured.
 

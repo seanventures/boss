@@ -14,6 +14,7 @@ data:
   BOSS_ARTIFACTS_DIR: {{ .Values.global.artifactPath | quote }}
   BOSS_CONTROL_PLANE_URL: {{ printf "http://%s-api.%s.svc.cluster.local:8000" (include "boss.fullname" .) .Release.Namespace | quote }}
   NEXT_PUBLIC_BOSS_API_URL: {{ .Values.web.publicApiUrl | quote }}
+  BOSS_CONSOLE_PUBLIC_ORIGIN: {{ .Values.web.publicOrigin | quote }}
   NEXT_PUBLIC_BOSS_PROJECT_ID: {{ .Values.project.projectId | quote }}
   BOSS_INFRA_REAL_PROVISION_ALLOWED: {{ .Values.safety.infraRealProvisionAllowed | quote }}
   BOSS_EMAIL_REAL_SEND_ALLOWED: {{ .Values.safety.emailRealSendAllowed | quote }}

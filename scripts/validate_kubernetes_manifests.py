@@ -102,6 +102,23 @@ def validate_kubernetes_base() -> list[dict[str, Any]]:
                 f"{name} must read runtime secrets from boss-secrets."
             )
 
+    web = by_key[("Deployment", "boss-web")]["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in web.get("env", [])}
+    for key in ("BOSS_CONSOLE_PASSWORD", "BOSS_CONSOLE_SESSION_SECRET"):
+        if env.get(key, {}).get("valueFrom", {}).get("secretKeyRef") != {
+            "name": "boss-secrets", "key": key,
+        }:
+            raise ManifestValidationError(f"boss-web must require {key} from boss-secrets.")
+    if env.get("BOSS_CONSOLE_PUBLIC_ORIGIN", {}).get("valueFrom", {}).get("configMapKeyRef") != {
+        "name": "boss-config", "key": "BOSS_CONSOLE_PUBLIC_ORIGIN",
+    }:
+        raise ManifestValidationError("boss-web must use the configured public origin.")
+    readiness = web["readinessProbe"].get("exec", {}).get("command", [])
+    if not any("/v1/projects" in part and "401" in part for part in readiness):
+        raise ManifestValidationError("boss-web readiness must verify the session gate.")
+    if "tcpSocket" not in web["livenessProbe"]:
+        raise ManifestValidationError("boss-web liveness must not probe a protected page.")
+
     worker = by_key[("Deployment", "boss-worker")]
     worker_container = worker["spec"]["template"]["spec"]["containers"][0]
     if not any("secretRef" in item for item in worker_container.get("envFrom", [])):
@@ -120,6 +137,8 @@ def validate_kubernetes_base() -> list[dict[str, Any]]:
     data = config.get("data") or {}
     if data.get("BOSS_REQUIRE_API_AUTH") != "true":
         raise ManifestValidationError("Kubernetes base must enable API auth by default.")
+    if "BOSS_CONSOLE_PUBLIC_ORIGIN" not in data:
+        raise ManifestValidationError("Kubernetes base must configure the console origin.")
     if data.get("BOSS_INFRA_REAL_PROVISION_ALLOWED") != "false":
         raise ManifestValidationError(
             "Kubernetes base must default provider writes off."
@@ -136,9 +155,15 @@ def validate_kubernetes_base() -> list[dict[str, Any]]:
         raise ManifestValidationError("secret-template.yaml must be a Secret.")
     if secret_template.get("metadata", {}).get("name") != "boss-secrets":
         raise ManifestValidationError("secret-template.yaml must define boss-secrets.")
-    for key in ("DATABASE_URL", "BOSS_API_KEYS", "BOSS_API_KEY", "BOSS_WORKER_API_KEY"):
+    for key in (
+        "DATABASE_URL", "BOSS_API_KEYS", "BOSS_API_KEY", "BOSS_WORKER_API_KEY",
+        "BOSS_CONSOLE_PASSWORD", "BOSS_CONSOLE_SESSION_SECRET",
+    ):
         if key not in (secret_template.get("stringData") or {}):
             raise ManifestValidationError(f"secret-template.yaml missing {key}.")
+    for key in ("BOSS_CONSOLE_PASSWORD", "BOSS_CONSOLE_SESSION_SECRET"):
+        if secret_template["stringData"][key]:
+            raise ManifestValidationError(f"secret-template.yaml must not ship a {key} default.")
 
     return resources
 
@@ -156,6 +181,14 @@ def validate_helm_chart() -> dict[str, Any]:
         raise ManifestValidationError(
             "Helm chart must not create placeholder secrets by default."
         )
+    if "publicOrigin" not in (values.get("web") or {}):
+        raise ManifestValidationError("Helm chart must configure the console origin.")
+    for key in ("BOSS_CONSOLE_PASSWORD", "BOSS_CONSOLE_SESSION_SECRET"):
+        example = ((values.get("secrets") or {}).get("stringData") or {})
+        if key not in example:
+            raise ManifestValidationError(f"Helm Secret example missing {key}.")
+        if example[key]:
+            raise ManifestValidationError(f"Helm chart must not ship a {key} default.")
     safety = values.get("safety") or {}
     for key in (
         "infraRealProvisionAllowed",
@@ -204,6 +237,17 @@ def validate_helm_chart() -> dict[str, Any]:
                 raise ManifestValidationError(
                     f"Helm template {template_name} missing required fragment: {fragment}"
                 )
+
+    web_template = (templates / "web.yaml").read_text(encoding="utf-8")
+    for fragment in (
+        "key: BOSS_CONSOLE_PASSWORD", "key: BOSS_CONSOLE_SESSION_SECRET",
+        "key: BOSS_CONSOLE_PUBLIC_ORIGIN", "/v1/projects", "r.status === 401",
+        "tcpSocket:",
+    ):
+        if fragment not in web_template:
+            raise ManifestValidationError(f"Helm web template missing {fragment}.")
+    if "BOSS_CONSOLE_PUBLIC_ORIGIN" not in (templates / "configmap.yaml").read_text(encoding="utf-8"):
+        raise ManifestValidationError("Helm ConfigMap must include the console origin.")
 
     network_policy_template = (templates / "networkpolicy.yaml").read_text(
         encoding="utf-8"

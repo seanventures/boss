@@ -39,16 +39,33 @@ spec:
                 name: {{ include "boss.fullname" . }}-config
             - secretRef:
                 name: {{ include "boss.secretName" . }}
+          env:
+            - name: BOSS_CONSOLE_PUBLIC_ORIGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "boss.fullname" . }}-config
+                  key: BOSS_CONSOLE_PUBLIC_ORIGIN
+            - name: BOSS_CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "boss.secretName" . }}
+                  key: BOSS_CONSOLE_PASSWORD
+            - name: BOSS_CONSOLE_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "boss.secretName" . }}
+                  key: BOSS_CONSOLE_SESSION_SECRET
           readinessProbe:
-            httpGet:
-              path: /
-              port: http
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:3000/v1/projects').then(r => process.exit(r.status === 401 ? 0 : 1)).catch(() => process.exit(1))"
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: http
             periodSeconds: 20
             timeoutSeconds: 3

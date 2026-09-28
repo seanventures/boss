@@ -15,6 +15,8 @@ data:
   BOSS_ARTIFACTS_DIR: "/var/lib/boss/artifacts"
   BOSS_CONTROL_PLANE_URL: "http://boss-api.boss.svc.cluster.local:8000"
   NEXT_PUBLIC_BOSS_API_URL: "http://boss-api.boss.svc.cluster.local:8000"
+  # Keep remote access closed until a TLS ingress and matching origin are configured.
+  BOSS_CONSOLE_PUBLIC_ORIGIN: ""
   NEXT_PUBLIC_BOSS_PROJECT_ID: "boss-dogfood"
   BOSS_INFRA_REAL_PROVISION_ALLOWED: "false"
   BOSS_EMAIL_REAL_SEND_ALLOWED: "false"
