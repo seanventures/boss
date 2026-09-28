@@ -50,7 +50,7 @@ WAVE3_OPERATIONS = {('post', '/v1/agent-runs/{run_id}/resume'): ['worker_id', 'j
  ('post', '/v1/pipeline-profiles'): ['project_id', 'name'],
  ('post', '/v1/pipeline-profiles/default'): ['project_id', 'name'],
  ('post', '/v1/previews/{preview_id}/approve'): ['actor'],
- ('post', '/v1/previews/{preview_id}/feedback'): [],
+ ('post', '/v1/previews/{preview_id}/feedback'): ['message'],
  ('post', '/v1/qa/benchmark-apps/{benchmark_id}/runs'): ['project_id'],
  ('post', '/v1/sandboxes/{sandbox_id}/exec'): [],
  ('post', '/v1/sandboxes/{sandbox_id}/preserve'): [],

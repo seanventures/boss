@@ -627,6 +627,8 @@ class CodeTaskSetupDeploymentBody(OpenRequestBody):
     auto_deploy: SkipValidation[bool | None] = None
 
 class PreviewFeedbackBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["message"]})
+
     message: SkipValidation[str | None] = None
     expected: SkipValidation[str | None] = None
     anchor: SkipValidation[str | None] = None

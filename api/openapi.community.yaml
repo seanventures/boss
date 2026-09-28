@@ -52182,6 +52182,8 @@ components:
           title: Screenshot Url
       additionalProperties: true
       type: object
+      required:
+      - message
       title: PreviewFeedbackBody
     PreviewFixtureRequest:
       properties:
