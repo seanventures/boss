@@ -33,6 +33,31 @@ if grep -qs '^BOSS_INFISICAL_TOKEN=' "$ENV_FILE"; then
   exit 0
 fi
 
+# The one-line installer may use sudo Docker when a newly installed daemon is
+# unavailable to the current user. Match that choice for bootstrap instead of
+# failing the optional secret store while the rest of Compose works.
+case "${BOSS_DOCKER_USE_SUDO:-auto}" in
+  1) USE_SUDO_DOCKER=1 ;;
+  0) USE_SUDO_DOCKER=0 ;;
+  auto)
+    if docker info >/dev/null 2>&1; then
+      USE_SUDO_DOCKER=0
+    elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+      USE_SUDO_DOCKER=1
+    else
+      echo "Docker daemon is unavailable to this user; use Docker access or noninteractive sudo." >&2
+      exit 1
+    fi ;;
+  *) echo "BOSS_DOCKER_USE_SUDO must be 0 or 1." >&2; exit 1 ;;
+esac
+docker_compose() {
+  if [ "$USE_SUDO_DOCKER" = 1 ]; then
+    sudo -n docker compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
 # Generated if you did not supply one, and WRITTEN DOWN. The first version withheld it and
 # said "reset it in the UI" — but a bundled instance has no SMTP, so password reset cannot
 # send mail and the admin account was simply unreachable. Nobody could log in, ever.
@@ -69,7 +94,7 @@ echo "bootstrapping ..." >&2
 # "this instance was already bootstrapped", which sent the operator to the web UI to fix a
 # problem that was one argument away.
 BOOT_ERR="$(mktemp)"
-BOOT="$(docker compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T "$SERVICE" \
+BOOT="$(docker_compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T "$SERVICE" \
   infisical bootstrap \
     --domain "http://127.0.0.1:8080" \
     --email "$ADMIN_EMAIL" \

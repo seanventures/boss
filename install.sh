@@ -716,6 +716,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
     $COMPOSE_PROFILES up -d --no-build infisical-redis infisical </dev/null
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
+       BOSS_DOCKER_USE_SUDO="$(if [[ "${DOCKER[0]}" == sudo ]]; then echo 1; else echo 0; fi)" \
        sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" </dev/null >/dev/null 2>&1; then
       # THE VALUES ARRIVE AFTER THE CONTAINERS DID.
       #
