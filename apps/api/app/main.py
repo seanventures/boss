@@ -4017,33 +4017,67 @@ def scim_delete_user(
         return Response(status_code=204)
 
 
+def catalog_read_scope() -> tuple[bool, str]:
+    """Return the authenticated member for catalog filtering.
+
+    Local deployments that explicitly disable transport auth keep the existing
+    all-project operator catalog. Authenticated requests must have a member
+    principal, even if the endpoint is called outside the auth middleware.
+    """
+    if not current_transport_authenticated.get():
+        return False, ""
+    principal = current_api_principal.get()
+    if not principal:
+        raise HTTPException(status_code=403, detail="Project member principal required.")
+    return True, principal
+
+
 @app.get("/v1/orgs")
 def list_orgs():
-    """Organizations onboarded to BOSS, each with its primary project and some
-    activity counts. Used by the org picker shown before entering the console."""
+    """Organizations with a project this caller may read, for the org picker."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    authenticated, principal = catalog_read_scope()
     with begin(engine) as connection:
         rows = connection.execute(
             text(
                 """
-                SELECT o.id AS org_id, o.name AS org_name, o.created_at,
-                       p.id AS project_id, p.name AS project_name, p.slug AS project_slug,
-                       w.name AS workspace_name,
-                       (SELECT count(*) FROM tasks t WHERE t.project_id = p.id) AS task_count,
-                       (SELECT count(*) FROM meetings m WHERE m.project_id = p.id) AS meeting_count
-                FROM orgs o
-                JOIN workspaces w ON w.org_id = o.id
-                JOIN projects p ON p.workspace_id = w.id
-                -- one primary (earliest) project per org
-                WHERE p.created_at = (
-                    SELECT min(p2.created_at) FROM projects p2
-                    JOIN workspaces w2 ON w2.id = p2.workspace_id
-                    WHERE w2.org_id = o.id
+                WITH accessible_projects AS (
+                    SELECT o.id AS org_id, o.name AS org_name,
+                           o.created_at AS org_created_at,
+                           p.id AS project_id, p.name AS project_name,
+                           p.slug AS project_slug, w.name AS workspace_name,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.id ORDER BY p.created_at, p.id
+                           ) AS project_rank
+                    FROM orgs o
+                    JOIN workspaces w ON w.org_id = o.id
+                    JOIN projects p ON p.workspace_id = w.id
+                    WHERE NOT :authenticated
+                       OR EXISTS (
+                           SELECT 1 FROM project_members pm
+                           WHERE pm.project_id = p.id
+                             AND pm.member_id = :principal AND pm.status = 'active'
+                       )
+                       OR EXISTS (
+                           SELECT 1 FROM org_members om
+                           WHERE om.org_id = o.id
+                             AND om.member_id = :principal AND om.status = 'active'
+                       )
                 )
-                ORDER BY o.created_at
+                SELECT ap.org_id, ap.org_name, ap.org_created_at AS created_at,
+                       ap.project_id, ap.project_name, ap.project_slug,
+                       ap.workspace_name,
+                       (SELECT count(*) FROM tasks t WHERE t.project_id = ap.project_id)
+                           AS task_count,
+                       (SELECT count(*) FROM meetings m WHERE m.project_id = ap.project_id)
+                           AS meeting_count
+                FROM accessible_projects ap
+                WHERE ap.project_rank = 1
+                ORDER BY ap.org_created_at, ap.org_id
                 """
-            )
+            ),
+            {"authenticated": authenticated, "principal": principal},
         ).mappings().all()
         return {
             "items": [
@@ -4104,6 +4138,7 @@ def onboard_org_endpoint(payload: dict):
 
 @app.get("/v1/projects", response_model=ProjectListResponse)
 def list_projects() -> ProjectListResponse:
+    authenticated, principal = catalog_read_scope()
     with begin(engine) as connection:
         rows = connection.execute(
             text(
@@ -4113,9 +4148,21 @@ def list_projects() -> ProjectListResponse:
                 FROM projects p
                 JOIN workspaces w ON w.id = p.workspace_id
                 JOIN orgs o ON o.id = w.org_id
+                WHERE NOT :authenticated
+                   OR EXISTS (
+                       SELECT 1 FROM project_members pm
+                       WHERE pm.project_id = p.id
+                         AND pm.member_id = :principal AND pm.status = 'active'
+                   )
+                   OR EXISTS (
+                       SELECT 1 FROM org_members om
+                       WHERE om.org_id = o.id
+                         AND om.member_id = :principal AND om.status = 'active'
+                   )
                 ORDER BY o.name ASC, w.name ASC, p.name ASC
                 """
-            )
+            ),
+            {"authenticated": authenticated, "principal": principal},
         ).mappings().all()
         return ProjectListResponse(
             items=[project_summary_from_row(row) for row in rows]
