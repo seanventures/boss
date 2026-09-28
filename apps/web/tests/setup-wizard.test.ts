@@ -228,8 +228,8 @@ describe("a connection that was made says so", () => {
     expect(UI).toContain("detected.connected");
   });
 
-  it("and the button says re-check rather than inviting the same connection again", () => {
-    expect(UI).toContain("detected.connected ? `Re-check");
+  it("labels a connected subscription without promising a paused live check", () => {
+    expect(UI).toContain('detected.connected ? `${liveProofAvailable ? "Re-check" : "Reconnect"}');
   });
 
   it("the recorded state is re-read after connecting, not assumed from the reply", () => {
