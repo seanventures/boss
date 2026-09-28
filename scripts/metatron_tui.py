@@ -119,7 +119,9 @@ def _secret_field(name: str) -> bool:
 def _request_secrets(body: Any, path: str) -> set[str]:
     """Collect submitted credential values without retaining or printing them."""
     segments = set(urlsplit(path).path.lower().split("/"))
-    credential_route = bool(segments & {"credential", "credentials", "secret", "secrets"})
+    credential_route = bool(segments & {
+        "credential", "credentials", "secret", "secrets", "key", "keys",
+    })
     secrets: set[str] = set()
 
     def visit(value: Any, *, sensitive: bool = False) -> None:

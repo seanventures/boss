@@ -366,6 +366,20 @@ def test_credential_validation_echo_is_redacted_in_http_error():
     assert SECRET not in rendered
 
 
+def test_kms_key_value_validation_echo_is_redacted():
+    credential = "FAKE-KMS-MATERIAL-123"
+    opener = FakeOpener([(422, {
+        "detail": [{"loc": ["body", "project_id"], "input": {"value": credential}}]
+    })])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    rendered = client.handle(tui.parse_line(
+        f'/api POST /v1/kms/keys {{"value":"{credential}"}}'
+    ))
+    assert "HTTP 422" in rendered
+    assert credential not in rendered
+    assert "***" in rendered
+
+
 def test_success_response_and_plain_text_error_redact_nested_submitted_secrets():
     token = "FAKE-AUTH-TOKEN-123"
     password = "FAKE-PASSWORD-456"
