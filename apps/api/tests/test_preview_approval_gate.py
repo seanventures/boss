@@ -127,7 +127,7 @@ def test_approve_preview_releases_the_build(client, engine):
                          branch=branch, repo="acme/demo-app")
         _insert_merge_decision(
             engine, decision_id="dec_preview_release", branch_name=branch,
-            pull_request_url="https://github.com/seanheiney/boss-sandbox/pull/77",
+            pull_request_url="https://github.com/acme/demo-app/pull/77",
         )
         _insert_deployment_target(engine, target_id="dep_target_release", repo="demo-app")
 
@@ -182,7 +182,7 @@ def test_approve_preview_is_refused_once_the_merge_decision_is_resolved(client, 
                      branch=branch, repo="acme/demo-app")
     _insert_merge_decision(
         engine, decision_id="dec_preview_already", branch_name=branch,
-        pull_request_url="https://github.com/seanheiney/boss-sandbox/pull/78",
+        pull_request_url="https://github.com/acme/demo-app/pull/78",
         status="approved",
     )
 
