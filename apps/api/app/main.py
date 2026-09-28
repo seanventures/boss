@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 import asyncio
 import json
 import logging
@@ -15,6 +16,8 @@ from urllib.parse import parse_qs
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.routing import APIRoute
+from starlette.routing import Match
 from sqlalchemy import text
 from uuid import uuid4
 from sqlalchemy.exc import ProgrammingError
@@ -1371,6 +1374,70 @@ def api_token_allowed(token: str, allowed_tokens: tuple[str, ...]) -> bool:
     return any(compare_digest(token, allowed) for allowed in allowed_tokens)
 
 
+# These list endpoints resolve an omitted project_id to the configured Community project.
+# Other optional project_id endpoints can intentionally return unscoped capability data;
+# only explicit project scopes are checked for those.
+DEFAULT_PROJECT_READ_PATHS = frozenset({
+    "/v1/activity", "/v1/members", "/v1/previews", "/v1/code-tasks", "/v1/tasks",
+    "/v1/dashboard", "/v1/factory/wip", "/v1/jobs", "/v1/events",
+    "/v1/capability-manifest", "/v1/capability-manifest/table",
+})
+
+
+@lru_cache(maxsize=1024)
+def matched_get_route(path: str, root_path: str) -> tuple[Any, Optional[str]] | None:
+    """Find the GET route before dispatch so project reads can be checked first."""
+    scope = {"type": "http", "method": "GET", "path": path, "root_path": root_path}
+    for route in app.routes:
+        # Recent FastAPI mounts include routers lazily. Their effective contexts
+        # carry the real path, parameters, and dependency fields; the wrapper's
+        # own matches() cannot identify which child route was selected.
+        candidates = (
+            (route,) if isinstance(route, APIRoute)
+            else route.effective_route_contexts()
+            if hasattr(route, "effective_route_contexts") else ()
+        )
+        for candidate in candidates:
+            if "GET" not in candidate.methods:
+                continue
+            match, child_scope = candidate.matches(scope)
+            if match is Match.FULL:
+                return candidate, child_scope.get("path_params", {}).get("project_id")
+    return None
+
+
+def requested_get_project_id(request: Request) -> Optional[str]:
+    """Return only the project scope consumed by a matched GET operation."""
+    if request.method != "GET":
+        return None
+    path = request.scope["path"]
+    root_path = request.scope.get("root_path", "")
+    route_path = (
+        path[len(root_path):]
+        if root_path and path.startswith(f"{root_path}/") else path
+    )
+    if (
+        "project_id" not in request.query_params
+        and route_path not in DEFAULT_PROJECT_READ_PATHS
+        and not route_path.startswith("/v1/projects/")
+    ):
+        return None
+    matched = matched_get_route(path, root_path)
+    if matched is None:
+        return None
+    route, path_project_id = matched
+    if path_project_id:
+        return str(path_project_id).strip()
+    if not any(field.alias == "project_id" for field in route.dependant.query_params):
+        return None
+    explicit = request.query_params.get("project_id")
+    if explicit and explicit.strip():
+        return explicit.strip()
+    if route.path in DEFAULT_PROJECT_READ_PATHS:
+        return str(settings.default_project_id or "").strip() or None
+    return None
+
+
 @app.middleware("http")
 async def require_transport_auth_for_v1(request: Request, call_next):
     auth_required = (
@@ -1513,6 +1580,15 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     authenticated_token = current_transport_authenticated.set(True)
     auth_method_token = current_auth_method.set(auth_method)
     try:
+        read_project_id = requested_get_project_id(request)
+        if read_project_id:
+            try:
+                with begin(engine) as connection:
+                    require_project_reader(connection, read_project_id)
+            except HTTPException as error:
+                return JSONResponse(
+                    status_code=error.status_code, content={"detail": error.detail}
+                )
         return await call_next(request)
     finally:
         current_api_principal.reset(principal_token)
