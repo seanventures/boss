@@ -415,7 +415,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         if not needle:
             return {"error": "host is required (id, name or address)"}
         with ctx.begin() as c:
-            # Matched three ways because an operator says "2.29.2.202" and the console says
+            # Matched three ways because an operator says "192.0.2.202" and the console says
             # "hetzner-ci-01"; forcing them to know the id is a lookup they should not have to do.
             row = c.execute(
                 _text(
@@ -4596,7 +4596,7 @@ def _register_port_tools(reg: ToolRegistry) -> None:
         "to another app in BOSS's registry. Use before retarget_app instead of picking the next "
         "number up: 'is 8001 free' needs both answers, and a port that is idle right now but "
         "promised to an app between deploys is not free.",
-        _obj({"host": {"type": "string", "description": "address, e.g. 2.29.2.202"},
+        _obj({"host": {"type": "string", "description": "address, e.g. 192.0.2.202"},
               "start": {"type": "integer", "description": "first port to consider (default 3000)"},
               "count": {"type": "integer", "description": "how many to report (default 3)"},
               "project_id": {"type": "string"}},
@@ -4897,7 +4897,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
         "host's public address and reports what came back. Use before assigning a port to an "
         "app, and when deciding whether a service is unintentionally public. Read-only: it "
         "makes requests, it changes nothing.",
-        _obj({"host": {"type": "string", "description": "public address, e.g. 2.29.2.202"},
+        _obj({"host": {"type": "string", "description": "public address, e.g. 192.0.2.202"},
               "ports": {"type": "array", "items": {"type": "integer"},
                         "description": "ports to probe"},
               "project_id": {"type": "string"}},
@@ -5216,7 +5216,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
     the outside, from refusing to help.
 
     It also had no way to READ the target's binding side by side. The contradiction was two
-    fields apart: `domains` said 2.29.2.202:8000 while `app_port` said 3020. The health check
+    fields apart: `domains` said 192.0.2.202:8000 while `app_port` said 3020. The health check
     probed the first, the container published on the second, and nothing compared them. There
     was no firewall; a sibling app on that host answers on its own port from outside.
 

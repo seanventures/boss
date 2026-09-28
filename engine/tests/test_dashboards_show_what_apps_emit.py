@@ -4,7 +4,7 @@ Reported: "I see dashboard not found for most of the Monitoring apps", and separ
 also to add some feature specific metrics as part of implementation I hope you did not miss
 adding them".
 
-The metrics were NOT missed. Measured live on 2.29.2.202: Change Calendar emits
+The metrics were NOT missed. Measured live on a VM (address redacted): Change Calendar emits
 `changes_created_total`, `collisions_detected_total`, `freeze_overrides_total`; Pricing
 Experiment Log emits `experiments_launched_total`, `decisions_recorded_total`,
 `overlap_overrides_total`, `experiments_open` — each written against a numbered acceptance
@@ -32,7 +32,7 @@ from boss_engine.services.observability_stack import (
 PORTS = {"grafana": 3006, "prometheus": 9091, "otel_http": 4318, "otel_metrics": 8889,
          "blackbox": 9115}
 TARGET = {"app": "Pricing Experiment Log.", "environment": "staging",
-          "project": "boss-dogfood", "public_url": "2.29.2.202:3017"}
+          "project": "boss-dogfood", "public_url": "192.0.2.202:3017"}
 
 # Verbatim from the live app's /metrics exposition.
 LIVE = [

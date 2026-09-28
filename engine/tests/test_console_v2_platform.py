@@ -354,11 +354,11 @@ def test_the_payload_says_the_template_cannot_be_edited():
 # and a link to the running thing. v2 listed hosts and targets as two flat lists and never read
 # the address at all -- so it could not say where anything was, while the app was plainly up.
 # --------------------------------------------------------------------------- #
-HOST = {"id": "h1", "name": "hetzner-ci-01", "address": "2.29.2.202", "arch": "AMD64",
+HOST = {"id": "h1", "name": "hetzner-ci-01", "address": "192.0.2.202", "arch": "AMD64",
         "status": "verified", "labels": None, "created_at": None}
 
 
-def tgt(app="Invoice-Chaser", domains=("2.29.2.202:3013",), ref="root@2.29.2.202:22",
+def tgt(app="Invoice-Chaser", domains=("192.0.2.202:3013",), ref="root@192.0.2.202:22",
         status="active", tid="deptgt_1"):
     return {"id": tid, "app_name": app, "repo": "boss-sandbox", "environment": "staging",
             "target_kind": "ssh", "target_ref": ref, "status": status,
@@ -368,8 +368,8 @@ def tgt(app="Invoice-Chaser", domains=("2.29.2.202:3013",), ref="root@2.29.2.202
 def test_a_target_carries_the_address_the_app_answers_on():
     out = infra(FakeConn(hosts=[HOST], targets=[tgt()]), "proj")
     t = out["targets"][0]
-    assert t["url"] == "http://2.29.2.202:3013"
-    assert t["domains"] == ["2.29.2.202:3013"]
+    assert t["url"] == "http://192.0.2.202:3013"
+    assert t["domains"] == ["192.0.2.202:3013"]
 
 
 def test_a_target_with_no_address_offers_no_link():

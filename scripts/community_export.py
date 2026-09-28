@@ -33,9 +33,14 @@ TS_IMPORT_RE = re.compile(
 MARKDOWN_LINK_RE = re.compile(r"\]\(([^)]+)\)")
 PRIVATE_MARKERS = (
     b"seanheiney/boss",
+    b"seanheiney/goldeneye",
     b".sean.network",
     b"tail95d980.ts.net",
     b"100.66.255.78",
+    b"2.29.2.202",
+    b"3.94.66.139",
+    b"46.225.93.220",
+    b"/Volumes/DataSSD1/test/boss",
 )
 PAID_SOURCE_MARKERS = (
     b"AccountConnect",
@@ -1057,6 +1062,14 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
             ]
             specpack_rewrites_applied.append(destination)
+    # Check the final output as well as ordinary source blobs. Checksum-pinned
+    # rewrites bypass the ordinary scan, and future rewrite rules must never
+    # turn a reviewed source into a candidate containing a private reference.
+    for path, data in list(selected.items()):
+        if any(marker in data for marker in PRIVATE_MARKERS):
+            blockers.append({"kind": "private-source-or-host-reference", "path": path})
+            del selected[path]
+            symlink_paths.pop(path, None)
     selected_paths = set(selected)
     for path in manifest["required_runtime"]:
         if path not in selected_paths:

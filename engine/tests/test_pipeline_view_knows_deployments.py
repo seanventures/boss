@@ -9,7 +9,7 @@ came from a code task with a PR:
 An operator pressing Deploy creates a deployment_run with trigger='manual' and NO stage. So the
 card reported "NEVER DEPLOYED" for a target whose app answered 200 on the host:
 
-    deprun_112e61add9…  succeeded  hetzner-ci-01  http://2.29.2.202:3011  → 200
+    deprun_112e61add9…  succeeded  hetzner-ci-01  http://192.0.2.202:3011  → 200
 
 The badge was answering "has a merge-driven stage?" while appearing to answer "has this ever
 deployed?". Two further gaps made it impossible for the UI to recover: the stage carried no

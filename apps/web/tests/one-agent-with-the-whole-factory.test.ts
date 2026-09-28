@@ -27,7 +27,7 @@ const step = {
 };
 const down = {
   kind: "unhealthy_app", id: "deptgt_1", app: "Change Calendar", environment: "staging",
-  at: "2.29.2.202:3013", error: "connection refused",
+  at: "192.0.2.202:3013", error: "connection refused",
 };
 const quiet = {
   kind: "quiet_build", id: "crun_1", app: "Interview Scorecard App", phase: "implement",
@@ -38,7 +38,7 @@ describe("every row names something real", () => {
   it.each([
     [decision, "Merge PR #186"],
     [step, "Lead-Triage Inbox — deploy deadlettered"],
-    [down, "Change Calendar (staging) at 2.29.2.202:3013"],
+    [down, "Change Calendar (staging) at 192.0.2.202:3013"],
     [quiet, "Interview Scorecard App — 27m quiet in implement"],
   ])("%#", (item, expected) => {
     expect(itemHeadline(item as never)).toBe(expected);
@@ -56,7 +56,7 @@ describe("and the question it asks already carries the facts", () => {
   });
 
   it("an app that is down brings its address", () => {
-    expect(itemQuestion(down as never)).toContain("2.29.2.202:3013");
+    expect(itemQuestion(down as never)).toContain("192.0.2.202:3013");
     expect(itemQuestion(down as never)).toContain("connection refused");
   });
 

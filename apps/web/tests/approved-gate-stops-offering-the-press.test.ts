@@ -4,7 +4,7 @@
  * "After approval I get this screen, I think it's deploying in the background but why it
  *  displays Deploy now" — and it was displaying both:
  *
- *     [ Deploy now ]  Ships this build to Pricing Experiment Log · staging (2.29.2.202:3017).
+ *     [ Deploy now ]  Ships this build to Pricing Experiment Log · staging (192.0.2.202:3017).
  *     ...
  *     Approved — starting. The gate is signed off; the step moves as soon as a worker picks
  *     it up, usually within a minute.

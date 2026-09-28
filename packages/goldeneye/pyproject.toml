@@ -22,10 +22,6 @@ dependencies = []
 [project.optional-dependencies]
 yaml = ["PyYAML>=6"]
 
-[project.urls]
-Homepage = "https://github.com/seanheiney/goldeneye"
-Documentation = "https://github.com/seanheiney/goldeneye/tree/main/docs"
-
 [tool.setuptools.packages.find]
 where = ["python"]
 include = ["goldeneye_kit*"]

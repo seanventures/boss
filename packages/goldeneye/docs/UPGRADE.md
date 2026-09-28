@@ -37,7 +37,7 @@ sudo GOLDENEYE_KIT_ROOT=/opt/goldeneye ge upgrade "$(pwd)"
 When vendored in BOSS:
 
 ```bash
-sudo ge upgrade /Volumes/DataSSD1/test/boss/packages/goldeneye
+sudo ge upgrade /path/to/boss/packages/goldeneye
 ```
 
 ## Rollback

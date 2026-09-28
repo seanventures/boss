@@ -14,7 +14,7 @@ import { codeOnly } from "./_helpers/source";
  * with the whole directive as its `app_name`:
  *
  *   deptgt_68bc4259…  "Build a lead triage inbox.Who it is for: a small team drowning in in…"
- *                     staging · active · 2.29.2.202:3014 · created_by executive_console
+ *                     staging · active · 192.0.2.202:3014 · created_by executive_console
  *
  * `executive_console` is the Set-target form on that very step, whose app-name field defaulted
  * to the run's raw title. One click, and the app had a target under a name that target

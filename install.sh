@@ -506,7 +506,7 @@ ENV_FILE="$INSTALL_DIR/.env"
 #     FATAL: password authentication failed for user "boss"
 #
 # while /health still answered 200 — an install that looks up and cannot read a row. Found by
-# running the installer twice over the same volume on 2.29.2.202.
+# running the installer twice over the same volume on one VM.
 #
 # The API key is preserved for a smaller reason: anything an operator saved, scripted or put in
 # a tunnel command keeps working across a re-run instead of silently 401-ing.

@@ -276,7 +276,7 @@ def _health_url(domain: str, check: dict, app_port: Optional[int] = None) -> str
     #
     # This only filled the port in when the domain had NONE, so a domain carrying a STALE port
     # silently beat the real one. HookWatch published on 3020 and was health-checked on
-    # 2.29.2.202:8000 — its target's `domains` still held the port issued when the target was
+    # 192.0.2.202:8000 — its target's `domains` still held the port issued when the target was
     # first created. Connection refused, every time, on every redeploy.
     #
     # And the failure was diagnosed as a firewall: the checker saw the app answering on

@@ -575,7 +575,7 @@ class TestADirectiveIsNotAnAppName:
     The target EXISTED. It is the first one in its own list:
 
         deptgt_68bc4259  "Build a lead triage inbox.Who it is for: a small team drowning in in…"
-                         staging · active · 2.29.2.202:3014 · created_by executive_console
+                         staging · active · 192.0.2.202:3014 · created_by executive_console
 
     The Set-target form on that step defaulted its app-name field to the run's raw title, so one
     click created a target under a name that identity matching could never find. The form is
@@ -628,7 +628,7 @@ class TestADirectiveIsNotAnAppName:
 
 
 class TestOneAppKeepsOneTarget:
-    """Two active targets for Lead-Triage Inbox, both on 2.29.2.202:3014:
+    """Two active targets for Lead-Triage Inbox, both on 192.0.2.202:3014:
 
         deptgt_33af7f  "Lead‐Triage Inbox"                                    22:03
         deptgt_68bc42  "Build a lead triage inbox.Who it is for: a small…"    21:45

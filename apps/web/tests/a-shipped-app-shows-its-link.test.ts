@@ -12,7 +12,7 @@ import { codeOnly } from "./_helpers/source";
  *   status=succeeded · healthy=true   APP NAME Lead-Triage Inbox
  *   TARGET ID deptgt_33af7f727c424ede8da1   DEPLOYMENT RUN ID deprun_3335d79ba0fe4a9b9c01
  *
- * and the target holds `domains: ["2.29.2.202:3014"]`. Both lookups behind the link compared
+ * and the target holds `domains: ["192.0.2.202:3014"]`. Both lookups behind the link compared
  * against the run's raw TITLE — the operator's whole directive:
  *
  *   targets.find((t) => t.app_name === runInput.title)

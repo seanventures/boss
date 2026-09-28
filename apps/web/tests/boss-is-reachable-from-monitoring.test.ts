@@ -16,7 +16,7 @@ import { codeOnly } from "./_helpers/source";
  */
 const target = (over: Record<string, unknown> = {}) => ({
   target_id: "deptgt_1", app_name: "Change Calendar", environment: "staging",
-  url: "http://2.29.2.202:3013", status: "up", status_since: null,
+  url: "http://192.0.2.202:3013", status: "up", status_since: null,
   uptime_24h: 1, uptime_7d: 1, avg_ms: 10, p95_ms: 20, last_checked: null,
   last_latency_ms: 10, last_error: null, sample_count: 10, series: [], incidents: [],
   deployed_commit: null, deployed_at: null, deployment_run_id: null, ...over,
@@ -30,11 +30,11 @@ describe("the questions it offers", () => {
   it("names the app that is actually broken, with its error", () => {
     const [first] = monitoringStarters(health([
       target(), target({ app_name: "Lead-Triage Inbox", status: "down",
-                         url: "http://2.29.2.202:3014", last_error: "connection refused" }),
+                         url: "http://192.0.2.202:3014", last_error: "connection refused" }),
     ]));
     expect(first).toContain("Lead-Triage Inbox");
     expect(first).toContain("connection refused");
-    expect(first).toContain("http://2.29.2.202:3014");
+    expect(first).toContain("http://192.0.2.202:3014");
   });
 
   it("lists them when several are unwell", () => {

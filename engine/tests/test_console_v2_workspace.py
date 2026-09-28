@@ -640,9 +640,9 @@ def test_a_role_that_has_never_run_has_no_success_rate():
 # --------------------------------------------------------------------------- #
 # Where the app is actually running
 # --------------------------------------------------------------------------- #
-def target(app_name="Shorty — a URL shortener", domains=("2.29.2.202:3013",), status="active"):
+def target(app_name="Shorty — a URL shortener", domains=("192.0.2.202:3013",), status="active"):
     return {"id": "deptgt_1", "app_name": app_name, "environment": "staging",
-            "target_kind": "ssh", "target_ref": "root@2.29.2.202:22",
+            "target_kind": "ssh", "target_ref": "root@192.0.2.202:22",
             "domains": list(domains), "status": status}
 
 
@@ -656,7 +656,7 @@ def test_a_deployed_app_carries_the_address_it_is_running_on():
                   "started_at": None, "finished_at": None, "failure_reason": None}],
     ), "proj", "app_1")
     d = out["deployment"]
-    assert d["url"] == "http://2.29.2.202:3013"
+    assert d["url"] == "http://192.0.2.202:3013"
     assert d["last_deploy"]["status"] == "succeeded"
     assert d["last_deploy"]["commit"] == "19d5806aaa"
 
@@ -672,4 +672,4 @@ def test_a_target_with_no_domain_yields_no_link():
     out = project_workspace(FakeConn(
         [run("crun_1", app_id="app_1")], targets=[target(domains=())]), "proj", "app_1")
     assert out["deployment"]["url"] is None
-    assert out["deployment"]["target_ref"] == "root@2.29.2.202:22"
+    assert out["deployment"]["target_ref"] == "root@192.0.2.202:22"

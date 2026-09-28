@@ -7,7 +7,7 @@ The operator approved a fix three separate times and got the same paragraph back
 
 Three things were true at once, and only the third is about tools:
 
-  1. THE DIAGNOSIS WAS WRONG. The health check probed 2.29.2.202:8000 — the stale port in the
+  1. THE DIAGNOSIS WAS WRONG. The health check probed 192.0.2.202:8000 — the stale port in the
      target's `domains` — while the container published on 3020. Two facts about different
      ports, compared as though they were about one. There was no firewall: a sibling app on
      that host answers on 3010 from outside, and 3020 itself returns 200.

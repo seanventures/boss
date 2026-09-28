@@ -260,10 +260,10 @@ class TestSecurityCanActuallyRunTheCheckItMandates:
     def test_it_says_which_app_already_owns_a_port(self, tools):
         """'Is this port free?' is the question being asked when a port is assigned."""
         conn = FakeConn(targets=[{"app_name": "HookWatch",
-                                  "domains": ["2.29.2.202:3020"]}])
+                                  "domains": ["192.0.2.202:3020"]}])
         out = tools["check_port_exposure"].handler(
             FakeCtx(conn), project_id="p", actor="Security",
-            args={"host": "2.29.2.202", "ports": [3020, 3021]})
+            args={"host": "192.0.2.202", "ports": [3020, 3021]})
         by_port = {f["port"]: f["already_assigned_to"] for f in out["findings"]}
         assert by_port[3020] == "HookWatch" and by_port[3021] is None
 

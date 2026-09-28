@@ -420,8 +420,8 @@ describe("explaining an attempt", () => {
 
 describe("where the app runs", () => {
   const dep = (over = {}) => ({
-    target_id: "deptgt_1", environment: "staging", target_ref: "root@2.29.2.202:22",
-    status: "active", url: "http://2.29.2.202:3013", domains: ["2.29.2.202:3013"],
+    target_id: "deptgt_1", environment: "staging", target_ref: "root@192.0.2.202:22",
+    status: "active", url: "http://192.0.2.202:3013", domains: ["192.0.2.202:3013"],
     last_deploy: { status: "succeeded", commit: "19d5806", finished_at: null,
                    failure_reason: null },
     ...over,
@@ -429,7 +429,7 @@ describe("where the app runs", () => {
 
   it("links to the running app", () => {
     const out = html(ws({ deployment: dep() }));
-    expect(out).toContain('href="http://2.29.2.202:3013"');
+    expect(out).toContain('href="http://192.0.2.202:3013"');
     expect(out).toContain("last deploy succeeded");
     expect(out).toContain("19d5806");
   });

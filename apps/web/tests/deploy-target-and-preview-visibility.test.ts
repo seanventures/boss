@@ -273,7 +273,7 @@ describe("the live link follows the deployment, not the step", () => {
   it("does not decide 'shipped' from the step's own status", () => {
     // HookWatch's deploy step reads SUCCEEDED because of a blocked run recorded before
     // `blocked` stopped counting as success. Trusting it produced "Open the app →
-    // 2.29.2.202:8000" for an address with no container on it.
+    // 192.0.2.202:8000" for an address with no container on it.
     expect(SOURCE).toContain('lastDeploy?.status !== "succeeded"');
     expect(SOURCE).not.toContain('if (!isDeployStep(step, capability) || step.status !== "succeeded") return ""');
   });

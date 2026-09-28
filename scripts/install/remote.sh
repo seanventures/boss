@@ -3,8 +3,8 @@
 #
 # WHY THIS EXISTS. Installing on a server meant copying the repository up by hand, SSH-ing in,
 # and running the installer there — three steps, each easy to get subtly wrong, and none of them
-# recorded anywhere. The machine ended up holding a tree nobody could identify: the box at
-# 2.29.2.202 had /root/boss with no .git in it, so "which version is running" had no answer.
+# recorded anywhere. The machine ended up holding a tree nobody could identify: one box
+# had /root/boss with no .git in it, so "which version is running" had no answer.
 #
 # WHAT THIS DOES INSTEAD. One command from the laptop. The source is streamed over the SSH
 # connection as a git archive of an exact commit, so:
@@ -105,14 +105,14 @@ options:
   --                   everything after this is passed through to install.sh
 
 examples:
-  scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key install --yes
-  scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key smoke
-  scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key tunnel
-  scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key \
+  scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key install --yes
+  scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key smoke
+  scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key tunnel
+  scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key \
       model --provider openrouter --api-key sk-or-... --model anthropic/claude-sonnet-4.5
-  claude setup-token | scripts/install/remote.sh --host root@2.29.2.202 \
+  claude setup-token | scripts/install/remote.sh --host root@192.0.2.202 \
       --key ~/.config/boss/deploy_key subscription --provider claude_code
-  scripts/install/remote.sh --host root@2.29.2.202 --key ~/.config/boss/deploy_key uninstall --yes
+  scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key uninstall --yes
 USAGE
 }
 

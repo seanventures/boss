@@ -6928,8 +6928,9 @@ def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict]
                  "i": target_id})
             report["applied_port"] = report["suggested_port"]
             # And point the URL at that port. Writing the port without fixing the domain left
-            # the console showing `3.94.66.139` between onboarding and the first deploy — which
-            # is port 80, which on this host is an unrelated product answering 200. The rule
+            # the console showing a bare IP (redacted here as `198.51.100.139`)
+            # between onboarding and the first deploy — which is port 80, where
+            # an unrelated product on this host answers 200. The rule
             # already existed in the connector; only the connector ran it, and the connector
             # does not run until you deploy.
             from .services.deployment_connectors import _split_ref, domain_with_port
@@ -8610,8 +8611,9 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
         # `domains` holds a bare `host:port`. Every consumer then had to prepend a scheme, and
         # three of them did it differently: delivery-ui hardcoded https (broken link),
         # deploy-ui hardcoded http, and the app card prepended nothing at all — so "Open"
-        # resolved as a RELATIVE path and navigated to localhost:3001/2.29.2.202:3010. Handing
-        # out an address that is not a URL guarantees each caller invents the missing half.
+        # resolved as a RELATIVE path and navigated to
+        # localhost:3001/192.0.2.202:3010 (address redacted). Handing out an
+        # address that is not a URL guarantees each caller invents the missing half.
         # The scheme the health probe uses is the scheme the link uses.
         domains = item.get("domains") or []
         raw = domains[0] if isinstance(domains, list) and domains else None

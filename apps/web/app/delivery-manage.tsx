@@ -553,7 +553,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     });
     if (gaps.length) { say(`fill in: ${gaps.join(", ")}`); return; }
     if (!targetRef.includes("@")) {
-      say("host must include the ssh user, e.g. ubuntu@3.94.66.139");
+      say("host must include the ssh user, e.g. ubuntu@198.51.100.139");
       return;
     }
     if (appsAmbiguous && !form.app_entry) {
@@ -1573,7 +1573,7 @@ export function FleetPanel({ projectId, targets = [] }: {
             void run(() => registerDeploymentHostAction(null, fd), () => setOpenReg(false));
           }}>
           <Field label="Name" name="name" placeholder="hetzner-ci-01" required />
-          <Field label="Address" name="address" placeholder="2.29.2.202" required />
+          <Field label="Address" name="address" placeholder="192.0.2.202" required />
           <Field label="SSH user" name="ssh_user" defaultValue="root" />
           {/* Left blank on purpose: verify reads `uname -m` from the box and corrects it. */}
           <Field label="Arch (optional)" name="arch" placeholder="detected on verify" />

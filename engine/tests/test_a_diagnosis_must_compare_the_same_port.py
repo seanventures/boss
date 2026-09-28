@@ -8,7 +8,7 @@ HookWatch failed its health check four times. Each time BOSS reported:
 
 and each time the operator was told to open a firewall rule. It would have changed nothing.
 
-The external check had probed `http://2.29.2.202:8000/` — the stale port in the target's
+The external check had probed `http://192.0.2.202:8000/` — the stale port in the target's
 `domains` — while the container was published on 3020. `_why_unreachable` compared "3020 works
 locally" against "the external check failed" without noticing those were different ports, and
 leapt to the network.

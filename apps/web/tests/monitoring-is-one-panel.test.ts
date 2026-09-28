@@ -7,7 +7,7 @@ import { codeOnly } from "./_helpers/source";
 /**
  * Health and the observability stack were two panels listing the same three apps.
  *
- *   Health of deployed apps      Incident-Timeline Builder · staging · up · 100% · 2.29.2.202:3011
+ *   Health of deployed apps      Incident-Timeline Builder · staging · up · 100% · 192.0.2.202:3011
  *   Observability stack          Incident-Timeline Builder · staging · …:3011/metrics · dashboard ↗
  *
  * Same names, same environments, one saying each app was up and the other saying where to look

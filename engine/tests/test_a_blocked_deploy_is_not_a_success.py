@@ -98,9 +98,9 @@ class TestTheSentenceThatExplainedNothing:
         """A dict with keys nobody planned for is still evidence."""
         reason = runner._reason_of_last_resort(
             {"capability": "deploy_app", "status": "failed",
-             "exit_code": 125, "host": "46.225.93.220"}, {})
+             "exit_code": 125, "host": "203.0.113.220"}, {})
         assert "exit_code=125" in reason
-        assert "host=46.225.93.220" in reason
+        assert "host=203.0.113.220" in reason
 
     def test_a_truly_empty_failure_says_so_and_names_what_to_do(self):
         reason = runner._reason_of_last_resort(

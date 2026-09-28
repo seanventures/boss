@@ -109,6 +109,45 @@ def test_exported_package_metadata_has_a_resolvable_apache_license() -> None:
     assert (root / "packages/create-boss/LICENSE").read_bytes() == (root / "LICENSE").read_bytes()
 
 
+def test_private_infrastructure_markers_are_withheld(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (docs / "public.md").write_text("Community guide\n")
+    markers = (
+        b"seanheiney/goldeneye",
+        b"2.29.2.202",
+        b"3.94.66.139",
+        b"46.225.93.220",
+        b"/Volumes/DataSSD1/test/boss",
+    )
+    for index, marker in enumerate(markers):
+        (docs / f"private-{index}.md").write_bytes(b"Host: " + marker + b"\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test",
+         "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["docs/"],
+        "exclude": ["docs/unused.md"],
+        "requires_split": ["docs/private-source.md"],
+        "required_runtime": ["docs/public.md"],
+        "required_release": ["docs/public.md"],
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert candidate == {"docs/public.md": b"Community guide\n"}
+    assert {
+        blocker["path"] for blocker in report["blockers"]
+        if blocker["kind"] == "private-source-or-host-reference"
+    } == {f"docs/private-{index}.md" for index in range(len(markers))}
+
+
 def test_local_import_graph_finds_withheld_modules() -> None:
     source = {
         "apps/api/app/main.py",
@@ -946,6 +985,42 @@ def test_community_schema_rewrite_is_exact_and_preserves_easy_connect(tmp_path: 
     report, candidate = export.analyze(repo, drift_sha, manifest)
     assert "schema-export-source-changed" in {b["kind"] for b in report["blockers"]}
     assert "db/schema.sql" not in candidate
+
+
+def test_community_schema_rewrite_scans_pinned_output_for_private_host(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    db = repo / "db"
+    db.mkdir(parents=True)
+    (db / "schema.sql").write_text("CREATE TABLE enterprise_clusters ();\n")
+    community = b"CREATE TABLE shared ();\n-- 2.29.2.202\n"
+    (db / "schema.community.sql").write_bytes(community)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test",
+         "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": ["db/"],
+        "exclude": ["db/unused.sql"],
+        "requires_split": ["db/schema.sql"],
+        "required_runtime": ["db/schema.sql"],
+        "required_release": ["db/schema.sql"],
+        "schema_export_rewrite": {
+            "source": "db/schema.community.sql",
+            "destination": "db/schema.sql",
+            "sha256": hashlib.sha256(community).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert "db/schema.sql" not in candidate
+    assert {"kind": "private-source-or-host-reference", "path": "db/schema.sql"} in report["blockers"]
+    assert {"kind": "missing-runtime-entrypoint", "path": "db/schema.sql"} in report["blockers"]
+
 
 def test_community_openapi_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     import hashlib

@@ -1049,17 +1049,17 @@ class TestWhatTheFirstFIXINGInvestigationFound:
         from boss_engine.services.deployment_connectors import domain_with_port
 
         # The case that produced a false red: domain says 3000, the app is on 3013.
-        assert domain_with_port("2.29.2.202:3000", "2.29.2.202", 3013) == "2.29.2.202:3013"
+        assert domain_with_port("192.0.2.202:3000", "192.0.2.202", 3013) == "192.0.2.202:3013"
 
     def test_a_correct_port_still_means_nothing_to_change(self):
         from boss_engine.services.deployment_connectors import domain_with_port
 
-        assert domain_with_port("2.29.2.202:3013", "2.29.2.202", 3013) is None
+        assert domain_with_port("192.0.2.202:3013", "192.0.2.202", 3013) is None
 
     def test_a_bare_domain_still_gains_the_port(self):
         from boss_engine.services.deployment_connectors import domain_with_port
 
-        assert domain_with_port("2.29.2.202", "2.29.2.202", 3013) == "2.29.2.202:3013"
+        assert domain_with_port("192.0.2.202", "192.0.2.202", 3013) == "192.0.2.202:3013"
 
     def test_something_unparseable_is_left_alone(self):
         from boss_engine.services.deployment_connectors import domain_with_port

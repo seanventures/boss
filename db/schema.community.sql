@@ -5676,7 +5676,7 @@ CREATE INDEX IF NOT EXISTS idx_process_manager_proposals_project
 -- Fleet: a VM is a first-class object.
 --
 -- Before this, the host lived as a string inside every deployment_target's
--- `target_ref` ("root@2.29.2.202:22"). Ten apps on one VM meant ten copies of that
+-- `target_ref` ("root@192.0.2.202:22"). Ten apps on one VM meant ten copies of that
 -- string and ten secret bindings to the SAME key, nowhere to ask "what runs on this
 -- box?", and a key rotation that meant editing ten rows. The host is the thing that
 -- has credentials, an architecture and a port budget — not the app.

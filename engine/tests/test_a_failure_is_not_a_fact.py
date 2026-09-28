@@ -65,10 +65,10 @@ DEPLOY_REFUSED = {
 class TestIsItStillTrue:
     def test_the_blocker_has_cleared_once_the_target_exists(self):
         rows = _Rows(targets=[{"id": "deptgt_1", "app_name": "Lead Triage Inbox.",
-                               "environment": "staging", "domains": ["2.29.2.202:3014"]}])
+                               "environment": "staging", "domains": ["192.0.2.202:3014"]}])
         out = blocker_status(rows, "boss-dogfood", DEPLOY_REFUSED)
         assert out["cleared"] is True
-        assert "2.29.2.202:3014" in out["reason"]
+        assert "192.0.2.202:3014" in out["reason"]
 
     def test_the_name_it_was_stored_under_does_not_have_to_match_exactly(self):
         """The target that fixed this was created under 'Lead Triage Inbox.' and the step
@@ -123,7 +123,7 @@ class TestPuttingItBack:
     def test_a_cleared_step_is_re_queued_with_its_attempts_reset(self):
         rows = _Rows(
             targets=[{"id": "deptgt_1", "app_name": "Lead-Triage Inbox",
-                      "environment": "staging", "domains": ["2.29.2.202:3014"]}],
+                      "environment": "staging", "domains": ["192.0.2.202:3014"]}],
             steps=[DEPLOY_REFUSED])
         out = recheck_run(rows, project_id="p", run_id="wfr_1")
         assert out["requeued"] == ["deploy"]

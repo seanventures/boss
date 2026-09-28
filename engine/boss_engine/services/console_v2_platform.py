@@ -188,7 +188,7 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
 def _host_for(target_ref: str, hosts: list[dict]) -> Optional[str]:
     """Which registered host a target deploys to, matched on the address inside its ref.
 
-    A target_ref is "root@2.29.2.202:22" and a host records "2.29.2.202". Matched on the address
+    A target_ref is "root@192.0.2.202:22" and a host records "192.0.2.202". Matched on the address
     rather than parsed as a URL, because the ref is an ssh destination and target_kind is not
     always ssh. Returns None rather than guessing: an app shown under the wrong machine is worse
     than an app shown under none.

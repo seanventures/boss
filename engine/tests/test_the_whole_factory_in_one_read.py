@@ -296,7 +296,7 @@ class TestWhatTheLiveBoardActuallyShowed:
                     def mappings(self_inner): return self_inner
                     def first(self_inner):
                         return {"id": "deptgt_1", "app_name": "Change Calendar",
-                                "environment": "staging", "domains": ["2.29.2.202:3013"]}
+                                "environment": "staging", "domains": ["192.0.2.202:3013"]}
                     def all(self_inner): return []
                 return R()
 

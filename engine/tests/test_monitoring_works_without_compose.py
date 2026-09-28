@@ -1,6 +1,6 @@
 """The monitoring stack assumed Compose; the host that runs the apps does not have it.
 
-The console linked to http://2.29.2.202:3006/d/boss-hookwatch and the link answered connection
+The console linked to http://192.0.2.202:3006/d/boss-hookwatch and the link answered connection
 refused, because no Grafana was ever running there. The deploy had been failing all along with:
 
     docker compose up -d   ->  unknown shorthand flag: 'd' in -d

@@ -3308,7 +3308,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // This asked the run's input for a `target_id` and otherwise compared `t.app_name` to the raw
   // TITLE, which is the operator's whole directive. So the app whose title is literally its name
   // ("Change Calendar") got its link and every other app got nothing: Lead-Triage Inbox shipped
-  // successfully to deptgt_33af7f on 2.29.2.202:3014 and the step showed no link at all.
+  // successfully to deptgt_33af7f on 192.0.2.202:3014 and the step showed no link at all.
   //
   // The step's own output is the authority here — it records the target this deployment
   // actually used — and the name comparison is by app identity, which is how the rest of the
@@ -3350,7 +3350,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // This first used the step's own status, and the step is exactly what cannot be trusted
   // here: HookWatch's deploy step reads SUCCEEDED because of a blocked run recorded before
   // `blocked` stopped counting as success. So the console offered "Open the app →
-  // 2.29.2.202:8000" and "Replaces what is running there" for an address with no container on
+  // 192.0.2.202:8000" and "Replaces what is running there" for an address with no container on
   // it at all. A link to a dead app is the same lie in a new place.
   const [lastDeploy, setLastDeploy] = useState<{ status: string } | null>(null);
   useEffect(() => {

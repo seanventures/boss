@@ -276,8 +276,8 @@ describe("deployed apps", () => {
   const html = (v: InfraView) => renderToStaticMarkup(<InfraScreen view={v} />);
   const target = (over: Partial<V2Target> = {}): V2Target => ({
     id: "deptgt_1", app_name: "Invoice-Chaser", repo: "boss-sandbox", environment: "staging",
-    kind: "ssh", ref: "root@2.29.2.202:22", status: "active", retired: false,
-    domains: ["2.29.2.202:3013"], url: "http://2.29.2.202:3013", host: "hetzner-ci-01",
+    kind: "ssh", ref: "root@192.0.2.202:22", status: "active", retired: false,
+    domains: ["192.0.2.202:3013"], url: "http://192.0.2.202:3013", host: "hetzner-ci-01",
     last_deploy: { status: "succeeded", commit: "19d5806", finished_at: null,
                    failure_reason: null },
     ...over,
@@ -285,7 +285,7 @@ describe("deployed apps", () => {
 
   it("links to the running app", () => {
     const out = html(infra({ targets: [target()] }));
-    expect(out).toContain('href="http://2.29.2.202:3013"');
+    expect(out).toContain('href="http://192.0.2.202:3013"');
     expect(out).toContain("open app");
   });
 

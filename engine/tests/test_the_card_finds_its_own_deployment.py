@@ -4,7 +4,7 @@
     NOT DEPLOYED   hetzner-ci-01   [Deploy now]   [Unbind target]
 
 It was up the whole time — `deprun_f948af84` succeeded at 01:50 and the app answers 200 on
-2.29.2.202:3015. The card asks "what did this run ship?", and that question is joined on
+192.0.2.202:3015. The card asks "what did this run ship?", and that question is joined on
 `release_packet->>'code_task_run_id'`. The deployment carries `crun_7f38987c`, the attempt that
 actually succeeded; the card is a different attempt of the same app.
 

@@ -3,7 +3,7 @@
 Design: docs/product/DEPLOYMENT_FLEET_AND_APPROVAL_FLOW.md
 
 Before this, a host existed only as a string inside each deployment_target's `target_ref`
-("root@2.29.2.202:22"). Ten apps on one box meant ten copies of that string, ten secret
+("root@192.0.2.202:22"). Ten apps on one box meant ten copies of that string, ten secret
 bindings to the SAME key, no way to ask "what runs here?", and a key rotation that meant
 editing ten rows. Credentials, architecture and a port budget belong to the machine, not to
 each app that happens to sit on it.

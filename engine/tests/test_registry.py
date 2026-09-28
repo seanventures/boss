@@ -51,7 +51,7 @@ _EXPECTED_TOOLS: set[str] = {
     # that says what an app was FOR.
     "read_spec",
     # The machines BOSS deploys onto. The agent could describe every build and had no way
-    # to answer "is 2.29.2.202 healthy" or "where would this ship" — so the Deployment
+    # to answer "is 192.0.2.202 healthy" or "where would this ship" — so the Deployment
     # Manager role had nothing to read. Read-only: the governed path still does the deploy.
     "list_deployment_hosts", "describe_deployment_host", "list_deployments",
     # A shell on a registered host. Two gates, not one: BOSS_AGENT_HOST_SHELL must be on, and
