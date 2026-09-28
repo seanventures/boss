@@ -146,4 +146,4 @@ def test_and_a_failed_fallback_reports_the_primary_failure():
                    FallingBackAdapter.create_text_response):
         source = inspect.getsource(method)
         assert "and the fallback failed too" in source
-        assert "from exc" in source
+        assert "from primary_error" in source
