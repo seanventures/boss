@@ -49,7 +49,7 @@ def test_tls_private_ca_and_explicit_local_opt_out(monkeypatch):
     assert trusted._ctx_cls.verify_mode == ssl.CERT_REQUIRED
 
     local = _client(
-        plane_base_url="https://plane.local.sean.network",
+        plane_base_url="https://plane.local.example.test",
         plane_tls_insecure_skip_verify=True,
     )
     assert local._ctx_cls.verify_mode == ssl.CERT_NONE
