@@ -162,7 +162,7 @@ def render(routes: list[tuple[str, str, str]]) -> str:
 
     lines.append("---")
     lines.append("")
-    lines.append("See also: [API docs index](README.md) · [OpenAPI](../../api/openapi.yaml) · "
+    lines.append("See also: [API docs index](README.md) · `api/openapi.yaml` in the source checkout · "
                  "`GET /v1/meta/api-catalog`")
     lines.append("")
     return "\n".join(lines)

@@ -42,13 +42,15 @@ Private design-partner invite: [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](
 (`make onboard`). That path does not claim a public repository or that
 sandboxes always work.
 
-**One-line (recommended):**
+The public one-line installer is pending repository publication. Invited
+contributors can install from their authorized checkout:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+cd /path/to/authorized/boss
+./install.sh --dir "$PWD"
 ```
 
-That installer checks your machine, installs dependencies via Docker, prompts for BYOK model keys, starts Postgres + API + worker (+ Mission Control), seeds `boss-dogfood`, and verifies health. See [QUICKSTART.md](./QUICKSTART.md) and [`scripts/install/README.md`](../../scripts/install/README.md).
+That installer checks your machine, installs dependencies via Docker, prompts for BYOK model keys, starts Postgres + API + worker (+ Mission Control), seeds `boss-dogfood`, and verifies health. See [QUICKSTART.md](./QUICKSTART.md) and `scripts/install/README.md` in the source checkout.
 
 ## Contributing
 

@@ -4,7 +4,7 @@
 **Human docs index:** [`docs/api/README.md`](../api/README.md)  
 **Live discovery:** `GET /v1/meta/api-catalog`  
 **Coverage report:** `GET /v1/meta/openapi-coverage`  
-**Machine schema:** `/openapi.json` · [`api/openapi.yaml`](../../api/openapi.yaml)  
+**Machine schema:** `/openapi.json` · `api/openapi.yaml` in the source checkout\
 **Generated route list:** [`docs/api/ROUTE_INDEX.md`](../api/ROUTE_INDEX.md)
 
 ---
@@ -67,7 +67,7 @@ Details and curl examples: [docs/api/README.md](../api/README.md).
 4. Decisions in inbox for risk/spend/destructive gates  
 5. Events feed shows full trail  
 
-Implementation build order and hard rules: root [`AGENTS.md`](../../AGENTS.md).
+Implementation build order and hard rules: root `AGENTS.md` in the source checkout.
 
 ---
 
