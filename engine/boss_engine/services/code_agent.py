@@ -591,16 +591,17 @@ class ClaudeCodeAgent:
         happened to be started with.
         """
         env = agent_environment(os.environ, _shared_tool_caches())
-        if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get("ANTHROPIC_API_KEY"):
-            token = (getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
-            if not token:
-                # The lane binder runs only where a connection and project are in scope; a
-                # sandboxed agent process has neither, so the store is asked directly.
-                from .cli_harness import stored_credential
+        token = (getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
+        if not token and not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            # The lane binder runs only where a connection and project are in scope; a
+            # sandboxed agent process has neither, so the store is asked directly.
+            from .cli_harness import stored_credential
 
-                token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
-            if token:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+            # The wizard-connected subscription wins over an inherited API key.
+            env.pop("ANTHROPIC_API_KEY", None)
         return env
 
     def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,

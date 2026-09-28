@@ -8,7 +8,7 @@ So `run_on_host` is a real shell on a real host — it can delete containers and
 down — and it cannot fire on the model's own initiative. Two independent gates:
 
   1. BOSS_AGENT_HOST_SHELL must be on. Off by default; nobody inherits a shell by upgrading.
-  2. `_operator_confirmed`, which ONLY /v1/engine/agent/action sets — the endpoint reached by
+  2. a privileged confirmation argument, which the action endpoint sets after
      clicking a proposed action, which deliberately does not go back through the model.
 
 Refusing tells the model what to do instead: propose it, so the exact host and the exact
@@ -70,8 +70,9 @@ class TestItWillNotRunOnTheModelsSayS0:
 
 class TestTheFlagIsTheOuterGate:
     def test_disabled_refuses_even_with_confirmation(self):
-        out = _run({"host": "h", "command": "docker ps", "_operator_confirmed": True},
-                   shell=False)
+        out = build_default_registry().invoke(
+            "run_on_host", _Ctx(False), project_id="p", actor="ceo",
+            args={"host": "h", "command": "docker ps"}, operator_confirmed=True)
         assert out["ok"] is False
         assert "BOSS_AGENT_HOST_SHELL" in out["error"]
 
@@ -82,18 +83,30 @@ class TestTheFlagIsTheOuterGate:
 
 
 class TestOnlyTheAcceptPathCanConfirm:
-    def test_the_api_sets_the_marker_and_nothing_else_does(self):
-        """If any other caller could set `_operator_confirmed`, the button becomes decorative."""
+    def test_the_api_sets_the_privileged_confirmation(self):
         from pathlib import Path
 
         api = Path("apps/api/app/main.py").read_text()
-        assert api.count('"_operator_confirmed": True') == 1, (
+        assert api.count("operator_confirmed=True") == 1, (
             "exactly one place may confirm on an operator's behalf: the endpoint a click "
             "reaches"
         )
-        # And it is that endpoint.
-        marker = api.index('"_operator_confirmed": True')
+        marker = api.index("operator_confirmed=True")
         assert "/v1/engine/agent/action" in api[max(0, marker - 4000):marker]
+        assert '"_operator_confirmed": True' not in api
+
+    def test_model_args_cannot_confirm_the_host_command(self):
+        out = _run({"host": "h", "command": "reboot", "_operator_confirmed": True})
+        assert out["ok"] is False
+        assert out["requires_confirmation"] is True
+        assert "_operator_confirmed" not in out["proposed_args"]
+
+    def test_privileged_confirmation_reaches_the_host_gate(self):
+        out = build_default_registry().invoke(
+            "run_on_host", _Ctx(True), project_id="p", actor="ceo",
+            args={"host": "h", "command": "docker ps"}, operator_confirmed=True)
+        assert out.get("requires_confirmation") is not True
+        assert "reached the database" in out.get("error", "")
 
     def test_the_accept_endpoint_does_not_re_ask_a_model(self):
         from pathlib import Path
@@ -109,3 +122,16 @@ class TestItIsReachableAtAll:
     def test_it_is_a_write_so_the_action_endpoint_will_run_it(self):
         """That endpoint refuses reads: 'a button that runs a read is a no-op'."""
         assert build_default_registry().get("run_on_host").kind == "write"
+
+    def test_the_chat_agent_only_proposes_it(self):
+        from boss_engine.agent.engine_agent import EngineAgent
+
+        assert "run_on_host" in EngineAgent.PROPOSE_ONLY
+
+
+def test_inspect_host_rejects_a_second_shell_line():
+    out = build_default_registry().invoke(
+        "inspect_host", _Ctx(), project_id="p", actor="ceo",
+        args={"host": "h", "command": "docker ps\nreboot"})
+    assert out["ok"] is False
+    assert "not permitted" in out["error"]

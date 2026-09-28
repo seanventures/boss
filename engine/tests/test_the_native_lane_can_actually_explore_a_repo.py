@@ -27,7 +27,7 @@ from boss_engine.services.code_agent import (
     _looks_like_tools_unsupported,
     load_repo_guide,
 )
-from boss_engine.services.code_agent_tools import SandboxToolset, ToolError, tool_schemas
+from boss_engine.services.code_agent_tools import SandboxToolset, tool_schemas
 
 
 @pytest.fixture()
@@ -139,6 +139,17 @@ def test_bash_refuses_a_command_outside_the_sandbox_allowlist(repo: Path) -> Non
     ts = SandboxToolset(repo, settings=_settings(BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS="python3"))
     assert ts.call("bash", {"command": "curl https://example.com"}).is_error
     assert not ts.call("bash", {"command": "python3 --version"}).is_error
+
+
+def test_bash_local_fallback_does_not_inherit_database_url(repo: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://production-secret")
+    ts = SandboxToolset(repo, settings=_settings(BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS="python3"))
+    result = ts.call("bash", {
+        "command": "python3 -c \"import os; print(os.getenv('DATABASE_URL', 'ABSENT'))\"",
+    })
+    assert not result.is_error, result.text
+    assert "ABSENT" in result.text
+    assert "production-secret" not in result.text
 
 
 def test_bash_refuses_shell_syntax_rather_than_running_half_of_it(repo: Path) -> None:

@@ -69,6 +69,9 @@ class TestItStillLetsTheAgentWork:
     def test_what_the_agent_needs_survives(self, name):
         assert name in agent_environment(PRODUCTION_LIKE)
 
+    def test_ci_survives_for_noninteractive_builds(self):
+        assert agent_environment(PRODUCTION_LIKE, {"CI": "1"})["CI"] == "1"
+
     def test_the_model_credential_is_allowed_deliberately_and_in_writing(self):
         """It is credential-shaped and it is allowed anyway: it buys model turns, not access to
         anybody's data. That distinction is the whole basis of the list, so it is asserted."""
@@ -131,6 +134,75 @@ class TestEverySpawnPointGoesThroughIt:
             "this runs the project's own test command; unfiltered, `make test` in a sandbox "
             "points at the production database"
         )
+
+    def test_native_sandbox_run_filters_the_real_child(self, tmp_path, monkeypatch):
+        from boss_engine.config import Settings
+        from boss_engine.services.sandbox import EphemeralSandbox
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://production-secret")
+        sandbox = EphemeralSandbox(Settings(), task_id="credential_filter")
+        sandbox.path = tmp_path
+        result = sandbox.run(
+            "python3 -c \"import os; print(os.getenv('DATABASE_URL', 'ABSENT'), os.getenv('CI'))\"")
+        assert result.exit_code == 0, result.stderr
+        assert "ABSENT 1" in result.stdout
+
+    def test_codex_chat_restores_login_without_inheriting_database(self, monkeypatch):
+        from boss_engine.config import Settings
+        from boss_engine.services.codex_cli_adapter import CodexCliAdapter
+
+        calls = []
+        monkeypatch.setenv("DATABASE_URL", "postgresql://production-secret")
+        monkeypatch.setenv("CODEX_HOME", "/tmp/codex-home")
+        monkeypatch.setattr(
+            "boss_engine.services.cli_harness.GenericCliCodeAgent.ensure_authorised",
+            lambda self: calls.append("restored") or {"authorised": True})
+        env = CodexCliAdapter(Settings())._child_env()
+        assert calls == ["restored"]
+        assert env["CODEX_HOME"] == "/tmp/codex-home"
+        assert "DATABASE_URL" not in env
+
+    def test_codex_harness_and_login_probe_withhold_control_plane_keys(self, monkeypatch):
+        from subprocess import CompletedProcess
+
+        from boss_engine.config import Settings
+        from boss_engine.services.cli_harness import (
+            BUILTIN_CLI_HARNESSES, GenericCliCodeAgent, _run_probe,
+        )
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://production-secret")
+        monkeypatch.setenv("OPENAI_API_KEY", "control-plane-model-key")
+        monkeypatch.setenv("CODEX_HOME", "/tmp/codex-home")
+        agent = GenericCliCodeAgent(Settings(), BUILTIN_CLI_HARNESSES["codex"])
+        child_env = agent._env()
+        assert "DATABASE_URL" not in child_env
+        assert "OPENAI_API_KEY" not in child_env
+        assert child_env["CODEX_HOME"] == "/tmp/codex-home"
+
+        captured = {}
+
+        def run(cmd, **kwargs):
+            captured["env"] = kwargs["env"]
+            return CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr("boss_engine.services.cli_harness.subprocess.run", run)
+        assert _run_probe("codex", ("--version",))[0] == 0
+        assert "DATABASE_URL" not in captured["env"]
+        assert "OPENAI_API_KEY" not in captured["env"]
+        assert captured["env"]["CODEX_HOME"] == "/tmp/codex-home"
+
+    def test_claude_drivers_receive_only_their_model_token(self, monkeypatch):
+        from boss_engine.config import Settings
+        from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
+        from boss_engine.services.code_agent import ClaudeCodeAgent
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://production-secret")
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        settings = Settings(CLAUDE_CODE_OAUTH_TOKEN="wizard-stored-token")
+        for child in (ClaudeCliAdapter(settings), ClaudeCodeAgent(settings)):
+            env = child._child_env()
+            assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "wizard-stored-token"
+            assert "DATABASE_URL" not in env
 
 
 class TestTheConsoleShellIsFilteredToo:

@@ -236,7 +236,7 @@ class TestAnInventedValueIsNotWritten:
 
         return build_default_registry().invoke(
             "write_db", Ctx(), project_id="p", actor="ceo",
-            args={"sql": sql, "reason": "test", "_operator_confirmed": True})
+            args={"sql": sql, "reason": "test"}, operator_confirmed=True)
 
     def test_the_statement_boss_actually_ran(self):
         out = self._write(

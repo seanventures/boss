@@ -32,6 +32,8 @@ log = logging.getLogger(__name__)
 ALLOW_EXACT: frozenset[str] = frozenset({
     # A working process.
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "TMPDIR", "TERM", "TZ", "HOSTNAME",
+    # Keep test/build commands noninteractive in the sandbox.
+    "CI",
     # Text handling. A build that cannot decode UTF-8 fails in ways nobody enjoys debugging.
     "LANG", "LC_ALL", "LC_CTYPE",
     # TLS trust. Without these, every https call from the sandbox fails.

@@ -389,7 +389,8 @@ def test_both_coding_clis_are_in_the_image() -> None:
     performs it — the same failure that left runs queued for weeks when git was missing."""
     from pathlib import Path
 
-    dockerfile = Path("Dockerfile")
+    dockerfile = (Path("Dockerfile.community") if Path("Dockerfile.community").exists()
+                  else Path("Dockerfile"))
     if not dockerfile.exists():  # pragma: no cover - engine installed standalone
         pytest.skip("Dockerfile not in this checkout")
     text = dockerfile.read_text()

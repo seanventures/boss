@@ -54,9 +54,6 @@ class CodexCliAdapter(CliChatBrain):
         than to pass a token. `ensure_authorised` is the harness's own idempotent placement of
         it and is cheap once the file is there.
         """
-        import os
-
-        env = dict(os.environ)
         try:
             from .cli_harness import GenericCliCodeAgent, load_specs
 
@@ -66,6 +63,13 @@ class CodexCliAdapter(CliChatBrain):
         except Exception as exc:  # noqa: BLE001 — the CLI may already be signed in
             _log.info("could not restore the codex credential for chat (%s)",
                       type(exc).__name__)
+        from .agent_env import agent_environment
+
+        env = agent_environment(os.environ)
+        # The auth file may live under a configured Codex home. This is a path, not the
+        # control plane's credential; the actual credential is restored by the harness.
+        if os.environ.get("CODEX_HOME"):
+            env["CODEX_HOME"] = os.environ["CODEX_HOME"]
         return env
 
     def _scratch_dir(self) -> str:

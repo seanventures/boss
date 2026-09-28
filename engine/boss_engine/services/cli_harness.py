@@ -540,7 +540,13 @@ def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
     """Run a short informational command. Never raises: a probe that explodes tells the
     operator less than one that reports what happened."""
     try:
-        env = {**os.environ, "CI": "1", **(extra_env or {})}
+        from .agent_env import agent_environment
+
+        env = agent_environment(os.environ, {"CI": "1", **(extra_env or {})})
+        # These are paths to the CLI's own session, not control-plane credentials.
+        for name in ("CODEX_HOME", "GROK_HOME"):
+            if os.environ.get(name):
+                env[name] = os.environ[name]
         for name in exclude_env:
             env.pop(name, None)
         proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout,
@@ -821,13 +827,14 @@ class GenericCliCodeAgent:
         return found
 
     def _env(self) -> dict:
-        from .agent_env import agent_environment
+        from .agent_env import NEVER, agent_environment
 
         env = agent_environment(os.environ)
         # A CLI signed in with its own OAuth needs its own home/config to find the session.
         for name in self.spec.env_passthrough:
             value = os.environ.get(name)
-            if value:
+            if value and not (self.spec.name in {"codex", "claude_code"}
+                              and name.upper() in NEVER):
                 env[name] = value
         for name in self.spec.env_exclude:
             env.pop(name, None)

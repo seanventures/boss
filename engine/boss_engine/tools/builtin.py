@@ -5937,7 +5937,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             return {"ok": False,
                     "error": f"only read-only commands are allowed here: {', '.join(allowed)}",
                     "note": "this tool inspects; it never changes a host."}
-        if any(ch in raw for ch in (";", "&&", "||", "|", "`", "$(", ">")):
+        if any(ch in raw for ch in (";", "&&", "||", "|", "`", "$(", ">", "\n", "\r")):
             return {"ok": False, "error": "shell chaining/redirection is not permitted"}
 
         from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,

@@ -26,6 +26,7 @@ from typing import Optional
 
 from ..config import Settings
 from ..schemas import FileChange
+from .agent_env import agent_environment
 from .scheduling import low_priority
 
 
@@ -425,7 +426,7 @@ class EphemeralSandbox:
             restore_note = maybe_restore_for_command(workdir, command)
         except Exception as exc:  # noqa: BLE001 — verify must still run
             restore_note = f"[boss] sandbox.restore failed {type(exc).__name__}: {exc}\n"
-        env = {**os.environ, "CI": "1", **_shared_tool_caches()}
+        env = agent_environment(os.environ, {"CI": "1", **_shared_tool_caches()})
         # Image-global `playwright` (browser install CLI) has no `test` command.
         # Prefer the app's node_modules/.bin so @playwright/test / vite win.
         try:

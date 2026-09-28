@@ -71,6 +71,19 @@ def test_and_which_model_to_ask_for():
         verify_model_key(provider="custom", api_key="k", base_url="http://x/v1", model="")
 
 
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "gopher://127.0.0.1", "//localhost/v1"])
+def test_model_key_probe_refuses_non_http_urls(url):
+    with pytest.raises(SetupError, match="http or https"):
+        verify_model_key(provider="custom", api_key="k", base_url=url, model="m")
+
+
+def test_model_key_probe_does_not_follow_redirects():
+    from boss_engine.services.setup_service import _NoRedirect
+
+    handler = _NoRedirect()
+    assert handler.redirect_request(None, None, 302, "Moved", {}, "file:///etc/passwd") is None
+
+
 def test_a_dead_host_is_reported_not_raised():
     """A wizard step that throws a stack trace at somebody on their first run has told them
     nothing. Port 1 is reserved and never listening."""
@@ -91,6 +104,16 @@ def test_the_api_refuses_to_store_a_key_it_could_not_prove():
     setup = setup[: setup.index("@app.get(\"/v1/entitlements/sources\"")]
     assert setup.index("verify_model_key(") < setup.index("upload_credential(")
     assert 'raise HTTPException(status_code=422' in setup
+
+
+def test_the_api_authorizes_before_probing_the_caller_url():
+    from pathlib import Path
+
+    api = Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py"
+    source = api.read_text(encoding="utf-8")
+    setup = source[source.index('@app.post("/v1/setup/model"'):]
+    setup = setup[: setup.index("@app.get(\"/v1/entitlements/sources\"")]
+    assert setup.index("require_project_actor") < setup.index("verify_model_key(")
 
 
 def test_a_subscription_is_redirected_rather_than_offered_a_key_box():

@@ -45,8 +45,9 @@ class TestTheChatAgentHasItsOwnBrain:
         """`llm_engine` is global. Flipping THAT to claude_cli would take the worker with it,
         and the worker image has no `claude` binary — every worker-side completion would start
         raising "claude CLI not found"."""
-        adapter = make_agent_chat_adapter(
-            Settings(BOSS_CHAT_LLM_ENGINE="claude_cli", BOSS_CHAT_MODEL="opus"))
+        adapter = make_agent_chat_adapter(Settings(
+            BOSS_CHAT_LLM_ENGINE="claude_cli", BOSS_CHAT_MODEL="opus",
+            OPENAI_API_KEY="fallback-is-configured"))
         assert isinstance(adapter, FallingBackAdapter)
         assert isinstance(adapter.primary, ClaudeCliAdapter)
         assert adapter.primary.model_override == "opus"
@@ -88,6 +89,9 @@ class TestRaisingTheBrainCannotTakeChatDown:
         def create_chat_completion(self, messages, tools=None, **kw):
             raise self.error
 
+        def create_text_response(self, prompt, system_prompt=None, model=None):
+            raise self.error
+
     class _Fine:
         def create_chat_completion(self, messages, tools=None, **kw):
             return ({"content": "answered"}, {})
@@ -114,6 +118,17 @@ class TestRaisingTheBrainCannotTakeChatDown:
         adapter = FallingBackAdapter(self._Fine(), self._Boom(RuntimeError("unused")))
         assert adapter.create_chat_completion([])[0]["content"] == "answered"
         assert adapter.last_backend == "_Fine"
+
+    @pytest.mark.parametrize("method,args", [
+        ("create_chat_completion", ([],)),
+        ("create_text_response", ("hello",)),
+    ])
+    def test_both_failures_report_the_primary_cause(self, method, args):
+        adapter = FallingBackAdapter(
+            self._Boom(RuntimeError("claude CLI not found")),
+            self._Boom(RuntimeError("fallback also failed")))
+        with pytest.raises(RuntimeError, match="claude CLI not found.*fallback also failed"):
+            getattr(adapter, method)(*args)
 
 
 # --------------------------------------------------------------------------- B
@@ -633,6 +648,48 @@ class TestWritingIsAnOperationBeforeItIsAStatement:
         assert "every row" in why
 
     @pytest.mark.parametrize("statement", [
+        "WITH x AS (SELECT 1) UPDATE jobs SET status = 'done'",
+        "WITH x AS (SELECT 1) DELETE FROM workflow_step_runs",
+        "WITH x AS (SELECT 1) INSERT INTO jobs (id) VALUES ('x')",
+        "EXPLAIN ANALYZE UPDATE jobs SET status = 'done' WHERE id = 'x'",
+    ])
+    def test_a_read_only_investigation_cannot_write_through_a_prefix(self, statement):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        allowed, why = sql_is_allowed(statement, allow_write=False)
+        assert allowed is False, (statement, why)
+
+    @pytest.mark.parametrize("statement", [
+        "WITH x AS (SELECT id FROM jobs WHERE status = 'dead') "
+        "UPDATE jobs SET status = 'queued'",
+        "UPDATE jobs SET status = (SELECT status FROM jobs WHERE id = 'other')",
+        "UPDATE jobs SET last_error = 'where is the port'",
+        "UPDATE jobs SET last_error = $$where is the port$$",
+        "UPDATE jobs SET last_error = $message$where is the port$message$",
+        "DELETE FROM jobs /* WHERE id = 'x' */",
+    ])
+    def test_an_inner_or_quoted_where_cannot_qualify_an_outer_write(self, statement):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        allowed, _why = sql_is_allowed(statement, allow_write=True)
+        assert allowed is False, statement
+
+    def test_a_qualified_cte_write_is_allowed_only_when_fixing(self):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        sql = ("WITH x AS (SELECT id FROM jobs WHERE status = 'dead') "
+               "UPDATE jobs SET status = 'queued' WHERE id IN (SELECT id FROM x)")
+        assert sql_is_allowed(sql, allow_write=False)[0] is False
+        assert sql_is_allowed(sql, allow_write=True)[0] is True
+
+    def test_a_data_changing_cte_is_refused_even_if_outer_query_reads(self):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        sql = "WITH x AS (DELETE FROM jobs RETURNING id) SELECT id FROM x"
+        assert sql_is_allowed(sql, allow_write=False)[0] is False
+        assert sql_is_allowed(sql, allow_write=True)[0] is False
+
+    @pytest.mark.parametrize("statement", [
         "DROP TABLE events",
         "TRUNCATE jobs",
         "ALTER TABLE jobs ADD COLUMN x TEXT",
@@ -657,7 +714,8 @@ class TestWritingIsAnOperationBeforeItIsAStatement:
 
         body = inspect.getsource(run_operation)
         assert "build_default_registry()" in body
-        assert '"_operator_confirmed": True' in body
+        assert "if not spec.self_executable" in body
+        assert "operator_confirmed=True" not in body
 
     def test_a_read_only_investigation_may_not_run_them(self):
         from boss_engine.services.debug_session import run_operation
@@ -669,7 +727,8 @@ class TestWritingIsAnOperationBeforeItIsAStatement:
         assert "redeploy" in out["available_in_a_fixing_investigation"]
 
     @pytest.mark.parametrize("tool", ["cancel_job", "cancel_code_task", "close_orphaned_runs",
-                                      "waive_gates", "run_on_host", "write_db"])
+                                      "waive_gates", "run_on_host", "write_db", "decide",
+                                      "delete_workflow"])
     def test_throwing_work_away_is_never_an_investigation(self, tool):
         """The operator's rule, in their words: cancelling "should be prevented at all cost".
         An investigation exists to make something work; nothing in that job needs to kill a
@@ -804,9 +863,10 @@ class TestWhoDecidedNotWhichFlagWasSet:
         def begin(self):
             raise AssertionError("OPENED")
 
-    def _investigate(self, args):
+    def _investigate(self, args, *, operator_confirmed=False):
         return build_default_registry().invoke(
-            "investigate", self._Ctx(), project_id="p", actor="ceo", args=args)
+            "investigate", self._Ctx(), project_id="p", actor="ceo", args=args,
+            operator_confirmed=operator_confirmed)
 
     def test_an_instruction_opens_a_fixing_investigation(self):
         out = self._investigate({"question": "fix the deploy", "fix": True,
@@ -814,8 +874,8 @@ class TestWhoDecidedNotWhichFlagWasSet:
         assert "OPENED" in str(out.get("error") or ""), out
 
     def test_a_click_still_does_too(self):
-        out = self._investigate({"question": "fix the deploy", "fix": True,
-                                 "_operator_confirmed": True})
+        out = self._investigate({"question": "fix the deploy", "fix": True},
+                                operator_confirmed=True)
         assert "OPENED" in str(out.get("error") or ""), out
 
     def test_a_question_gets_an_offer(self):

@@ -10035,16 +10035,15 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
     # THIS IS THE ACK, AND ONLY THIS PATH CAN GIVE IT.
     #
     # Some tools change a machine rather than a row — `run_on_host` opens a shell on a
-    # registered host. Those refuse to run from a model's own tool call and require this
-    # marker, which is set here and nowhere else: reaching this line means an operator was
-    # shown the exact tool and the exact arguments and pressed the button.
+    # registered host. The confirmation travels as a privileged invoke argument, outside
+    # the model-controlled tool args. Reaching this line means an operator pressed the button.
     #
     # The distinction the operator drew after the 2026-09-02 wipe: an agent working WITH a
     # person is fine; an autonomous one performing a destructive act with nobody watching is
     # not. This is where that line is enforced.
     result = registry.invoke(
         spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
-        args={**dict(payload.args or {}), "_operator_confirmed": True},
+        args=dict(payload.args or {}), operator_confirmed=True,
     )
     ok = bool(result.get("ok", True))
     with begin(engine) as connection:
@@ -14073,7 +14072,8 @@ def setup_store_coding_agent_credential(payload: dict) -> dict:
     )
 
     project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "setup")
+    actor = str(payload.get("actor") or "").strip() or (
+        current_api_principal.get() or "ceo")
     provider = str(payload.get("provider") or "").strip().lower()
     credential = str(payload.get("credential") or "")
     accept = bool(payload.get("accept_database_fallback"))
@@ -14153,7 +14153,8 @@ def setup_connect_coding_agent(payload: dict) -> dict:
     from .services.setup_service import SetupError, connect_coding_agent
 
     project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "setup")
+    actor = str(payload.get("actor") or "").strip() or (
+        current_api_principal.get() or "ceo")
     provider = str(payload.get("provider") or "").strip().lower()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -14203,6 +14204,11 @@ def setup_model_endpoint(payload: dict) -> dict:
                     f"through its own login. Use /v1/entitlements/sources/{{source_id}}/connect."))
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
+
+    # verify_model_key makes a network request to a caller-supplied URL. Check project
+    # authority before any request leaves this process.
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "entitlement_manage")
 
     try:
         proof = verify_model_key(provider=provider, api_key=api_key,

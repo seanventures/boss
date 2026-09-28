@@ -119,13 +119,16 @@ class CliChatBrain:
         coding harness had always resolved the stored credential; the chat never did, so the
         one interface a customer talks to was the one that could not reach the model.
         """
+        from .agent_env import agent_environment
         from .cli_harness import stored_credential
 
-        env = dict(os.environ)
-        if not (env.get("CLAUDE_CODE_OAUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")):
-            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN")
-            if token:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        token = str(getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
+        if not token and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+        extra = {"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}
+        env = agent_environment(os.environ, extra)
+        if token:
+            env.pop("ANTHROPIC_API_KEY", None)
         return env
 
     def _usage(self, data: dict) -> dict:  # pragma: no cover - subclass responsibility
@@ -442,13 +445,16 @@ class ClaudeCliAdapter(CliChatBrain):
         coding harness had always resolved the stored credential; the chat never did, so the
         one interface a customer talks to was the one that could not reach the model.
         """
+        from .agent_env import agent_environment
         from .cli_harness import stored_credential
 
-        env = dict(os.environ)
-        if not (env.get("CLAUDE_CODE_OAUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")):
-            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN")
-            if token:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        token = str(getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
+        if not token and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+        extra = {"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}
+        env = agent_environment(os.environ, extra)
+        if token:
+            env.pop("ANTHROPIC_API_KEY", None)
         return env
 
     def _usage(self, data: dict) -> dict:
@@ -516,6 +522,7 @@ class FallingBackAdapter:
         return any(marker in blob for marker in self._UNAVAILABLE)
 
     def create_chat_completion(self, messages, tools=None, **kwargs):
+        primary_error = None
         try:
             out = self.primary.create_chat_completion(messages, tools=tools, **kwargs)
             self.last_backend = type(self.primary).__name__
@@ -523,6 +530,7 @@ class FallingBackAdapter:
         except Exception as exc:  # noqa: BLE001
             if not self._unavailable(exc):
                 raise
+            primary_error = exc
             _log.warning("chat brain unavailable (%s); falling back to %s",
                          exc, type(self.fallback).__name__)
             if self._on_fallback:
@@ -536,7 +544,7 @@ class FallingBackAdapter:
             # THE FIRST FAILURE IS THE REAL ONE. Reporting the second hides a CLI that said
             # exactly what was wrong behind a backend the operator never chose.
             raise RuntimeError(
-                f"{exc} (and the fallback failed too: {fallback_exc})") from exc
+                f"{primary_error} (and the fallback failed too: {fallback_exc})") from primary_error
         self.last_backend = type(self.fallback).__name__
         return out
 
@@ -550,6 +558,7 @@ class FallingBackAdapter:
         OPENAI_API_KEY error it was meant to replace. A wrapper that implements half of the
         interface it wraps is a fallback that only works for the callers somebody tested.
         """
+        primary_error = None
         try:
             out = self.primary.create_text_response(
                 prompt, system_prompt=system_prompt, model=model)
@@ -558,6 +567,7 @@ class FallingBackAdapter:
         except Exception as exc:  # noqa: BLE001
             if not self._unavailable(exc):
                 raise
+            primary_error = exc
             _log.warning("chat brain unavailable (%s); falling back to %s",
                          exc, type(self.fallback).__name__)
             if self._on_fallback:
@@ -570,7 +580,7 @@ class FallingBackAdapter:
                 prompt, system_prompt=system_prompt, model=model)
         except Exception as fallback_exc:  # noqa: BLE001
             raise RuntimeError(
-                f"{exc} (and the fallback failed too: {fallback_exc})") from exc
+                f"{primary_error} (and the fallback failed too: {fallback_exc})") from primary_error
         self.last_backend = type(self.fallback).__name__
         return out
 

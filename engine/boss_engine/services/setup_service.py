@@ -18,6 +18,7 @@ from pathlib import Path as pathlib_Path
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -104,6 +105,24 @@ class SetupError(RuntimeError):
     """Something the operator can fix, phrased for them."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep a provider probe at the URL the authorized operator supplied."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _provider_endpoint(url_base: str, suffix: str) -> str:
+    """urllib can also fetch file URLs; model probes require an HTTP host."""
+    try:
+        parsed = urlparse(url_base)
+    except ValueError as exc:
+        raise SetupError("the provider URL is malformed.") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise SetupError("the provider URL must be http or https and include a host.")
+    return f"{url_base.rstrip('/')}{suffix}"
+
+
 def provider_catalogue() -> list[dict[str, Any]]:
     """What the wizard shows, in the order it shows it."""
     return [{"provider": key, **value} for key, value in PROVIDERS.items()]
@@ -128,13 +147,13 @@ def verify_model_key(
         raise SetupError("a model name is required.")
 
     if spec.get("api") == "anthropic":
-        endpoint = f"{url_base}/messages"
+        endpoint = _provider_endpoint(url_base, "/messages")
         body = {"model": name, "max_tokens": 1,
                 "messages": [{"role": "user", "content": "hi"}]}
         headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
                    "content-type": "application/json"}
     else:
-        endpoint = f"{url_base}/chat/completions"
+        endpoint = _provider_endpoint(url_base, "/chat/completions")
         body = {"model": name, "max_tokens": 1,
                 "messages": [{"role": "user", "content": "hi"}]}
         headers = {"Authorization": f"Bearer {api_key}",
@@ -142,8 +161,9 @@ def verify_model_key(
 
     request = urllib.request.Request(
         endpoint, data=json.dumps(body).encode(), headers=headers, method="POST")
+    opener = urllib.request.build_opener(_NoRedirect)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return {"ok": True, "status": response.status, "model": name,
                     "endpoint": endpoint}
     except urllib.error.HTTPError as error:
@@ -435,7 +455,7 @@ class SecretFallbackNotAccepted(SetupError):
 
 def store_coding_agent_credential(
     connection, settings: Settings, project_id: str, provider: str, credential: str, *,
-    actor: str = "setup", accept_database_fallback: bool = False,
+    actor: str = "ceo", accept_database_fallback: bool = False,
 ) -> dict[str, Any]:
     """Put a subscription's credential into whatever store THIS installation has.
 
@@ -560,7 +580,7 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
 
 def connect_coding_agent(
     connection: Connection, settings: Settings, project_id: str, provider: str, *,
-    actor: str = "setup", prove: bool = True,
+    actor: str = "ceo", prove: bool = True,
 ) -> dict[str, Any]:
     """Import a coding-agent subscription the customer already has, into BOSS.
 

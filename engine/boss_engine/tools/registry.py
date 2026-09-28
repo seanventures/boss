@@ -176,7 +176,16 @@ class ToolRegistry:
         return [s.mcp() for s in self.specs(kind=kind)]
 
     # ---- invocation -------------------------------------------------------
-    def invoke(self, name: str, ctx: Any, *, project_id: str, actor: str, args: dict) -> dict:
+    def invoke(
+        self,
+        name: str,
+        ctx: Any,
+        *,
+        project_id: str,
+        actor: str,
+        args: dict,
+        operator_confirmed: bool = False,
+    ) -> dict:
         spec = self.get(name)
         if spec.kind == "write" and not getattr(ctx, "durable_workspace_configured", True):
             return {
@@ -192,14 +201,16 @@ class ToolRegistry:
             }
         # THE ACK, ENFORCED AT THE DOOR RATHER THAN PER TOOL.
         #
-        # The agent loop already refuses to press these itself. This is the second lock: even a
-        # code path that invokes the registry directly with a model's arguments cannot run a
-        # tool that destroys work or cannot be undone without the marker the operator's own
-        # click sets, and that marker is set in exactly one place (the accept-action endpoint).
+        # The agent loop already refuses to press these itself. The model, MCP, and CLI can
+        # supply args, so confirmation must arrive through a separate trusted call path.
         #
         # `run_on_host` has always checked this for itself; the check belongs to the CLASS, not
         # to whichever tool remembered.
-        if not spec.self_executable and not (args or {}).get("_operator_confirmed"):
+        safe_args = dict(args or {})
+        safe_args.pop("_operator_confirmed", None)
+        if operator_confirmed:
+            safe_args["_operator_confirmed"] = True
+        if not spec.self_executable and not operator_confirmed:
             return {
                 "ok": False, "tool": name, "status": "confirmation_required",
                 # `requires_confirmation` and `do_this` are the shape `run_on_host` has always
@@ -216,15 +227,14 @@ class ToolRegistry:
                 ),
                 # VERBATIM. A confirmation button is worthless if what runs is not what was
                 # shown, so the arguments come back untouched for the proposal to carry.
-                "proposed_args": {k: v for k, v in (args or {}).items()
-                                  if k != "_operator_confirmed"},
+                "proposed_args": safe_args,
                 "message": (
                     f"'{name}' is declared '{spec.reversibility}' — it throws away work or "
                     "cannot be undone — so it runs only when an operator clicks it."
                 ),
             }
         try:
-            result = spec.handler(ctx, project_id=project_id, actor=actor, args=args or {})
+            result = spec.handler(ctx, project_id=project_id, actor=actor, args=safe_args)
         except ToolError:
             raise
         except Exception as exc:  # normalize handler failures into a tool result

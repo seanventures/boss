@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
 import uuid
@@ -150,17 +149,61 @@ def _without_string_literals(statement: str) -> str:
     """
     out: list[str] = []
     quote = ""
-    for char in statement or "":
+    source = statement or ""
+    offset = 0
+    while offset < len(source):
+        char = source[offset]
         if quote:
+            if char == "\\" and offset + 1 < len(source):
+                # PostgreSQL E'...' escapes a quote; treating it as the end of the
+                # string would expose a fake WHERE to the guard.
+                out.extend("  ")
+                offset += 2
+                continue
+            if char == quote and offset + 1 < len(source) and source[offset + 1] == quote:
+                out.extend("  ")
+                offset += 2
+                continue
             out.append(" " if char != quote else char)
             if char == quote:
                 quote = ""
         elif char in ("'", '"'):
             quote = char
             out.append(char)
+        elif char == "$":
+            # PostgreSQL dollar strings can hold the same "where" payload as quotes.
+            delimiter = re.match(r"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$", source[offset:])
+            if delimiter:
+                token = delimiter.group(0)
+                end = source.find(token, offset + len(token))
+                if end >= 0:
+                    length = end + len(token) - offset
+                    out.extend(" " * length)
+                    offset += length
+                    continue
+            out.append(char)
         else:
             out.append(char)
+        offset += 1
     return "".join(out)
+
+
+def _top_level_sql(statement: str) -> str | None:
+    """Keep SQL outside parentheses; a CTE or subquery cannot qualify an outer write."""
+    depth = 0
+    out: list[str] = []
+    for char in statement:
+        if char == "(":
+            depth += 1
+            out.append(" ")
+        elif char == ")":
+            if depth == 0:
+                return None
+            depth -= 1
+            out.append(" ")
+        else:
+            out.append(char if depth == 0 else " ")
+    return "".join(out) if depth == 0 else None
 
 
 def sql_is_allowed(statement: str, *, allow_write: bool) -> tuple[bool, str]:
@@ -183,11 +226,30 @@ def sql_is_allowed(statement: str, *, allow_write: bool) -> tuple[bool, str]:
     if ";" in _without_string_literals(body):
         return False, ("one statement at a time (a semicolon inside a quoted string is fine; "
                        "this one separates statements)")
+    visible = _without_string_literals(body)
+    # Comments can hide a write or supply a fake WHERE. An investigation needs neither.
+    if any(marker in visible for marker in ("--", "/*", "*/")):
+        return False, "SQL comments are not permitted in an investigation"
+    outer = _top_level_sql(visible)
+    if outer is None:
+        return False, "unbalanced SQL parentheses"
     head = body.split(None, 1)[0].lower() if body.split() else ""
-    if _SQL_NEVER.search(_without_string_literals(body)):
+    if _SQL_NEVER.search(visible):
         return False, ("schema changes, grants and bulk copies are refused in every mode — "
                        "that is a migration, not an investigation")
-    if head in ("select", "with", "explain", "table", "show"):
+    if head == "with":
+        # WITH is a prefix, not a read. Find the verb after the CTE bodies, and refuse
+        # data-changing CTEs whose inner effect would otherwise escape that classification.
+        outer_verb = re.search(r"\b(select|update|delete|insert)\b", outer, re.I)
+        if outer_verb is None:
+            return False, "a WITH statement needs a supported outer operation"
+        if re.search(r"\b(update|delete|insert)\b", visible[:outer_verb.start()], re.I):
+            return False, "data-changing CTEs are not permitted in an investigation"
+        head = outer_verb.group(1).lower()
+        outer = outer[outer_verb.start():]
+    if head in ("select", "explain", "table", "show"):
+        if re.search(r"\b(update|delete|insert)\b", visible, re.I):
+            return False, "read-only: the statement contains a write keyword"
         return True, ""
     if not allow_write:
         return False, (f"this investigation is read-only ({head!r} refused). Work out exactly "
@@ -195,7 +257,7 @@ def sql_is_allowed(statement: str, *, allow_write: bool) -> tuple[bool, str]:
                        "investigation, or apply it from the console in one click.")
     if head not in ("insert", "update", "delete"):
         return False, f"{head!r} is not a statement an investigation may run"
-    if head in ("update", "delete") and not re.search(r"\bwhere\b", body, re.I):
+    if head in ("update", "delete") and not re.search(r"\bwhere\b", outer, re.I):
         return False, (f"an unqualified {head.upper()} would hit every row. Add a WHERE, or use "
                        "boss-do to call the operation that does this properly.")
     return True, ""
@@ -907,6 +969,7 @@ def run_db(connection, record: dict, statement: str) -> dict[str, Any]:
 _NOT_FOR_INVESTIGATIONS = frozenset({
     "cancel_job", "cancel_code_task", "close_orphaned_runs", "waive_gates",
     "write_db", "run_on_host", "generate_image", "create_discovery", "request_meeting",
+    "decide", "delete_workflow",
 })
 
 
@@ -923,7 +986,8 @@ def run_operation(ctx, record: dict, tool: str, args: dict) -> dict[str, Any]:
 
     registry = build_default_registry()
     available = sorted(
-        s.name for s in registry.specs(kind="write") if s.name not in _NOT_FOR_INVESTIGATIONS)
+        s.name for s in registry.specs(kind="write")
+        if s.name not in _NOT_FOR_INVESTIGATIONS and s.self_executable)
     if not record["allow_fix"]:
         return {"ok": False,
                 "error": "this investigation is read-only, so it may not run operations. Put "
@@ -941,11 +1005,14 @@ def run_operation(ctx, record: dict, tool: str, args: dict) -> dict[str, Any]:
         return {"ok": False, "error": str(exc), "available": available}
     if spec.kind != "write":
         return {"ok": False, "error": f"{tool!r} changes nothing — read it with boss-db instead"}
+    if not spec.self_executable:
+        return {"ok": False, "requires_confirmation": True,
+                "error": f"{tool!r} requires its own operator click; describe the action "
+                         "and let the operator run it from the console.",
+                "available": available}
     return registry.invoke(
         spec.name, ctx, project_id=str(record["project_id"]), actor=str(record["actor"]),
-        # THE OPERATOR'S MARKER, and it is honest here: a fixing investigation was opened by an
-        # operator who was shown what it would be allowed to do.
-        args={**(args or {}), "_operator_confirmed": True})
+        args=args or {})
 
 
 def get_investigation(connection, *, project_id: str,

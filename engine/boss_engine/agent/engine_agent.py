@@ -507,6 +507,8 @@ class EngineAgent:
         # on its own that a page "needs a hero image" can spend real money on a hunch. The
         # operator sees the prompt and the destination and clicks, or does not.
         "generate_image",
+        # Arbitrary shell on a registered host always needs a visible button press.
+        "run_on_host",
     })
 
     #: THROWS AWAY WORK, OR REMOVES A SAFEGUARD. Always offered, never executed by the model.

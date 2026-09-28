@@ -390,10 +390,12 @@ class SandboxToolset:
             # `/v1/code-tasks?limit=5` went 0.37s -> 47.1s while a code task ran. An
             # unniced build makes the console unusable; see
             # tests/test_builds_yield_to_the_control_plane.py.
+            from .agent_env import agent_environment
+
             proc = subprocess.run(
                 low_priority(argv), cwd=str(self.root), capture_output=True, text=True,
                 timeout=timeout, start_new_session=True,
-                env={**os.environ, "CI": "1"},
+                env=agent_environment(os.environ, {"CI": "1"}),
             )
         except subprocess.TimeoutExpired:
             return f"$ {command}\n(timed out after {timeout}s)"

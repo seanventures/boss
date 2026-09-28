@@ -150,7 +150,7 @@ def test_boss_is_the_default_destination(mod, tmp_path, monkeypatch, capsys) -> 
     """
     sent = {}
 
-    def fake(api, api_key, project_id, provider, credential, actor="setup", timeout=30,
+    def fake(api, api_key, project_id, provider, credential, actor="ceo", timeout=30,
              accept_database_fallback=False):
         sent.update(api=api, key=api_key, project=project_id, provider=provider,
                     credential=credential, accepted=accept_database_fallback)
@@ -169,6 +169,32 @@ def test_boss_is_the_default_destination(mod, tmp_path, monkeypatch, capsys) -> 
     out = capsys.readouterr().out
     assert "database" in out and "Nothing to restart" in out
     assert "real-token-value" not in out
+
+
+def test_the_default_store_request_acts_as_a_project_member(mod, monkeypatch) -> None:
+    from boss_engine.services.members import DEFAULT_MEMBER_IDS
+
+    captured = {}
+
+    def capture(request, timeout=None):
+        captured["body"] = json.loads(request.data.decode())
+
+        class Response:
+            def read(self):
+                return b'{"ok": true}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", capture)
+    assert mod.send_to_boss("http://boss", "k", "p", "codex", '{"t":1}')["ok"] is True
+    assert captured["body"]["actor"] in DEFAULT_MEMBER_IDS
+    assert captured["body"]["actor"] != "setup"
 
 
 def test_boss_refusing_the_credential_does_not_echo_it(mod, monkeypatch) -> None:
