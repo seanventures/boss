@@ -9800,6 +9800,27 @@ def _raise_sandbox_plane(exc: Exception) -> None:
     raise exc
 
 
+def require_sandbox_reader(connection, sandbox_id: str) -> str:
+    """Resolve a host sandbox to one stored project before inspecting it."""
+    project_ids = connection.execute(
+        text(
+            """SELECT DISTINCT project_id FROM (
+                   SELECT project_id FROM code_task_runs
+                   WHERE finalize_ctx->>'sandbox_task_id' = :sandbox_id
+                   UNION ALL
+                   SELECT project_id FROM app_previews
+                   WHERE sandbox_task_id = :sandbox_id
+               ) known_sandboxes"""
+        ),
+        {"sandbox_id": sandbox_id},
+    ).scalars().all()
+    if len(project_ids) != 1:
+        raise HTTPException(status_code=404, detail="Sandbox not found")
+    project_id = str(project_ids[0])
+    require_project_reader(connection, project_id)
+    return project_id
+
+
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():
     """The connected micro-VM host + the inspectable (retained) VMs. A failed or
@@ -9830,19 +9851,27 @@ def list_sandboxes_endpoint():
                 "AND finalize_ctx->>'sandbox_task_id' IS NOT NULL "
                 "AND updated_at > now() - interval '115 minutes' "
                 "ORDER BY updated_at DESC LIMIT 30")).mappings().all()
-        for r in rows:
-            def _j(v):
-                return v if isinstance(v, dict) else (json.loads(v) if v else {})
-            spec, state, fctx = _j(r["spec"]), _j(r["state"]), _j(r["finalize_ctx"])
-            cards.append({
-                "sandbox_id": fctx.get("sandbox_task_id"), "status": "failed",
-                "title": r["title"], "tenant_id": r["project_id"],
-                "repo": f"{spec.get('owner', '')}/{spec.get('repo', '')}",
-                "age_seconds": int(r["age"] or 0), "preserved": False,
-                "meta": {"engine": state.get("engine"), "run_id": r["id"],
-                         "diff_summary": state.get("diff_summary"),
-                         "tests_passed": state.get("tests_passed")},
-            })
+            for r in rows:
+                if current_transport_authenticated.get():
+                    principal = current_api_principal.get()
+                    try:
+                        if not principal:
+                            continue
+                        members.require_member(c, r["project_id"], principal)
+                    except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+                        continue
+                def _j(v):
+                    return v if isinstance(v, dict) else (json.loads(v) if v else {})
+                spec, state, fctx = _j(r["spec"]), _j(r["state"]), _j(r["finalize_ctx"])
+                cards.append({
+                    "sandbox_id": fctx.get("sandbox_task_id"), "status": "failed",
+                    "title": r["title"], "tenant_id": r["project_id"],
+                    "repo": f"{spec.get('owner', '')}/{spec.get('repo', '')}",
+                    "age_seconds": int(r["age"] or 0), "preserved": False,
+                    "meta": {"engine": state.get("engine"), "run_id": r["id"],
+                             "diff_summary": state.get("diff_summary"),
+                             "tests_passed": state.get("tests_passed")},
+                })
     except Exception:  # noqa: BLE001
         pass
     result["sandboxes"] = cards
@@ -9872,7 +9901,11 @@ def sandbox_tree_endpoint(sandbox_id: str):
     from .services.sandbox_provider import SandboxPlaneError
 
     try:
+        with begin(engine) as connection:
+            require_sandbox_reader(connection, sandbox_id)
         return sandbox_console.get_tree(settings, sandbox_id)
+    except HTTPException:
+        raise
     except SandboxPlaneError as e:
         _raise_sandbox_plane(e)
     except Exception as e:  # noqa: BLE001
@@ -9890,7 +9923,10 @@ def sandbox_file_endpoint(sandbox_id: str, path: str, actor: str = "operator"):
 
     try:
         with begin(engine) as c:
+            require_sandbox_reader(c, sandbox_id)
             return sandbox_console.read_file(c, settings, sandbox_id, path, actor=actor)
+    except HTTPException:
+        raise
     except SandboxPlaneError as e:
         _raise_sandbox_plane(e)
     except Exception as e:  # noqa: BLE001
@@ -9927,6 +9963,8 @@ def sandbox_exec_endpoint(sandbox_id: str, payload: dict):
 def sandbox_stats_endpoint(sandbox_id: str):
     """Per-sandbox resource telemetry (CPU/mem/io, OOM, limits) for operators."""
     from .services import sandbox_console
+    with begin(engine) as connection:
+        require_sandbox_reader(connection, sandbox_id)
     return sandbox_console.get_stats(settings, sandbox_id)
 
 
@@ -9937,7 +9975,11 @@ def sandbox_logs_endpoint(sandbox_id: str):
     from .services.sandbox_provider import SandboxPlaneError
 
     try:
+        with begin(engine) as connection:
+            require_sandbox_reader(connection, sandbox_id)
         return sandbox_console.get_logs(settings, sandbox_id)
+    except HTTPException:
+        raise
     except SandboxPlaneError as e:
         _raise_sandbox_plane(e)
     except Exception as e:  # noqa: BLE001 — fail closed (no 500)
