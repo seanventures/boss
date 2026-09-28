@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "db/schema.sql"
 OUTPUT = ROOT / "db/schema.community.sql"
-REVIEWED_SOURCE_SHA256 = "19459c1ce924417fe59dfbd8bf465ee232e2004ed56d277de38984aa9f430c8c"
+REVIEWED_SOURCE_SHA256 = "c49c92b9f792bf64e8e026c90a4f57f9abf09970bee9c6246a531f29f593173c"
 
 # Optional Easy Connect retains its local org/auth/health/worker records. Only
 # hosted seat/billing/marketplace and Enterprise cluster/support records are

@@ -804,6 +804,26 @@ CREATE INDEX IF NOT EXISTS idx_resource_allocations_work
 CREATE INDEX IF NOT EXISTS idx_resource_allocations_quota
   ON resource_allocations(quota_id, status, expires_at);
 
+-- Per-project configuration that is neither a setting nor a credential.
+--
+-- A SETTING is a knob with a default and a type, and project_settings holds those. A CREDENTIAL
+-- goes through secret_backends and is referenced, never stored here. What was left over is a
+-- small structured body — an SMTP server's host, port, sender and TLS flags — that belongs to
+-- one project, is worth showing on a screen, and is harmless in a log. Those had nowhere to go
+-- but the environment, which meant changing a mail server was a redeploy.
+--
+-- The SECRET part of such a body is a `secret_ref_id` inside it, never the value.
+CREATE TABLE IF NOT EXISTS project_configurations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  config_key TEXT NOT NULL,
+  body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, config_key)
+);
+
 CREATE TABLE IF NOT EXISTS work_tracker_providers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -2995,7 +3015,7 @@ CREATE TABLE IF NOT EXISTS skill_definitions (
   label TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '',
   behaviour_kind TEXT NOT NULL
-    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command')),
+    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program')),
   -- WHAT THIS SKILL KNOWS. The markdown body an operator writes: the house style, the format
   -- their team uses, the clauses that matter. Carried into every execution as context, so the
   -- skill behaves the same on its hundredth run as on the one somebody watched.
@@ -3019,6 +3039,27 @@ CREATE TABLE IF NOT EXISTS skill_definitions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, skill_key)
 );
+
+-- A FOURTH BEHAVIOUR: a program an AGENT wrote and a workflow kept.
+--
+-- The other three are authored by a person. This one is written by an agent mid-run, saved when
+-- it worked, and offered back to the agent on the next run of the same workflow — so a customer's
+-- second video project reuses the program the first one produced instead of paying a model to
+-- rediscover it. The source lives in `config`, which is why this needed a constraint widened and
+-- not a table added.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'skill_definitions_behaviour_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%agent_program%'
+  ) THEN
+    ALTER TABLE skill_definitions DROP CONSTRAINT skill_definitions_behaviour_kind_check;
+    ALTER TABLE skill_definitions
+      ADD CONSTRAINT skill_definitions_behaviour_kind_check
+      CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program'));
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_skill_definitions_project
   ON skill_definitions(project_id, enabled, skill_key);
 
@@ -3746,6 +3787,44 @@ CREATE INDEX IF NOT EXISTS idx_workflow_mappings_resolve
 CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_mappings_active_selector
   ON workflow_mappings(project_id, selector_kind, selector_value, scope_type, scope_id, priority)
   WHERE enabled = true;
+
+-- A workflow that starts because it is Monday, rather than because somebody asked.
+--
+-- NOT CRON. A cadence, a minute, an hour and a weekday — see
+-- engine/boss_engine/services/workflow_schedules.py for why five positional fields were the
+-- wrong trade here. The TIME ZONE is stored with it because "Monday 8am" means 8am where the
+-- person reading the report lives; next_run_at is UTC because an instant is an instant.
+CREATE TABLE IF NOT EXISTS workflow_schedules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- The workflow by KEY, not by version: a schedule is "run this workflow", and pinning a
+  -- version would quietly keep running the one that was current when it was created.
+  workflow_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  cadence TEXT NOT NULL CHECK (cadence IN ('hourly', 'daily', 'weekly')),
+  minute INTEGER NOT NULL CHECK (minute BETWEEN 0 AND 59),
+  hour INTEGER NOT NULL DEFAULT 0 CHECK (hour BETWEEN 0 AND 23),
+  weekday INTEGER CHECK (weekday BETWEEN 0 AND 6),
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  -- What each run is started with. The same every time: a schedule that needed different
+  -- input per run would be a queue, not a schedule.
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  actor TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  next_run_at TIMESTAMPTZ NOT NULL,
+  last_run_at TIMESTAMPTZ,
+  last_run_id TEXT,
+  last_error TEXT,
+  -- The fuse. A schedule that fires and fails forever spends money forever, so it is disabled
+  -- after a run of failures rather than left to keep trying.
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+-- The only query the tick makes, on every tick.
+CREATE INDEX IF NOT EXISTS idx_workflow_schedules_due
+  ON workflow_schedules(next_run_at) WHERE enabled;
 
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id TEXT PRIMARY KEY,

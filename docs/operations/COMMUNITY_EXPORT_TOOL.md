@@ -67,3 +67,7 @@ The checked-in Community README, contributor guide, and Makefile are mapped to t
 The product owner supplied counsel reference `01049940` approving Apache License 2.0 for the full Community repository. The exporter now includes the existing root `LICENSE` only when its SHA-256 matches the reviewed manifest pin. A changed file is withheld with a `reviewed-license-changed` blocker; an unpinned root license is rejected by manifest validation. The source license text was not rewritten.
 
 Against the prior combined source commit `9891ad69f1367766595ec57d81f74f18a9a3c3de`, the candidate grew from 1,743 to 1,744 files and the three `LICENSE`-related blockers fell to zero. The redacted gitleaks candidate scan found zero matches. This is mechanical export evidence only: the report retains `ready_for_publication: false` while the BOSS-300 decision record, NOTICE/package metadata review, independent scans, clean Linux installer acceptance, and remaining BOSS-293 release gates are completed.
+
+## 2026-09-28 current-main schema review
+
+The integrated source added Community `project_configurations` for local SMTP settings and `workflow_schedules` for recurring workflow runs, and widened the Community skill behaviour constraint to include `agent_program`. The regenerated bootstrap has 246 tables, including `agent_wakeups`, and excludes exactly seven hosted billing/marketplace and Enterprise tables. The source and generated SQL have separate SHA-256 pins; a further source or output change stops the export until the table boundary is reviewed again.
