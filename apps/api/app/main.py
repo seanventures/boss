@@ -14165,6 +14165,10 @@ def setup_status_endpoint(project_id: str) -> dict:
     from .services.setup_service import setup_status
 
     with begin(engine) as connection:
+        require_project_actor(
+            connection, project_id, current_api_principal.get() or "ceo",
+            "entitlement_manage",
+        )
         return setup_status(connection, settings, project_id)
 
 
@@ -14195,16 +14199,21 @@ def setup_coding_agents(project_id: str = "") -> dict:
     """
     from .services.setup_service import list_coding_agents, with_recorded_connections
 
-    agents = list_coding_agents(get_settings())
     if project_id:
-        # Best effort: detection is useful on its own, and a lookup that fails must not take
-        # the wizard down with it — every agent then reports connected=False, which is what
-        # this endpoint said before it could read the record at all.
-        try:
-            with begin(engine) as connection:
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, project_id, current_api_principal.get() or "ceo",
+                "entitlement_manage",
+            )
+            agents = list_coding_agents(get_settings())
+            # Keep detection useful if the recorded connection lookup fails. An authority
+            # failure must reach the caller instead of becoming connected=False.
+            try:
                 agents = with_recorded_connections(agents, connection, project_id)
-        except Exception:  # noqa: BLE001
-            pass
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        agents = list_coding_agents(get_settings())
     return {"agents": agents,
             "ready": [a["name"] for a in agents if a["ready"]],
             "connected": [a["name"] for a in agents if a.get("connected")],
@@ -14265,6 +14274,10 @@ def setup_decision_model_status(project_id: str) -> dict:
     from .services.setup_service import decision_model_status
 
     with begin() as connection:
+        require_project_actor(
+            connection, project_id, current_api_principal.get() or "ceo",
+            "entitlement_manage",
+        )
         return decision_model_status(connection, get_settings(), project_id)
 
 
@@ -14280,7 +14293,9 @@ def setup_store_decision_key(payload: dict) -> dict:
     )
 
     project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "setup")
+    actor = str(payload.get("actor") or "").strip() or (
+        current_api_principal.get() or "ceo"
+    )
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin() as connection:

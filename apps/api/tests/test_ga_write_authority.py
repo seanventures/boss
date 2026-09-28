@@ -9,6 +9,7 @@ from boss_engine.services import (
     plane_sync,
     prd_decomposition,
     secrets_service,
+    setup_service,
 )
 from sqlalchemy import text
 
@@ -188,6 +189,81 @@ def test_plane_sync_uses_stored_run_project_and_merge_receipt(
     )
     assert merged.status_code == 200, merged.text
     assert calls[-1] == (home_run, "software_factory.pull_request_merged")
+
+
+def test_setup_project_reads_and_decision_key_write_require_entitlement_grant(
+    client, engine, scoped_operator, monkeypatch,
+):
+    calls = []
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_operator",
+            display_name="Scoped GA operator", member_type="human", role_keys=[],
+            permissions=["entitlement_manage"], actor="ceo",
+        )
+
+    def fake_status(_connection, _settings, project_id):
+        calls.append(("status", project_id))
+        return {"project_id": project_id, "ready": True}
+
+    def fake_decision_status(_connection, _settings, project_id):
+        calls.append(("decision", project_id))
+        return {"backend": "claude", "typesafe_key": False}
+
+    def fake_agents(_settings):
+        calls.append(("detect", None))
+        return [{"name": "codex", "ready": True}]
+
+    def fake_recorded(agents, _connection, project_id):
+        calls.append(("recorded", project_id))
+        agents[0]["connected"] = True
+        return agents
+
+    def fake_store(_connection, _settings, project_id, _key, **kwargs):
+        calls.append(("store", project_id, kwargs["actor"]))
+        return {"status": "connected"}
+
+    monkeypatch.setattr(setup_service, "setup_status", fake_status)
+    monkeypatch.setattr(setup_service, "decision_model_status", fake_decision_status)
+    monkeypatch.setattr(setup_service, "list_coding_agents", fake_agents)
+    monkeypatch.setattr(setup_service, "with_recorded_connections", fake_recorded)
+    monkeypatch.setattr(setup_service, "store_decision_key", fake_store)
+
+    reads = [
+        "/v1/setup/status", "/v1/setup/coding-agents", "/v1/setup/decision-model",
+    ]
+    for path in reads:
+        assert client.get(
+            path, headers=_auth("coo-key"), params={"project_id": PROJECT},
+        ).status_code == 403
+        assert client.get(
+            path, headers=_auth("operator-key"),
+            params={"project_id": scoped_operator},
+        ).status_code == 403
+    body = {"project_id": PROJECT, "api_key": "test-decision-key"}
+    assert client.post(
+        "/v1/setup/decision-model/key", headers=_auth("coo-key"), json=body,
+    ).status_code == 403
+    assert client.post(
+        "/v1/setup/decision-model/key", headers=_auth("operator-key"),
+        json={**body, "project_id": scoped_operator},
+    ).status_code == 403
+    assert client.post(
+        "/v1/setup/decision-model/key", headers=_auth("operator-key"),
+        json={**body, "actor": "ceo"},
+    ).status_code == 403
+    assert calls == []
+
+    for path in reads:
+        accepted = client.get(
+            path, headers=_auth("operator-key"), params={"project_id": PROJECT},
+        )
+        assert accepted.status_code == 200, (path, accepted.text)
+    stored = client.post(
+        "/v1/setup/decision-model/key", headers=_auth("operator-key"), json=body,
+    )
+    assert stored.status_code == 201, stored.text
+    assert ("store", PROJECT, "ga_operator") in calls
 
 
 @pytest.fixture
