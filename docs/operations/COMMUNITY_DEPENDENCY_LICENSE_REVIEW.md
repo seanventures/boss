@@ -75,6 +75,12 @@ The inspected local `caniuse-lite` package root includes its CC-BY-4.0
 These additions do not resolve the separate third-party terms and notice
 review below.
 
+The Community Dockerfile pins the reviewed multi-architecture Docker Hub base
+indexes for `python:3.11-slim-bookworm` (`sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b`)
+and `node:20-bookworm-slim` (`sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0`).
+These pins identify the base images; apt and package-registry downloads still
+require the final image digests and inventory for release review.
+
 The interim Debian inventory found a copyright text for every installed
 package (354 API, 88 web). The `qrcode-terminal` metadata omission is resolved
 to a present Apache-2.0 text in the inspected Node base image. Neither result

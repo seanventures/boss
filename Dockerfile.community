@@ -2,7 +2,8 @@
 
 # Build only from a reviewed Community tree. The source export gate verifies
 # that every copied path belongs in that tree before publication.
-FROM python:3.11-slim-bookworm AS python-runtime
+# Pin the multi-architecture base indexes reviewed for this release candidate.
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
 
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN python -c 'import json; assert json.load(open("/tmp/community-export-status.json"))["mechanically_complete"], "Community source export is blocked"'
@@ -16,10 +17,10 @@ WORKDIR /app
 
 # The official Node image supplies Node 20 and npm for coding CLIs and project
 # verification. Debian's nodejs package can lag the CLI minimum Node version.
-COPY --from=node:20-bookworm-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/lib/node_modules /usr/local/lib/node_modules
 # Keep the Node distribution's license alongside its binary in the API/worker image.
-COPY --from=node:20-bookworm-slim /usr/local/LICENSE /usr/local/LICENSE
+COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/LICENSE /usr/local/LICENSE
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
@@ -80,7 +81,7 @@ CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 FROM python-runtime AS worker
 CMD ["python", "-m", "apps.worker.boss_worker.main"]
 
-FROM node:20-bookworm-slim AS web-builder
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web-builder
 WORKDIR /app
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN node -e 'if (!require("/tmp/community-export-status.json").mechanically_complete) throw Error("Community source export is blocked")'
@@ -100,7 +101,7 @@ RUN test -n "$NEXT_PUBLIC_BOSS_API_URL" \
     || { echo 'NEXT_PUBLIC_BOSS_API_URL is required for the Community web build' >&2; exit 1; }
 RUN pnpm --filter boss-web build
 
-FROM node:20-bookworm-slim AS web
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 ENV NODE_ENV=production \
