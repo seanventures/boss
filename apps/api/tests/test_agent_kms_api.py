@@ -60,7 +60,7 @@ def test_store_list_grant_lease_resolve(client):
 
     # Owner can list (metadata only)
     listed = client.get(
-        "/v1/kms/keys", params={"project_id": PROJECT, "agent_id": OWNER}
+        "/v1/kms/keys", params={"project_id": PROJECT, "agent_id": OWNER, "actor": ACTOR}
     )
     assert listed.status_code == 200, listed.text
     items = listed.json()["items"]
@@ -160,7 +160,9 @@ def test_list_does_not_include_values(client):
             "backend": "local_vault",
         },
     )
-    r = client.get("/v1/kms/keys", params={"project_id": PROJECT, "agent_id": OWNER})
+    r = client.get(
+        "/v1/kms/keys", params={"project_id": PROJECT, "agent_id": OWNER, "actor": ACTOR}
+    )
     assert r.status_code == 200
     blob = r.text
     assert "never-list-this-value-1234" not in blob

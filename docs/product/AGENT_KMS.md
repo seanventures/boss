@@ -35,6 +35,12 @@ BOSS **never stores raw secret values in Postgres** (`raw_secret_stored: false`)
 
 ## API (prefix `/v1/kms`)
 
+Project key operations require an authenticated project member with
+`integration_manage`. The member in `actor` must match the API key or login
+principal; when a principal is bound, `actor` may be omitted. Agent ownership
+and grants are checked in addition to the project permission. A worker that
+calls these HTTP routes needs its own project member and bound API key.
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/backends` | OSS backend catalog |
@@ -85,7 +91,7 @@ curl -sS -H "Authorization: Bearer $BOSS_KEY" -H "Content-Type: application/json
   -d '{
     "project_id": "'"$PROJECT"'",
     "agent_id": "code-agent",
-    "actor": "worker",
+    "actor": "ceo",
     "ttl_seconds": 120,
     "reveal": false
   }' "$BOSS_API/v1/kms/keys/$KEY_ID/lease"
@@ -94,7 +100,7 @@ curl -sS -H "Authorization: Bearer $BOSS_KEY" -H "Content-Type: application/json
   -d '{
     "project_id": "'"$PROJECT"'",
     "agent_id": "code-agent",
-    "actor": "worker"
+    "actor": "ceo"
   }' "$BOSS_API/v1/kms/leases/$LEASE_ID/resolve"
 ```
 

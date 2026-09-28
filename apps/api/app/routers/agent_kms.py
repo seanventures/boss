@@ -26,7 +26,7 @@ class StoreKeyRequest(BaseModel):
     name: str
     value: str
     owner_agent: str
-    actor: str = "operator"
+    actor: str = ""
     purpose: str = "general"
     secret_kind: str = "api_token"
     backend: str = "local_vault"
@@ -39,14 +39,14 @@ class GrantRequest(BaseModel):
     granter_agent: str
     grantee_agent: str
     permissions: list[str] = Field(default_factory=lambda: ["use", "read_meta"])
-    actor: str = "operator"
+    actor: str = ""
     expires_at: Optional[str] = None
 
 
 class LeaseRequest(BaseModel):
     project_id: str
     agent_id: str
-    actor: str = "system"
+    actor: str = ""
     purpose: str = ""
     ttl_seconds: int = Field(default=120, ge=15, le=900)
     reveal: bool = False
@@ -56,13 +56,34 @@ class LeaseRequest(BaseModel):
 class ResolveLeaseRequest(BaseModel):
     project_id: str
     agent_id: str
-    actor: str = "system"
+    actor: str = ""
 
 
 class RevokeGrantRequest(BaseModel):
     project_id: str
     actor_agent: str
-    actor: str = "operator"
+    actor: str = ""
+
+
+def _require_kms_operator(connection, project_id: str, actor: Optional[str]) -> str:
+    """Bind a project secret operation to a member before consulting agent grants."""
+    from apps.api.app.main import (
+        current_api_principal,
+        current_transport_authenticated,
+        require_project_actor,
+    )
+
+    principal = current_api_principal.get()
+    if current_transport_authenticated.get() and not principal:
+        raise HTTPException(
+            status_code=403,
+            detail="KMS requires a transport credential bound to a project member",
+        )
+    resolved_actor = (actor or "").strip() or principal
+    if not resolved_actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    require_project_actor(connection, project_id, resolved_actor, "integration_manage")
+    return resolved_actor
 
 
 @router.get("/backends")
@@ -80,6 +101,7 @@ def store_key(payload: StoreKeyRequest):
     settings = get_settings()
     try:
         with begin(get_engine()) as connection:
+            actor = _require_kms_operator(connection, payload.project_id, payload.actor)
             return kms.store_key(
                 connection,
                 settings,
@@ -87,7 +109,7 @@ def store_key(payload: StoreKeyRequest):
                 name=payload.name,
                 value=payload.value,
                 owner_agent=payload.owner_agent,
-                actor=payload.actor,
+                actor=actor,
                 purpose=payload.purpose,
                 secret_kind=payload.secret_kind,
                 backend=payload.backend,
@@ -104,9 +126,11 @@ def store_key(payload: StoreKeyRequest):
 def list_keys(
     project_id: str = Query(...),
     agent_id: str = Query(...),
+    actor: Optional[str] = Query(None),
 ):
     try:
         with begin(get_engine()) as connection:
+            _require_kms_operator(connection, project_id, actor)
             items = kms.list_keys_for_agent(
                 connection, project_id=project_id, agent_id=agent_id
             )
@@ -125,9 +149,11 @@ def get_key(
     key_entry_id: str,
     project_id: str = Query(...),
     agent_id: str = Query(...),
+    actor: Optional[str] = Query(None),
 ):
     try:
         with begin(get_engine()) as connection:
+            _require_kms_operator(connection, project_id, actor)
             items = kms.list_keys_for_agent(
                 connection, project_id=project_id, agent_id=agent_id
             )
@@ -143,6 +169,7 @@ def get_key(
 def grant_key(key_entry_id: str, payload: GrantRequest):
     try:
         with begin(get_engine()) as connection:
+            actor = _require_kms_operator(connection, payload.project_id, payload.actor)
             return kms.grant_key(
                 connection,
                 project_id=payload.project_id,
@@ -150,7 +177,7 @@ def grant_key(key_entry_id: str, payload: GrantRequest):
                 granter_agent=payload.granter_agent,
                 grantee_agent=payload.grantee_agent,
                 permissions=payload.permissions,
-                actor=payload.actor,
+                actor=actor,
                 expires_at=payload.expires_at,
             )
     except PermissionError as error:
@@ -163,13 +190,14 @@ def grant_key(key_entry_id: str, payload: GrantRequest):
 def revoke_grant(key_entry_id: str, grantee_agent: str, payload: RevokeGrantRequest):
     try:
         with begin(get_engine()) as connection:
+            actor = _require_kms_operator(connection, payload.project_id, payload.actor)
             return kms.revoke_grant(
                 connection,
                 project_id=payload.project_id,
                 key_entry_id=key_entry_id,
                 grantee_agent=grantee_agent,
                 actor_agent=payload.actor_agent,
-                actor=payload.actor,
+                actor=actor,
             )
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
@@ -182,9 +210,11 @@ def list_grants(
     key_entry_id: str,
     project_id: str = Query(...),
     agent_id: str = Query(...),
+    actor: Optional[str] = Query(None),
 ):
     try:
         with begin(get_engine()) as connection:
+            _require_kms_operator(connection, project_id, actor)
             items = kms.list_grants(
                 connection,
                 project_id=project_id,
@@ -203,13 +233,14 @@ def lease_key(key_entry_id: str, payload: LeaseRequest):
     settings = get_settings()
     try:
         with begin(get_engine()) as connection:
+            actor = _require_kms_operator(connection, payload.project_id, payload.actor)
             return kms.lease_key(
                 connection,
                 settings,
                 project_id=payload.project_id,
                 key_entry_id=key_entry_id,
                 agent_id=payload.agent_id,
-                actor=payload.actor,
+                actor=actor,
                 purpose=payload.purpose,
                 ttl_seconds=payload.ttl_seconds,
                 reveal=payload.reveal,
@@ -229,13 +260,14 @@ def resolve_lease(lease_id: str, payload: ResolveLeaseRequest):
     settings = get_settings()
     try:
         with begin(get_engine()) as connection:
+            actor = _require_kms_operator(connection, payload.project_id, payload.actor)
             return kms.resolve_lease(
                 connection,
                 settings,
                 project_id=payload.project_id,
                 lease_id=lease_id,
                 agent_id=payload.agent_id,
-                actor=payload.actor,
+                actor=actor,
             )
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
@@ -249,9 +281,10 @@ def resolve_lease(lease_id: str, payload: ResolveLeaseRequest):
 def revoke_lease(
     lease_id: str,
     project_id: str = Query(...),
-    actor: str = Query("operator"),
+    actor: Optional[str] = Query(None),
 ):
     with begin(get_engine()) as connection:
+        resolved_actor = _require_kms_operator(connection, project_id, actor)
         return kms.revoke_lease(
-            connection, project_id=project_id, lease_id=lease_id, actor=actor
+            connection, project_id=project_id, lease_id=lease_id, actor=resolved_actor
         )
