@@ -72,7 +72,7 @@ export async function validSession(
 
 export function safeNext(value: string | null): string {
   if (!value || !value.startsWith("/") || value.startsWith("//") ||
-      value.includes("\\") || /[\r\n]/.test(value)) return "/";
+      value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return "/";
   return value;
 }
 
@@ -85,10 +85,11 @@ export function sameOriginMutation(request: Request): boolean {
     try {
       const actual = new URL(origin);
       // Next can normalize request.url to its internal listener port behind an SSH tunnel.
-      // The browser's same-origin port is the validated loopback Host header.
-      const browser = new URL(`http://${request.headers.get("host") || url.host}`);
-      return actual.protocol === "http:" && actual.port === browser.port &&
-        ["localhost", "127.0.0.1", "[::1]"].includes(actual.hostname);
+      // The browser's same-origin address is the validated loopback Host header.
+      const host = request.headers.get("host");
+      if (!host) return false;
+      const browser = new URL(`http://${host}`);
+      return origin === actual.origin && actual.origin === browser.origin;
     } catch { return false; }
   }
   return origin === (process.env.BOSS_CONSOLE_PUBLIC_ORIGIN || url.origin);
@@ -126,13 +127,4 @@ export function localHttp(request: Request): boolean {
 export function sessionCookieName(request: Request): string {
   // Browsers do not consistently accept Secure cookies on plain HTTP loopback.
   return localHttp(request) ? LOCAL_SESSION_COOKIE : SESSION_COOKIE;
-}
-
-export function consoleOrigin(request: Request): string {
-  if (localHttp(request)) {
-    const url = new URL(request.url);
-    return `${url.protocol}//${request.headers.get("host") || url.host}`;
-  }
-  // Call only after secureConsoleTransport has validated this configured origin.
-  return process.env.BOSS_CONSOLE_PUBLIC_ORIGIN!;
 }

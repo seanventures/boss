@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  consoleAuthConfig, consoleOrigin, issueSession, passwordMatches, safeNext,
+  consoleAuthConfig, issueSession, passwordMatches, safeNext,
   sameOriginMutation, secureConsoleTransport, localHttp, sessionCookieName, SESSION_SECONDS,
 } from "../../../../lib/console-session";
 
@@ -16,16 +16,17 @@ export async function POST(request: NextRequest) {
   const form = await request.formData();
   const password = form.get("password");
   if (typeof password !== "string" || !(await passwordMatches(password, config))) {
-    const denied = NextResponse.redirect(new URL("/login?error=invalid", consoleOrigin(request)), 303);
-    denied.headers.set("Cache-Control", "no-store");
-    return denied;
+    return new NextResponse(null, { status: 303, headers: {
+      Location: "/login?error=invalid", "Cache-Control": "no-store",
+    } });
   }
   const destination = safeNext(typeof form.get("next") === "string" ? String(form.get("next")) : null);
-  const response = NextResponse.redirect(new URL(destination, consoleOrigin(request)), 303);
+  const response = new NextResponse(null, { status: 303, headers: {
+    Location: destination, "Cache-Control": "no-store",
+  } });
   response.cookies.set(sessionCookieName(request), await issueSession(config), {
     httpOnly: true, secure: !localHttp(request), sameSite: "strict", path: "/",
     maxAge: SESSION_SECONDS,
   });
-  response.headers.set("Cache-Control", "no-store");
   return response;
 }

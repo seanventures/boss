@@ -10,6 +10,7 @@ retrieve or rotate the owner password. Rotating it invalidates existing sessions
 
 Every page, `/v1/*` proxy request, and `/api/*` route requires this session. An
 unauthenticated API request returns 401 before the privileged key is attached.
+An unauthenticated page opens sign-in on the same browser origin.
 State-changing browser requests require a matching `Origin`, and `POST
 /api/auth/logout` clears the session. If either console secret is missing or too
 short, protected requests fail with 503.

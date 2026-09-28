@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  consoleAuthConfig, consoleOrigin, sameOriginMutation, secureConsoleTransport,
+  consoleAuthConfig, localHttp, sameOriginMutation, secureConsoleTransport,
   sessionCookieName, validSession,
 } from "./lib/console-session";
 
@@ -30,11 +30,14 @@ export async function middleware(request: NextRequest) {
   if (!(await validSession(token, config))) {
     if (api) return NextResponse.json({ error: "Console sign-in required." },
       { status: 401, headers: { "Cache-Control": "no-store" } });
-    const login = new URL("/login", consoleOrigin(request));
+    // Keep a local tunnel on its original browser host. Behind a TLS proxy,
+    // redirect to the configured public origin: Next's internal listener is HTTP.
+    const local = localHttp(request);
+    const login = new URL("/login", local ? request.url : process.env.BOSS_CONSOLE_PUBLIC_ORIGIN!);
     login.searchParams.set("next", path + request.nextUrl.search);
-    const redirect = NextResponse.redirect(login);
-    redirect.headers.set("Cache-Control", "no-store");
-    return redirect;
+    const response = local ? NextResponse.rewrite(login) : NextResponse.redirect(login);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   }
   if (!sameOriginMutation(request)) {
     return NextResponse.json({ error: "Cross-origin console mutation denied." },

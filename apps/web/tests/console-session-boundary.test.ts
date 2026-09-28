@@ -34,6 +34,8 @@ describe("single-operator console boundary", () => {
       configured();
       const response = await middleware(new NextRequest(`https://boss.example${path}`));
       expect(response.status).toBe(path === "/" ? 307 : 401);
+      if (path === "/") expect(response.headers.get("location"))
+        .toBe("https://boss.example/login?next=%2F");
       expect(response.headers.get("cache-control")).toMatch(/no-store|private/);
     },
   );
@@ -94,7 +96,7 @@ describe("single-operator console boundary", () => {
     });
     const response = await login(request);
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("https://boss.example/?project_id=alpha");
+    expect(response.headers.get("location")).toBe("/?project_id=alpha");
     const setCookie = response.headers.get("set-cookie") ?? "";
     expect(setCookie).toContain("__Host-boss_console_session=");
     expect(setCookie).toContain("HttpOnly");
@@ -107,8 +109,20 @@ describe("single-operator console boundary", () => {
   it("does not allow a login redirect to leave the console", () => {
     expect(safeNext("//attacker.example")).toBe("/");
     expect(safeNext("/\\attacker.example")).toBe("/");
+    expect(safeNext("/\t/attacker.example")).toBe("/");
     expect(safeNext("https://attacker.example")).toBe("/");
     expect(safeNext("/?project_id=alpha")).toBe("/?project_id=alpha");
+  });
+
+  it("keeps a submitted control-character return path inside the console", async () => {
+    configured();
+    const request = new NextRequest("https://boss.example/api/auth/login", {
+      method: "POST", headers: {
+        origin: "https://boss.example", "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ password: PASSWORD, next: "/\t/attacker.example" }).toString(),
+    });
+    expect((await login(request)).headers.get("location")).toBe("/");
   });
 
   it("requires HTTPS on remote origins, including direct HTTP with forged API requests", async () => {
@@ -129,6 +143,17 @@ describe("single-operator console boundary", () => {
       .toBe(401);
   });
 
+  it("shows local sign-in without switching the browser's loopback host", async () => {
+    configured();
+    const response = await middleware(new NextRequest("http://127.0.0.1:3000/v2", {
+      headers: { host: "127.0.0.1:3000" },
+    }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-middleware-rewrite"))
+      .toBe("http://localhost:3000/login?next=%2Fv2");
+  });
+
   it("trusts only an explicitly configured loopback TLS proxy and sets a Secure cookie", async () => {
     configured();
     vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "https://boss.example");
@@ -137,13 +162,19 @@ describe("single-operator console boundary", () => {
       "x-forwarded-host": "boss.example", origin: "https://boss.example",
       "content-type": "application/x-www-form-urlencoded",
     };
+    const page = await middleware(new NextRequest("http://localhost:3000/v2?area=work", {
+      headers,
+    }));
+    expect(page.status).toBe(307);
+    expect(page.headers.get("location"))
+      .toBe("https://boss.example/login?next=%2Fv2%3Farea%3Dwork");
     const request = new NextRequest("http://localhost:3000/api/auth/login", {
       method: "POST", headers, body: new URLSearchParams({ password: PASSWORD }).toString(),
     });
     expect((await middleware(request)).status).toBe(200);
     const response = await login(request);
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("https://boss.example/");
+    expect(response.headers.get("location")).toBe("/");
     expect(response.headers.get("set-cookie")).toContain("__Host-boss_console_session=");
     expect(response.headers.get("set-cookie")).toContain("Secure");
   });
@@ -154,6 +185,7 @@ describe("single-operator console boundary", () => {
     const cookie = await issueSession(consoleAuthConfig()!);
     const request = new NextRequest("http://127.0.0.1:3000/api/builds", {
       method: "POST", headers: {
+        host: "127.0.0.1:3000",
         cookie: `boss_console_session_local=${cookie}`,
         origin: "http://127.0.0.1:3000",
       },
@@ -167,6 +199,13 @@ describe("single-operator console boundary", () => {
       },
     });
     expect((await middleware(tunneled)).status).toBe(200);
+    const otherLoopbackOrigin = new NextRequest("http://127.0.0.1:3000/api/builds", {
+      method: "POST", headers: {
+        host: "127.0.0.1:3108", cookie: `boss_console_session_local=${cookie}`,
+        origin: "http://localhost:3108",
+      },
+    });
+    expect((await middleware(otherLoopbackOrigin)).status).toBe(403);
     const forged = new NextRequest("http://127.0.0.1:3000/api/auth/login", {
       method: "POST", headers: {
         host: "127.0.0.1:3000", "x-forwarded-proto": "https",
@@ -186,7 +225,7 @@ describe("single-operator console boundary", () => {
       }, body: new URLSearchParams({ password: PASSWORD }).toString(),
     });
     const response = await login(request);
-    expect(response.headers.get("location")).toBe("http://127.0.0.1:3000/");
+    expect(response.headers.get("location")).toBe("/");
     expect(response.headers.get("set-cookie")).toContain("boss_console_session_local=");
   });
 });
