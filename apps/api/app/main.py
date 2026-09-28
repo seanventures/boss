@@ -6574,11 +6574,17 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
 
 @app.get("/v1/code-tasks/{run_id}/retrospective")
 def run_retrospective_endpoint(run_id: str, project_id: str = "") -> dict:
-    """What this run cost, delivered and lost — assembled from evidence, no model involved."""
+    """What this run cost, delivered and lost for a member of its stored project."""
     from boss_engine.services.run_retrospective import assemble
-    resolved_project = project_id or settings.default_project_id
     with begin(engine) as connection:
-        return assemble(connection, resolved_project, run_id)
+        stored_project = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar()
+        if stored_project is None:
+            raise HTTPException(status_code=404, detail="code task not found")
+        require_project_reader(connection, stored_project)
+        return assemble(connection, project_id or stored_project, run_id)
 
 
 @app.get("/v1/workflow-runs/{run_id}/report")
@@ -6590,14 +6596,20 @@ def workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
     build while the research and the panel that produced its spec, $1.74 between them, were
     recorded in two other tables and shown nowhere.
 
-    Deterministic and read-only. No model is asked to narrate it: a report that runs after
-    every workflow and occasionally invents a cause is worse than no report.
+    Deterministic and read-only for a member of the run's stored project. No model is asked
+    to narrate it: a report that occasionally invents a cause is worse than no report.
     """
     from boss_engine.services.run_retrospective import assemble_workflow, workflow_markdown
 
-    resolved_project = project_id or settings.default_project_id
     with begin(engine) as connection:
-        report = assemble_workflow(connection, resolved_project, run_id)
+        stored_project = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar()
+        if stored_project is None:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        require_project_reader(connection, stored_project)
+        report = assemble_workflow(connection, project_id or stored_project, run_id)
     if report.get("ok"):
         report["markdown"] = workflow_markdown(report)
     return report
