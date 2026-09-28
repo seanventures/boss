@@ -222,7 +222,7 @@
     "sha256": "c3a71a94b0de92ddddbca9187f887ee0740fc948fff870b3030adc65f545c324"
   },
   "reviewed_community_service_sha256": {
-    "engine/boss_engine/services/community_edition.py": "96fff2acfae8f54709deee00e1d6e3388a6a785f0943a9f83780e549c5953faf",
+    "engine/boss_engine/services/community_edition.py": "d90dc5f0cec278c4860b73c0c574da1286786ff11d10aeba9badd8e0c889c987",
     "engine/boss_engine/services/community_cloud.py": "dca25b4114e4e251cd0f267e009ca0dce4b3bee5d72c00d6c4330bc4764238ea"
   },
   "specpack_export_rewrites": [
@@ -249,7 +249,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "52e3e208904dc1ad33ea05a49ba682127e7f580354b25cd3c7cdf02f4d19a581",
-    "output_sha256": "8a9acbcdce2dc8f0f3423cad6f5971b6ba20c348f63f80c5133e07953e5c39fa"
+    "source_sha256": "9517d81c98a7a6fe4a69043cec75cbe73aa3704aa3e0ecdfdf1d121fdc2a0e5e",
+    "output_sha256": "2c97ceb8ea3a892dda20009d4ef39a141dbc60f337f877928c5d7348325cca91"
   }
 }

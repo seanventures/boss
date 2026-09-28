@@ -223,7 +223,7 @@ def reviewed_marker_bytes(path: str, data: bytes) -> tuple[bytes, bool]:
             sum(line.rstrip("\r\n") == allowed for line in lines) == 1
             and b"id: community_edition\n" in data
             and b"license_candidate: Apache-2.0\n" in data
-            and b"legal_review_required: true\n" in data
+            and b"legal_review_required: false\n" in data
             and b"commercial_packaging_policy" not in data
         )
         if not valid:

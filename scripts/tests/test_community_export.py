@@ -273,7 +273,7 @@ class LicenseEntitlementSummary(BaseModel):
 
     pack = b"""id: community_edition
 license_candidate: Apache-2.0
-legal_review_required: true
+legal_review_required: false
 hosted_account_connect_required: false
 """
     pack_path = "packages/specpack/packs/community_edition.yaml"
@@ -284,8 +284,14 @@ hosted_account_connect_required: false
         pack_path, pack.replace(b"Apache-2.0", b"AGPLv3")
     )[1] is False
     assert export.reviewed_marker_bytes(
+        pack_path, pack.replace(b"legal_review_required: false", b"legal_review_required: true")
+    )[1] is False
+    assert export.reviewed_marker_bytes(
         pack_path, pack + b"commercial_packaging_policy\n"
     )[1] is False
+    actual_pack = (export.ROOT / pack_path).read_bytes()
+    assert export.reviewed_marker_bytes(pack_path, actual_pack)[1]
+    assert b"commercial_packaging_policy" not in actual_pack
 
     providers_path = "packages/specpack/models/providers.yaml"
     providers = b"""source_records:
