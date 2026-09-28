@@ -5993,6 +5993,7 @@ def qa_benchmark_app_report_endpoint(run_id: str):
     from .services.code_task_service import load_code_task_run
 
     with begin(engine) as c:
+        require_code_task_reader(c, run_id)
         run = load_code_task_run(c, run_id)
         calls = c.execute(
             text(
@@ -6222,6 +6223,13 @@ def list_improvement_trials(program_id: str, limit: int = 50):
 
     try:
         with begin(engine) as connection:
+            project_id = connection.execute(
+                text("SELECT project_id FROM improvement_programs WHERE id = :program_id"),
+                {"program_id": program_id},
+            ).scalar()
+            if project_id is None:
+                raise HTTPException(status_code=404, detail="Improvement program not found.")
+            require_project_reader(connection, project_id)
             program = improvement_programs.get_program(connection, program_id)
             return {
                 "program": program,
@@ -8241,6 +8249,9 @@ def get_deployment_run_endpoint(deployment_run_id: str):
     from .services.deployment_steps import planned_steps
 
     with begin(engine) as connection:
+        require_project_reader(
+            connection, project_id_for_deployment_run(connection, deployment_run_id)
+        )
         row = connection.execute(
             text("SELECT d.*, t.app_name AS target_app, t.domains "
                  "FROM deployment_runs d LEFT JOIN deployment_targets t "
@@ -9580,7 +9591,19 @@ def bakeoff_report_endpoint(batch_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.bakeoff import aggregate_batch, render_markdown
     with begin(engine) as c:
-        report = aggregate_batch(c, batch_id)
+        projects = c.execute(
+            text(
+                "SELECT DISTINCT project_id FROM code_task_runs "
+                "WHERE finalize_ctx->'bakeoff'->>'batch_id' = :batch_id LIMIT 2"
+            ),
+            {"batch_id": batch_id},
+        ).scalars().all()
+        if len(projects) > 1:
+            raise HTTPException(status_code=404, detail="Bakeoff batch not found.")
+        project_id = projects[0] if projects else None
+        if project_id is not None:
+            require_project_reader(c, project_id)
+        report = aggregate_batch(c, batch_id, project_id=project_id)
     report["markdown"] = render_markdown(report)
     return report
 
@@ -11745,6 +11768,13 @@ def get_self_improvement_proposal(
     proposal_id: str,
 ) -> SelfImprovementProposalDetail:
     with begin(engine) as connection:
+        project_id = connection.execute(
+            text("SELECT project_id FROM self_improvement_proposals WHERE id = :proposal_id"),
+            {"proposal_id": proposal_id},
+        ).scalar()
+        if project_id is None:
+            raise HTTPException(status_code=404, detail="Self-improvement proposal not found.")
+        require_project_reader(connection, project_id)
         try:
             row = self_improvement.get_proposal(connection, proposal_id)
         except SelfImprovementProposalNotFoundError as error:
@@ -17382,6 +17412,7 @@ def get_changeset_terraform_export(
 ) -> TerraformExportArtifactResponse:
     with begin(engine) as connection:
         project_id = project_id_for_changeset(connection, changeset_id)
+        require_project_reader(connection, project_id)
         row = terraform_export_service.latest_export_artifact(
             connection, project_id, changeset_id
         )
@@ -18579,6 +18610,7 @@ def get_deployment_promotion(promotion_id: str) -> DeploymentPromotionSummary:
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Deployment promotion not found.")
+        require_project_reader(connection, row["project_id"])
         return DeploymentPromotionSummary(
             **promotion_orchestrator.get_promotion_detail(
                 connection, row["project_id"], promotion_id

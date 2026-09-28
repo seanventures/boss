@@ -103,7 +103,7 @@ def fixture_for_run(finalize_ctx: Optional[dict]) -> Optional[dict]:
     return files if isinstance(files, dict) and files else None
 
 
-def aggregate_batch(connection, batch_id: str) -> dict:
+def aggregate_batch(connection, batch_id: str, project_id: Optional[str] = None) -> dict:
     """Aggregate one batch from code_task_runs ⋈ quality_gates ⋈ llm_calls.
 
     Known-bad probes (expect=fail) are excluded from pass-rate and $/verified-outcome —
@@ -121,8 +121,9 @@ def aggregate_batch(connection, batch_id: str) -> dict:
               FROM code_task_runs r
               LEFT JOIN quality_gates q ON q.code_task_run_id = r.id
              WHERE r.finalize_ctx->'bakeoff'->>'batch_id' = :b
+               AND (CAST(:project_id AS TEXT) IS NULL OR r.project_id = :project_id)
         """),
-        {"b": batch_id},
+        {"b": batch_id, "project_id": project_id},
     ).mappings().all()
     run_ids = [r["id"] for r in runs]
     costs: dict[str, dict] = {}
