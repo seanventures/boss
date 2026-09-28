@@ -15,6 +15,7 @@ from urllib.parse import parse_qs
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from starlette.routing import Match
@@ -1300,6 +1301,26 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_without_input(_request: Request, exc: RequestValidationError):
+    """Report invalid fields without echoing submitted credentials or request bodies.
+
+    FastAPI's default 422 response includes each error's ``input`` value. Many
+    routes accept provider keys and other secrets, so even an unrelated missing
+    field could otherwise reflect a credential into terminal output or logs.
+    Error types and field locations are enough to repair the request.
+    """
+    detail = []
+    for error in exc.errors():
+        error_type = str(error.get("type") or "value_error")
+        detail.append({
+            "type": error_type,
+            "loc": list(error.get("loc") or ()),
+            "msg": "Field required" if error_type == "missing" else "Invalid request value",
+        })
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 def undefined_table_response(exc: BaseException) -> Optional[JSONResponse]:

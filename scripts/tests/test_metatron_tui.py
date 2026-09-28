@@ -563,7 +563,8 @@ def test_private_snapshot_maps_every_operator_operation_except_inbound_callbacks
         ("POST", "/v1/webhooks/inbound/{source}"),
     }
     assert len({record["operation_id"] for record in records}) == len(records)
-    assert sum(record["runtime_operation_id"] is None for record in records) == 529
+    assert all(record["runtime_operation_id"] for record in records)
+    assert len({record["runtime_operation_id"] for record in records}) == len(records)
 
 
 def test_live_community_app_schema_and_catalog_map_every_mounted_operator_route():
