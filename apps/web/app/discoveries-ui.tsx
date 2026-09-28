@@ -107,8 +107,22 @@ function useLiveRefresh(active: boolean, intervalMs = 4000) {
 }
 
 // --------------------------------------------------------------------------- //
-function StartDiscovery({ projectId }: { projectId: string }) {
+function StartDiscovery({ projectId, researchAvailable }: {
+  projectId: string;
+  researchAvailable: boolean;
+}) {
   const [state, action, pending] = useActionState(startDiscoveryAction, null);
+  if (!researchAvailable) {
+    return (
+      <section className="panel" style={{ padding: 16 }} data-testid="discovery-research-paused">
+        <div className="eyebrow">Discovery research paused in Community</div>
+        <p className="detail" style={{ margin: "8px 0 0" }}>
+          New and deeper research will return when budget and recovery safeguards are ready.
+          Saved dossiers below remain available.
+        </p>
+      </section>
+    );
+  }
   return (
     <form action={action} className="panel" style={{ display: "grid", gap: 8, padding: 16 }}>
       <input type="hidden" name="project_id" value={projectId} />
@@ -131,11 +145,13 @@ function StartDiscovery({ projectId }: { projectId: string }) {
 // --------------------------------------------------------------------------- //
 export function DiscoveriesHome({
   projectId, orgId, discoveries, apiReachable, initialDiscoveryId,
+  researchAvailable = true,
 }: {
   projectId: string;
   orgId?: string;
   discoveries: DiscoveryRun[];
   apiReachable: boolean;
+  researchAvailable?: boolean;
   /** A dossier named in the URL — `?area=discovery&run=drun_…`, which is what the workflow's
    *  research step links to. Without this the id in the link was ignored and every "open the
    *  research" arrived at the list of every discovery the project had ever run. */
@@ -157,7 +173,8 @@ export function DiscoveriesHome({
   useLiveRefresh(anyLive);
 
   const run = selected ? discoveries.find((d) => d.id === selected) : null;
-  if (run) return <DiscoveryDetail run={run} orgId={orgId} onBack={() => setSelected(null)} />;
+  if (run) return <DiscoveryDetail run={run} orgId={orgId}
+    researchAvailable={researchAvailable} onBack={() => setSelected(null)} />;
 
   // ASKED FOR ONE, GOT THE SHELF. A link naming a dossier that is not in this feed — older
   // than the window, or another project's — used to fall through to the list with no word of
@@ -166,7 +183,7 @@ export function DiscoveriesHome({
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <StartDiscovery projectId={projectId} />
+      <StartDiscovery projectId={projectId} researchAvailable={researchAvailable} />
       {missing ? (
         <div className="detail" data-testid="discovery-not-in-feed">
           Research run <code>{missing}</code> is not in this project&rsquo;s recent runs — showing
@@ -175,7 +192,9 @@ export function DiscoveriesHome({
       ) : null}
       {!apiReachable ? <div className="detail" style={{ color: "#f85149" }}>API unreachable — start the control plane.</div> : null}
       {discoveries.length === 0 ? (
-        <div className="detail">No discovery runs yet. Feed an idea above and BOSS will research the market signal behind it.</div>
+        <div className="detail">{researchAvailable
+          ? "No discovery runs yet. Feed an idea above and BOSS will research the market signal behind it."
+          : "No saved discovery dossiers yet."}</div>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {discoveries.map((d, i) => {
@@ -243,7 +262,12 @@ export function DiscoveriesHome({
 }
 
 // --------------------------------------------------------------------------- //
-function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: string; onBack: () => void }) {
+function DiscoveryDetail({ run, orgId, researchAvailable, onBack }: {
+  run: DiscoveryRun;
+  orgId?: string;
+  researchAvailable: boolean;
+  onBack: () => void;
+}) {
   const live = run.status === "running";
   useLiveRefresh(live);
   const d = run.state ?? {};
@@ -259,13 +283,17 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
         {(d as { deep?: boolean }).deep ? <span className="cap-badge">deep sweep</span> : null}
         {run.usage?.cost_usd_micros != null ? <span className="detail">{fmtUsd(run.usage.cost_usd_micros)}</span> : null}
         <span style={{ flex: 1 }} />
-        {run.status === "completed" ? <DeepenButton runId={run.id} /> : null}
+        {run.status === "completed" && researchAvailable ? <DeepenButton runId={run.id} /> : null}
       </div>
 
       <div>
         <h2 style={{ margin: "0 0 4px" }}>{run.title}</h2>
         {run.seed ? <div className="detail">{run.seed}</div> : null}
         {run.context ? <div className="detail" style={{ marginTop: 4 }}>Context: {run.context}</div> : null}
+        {!researchAvailable ? <div className="detail" style={{ marginTop: 8 }}>
+          This saved dossier remains available. Deeper research is paused in Community until
+          budget and recovery safeguards are ready.
+        </div> : null}
       </div>
 
       {/* THE FLOW, ALWAYS. This appeared only while running, so a finished or failed run showed

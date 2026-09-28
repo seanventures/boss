@@ -1085,7 +1085,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             below the fold that could only answer. This is the agent, and it can act. */}
         {shows("overview") ? (
         <section data-area="overview" aria-label="Ask BOSS">
-          <AskBossHero projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
+          <AskBossHero projectId={activeProjectId} actor={activeActorId}
+            orgId={activeOrgId} researchAvailable={false} />
         </section>
         ) : null}
 
@@ -1260,7 +1261,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               which is most of what "the flow is missing" has meant. */}
           <div className="ov-actions">
             <span className="ov-actions-label">Quick actions</span>
-            <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>Research an idea</AreaLink>
+            <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>View saved research</AreaLink>
             <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
             <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a project</AreaLink>
             <AreaLink className="ov-action" area="apps" orgId={activeOrgId}>See your apps</AreaLink>
@@ -5341,7 +5342,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-head">
             <div>
               <span className="eyebrow">Discovery</span>
-              <h2>Feed a signal — BOSS researches the market, vets the thesis, and proposes evidence‑backed outcomes.</h2>
+              <h2>Review saved Discovery dossiers and the outcomes they identified.</h2>
             </div>
           </div>
           <DiscoveriesHome
@@ -5350,6 +5351,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             discoveries={discoveryFeed.items}
             apiReachable={discoveryFeed.apiReachable}
             initialDiscoveryId={requestedDiscovery}
+            researchAvailable={false}
           />
         </section>
         ) : null}

@@ -1277,11 +1277,8 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] orphaned-deployment sweep skipped: {exc}")
     try:
-        # RESEARCH THAT DIED WITH THE LAST PROCESS. A discovery runs on a daemon thread inside
-        # whichever process started it, so every restart of this one orphaned every discovery
-        # in flight — the row stayed `running`, nothing advanced it, and the Task Shepherd
-        # killed it twenty minutes later. Same failure shape as an orphaned deployment, same
-        # place to deal with it.
+        # Reconcile research interrupted by the prior process. Community marks such runs
+        # failed with a spend-reconciliation decision; it never replays unleased model calls.
         from .services.discovery_service import resume_interrupted
         print(f"[lifespan] interrupted discoveries: {resume_interrupted(settings)}")
     except Exception as exc:  # noqa: BLE001
@@ -9831,7 +9828,15 @@ def start_discovery_endpoint(payload: dict):
     actor = str(current_api_principal.get() or payload.get("actor") or "executive_console").strip()
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
-    from .services.discovery_service import start_discovery
+    from .services.discovery_service import (
+        DiscoveryExecutionBlocked,
+        require_discovery_runtime,
+        start_discovery,
+    )
+    try:
+        require_discovery_runtime(settings)
+    except DiscoveryExecutionBlocked as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     run_id = start_discovery(
         project_id=project_id, title=title, seed=seed,
         context=(payload.get("context") or "").strip(), settings=settings,
@@ -9946,13 +9951,22 @@ def deepen_discovery_endpoint(run_id: str, payload: Optional[dict] = None):
     (competitor/pain/demand/timing) for a richer, more-cited dossier. Returns the new run_id."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.discovery_service import load_discovery_run, start_discovery
+    from .services.discovery_service import (
+        DiscoveryExecutionBlocked,
+        load_discovery_run,
+        require_discovery_runtime,
+        start_discovery,
+    )
     with begin(engine) as c:
         parent = load_discovery_run(c, run_id)
         if parent is None:
             raise HTTPException(status_code=404, detail="discovery run not found")
         actor = str(current_api_principal.get() or (payload or {}).get("actor") or "executive_console").strip()
         require_project_actor(c, parent["project_id"], actor, "workflow_execute")
+    try:
+        require_discovery_runtime(settings)
+    except DiscoveryExecutionBlocked as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     new_id = start_discovery(
         project_id=parent["project_id"], title=f"[deep] {parent['title']}"[:300],
         seed=parent["seed"] or "", context=parent["context"] or "",

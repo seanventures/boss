@@ -56,11 +56,16 @@ The engine registry currently has 106 tools: 61 read and 45 write. Examples:
 | Activity | MCP tools |
 |---|---|
 | Discover work | `project_status`, `list_running_work`, `list_code_tasks`, `get_code_task` |
-| Start governed work | `request_meeting`, `create_discovery`, `create_code_task`, `start_workflow` |
+| Start governed work | `request_meeting`, `create_code_task`, `start_workflow` |
 | Steer and inspect | `steer_code_task`, `send_feedback`, `retry_code_task`, `get_run_activity` |
 | Review gates | `list_decisions`, `propose_action`, `read_pull_request`, `list_review_comments` |
 | Inspect delivery | `list_previews`, `read_preview_log`, `list_deployments`, `preflight_deployment_target` |
 | Author workflows | `list_capabilities`, `list_skills`, `draft_workflow`, `describe_workflow` |
+
+`create_discovery` remains in the tool registry for compatibility, but Community
+refuses new Discovery research until its model calls use durable job leases,
+budget reservations, and reconciled receipts. The API's Discovery start and
+deepen routes return 503 for authorized callers while this release gate is open.
 
 The session project is fixed at server startup. MCP ignores any
 `project_id` supplied in a tool call and removes internal

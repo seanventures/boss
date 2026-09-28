@@ -9,7 +9,8 @@ The moat, applied to research: every finding is cited, the thesis is adversarial
 fail-closed evidence gate decides "pursue" vs "needs more research". See
 docs/product/BOSS_DISCOVERY_PIPELINE_DESIGN.md.
 
-D1 scope: web-only signals; runs in a background thread; the UI polls discovery_runs for progress.
+D1 scope: web-only signals. Community research is paused until this pipeline uses
+durable leased jobs and reconciled model spend; saved dossiers remain readable.
 """
 from __future__ import annotations
 
@@ -23,9 +24,26 @@ from sqlalchemy import text
 from ..config import Settings
 from ..db import begin, get_engine
 from .code_agent import make_code_agent
-from .core import emit_event, make_id
+from .core import create_blocking_decision, emit_event, make_id
 
 PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"]
+COMMUNITY_DISCOVERY_BLOCK_REASON = (
+    "Discovery research is unavailable in Community until model calls have durable "
+    "leases, budget reservations, and reconciled receipts."
+)
+
+
+class DiscoveryExecutionBlocked(ValueError):
+    """Community must not launch unleased research that can spend without a reservation."""
+
+
+def _community_research_paused(settings: Settings) -> bool:
+    return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
+
+
+def require_discovery_runtime(settings: Settings) -> None:
+    if _community_research_paused(settings):
+        raise DiscoveryExecutionBlocked(COMMUNITY_DISCOVERY_BLOCK_REASON)
 
 
 class DiscoveryResearchUnavailable(RuntimeError):
@@ -68,6 +86,7 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
 
     deep=True runs a multi-source parallel scout sweep (competitor/pain/demand/timing) for a richer,
     more cited dossier — the deeper second pass for a promising idea."""
+    require_discovery_runtime(settings)
     run_id = make_id("drun")
     engine = get_engine()
     init_state = {"deep": deep}
@@ -95,7 +114,7 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
 
 
 def resume_interrupted(settings: Settings) -> dict:
-    """Restart research whose thread died with the process that owned it.
+    """Reconcile Community research interrupted by process exit.
 
     `start_discovery` drives the pipeline on a DAEMON THREAD, so a discovery lives inside
     whichever process started it and dies when that process does. Every API restart — a deploy,
@@ -103,11 +122,48 @@ def resume_interrupted(settings: Settings) -> dict:
     nothing advanced it, and the Task Shepherd called it abandoned. From the operator's side
     that is research failing at random.
 
-    Called at startup, beside the orphaned-deployment sweep, which exists for the same reason.
-    Restarting from the beginning is deliberate: a discovery is minutes of web research, and
-    redoing it beats cancelling work somebody is waiting on.
+    Called at startup beside the orphaned-deployment sweep. Community marks
+    interrupted runs failed and creates a spend-reconciliation decision without
+    replaying model calls. Other editions retain the earlier restart behavior.
     """
     engine = get_engine()
+    if _community_research_paused(settings):
+        blocked: list[str] = []
+        with begin(engine) as c:
+            rows = c.execute(
+                text("SELECT id, project_id, state, usage FROM discovery_runs "
+                     "WHERE status = 'running' ORDER BY created_at FOR UPDATE SKIP LOCKED")
+            ).mappings().all()
+            for row in rows:
+                changed = c.execute(
+                    text("UPDATE discovery_runs SET status = 'failed', error = :reason, "
+                         "updated_at = now() WHERE id = :id AND status = 'running'"),
+                    {"id": row["id"], "reason": COMMUNITY_DISCOVERY_BLOCK_REASON},
+                ).rowcount
+                if not changed:
+                    continue
+                state = row["state"] if isinstance(row["state"], dict) else {}
+                governance = state.get("governance") or {}
+                if not isinstance(governance, dict):
+                    governance = {}
+                create_blocking_decision(
+                    c, row["project_id"], None,
+                    f"Reconcile interrupted Discovery research {row['id']}",
+                    {"action": "review_model_spend_and_receipts_before_retry"},
+                    {"run_id": row["id"], "recorded_usage": row["usage"],
+                     "reservation_id": governance.get("reservation_id"),
+                     "receipt_id": governance.get("receipt_id")},
+                    "discovery_unverified_spend", default_action="hold",
+                )
+                emit_event(
+                    c, row["project_id"], "discovery.blocked", "boss",
+                    "discovery_run", row["id"],
+                    {"reason": "community_discovery_governance_gate",
+                     "spend_reconciliation_required": True},
+                )
+                blocked.append(row["id"])
+        return {"resumed": 0, "run_ids": [], "blocked": len(blocked),
+                "blocked_run_ids": blocked[:20]}
     resumed: list[str] = []
     with begin(engine) as c:
         rows = c.execute(
@@ -117,7 +173,7 @@ def resume_interrupted(settings: Settings) -> dict:
     for row in rows:
         state = row["state"] if isinstance(row["state"], dict) else {}
         try:
-            with begin(c2 := get_engine()) as conn:
+            with begin(get_engine()) as conn:
                 emit_event(conn, row["project_id"], "discovery.resumed", "boss",
                            "discovery_run", row["id"],
                            {"reason": "the process running it restarted"})

@@ -18,7 +18,7 @@ from .capability_manifest import CapabilityManifest
 from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
-from .discovery_service import start_discovery
+from .discovery_service import require_discovery_runtime, start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
 from .meeting_service import start_meeting_run
@@ -2742,6 +2742,7 @@ class IntentRouter:
 
         if name == "run_discovery":
             self._require(connection, project_id, actor, "task_create")
+            require_discovery_runtime(self.settings)
             seed = str(arguments.get("seed") or "").strip()
             title = str(arguments.get("title") or seed[:120] or "Discovery")
             reservation_amount = self.settings.plan_budget_usd_micros * 4

@@ -1012,10 +1012,12 @@ export function AskBossHero({
   projectId,
   actor,
   orgId,
+  researchAvailable = true,
 }: {
   projectId: string;
   actor: string;
   orgId?: string;
+  researchAvailable?: boolean;
 }) {
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("");
@@ -1387,7 +1389,7 @@ export function AskBossHero({
    */
   const research = useCallback((seedText: string) => {
     const seed = seedText.trim();
-    if (!seed || busy) return;
+    if (!seed || busy || !researchAvailable) return;
     setError(""); setReply(""); setProposed([]);
     startTransition(async () => {
       const r = await postBounded("/api/discoveries", { project_id: projectId, seed, actor });
@@ -1399,7 +1401,7 @@ export function AskBossHero({
         `When something looks worth building, bring it back here and press Build.`,
       );
     });
-  }, [busy, projectId, actor]);
+  }, [busy, projectId, actor, researchAvailable]);
 
   // A SLOW DRIFT THE OPERATOR CAN OVERRIDE.
   //
@@ -1572,9 +1574,10 @@ export function AskBossHero({
                     hint: "An idea or the running system — BOSS asks what it needs to know, "
                           + "pushes back, and starts nothing unless you say so.",
                     onRun: () => discuss(input) },
-                  { id: "research", label: "Research", cost: "spends money",
+                  ...(researchAvailable ? [{ id: "research", label: "Research",
+                    cost: "spends money",
                     hint: "Web sources first, into a cited dossier and candidate outcomes",
-                    onRun: () => research(input) },
+                    onRun: () => research(input) }] : []),
                 ]}
               />
             </div>
@@ -1601,7 +1604,7 @@ export function AskBossHero({
                   height for a secondary path and pushed the composer — the thing that should
                   read first — down the panel. The chip carries a short label; the full question
                   goes into the composer on click, where it can be edited before it runs. */}
-              <div className="askboss-research-row">
+              {researchAvailable ? <div className="askboss-research-row">
                 <span className="askboss-research-label">Not sure yet?</span>
                 {RESEARCH.map((r) => (
                   <button
@@ -1625,7 +1628,10 @@ export function AskBossHero({
                   </button>
                 ))}
                 <span className="askboss-research-hint">→ then press Research</span>
-              </div>
+              </div> : <div className="askboss-research-row" role="status">
+                Discovery research is paused in Community while budget and recovery safeguards
+                are completed. Saved dossiers are available under Discovery.
+              </div>}
               {/* A SCROLL STRIP, NOT A SLIDESHOW.
                   These flipped pages on a nine-second timer, which means the one you were
                   reading could leave while you read it, and seeing the whole set required
