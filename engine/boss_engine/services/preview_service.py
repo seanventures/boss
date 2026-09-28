@@ -2025,6 +2025,8 @@ def smoke_test(
     for chk in checks:
         method = (chk.get("method") or "GET").upper()
         path = chk.get("path") or "/"
+        if method not in {"GET", "HEAD"} or not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+            raise ValueError("preview smoke supports only GET/HEAD on relative paths")
         want_status = chk.get("expect_status")
         want_contains = chk.get("expect_contains")
         data = json.dumps(chk["body"]).encode() if chk.get("body") is not None else None

@@ -1048,7 +1048,9 @@ def _record_redelivery(client: ControlPlaneClient, job) -> None:
     if not isinstance(run_id, str) or not run_id.strip():
         return
     try:
-        client.note_code_task_redelivery(run_id.strip(), int(job.attempt))
+        client.note_code_task_redelivery(
+            run_id.strip(), int(job.attempt), job.id, job.lease_token,
+        )
     except Exception:  # noqa: BLE001 — annotation is never worth losing the job over
         LOGGER.debug("redelivery_note_failed job_id=%s", job.id, exc_info=True)
 

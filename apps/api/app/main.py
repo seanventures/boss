@@ -6710,8 +6710,31 @@ def code_task_redelivered_endpoint(run_id: str, payload: dict) -> dict:
     against it and nothing anywhere says the stage was restarted, which is precisely how a
     46-minute build became a forensic exercise.
     """
+    require_worker_principal()
+    worker_id = str(payload.get("worker_id") or "").strip()
+    job_id = str(payload.get("job_id") or "").strip()
+    lease_token = str(payload.get("lease_token") or "").strip()
     attempt = int(payload.get("attempt") or 0)
+    if not worker_id or not job_id or not lease_token or attempt < 2:
+        raise HTTPException(status_code=422, detail="active replay lease and attempt >= 2 required")
     with begin(engine) as connection:
+        try:
+            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        run_project = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar_one_or_none()
+        if run_project is None:
+            raise HTTPException(status_code=404, detail="code task not found")
+        lease_payload = lease.get("payload") or {}
+        if (
+            lease["project_id"] != run_project
+            or (lease_payload.get("run_id") or lease_payload.get("code_task_run_id")) != run_id
+            or lease["attempt"] != attempt
+        ):
+            raise HTTPException(status_code=409, detail="replay lease does not match code task")
         connection.execute(
             text(
                 """
@@ -9113,9 +9136,21 @@ def smoke_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
     """Tier-3 smoke canary: assert the live preview actually works (key routes), record a receipt."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    checks = (payload or {}).get("checks")
+    if checks is not None:
+        if not isinstance(checks, list) or not checks or len(checks) > 20:
+            raise HTTPException(status_code=422, detail="checks must contain 1 to 20 reads")
+        for check in checks:
+            if not isinstance(check, dict) or str(check.get("method") or "GET").upper() not in {"GET", "HEAD"}:
+                raise HTTPException(status_code=422, detail="preview smoke supports GET and HEAD only")
+            path = check.get("path") or "/"
+            if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+                raise HTTPException(status_code=422, detail="smoke path must be relative to preview")
+    with begin(engine) as connection:
+        require_preview_reader(connection, preview_id)
     from .services.preview_service import smoke_test
     try:
-        return smoke_test(engine, preview_id, (payload or {}).get("checks"), settings)
+        return smoke_test(engine, preview_id, checks, settings)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -9218,7 +9253,7 @@ def approve_preview_endpoint(preview_id: str, payload: dict):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    actor = str(payload.get("actor") or "").strip()
+    actor = str(current_api_principal.get() or payload.get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
     from boss_engine.services.preview_approval import (
@@ -9232,6 +9267,7 @@ def approve_preview_endpoint(preview_id: str, payload: dict):
                 note=str(payload.get("note") or "").strip() or None)
         except PreviewGateError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc))
+        require_project_actor(connection, gate["project_id"], actor, "decision_resolve")
 
     # Approve the merge decision through the SAME endpoint a human uses. Calling the existing
     # transition keeps role checks, receipts and the merge itself on one path; a private
@@ -9243,6 +9279,16 @@ def approve_preview_endpoint(preview_id: str, payload: dict):
                               note=f"Preview {preview_id} approved by {actor}"
                                    + (f": {gate['note']}" if gate.get("note") else "")),
     )
+    with begin(engine) as connection:
+        emit_event(
+            connection, gate["project_id"], "preview.approved", actor,
+            "app_preview", preview_id,
+            {"run_id": gate["run_id"], "repo": gate["repo"],
+             "branch": gate["branch"], "preview_url": gate["preview_url"],
+             "decision_id": decision_id,
+             "pull_request_url": gate["pull_request_url"],
+             "will_deploy": gate["will_deploy"], "note": (gate.get("note") or "")[:500]},
+        )
     return {"preview_id": preview_id, "decision_id": decision_id,
             "approved_by": actor, "decision": card,
             "app_targets": gate.get("app_targets", []),
@@ -9408,6 +9454,28 @@ def set_code_task_origin_endpoint(run_id: str, payload: dict):
         if (payload or {}).get(field):
             origin[field] = str(payload[field])
     with begin(engine) as c:
+        project_id = c.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :id"),
+            {"id": run_id},
+        ).scalar_one_or_none()
+        if project_id is None:
+            raise HTTPException(status_code=404, detail="code task not found")
+        actor = str((payload or {}).get("actor") or "").strip()
+        if not actor:
+            raise HTTPException(status_code=422, detail="actor is required")
+        require_project_actor(c, project_id, actor, "task_create")
+        for field, table in (
+            ("meeting_run_id", "meeting_runs"),
+            ("task_id", "tasks"),
+            ("discovery_run_id", "discovery_runs"),
+        ):
+            if field in origin:
+                owner = c.execute(
+                    text(f"SELECT project_id FROM {table} WHERE id = :id"),
+                    {"id": origin[field]},
+                ).scalar_one_or_none()
+                if owner != project_id:
+                    raise HTTPException(status_code=422, detail=f"{field} must belong to the code task project")
         n = c.execute(text(
             "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
             "|| jsonb_build_object('origin', CAST(:o AS JSONB)), updated_at = now() "

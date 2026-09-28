@@ -24,7 +24,6 @@ import json
 from typing import Any, Optional
 
 from ..ports import sql
-from .core import emit_event
 
 # The branch a code task builds on. The merge decision records `branch_name`, and the preview
 # records `run_id`; this is the only thing that links a preview to its gate.
@@ -135,6 +134,8 @@ def describe_gate(connection, *, preview_id: str) -> Optional[dict[str, Any]]:
 
     project_id = (decision or {}).get("project_id") or preview.get("project_id")
     targets = _app_targets(connection, project_id, preview.get("repo"))
+    if decision and decision.get("project_id") != preview.get("project_id"):
+        blockers.append("merge decision belongs to another project")
     if decision and not targets:
         # Not a blocker: approving still merges, which is a legitimate thing to want. But the
         # console should not imply a deploy that no target exists to receive.
@@ -163,10 +164,9 @@ def describe_gate(connection, *, preview_id: str) -> Optional[dict[str, Any]]:
 
 def record_preview_approval(connection, *, preview_id: str, actor: str,
                             note: Optional[str] = None) -> dict[str, Any]:
-    """Check the gate and record WHO approved WHAT, then hand back the decision to approve.
+    """Validate the preview gate before the decision transition.
 
-    Deliberately does not perform the approval itself: the caller routes it through the same
-    decision endpoint a human uses, so role checks, receipts and the merge stay on one path.
+    The caller records ``preview.approved`` only after the decision has been approved.
     """
     gate = describe_gate(connection, preview_id=preview_id)
     if gate is None:
@@ -174,13 +174,4 @@ def record_preview_approval(connection, *, preview_id: str, actor: str,
     if not gate["can_approve"]:
         raise PreviewGateError("; ".join(gate["blockers"]), status=409)
 
-    # The evidence: which preview, which URL, which commit-shaped thing the human actually
-    # looked at. "Approved" with no record of what was on screen is not worth much later.
-    emit_event(
-        connection, gate["project_id"], "preview.approved", actor, "app_preview", preview_id,
-        {"run_id": gate["run_id"], "repo": gate["repo"], "branch": gate["branch"],
-         "preview_url": gate["preview_url"], "decision_id": gate["decision_id"],
-         "pull_request_url": gate["pull_request_url"],
-         "will_deploy": gate["will_deploy"], "note": (note or "")[:500]},
-    )
     return {**gate, "note": note}
