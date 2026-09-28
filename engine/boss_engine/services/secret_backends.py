@@ -194,7 +194,10 @@ class PlatformSecretStoreBackend:
     def health(self) -> dict[str, Any]:
         try:
             self.list_keys()
-            return {"ok": True, "kind": self.kind, "writable": True}
+            # External to this process. A redeploy does not take it with it, which is what
+            # `durable_secret_backend` is asking — a store that forgets to say so is skipped,
+            # and the credential lands in Postgres instead.
+            return {"ok": True, "kind": self.kind, "writable": True, "durable": True}
         except SecretUnavailable as exc:
             return {"ok": False, "kind": self.kind, "error": str(exc)}
 
@@ -349,8 +352,10 @@ class InfisicalBackend:
     def health(self) -> dict[str, Any]:
         try:
             keys = self.list_keys()
-            return {"ok": True, "kind": self.kind, "writable": True, "keys": len(keys),
-                    "environment": self._environment, "path": self._path}
+            # External to this process. See PlatformSecretStoreBackend.health: without
+            # `durable`, a configured Infisical is skipped and channel secrets go to Postgres.
+            return {"ok": True, "kind": self.kind, "writable": True, "durable": True,
+                    "keys": len(keys), "environment": self._environment, "path": self._path}
         except SecretUnavailable as exc:
             return {"ok": False, "kind": self.kind, "error": str(exc)}
 
@@ -559,7 +564,9 @@ class VaultKvBackend:
     def health(self) -> dict[str, Any]:
         try:
             self._call("GET", "/v1/sys/health")
-            return {"ok": True, "kind": self.kind, "writable": True, "addr": self._addr}
+            # External to this process. See PlatformSecretStoreBackend.health.
+            return {"ok": True, "kind": self.kind, "writable": True, "durable": True,
+                    "addr": self._addr}
         except SecretUnavailable as exc:
             return {"ok": False, "kind": self.kind, "error": str(exc)}
 

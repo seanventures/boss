@@ -85,6 +85,35 @@ def test_a_backend_that_raises_is_not_fatal(monkeypatch):
     assert sb.durable_secret_backend(Settings()) == "database"
 
 
+def test_the_real_managed_stores_say_they_survive_a_redeploy(tmp_path):
+    """THE SELECTOR ONLY TRUSTS THE FLAG. The unit above passes a mock that already says
+    `durable: True`, and the three stores an operator actually configures never did — their
+    health answered `ok` and stopped there. `durable_secret_backend` then skipped a working
+    Infisical, Vault, or platform store and wrote the Google client secret and refresh token
+    into Postgres. On an install with no separate master key, that key sits in the same
+    table, so a database copy is the credential.
+
+    local_vault stays silent on purpose: its files live in the container, and claiming
+    otherwise is how the client was destroyed the first two times.
+    """
+    infisical = sb.InfisicalBackend(
+        "https://infisical.invalid", "id", "sec", "proj", token="t")
+    infisical.list_keys = lambda: []
+    assert infisical.health().get("durable") is True
+
+    platform = sb.PlatformSecretStoreBackend("https://ops.invalid", "token")
+    platform.list_keys = lambda: []
+    assert platform.health().get("durable") is True
+
+    vault = sb.VaultKvBackend("https://vault.invalid", "token")
+    vault._call = lambda *args, **kwargs: {}
+    assert vault.health().get("durable") is True
+
+    local = sb.LocalVaultBackend(root=str(tmp_path / "vault"), master_key=b"k" * 32)
+    assert local.health().get("ok") is True
+    assert local.health().get("durable") is not True
+
+
 def test_channel_credentials_ask_for_durability_rather_than_protection():
     """Both places channel_oauth stores a secret — the OAuth client and the refresh token."""
     import inspect
