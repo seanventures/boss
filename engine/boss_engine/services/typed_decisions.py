@@ -230,15 +230,32 @@ class ClaudeDecider:
 
     The confidence is the model's own estimate, not a calibrated probability — treat it as a
     ranking signal, and measure it before trusting it as a threshold.
+
+    THE WORKER HAS NO `claude` BINARY. A workflow's decision step runs there, and a decider that
+    only knew the CLI failed every one with "claude CLI not found" — including the second
+    opinion behind Jev, so an unsure Jev answer failed the step instead of being checked. Where
+    the CLI is absent this uses the same API model the worker's agent steps already use.
     """
 
-    backend = "claude_code"
-
     def __init__(self, settings: Settings, model: Optional[str] = None, attempts: int = 2):
-        from .claude_cli_adapter import ClaudeCliAdapter
+        import shutil
 
-        self._adapter = ClaudeCliAdapter(settings, model=model)
-        self.model = model or getattr(settings, "claude_cli_model", None) or ""
+        from .claude_cli_adapter import ClaudeCliAdapter, openai_fallback_usable
+
+        cli = ClaudeCliAdapter(settings, model=model)
+        if shutil.which(cli._claude_bin()):
+            self._adapter, self.backend = cli, "claude_code"
+            self.model = model or getattr(settings, "claude_cli_model", None) or ""
+        elif openai_fallback_usable(settings):
+            from .openai_adapter import OpenAIAdapter
+
+            # A Claude alias ("opus") means nothing to this API, so its own configured model
+            # answers.
+            self._adapter, self.backend, self.model = OpenAIAdapter(settings), "openai", ""
+        else:
+            raise RuntimeError(
+                "no model can answer decisions in this process: the claude CLI is not installed "
+                "here and no API key is configured.")
         self._attempts = max(1, attempts)
 
     def decide(self, context: str, questions: list[Question]) -> DecisionBatch:

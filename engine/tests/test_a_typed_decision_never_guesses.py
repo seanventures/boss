@@ -189,3 +189,25 @@ def test_no_answer_fails_the_step(monkeypatch):
     import pytest
     with pytest.raises(CapabilityExecutionError, match="no usable answer"):
         _run(monkeypatch, _Answers(None, None))
+
+
+# --- The worker has no claude binary -------------------------------------------------------- #
+def test_without_the_cli_decisions_use_the_api_model(monkeypatch):
+    from boss_engine.config import Settings
+    from boss_engine.services.typed_decisions import ClaudeDecider
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    decider = ClaudeDecider(Settings(OPENAI_API_KEY="sk-test"), model="opus")
+    assert decider.backend == "openai" and decider.model == ""
+
+
+def test_without_the_cli_or_a_key_the_error_says_so(monkeypatch):
+    import pytest
+    from boss_engine.config import Settings
+    from boss_engine.services.typed_decisions import ClaudeDecider
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("boss_engine.services.claude_cli_adapter.openai_fallback_usable",
+                        lambda settings: False)
+    with pytest.raises(RuntimeError, match="claude CLI is not installed"):
+        ClaudeDecider(Settings(), model="opus")
