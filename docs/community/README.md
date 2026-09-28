@@ -15,6 +15,11 @@ In the console, **Agent work** shows recent activity by role. **Team
 structure** holds a planned role layout and separately shows actual handoffs.
 **Agent Studio** creates and tests agent definitions. Moving a role on the
 chart does not change task routing, and adding a template does not start work.
+On a new install, the planned layout and your workflow list start empty even
+though Agent Studio has starter definitions. Place roles deliberately and add
+the optional workflows from `examples/` when you are ready. The header's
+Software projects count tracks app builds; the seeded BOSS control project is
+selected separately.
 
 ## Extend and contribute
 
