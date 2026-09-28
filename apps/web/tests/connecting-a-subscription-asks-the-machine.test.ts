@@ -9,13 +9,12 @@ import { readFileSync } from "node:fs";
  * for it at all. That was true when the only way in was a credential.
  *
  * It is not true any more. A Codex or Cursor plan is an OAuth session the CLI already holds,
- * so BOSS can look for the CLI on the machine, read whether it is signed in, and prove it
- * answers — without a credential ever existing to paste. The wizard asks the machine instead
- * of the operator.
+ * so BOSS can look for the CLI on the machine and read whether it is signed in. Community
+ * records eligible subscriptions without a live model turn until proof is budget governed.
  *
  * The earlier comment in this file is worth keeping in mind: a previous version promised a
  * "connection session" that did nothing, producing a green tick over nothing. Hence the
- * insistence below that connecting PROVES before it records.
+ * wizard distinguishes a proved connection from one recorded without live proof.
  */
 
 const UI = readFileSync(new URL("../app/setup-ui.tsx", import.meta.url), "utf8");
@@ -53,13 +52,15 @@ describe("the wizard asks the machine", () => {
 });
 
 describe("it does not repeat the green-tick-over-nothing mistake", () => {
-  it("says the connection is proved, not merely recorded", () => {
-    expect(UI).toContain("one turn in its read-only sandbox");
-    expect(UI).toContain("Signed in is not the same as working");
+  it("shows whether live proof is available before claiming it ran", () => {
+    expect(UI).toContain("liveProofAvailable");
+    expect(UI).toContain("Connected without a live model check");
+    expect(UI).toContain("Community pauses live proof");
   });
 
-  it("asks the server to prove it", () => {
-    expect(UI).toContain("prove: true");
+  it("uses the server's proof capability in the connection request", () => {
+    expect(UI).toContain("status.live_proof_available === true");
+    expect(UI).toContain("prove: liveProofAvailable");
   });
 
   it("keeps the manual instructions for anything undetected", () => {

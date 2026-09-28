@@ -236,7 +236,8 @@ def test_connect_records_owner_only_entitlement_and_code_engine_hint(
                         lambda _settings: SimpleNamespace(upsert_source=(
                             lambda _conn, payload, **_kw: payloads.append(payload))))
 
-    out = setup_service.connect_coding_agent(None, SimpleNamespace(), "project", "grok")
+    out = setup_service.connect_coding_agent(
+        None, SimpleNamespace(boss_edition="enterprise"), "project", "grok")
 
     assert out["ok"] and out["use_it_with"] == "BOSS_CODE_AGENT_ENGINE=grok"
     assert out["entitlement_recorded"]
@@ -254,10 +255,12 @@ def test_connect_refuses_grok_without_the_worker_session(
                         lambda *_a: pytest.fail("cannot import another user's session"))
 
     with pytest.raises(setup_service.SetupError, match="device-auth"):
-        setup_service.connect_coding_agent(None, SimpleNamespace(), "project", "grok")
+        setup_service.connect_coding_agent(
+            None, SimpleNamespace(boss_edition="enterprise"), "project", "grok")
 
 
 def test_grok_entitlement_cannot_skip_the_live_proof() -> None:
     with pytest.raises(setup_service.SetupError, match="requires a live read-only proof"):
         setup_service.connect_coding_agent(
-            None, SimpleNamespace(), "project", "grok", prove=False)
+            None, SimpleNamespace(boss_edition="enterprise"), "project", "grok",
+            prove=False)

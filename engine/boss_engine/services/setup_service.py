@@ -105,6 +105,17 @@ class SetupError(RuntimeError):
     """Something the operator can fix, phrased for them."""
 
 
+_PAID_EDITIONS = frozenset({
+    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
+})
+
+
+def coding_agent_live_proof_available(settings: Settings) -> bool:
+    """Only editions with a governed CLI proof path may spend a live model turn."""
+    edition = str(getattr(settings, "boss_edition", "community") or "community")
+    return edition.strip().lower() in _PAID_EDITIONS
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Keep a provider probe at the URL the authorized operator supplied."""
 
@@ -585,14 +596,21 @@ def connect_coding_agent(
     """Import a coding-agent subscription the customer already has, into BOSS.
 
     There is nothing to paste. A Codex or Cursor subscription is an OAuth session held by that
-    CLI, so the only honest way to "configure" one is to find the CLI, confirm it is signed in,
-    prove it answers, and record the entitlement. Anything else is asking the operator to
+    CLI, so configuration finds the CLI, confirms it is signed in, and records the entitlement.
+    Paid editions also prove it answers before recording. Anything else is asking the operator to
     transcribe a credential that does not exist.
 
     Refuses rather than half-succeeds: not installed and signed-out are different problems with
     different next steps, and both are more useful than a stored setting that fails at build
     time an hour later.
     """
+    if prove and not coding_agent_live_proof_available(settings):
+        raise SetupError(
+            "Live coding-agent proof is paused in Community until its model turn has a "
+            "budget reservation, worker lease, and cost receipt. Use prove=false to record "
+            "a CLI that permits an unverified connection; the first governed job will "
+            "verify it."
+        )
     from .cli_harness import GenericCliCodeAgent, detect, load_specs
 
     spec = load_specs(settings).get(provider)
@@ -601,6 +619,11 @@ def connect_coding_agent(
             f"no CLI coding agent called {provider!r}. Known: "
             f"{', '.join(sorted(load_specs(settings)))}.")
     if spec.require_local_session_file and not prove:
+        if not coding_agent_live_proof_available(settings):
+            raise SetupError(
+                f"{provider} requires a live CLI proof before connection; that proof is "
+                "paused in Community until budget, lease, and receipt tracking is in place."
+            )
         raise SetupError(f"{provider} requires a live read-only proof turn before connecting.")
     found = detect(spec)
     if not found["installed"]:

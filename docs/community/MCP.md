@@ -71,6 +71,10 @@ Community source tools accept a run ID from the session project or an active
 repository binding in that project. Pull request reads use the same boundary.
 `read_logs` returns only project-tagged captured logs. Arbitrary URL probes are
 unavailable until destinations can be verified against a project network policy.
+Community also pauses `find_free_port` until host probes are project bound, and
+pauses live coding-agent setup checks until model turns have budget, lease, and
+receipt tracking. Eligible CLI subscriptions can be recorded with `prove=false`;
+the first governed job tests the connection.
 
 The session project is fixed at server startup. MCP ignores any
 `project_id` supplied in a tool call and removes internal

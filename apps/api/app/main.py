@@ -14633,7 +14633,12 @@ def setup_coding_agents(project_id: str = "") -> dict:
     wizard showed the same Connect button as a fresh install, with nothing saying the work had
     already been done — so an operator reasonably concluded it had not been saved.
     """
-    from .services.setup_service import list_coding_agents, with_recorded_connections
+    from .services.setup_service import (
+        coding_agent_live_proof_available, list_coding_agents,
+        with_recorded_connections,
+    )
+
+    runtime_settings = get_settings()
 
     if project_id:
         with begin(engine) as connection:
@@ -14641,7 +14646,7 @@ def setup_coding_agents(project_id: str = "") -> dict:
                 connection, project_id, current_api_principal.get() or "ceo",
                 "entitlement_manage",
             )
-            agents = list_coding_agents(get_settings())
+            agents = list_coding_agents(runtime_settings)
             # Keep detection useful if the recorded connection lookup fails. An authority
             # failure must reach the caller instead of becoming connected=False.
             try:
@@ -14649,8 +14654,9 @@ def setup_coding_agents(project_id: str = "") -> dict:
             except Exception:  # noqa: BLE001
                 pass
     else:
-        agents = list_coding_agents(get_settings())
+        agents = list_coding_agents(runtime_settings)
     return {"agents": agents,
+            "live_proof_available": coding_agent_live_proof_available(runtime_settings),
             "ready": [a["name"] for a in agents if a["ready"]],
             "connected": [a["name"] for a in agents if a.get("connected")],
             "not_ready": [{"name": a["name"], "next_step": a["next_step"]}
@@ -14753,11 +14759,10 @@ def setup_store_decision_key(payload: dict) -> dict:
 
 @app.post("/v1/setup/coding-agents/connect", status_code=201)
 def setup_connect_coding_agent(payload: dict) -> dict:
-    """Import a subscription the operator already has, after proving it answers.
+    """Import an existing subscription. Community records eligible CLIs without live proof.
 
-    Same order as the model-key route and for the same reason: a CLI reports "logged in" from
-    a token on disk, which says somebody signed in once — not that the session still works or
-    the plan is active. One real turn turns that into evidence.
+    A live proof turn is available only where model cost is governed; otherwise the first
+    governed job tests the recorded connection and reports any authentication failure.
     """
     from .services.setup_service import SetupError, connect_coding_agent
 
@@ -14773,7 +14778,7 @@ def setup_connect_coding_agent(payload: dict) -> dict:
         require_project_actor(connection, project_id, actor, "pack_manage")
         try:
             return connect_coding_agent(connection, get_settings(), project_id, provider,
-                                        actor=actor, prove=bool(payload.get("prove", True)))
+                                        actor=actor, prove=payload.get("prove") is not False)
         except SetupError as exc:
             # 422, not 500: the operator can fix every one of these, and the message says how.
             raise HTTPException(status_code=422, detail=str(exc)) from exc

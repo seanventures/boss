@@ -2463,9 +2463,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "connect_coding_agent",
         "Import a coding-agent subscription the operator already has (e.g. Codex via their "
-        "ChatGPT login) into BOSS: confirm the CLI is signed in, make it complete one real "
-        "turn, and record the entitlement. Refuses rather than half-succeeds — signed in is "
-        "not the same as working.",
+        "ChatGPT login) into BOSS. Community can record an eligible CLI with prove=false; "
+        "live proof is paused until model turns have budget, lease, and receipt tracking.",
         _obj({"provider": {"type": "string",
                            "description": "codex | cursor | aider"},
               "prove": {"type": "boolean", "default": True,
@@ -2475,13 +2474,22 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reversibility="safe",
     )
     def connect_coding_agent(ctx, *, project_id, actor, args):
-        from ..services.setup_service import SetupError, connect_coding_agent as _connect
+        from ..services.setup_service import (
+            SetupError, coding_agent_live_proof_available,
+            connect_coding_agent as _connect,
+        )
+
+        prove = args.get("prove") is not False
+        if prove and not coding_agent_live_proof_available(ctx.settings):
+            return {"ok": False, "error": "Community live CLI proof is paused until its "
+                    "model turn has a budget reservation, worker lease, and cost receipt. "
+                    "Use prove=false for CLIs that permit an unverified connection."}
 
         with ctx.begin() as c:
             try:
                 return _connect(c, ctx.settings, project_id,
                                 str(args.get("provider") or "").strip().lower(),
-                                actor=actor, prove=bool(args.get("prove", True)))
+                                actor=actor, prove=prove)
             except SetupError as exc:
                 # The next step IS the answer here, so it travels as a result an agent can
                 # read and act on rather than an exception that loses it.
@@ -4750,7 +4758,8 @@ def _register_port_tools(reg: ToolRegistry) -> None:
         "A port on this host that is actually free — nothing listening AND not already assigned "
         "to another app in BOSS's registry. Use before retarget_app instead of picking the next "
         "number up: 'is 8001 free' needs both answers, and a port that is idle right now but "
-        "promised to an app between deploys is not free.",
+        "promised to an app between deploys is not free. Unavailable in Community until "
+        "host probes have a project-bound network policy.",
         _obj({"host": {"type": "string", "description": "address, e.g. 192.0.2.202"},
               "start": {"type": "integer", "description": "first port to consider (default 3000)"},
               "count": {"type": "integer", "description": "how many to report (default 3)"},
@@ -4761,6 +4770,9 @@ def _register_port_tools(reg: ToolRegistry) -> None:
     def find_free_port(ctx, *, project_id, actor, args):
         import socket
 
+        if _community_restricted(ctx.settings):
+            return {"ok": False, "error": "Community host-port probes are paused until "
+                    "the destination and port range are bound to the current project."}
         host = str(args.get("host") or "").strip()
         if not host:
             return {"ok": False, "error": "host is required"}
@@ -6695,7 +6707,8 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
             continue
         if (edition is not None
                 and edition.strip().lower() not in _PAID_EFFECT_EDITIONS
-                and spec.name in {"query_db", "write_db", "generate_image", "http_probe"}):
+                and spec.name in {"query_db", "write_db", "generate_image",
+                                  "http_probe", "find_free_port"}):
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
         properties.pop("project_id", None)

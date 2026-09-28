@@ -285,6 +285,8 @@ class TestFindingAPortWithoutGuessing:
                 return Result()
 
         class Ctx:
+            settings = type("Settings", (), {"boss_edition": "enterprise"})()
+
             @contextlib.contextmanager
             def begin(self):
                 yield Connection()

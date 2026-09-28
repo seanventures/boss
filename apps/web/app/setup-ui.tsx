@@ -506,6 +506,7 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [agents, setAgents] = useState<CodingAgent[] | null>(null);
+  const [liveProofAvailable, setLiveProofAvailable] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [token, setToken] = useState("");
   // The store fallback is a decision, so it is asked once and remembered for the retry
@@ -531,7 +532,11 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
       const r = await fetch(
         `/api/setup?view=coding-agents&project_id=${encodeURIComponent(projectId)}`,
         { cache: "no-store" });
-      if (r.ok) setAgents(((await r.json()).agents ?? []) as CodingAgent[]);
+      if (r.ok) {
+        const status = await r.json();
+        setAgents((status.agents ?? []) as CodingAgent[]);
+        setLiveProofAvailable(status.live_proof_available === true);
+      }
     } catch { setAgents(null); }   // fall back to the manual instructions below
   }, [projectId]);
 
@@ -547,19 +552,22 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
     setConnecting(true); setResult(null);
     const r = await call<Record<string, unknown>>({
       step: "coding-agent",
-      payload: { project_id: projectId, actor, provider, prove: true },
+      payload: { project_id: projectId, actor, provider, prove: liveProofAvailable },
     });
     setConnecting(false);
     setResult(r.ok
-      ? { ok: true, text: `Connected. ${provider} answered a test turn, and the entitlement `
-                          + `is recorded. Use it with BOSS_PROVIDER_LOCK=${provider}.` }
+      ? { ok: true, text: liveProofAvailable
+          ? `Connected. ${provider} answered a test turn, and the entitlement is recorded. `
+            + `Use it with BOSS_PROVIDER_LOCK=${provider}.`
+          : `Connected without a live model check. The first governed job will verify `
+            + `${provider}. Use it with BOSS_PROVIDER_LOCK=${provider}.` }
       // The API answers 422 with the next command for every fixable case, so show it verbatim
       // rather than "could not connect".
       : { ok: false, text: r.error ?? "could not connect" });
     // Re-read the recorded state rather than assuming it. The banner below is meant to say
     // what the database holds; setting it from the reply would make it say what we hoped.
     if (r.ok) { await loadAgents(); onDone(); }
-  }, [connecting, projectId, actor, provider, onDone, loadAgents]);
+  }, [connecting, projectId, actor, provider, liveProofAvailable, onDone, loadAgents]);
 
   const storeTokenAndConnect = useCallback(async () => {
     if (connecting || !token.trim()) return;
@@ -588,17 +596,20 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
     setToken("");
     const connected = await call<Record<string, unknown>>({
       step: "coding-agent",
-      payload: { project_id: projectId, actor, provider, prove: true },
+      payload: { project_id: projectId, actor, provider, prove: liveProofAvailable },
     });
     setConnecting(false);
     setResult(connected.ok
       ? { ok: true, text: `Connected. BOSS holds the token in its `
-                          + `${String(stored.data?.backend ?? "secret")} store and ${provider} `
-                          + `answered a test turn.` }
+                          + `${String(stored.data?.backend ?? "secret")} store. `
+                          + (liveProofAvailable
+                            ? `${provider} answered a test turn.`
+                            : `${provider} will be verified by the first governed job.`) }
       : { ok: false, text: connected.error ?? "the token was stored but did not work" });
     await loadAgents();
     if (connected.ok) onDone();
-  }, [connecting, token, acceptFallback, projectId, actor, provider, onDone, loadAgents]);
+  }, [connecting, token, acceptFallback, projectId, actor, provider,
+      liveProofAvailable, onDone, loadAgents]);
 
   const save = useCallback(async () => {
     if (busy) return;
@@ -742,9 +753,12 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
               {detected.credential_kind === "token"
                 // "It never asks you for a credential" is true of the file route and false
                 // here, where the box below is asking for exactly one.
-                ? <>Press <b>Store and connect</b>. BOSS proves it with one real turn before
-                    recording anything.</>
-                : <>Press Connect below. BOSS checks it, it never asks you for a credential.</>}
+                ? <>Press <b>Store and connect</b>. {liveProofAvailable
+                    ? "BOSS proves it with one real turn before recording anything."
+                    : "Community records it without a live model check; the first governed job verifies it."}</>
+                : <>Press Connect below. {liveProofAvailable
+                    ? "BOSS checks it without asking you for a credential."
+                    : "Community records eligible CLIs without a live model check."}</>}
               {detected.connected ? " — already connected." : null}
             </li>
           </ol>
@@ -781,10 +795,10 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
           ) : null}
           <button className="button" disabled={connecting || !detected.installed}
                   data-testid="setup-agent-connect" onClick={() => void connectAgent()}>
-            {connecting ? "Checking it answers…"
-              : detected.connected ? `Re-check ${chosen?.label ?? provider}`
+            {connecting ? (liveProofAvailable ? "Checking it answers…" : "Connecting…")
+              : detected.connected ? `${liveProofAvailable ? "Re-check" : "Reconnect"} ${chosen?.label ?? provider}`
               : detected.ready ? `Connect ${chosen?.label ?? provider}`
-              : `Re-check ${chosen?.label ?? provider}`}
+              : `${liveProofAvailable ? "Re-check" : "Connect"} ${chosen?.label ?? provider}`}
           </button>
           {detected.ready ? null
             : detected.credential_kind === "token" && !detected.token_present ? (
@@ -801,9 +815,13 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
               </p>
             )}
           <p className="hint">
-            Connecting proves it works before recording anything: BOSS makes the agent complete
-            one turn in its read-only sandbox. Signed in is not the same as working — so
-            pressing this again after re-authorising is the way to confirm it, not a no-op.
+            {liveProofAvailable
+              ? <>Connecting proves it works before recording anything: BOSS makes the agent
+                  complete one turn in its read-only sandbox. Signed in is not the same as
+                  working — so pressing this again after re-authorising is the way to confirm it.</>
+              : <>Community pauses live proof until model turns have budget, lease, and receipt
+                  tracking. CLIs that require live proof cannot be connected yet; other
+                  subscriptions can be recorded and verified by their first governed job.</>}
             {detected.docs_url ? <> The CLI&rsquo;s own docs: <code>{detected.docs_url}</code>.</> : null}
           </p>
         </div>
