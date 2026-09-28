@@ -14786,14 +14786,15 @@ def setup_connect_coding_agent(payload: dict) -> dict:
 
 @app.post("/v1/setup/model", status_code=201)
 def setup_model_endpoint(payload: dict) -> dict:
-    """Prove a model key works, then store it and register the source.
+    """Save a model key; paid editions also probe it before storing.
 
-    IN THAT ORDER, deliberately. Storing first and verifying afterwards leaves a broken key
-    recorded as configured, and the operator learns an hour later when a build fails — by which
-    point the key is the last thing anyone suspects.
+    Community stores it as unverified because a live one-token completion needs a governed
+    budget reservation, leased job, and cost receipt that this setup route does not create.
     """
     from .services.secret_backends import default_secret_backend
-    from .services.setup_service import PROVIDERS, SetupError, verify_model_key
+    from .services.setup_service import (
+        PROVIDERS, SetupError, live_model_probe_allowed, model_key_details, verify_model_key,
+    )
 
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or "executive_console"
@@ -14819,19 +14820,23 @@ def setup_model_endpoint(payload: dict) -> dict:
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
-    # verify_model_key makes a network request to a caller-supplied URL. Check project
-    # authority before any request leaves this process.
+    # Check authority before either storing a credential or contacting a provider.
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
 
     try:
-        proof = verify_model_key(provider=provider, api_key=api_key,
-                                 base_url=base_url, model=model)
+        live_probe = live_model_probe_allowed(settings)
+        if live_probe:
+            proof = verify_model_key(settings=settings, provider=provider, api_key=api_key,
+                                     base_url=base_url, model=model)
+        else:
+            proof = {"ok": True, **model_key_details(
+                provider=provider, base_url=base_url, model=model,
+            )}
     except SetupError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     if not proof.get("ok"):
-        # The key never reaches storage. A source recorded as configured against a key that does
-        # not work is worse than no source at all.
+        # A failed paid-edition probe does not store the key.
         raise HTTPException(status_code=422, detail=proof.get("error") or "the key did not work")
 
     source_id = f"setup-{provider}"
@@ -14847,7 +14852,12 @@ def setup_model_endpoint(payload: dict) -> dict:
                 "status": "declared", "runtime_supported": True,
                 "supported_models": [proof["model"]],
                 "connection_metadata": {"base_url": base_url or spec.get("base_url") or "",
-                                        "verified_endpoint": proof.get("endpoint")},
+                                        "verification_state": (
+                                            "verified" if live_probe else "unverified"
+                                        ),
+                                        "verified_endpoint": (
+                                            proof.get("endpoint") if live_probe else None
+                                        )},
             },
             actor=actor,
         )
@@ -14857,7 +14867,8 @@ def setup_model_endpoint(payload: dict) -> dict:
         )
     secret = stored["secret"]
     return {"ok": True, "provider": provider, "source_id": source_id,
-            "model": proof["model"], "verified": True,
+            "model": proof["model"], "verified": live_probe,
+            "verification_state": "verified" if live_probe else "unverified",
             "backend": secret["backend"], "last4": secret.get("last4"),
             "raw_secret_stored": False}
 

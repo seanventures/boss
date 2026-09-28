@@ -10,8 +10,8 @@
  * because nothing told you the order.
  *
  * Two steps, because two things make a working install: somewhere to write code, and something
- * to think with. Each one PROVES itself against the real service before it says it worked — a
- * wizard that stores a key and reports success has verified that the operator can type.
+ * to think with. Community stores model keys without a live provider request and labels them
+ * unverified until a governed model run can prove them.
  */
 
 import React, { useCallback, useEffect, useState } from "react";
@@ -39,7 +39,7 @@ type SavedModel = {
 type Status = {
   ready?: boolean; steps?: Step[]; repositories?: number;
   model_sources?: number; model_from_environment?: boolean;
-  model_saved?: SavedModel[];
+  model_saved?: SavedModel[]; model_probe_available?: boolean;
   environment?: { github?: EnvCheck; model?: EnvCheck };
 };
 type Provider = {
@@ -128,6 +128,8 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
   }, []);
 
   const steps = status?.steps ?? [];
+  const unverifiedModel = (status?.model_saved ?? [])
+    .some((item) => item.kind === "api_key" && !item.verified);
   return (
     <section className="panel-stack" aria-label="Repo and model">
       <article className="stack-card">
@@ -137,13 +139,14 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
             <div className="help-heading">
               <h2>Connect a repo and model</h2>
               <HelpTip label="Repo and model setup"
-                text="BOSS needs somewhere to write code and a model to work with. Each connection is checked against the service before it is marked ready." />
+                text="BOSS needs a repository and a model. Community saves model keys as unverified until a governed run can test them." />
             </div>
           </div>
           {status ? (
-            <span className={`cap-badge ${status.ready ? "tone-green" : "tone-amber"}`}
+            <span className={`cap-badge ${status.ready && !unverifiedModel ? "tone-green" : "tone-amber"}`}
                   data-testid="setup-verdict">
-              {status.ready ? "Ready" : "Not finished"}
+              {status.ready ? (unverifiedModel ? "Configured · model unverified" : "Ready")
+                            : "Not finished"}
             </span>
           ) : null}
         </div>
@@ -175,7 +178,8 @@ export function SetupHome({ projectId, actor }: { projectId: string; actor: stri
 
       <GitHubStep projectId={projectId} actor={actor} onDone={reload} />
       <ModelStep projectId={projectId} actor={actor} providers={providers}
-                 saved={status?.model_saved ?? []} onDone={reload} />
+                 saved={status?.model_saved ?? []}
+                 probeAvailable={status?.model_probe_available ?? false} onDone={reload} />
     </section>
   );
 }
@@ -489,8 +493,9 @@ function TokenHelp() {
   );
 }
 
-function ModelStep({ projectId, actor, providers, saved, onDone }: {
+function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone }: {
   projectId: string; actor: string; providers: Provider[]; saved: SavedModel[];
+  probeAvailable: boolean;
   onDone: () => void;
 }) {
   const [provider, setProvider] = useState("openrouter");
@@ -622,7 +627,10 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
     setBusy(false);
     setApiKey("");
     if (!r.ok) { setResult({ ok: false, text: r.error ?? "could not save" }); return; }
-    setResult({ ok: true, text: `Working — answered as ${String(r.data?.model ?? "the model")}.` });
+    setResult({ ok: true, text: r.data?.verified === true
+      ? `Working — answered as ${String(r.data?.model ?? "the model")}.`
+      : `Key saved securely for ${String(r.data?.model ?? "the model")}. No live test was sent; `
+        + "this model is unverified until a governed run uses it." });
     onDone();
   }, [busy, projectId, actor, provider, apiKey, baseUrl, model, onDone]);
 
@@ -633,7 +641,9 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
           <h2 className="eyebrow">Model</h2>
           <p className="detail">
             An API key, anything that speaks the OpenAI API, or a subscription you already pay
-            for. BOSS spends one token proving it works before saving it.
+            for. {probeAvailable
+              ? "BOSS spends one token proving it works before saving it."
+              : "Community saves the key without a live test and marks it unverified."}
           </p>
         </div>
       </div>
@@ -686,7 +696,8 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
             <button type="button" className="cap-btn primary"
                     disabled={busy || !apiKey.trim() || !model.trim()}
                     data-testid="setup-model-submit" onClick={() => void save()}>
-              {busy ? "Checking…" : "Verify and save"}
+              {busy ? (probeAvailable ? "Checking…" : "Saving…")
+                    : (probeAvailable ? "Verify and save" : "Save key without test")}
             </button>
           </>
         )}
@@ -872,7 +883,7 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
 /**
  * The models this project has, what each is, and what it is doing.
  *
- * A green dot means BOSS can use it right now. The roles beside a model are the jobs it
+ * A dot means BOSS has a usable source. The roles beside a model are the jobs it
  * currently holds — so "which model writes my code" is answered by looking, not by opening a
  * picker and reading four dropdowns.
  */
@@ -911,6 +922,7 @@ function ConnectedModels(
       label: providers.find((p) => p.provider === engine)?.label
              ?? engine.replace(/_/g, " "),
       kind: from?.kind === "subscription" ? "subscription" : from ? "API key" : "this install",
+      verified: from?.verified,
       at: from?.saved_at ? from.saved_at.slice(0, 10) : "",
       // The jobs it holds right now. Empty is a real answer and says so below.
       jobs: roles.filter((r) => r.value === engine).map((r) => r.label),
@@ -937,11 +949,14 @@ function ConnectedModels(
           {rows.map((row) => (
             <tr key={row.engine}>
               <th scope="row">
-                <span className="setup-dot" aria-hidden />
+                <span className="setup-dot" aria-hidden
+                      style={row.kind === "API key" && !row.verified
+                        ? { background: "var(--amber)" } : undefined} />
                 {row.label}
               </th>
               <td className="setup-models-kind">
-                {row.kind}{row.at ? ` · ${row.at}` : ""}
+                {row.kind}{row.kind === "API key" && !row.verified ? " · unverified" : ""}
+                {row.at ? ` · ${row.at}` : ""}
               </td>
               <td className="setup-models-jobs" data-empty={row.jobs.length ? undefined : "true"}>
                 {row.jobs.length ? row.jobs.join(" · ") : "no role yet"}

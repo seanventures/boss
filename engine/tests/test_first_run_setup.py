@@ -10,9 +10,13 @@ call four endpoints in the right order with the right ids. That is where an open
 evaluation ends — not because something is missing, but because nothing told you the order.
 """
 import pytest
+from types import SimpleNamespace
 
 from boss_engine.schemas import GitHubEasyConnectRequest
 from boss_engine.services.setup_service import PROVIDERS, SetupError, verify_model_key
+
+
+PAID_SETTINGS = SimpleNamespace(boss_edition="enterprise_self_hosted")
 
 
 def test_a_token_can_be_pasted_rather_than_put_in_the_environment():
@@ -63,18 +67,25 @@ def test_the_catalogue_covers_keys_compatibles_and_subscriptions():
 
 def test_a_custom_provider_must_say_where_it_lives():
     with pytest.raises(SetupError):
-        verify_model_key(provider="custom", api_key="k", base_url="", model="m")
+        verify_model_key(
+            settings=PAID_SETTINGS, provider="custom", api_key="k", base_url="", model="m",
+        )
 
 
 def test_and_which_model_to_ask_for():
     with pytest.raises(SetupError):
-        verify_model_key(provider="custom", api_key="k", base_url="http://x/v1", model="")
+        verify_model_key(
+            settings=PAID_SETTINGS, provider="custom", api_key="k", base_url="http://x/v1",
+            model="",
+        )
 
 
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "gopher://127.0.0.1", "//localhost/v1"])
 def test_model_key_probe_refuses_non_http_urls(url):
     with pytest.raises(SetupError, match="http or https"):
-        verify_model_key(provider="custom", api_key="k", base_url=url, model="m")
+        verify_model_key(
+            settings=PAID_SETTINGS, provider="custom", api_key="k", base_url=url, model="m",
+        )
 
 
 def test_model_key_probe_does_not_follow_redirects():
@@ -87,10 +98,23 @@ def test_model_key_probe_does_not_follow_redirects():
 def test_a_dead_host_is_reported_not_raised():
     """A wizard step that throws a stack trace at somebody on their first run has told them
     nothing. Port 1 is reserved and never listening."""
-    result = verify_model_key(provider="custom", api_key="k",
+    result = verify_model_key(settings=PAID_SETTINGS, provider="custom", api_key="k",
                               base_url="http://127.0.0.1:1/v1", model="m", timeout=3)
     assert result["ok"] is False
     assert "could not reach" in result["error"]
+
+
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", ""])
+def test_direct_model_probe_has_no_network_in_unmetered_editions(monkeypatch, edition):
+    from boss_engine.services import setup_service
+
+    calls = []
+    monkeypatch.setattr(setup_service.urllib.request, "build_opener",
+                        lambda *args: calls.append(args))
+    with pytest.raises(SetupError, match="paused in Community"):
+        verify_model_key(settings=SimpleNamespace(boss_edition=edition), provider="openai",
+                         api_key="unused", model="test-model")
+    assert calls == []
 
 
 def test_the_api_refuses_to_store_a_key_it_could_not_prove():

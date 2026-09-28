@@ -6,10 +6,10 @@ answer to "I just installed this, what do I do?", and the honest answer was: set
 variables on the API container, restart it, then call four endpoints in the right order with the
 right ids. That is not onboarding. For open source it is where the evaluation ends.
 
-So this module owns the ORDER and the VERDICT: it knows which steps make a working install, it
-proves each one against the real service rather than trusting that a key was pasted correctly,
-and it names precisely what is missing. Nothing here is a new capability; it is the sequence
-somebody would otherwise have to learn from the source.
+So this module owns the ORDER and the VERDICT: it knows which steps configure an install and
+names precisely what is missing. Community stores model keys as unverified until a governed
+model run can prove them. Nothing here is a new capability; it is the sequence somebody would
+otherwise have to learn from the source.
 """
 from __future__ import annotations
 
@@ -108,10 +108,20 @@ class SetupError(RuntimeError):
 _PAID_EDITIONS = frozenset({
     "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
 })
+_LIVE_MODEL_PROBE_DENIAL = (
+    "Live model key verification is paused in Community until it has a budget reservation, "
+    "leased job, and cost receipt. The key can be saved without a live test."
+)
 
 
 def coding_agent_live_proof_available(settings: Settings) -> bool:
     """Only editions with a governed CLI proof path may spend a live model turn."""
+    edition = str(getattr(settings, "boss_edition", "community") or "community")
+    return edition.strip().lower() in _PAID_EDITIONS
+
+
+def live_model_probe_allowed(settings: Settings) -> bool:
+    """Unknown editions fail closed for the spendy provider request."""
     edition = str(getattr(settings, "boss_edition", "community") or "community")
     return edition.strip().lower() in _PAID_EDITIONS
 
@@ -139,16 +149,8 @@ def provider_catalogue() -> list[dict[str, Any]]:
     return [{"provider": key, **value} for key, value in PROVIDERS.items()]
 
 
-def verify_model_key(
-    *, provider: str, api_key: str, base_url: str = "", model: str = "", timeout: int = 20
-) -> dict[str, Any]:
-    """Spend one token proving the key works, before telling anybody it is set up.
-
-    A wizard that stores a key and reports success has verified that the operator can type. The
-    first real evidence otherwise arrives when a build fails an hour later, by which point the
-    key is the last thing anyone suspects. One tiny completion costs a fraction of a cent and
-    turns "saved" into "working".
-    """
+def model_key_details(*, provider: str, base_url: str = "", model: str = "") -> dict[str, str]:
+    """Validate and normalize setup fields without contacting the provider."""
     spec = PROVIDERS.get(provider) or PROVIDERS["custom"]
     url_base = (base_url or spec.get("base_url") or "").strip().rstrip("/")
     if not url_base:
@@ -156,15 +158,36 @@ def verify_model_key(
     name = (model or spec.get("example_model") or "").strip()
     if not name:
         raise SetupError("a model name is required.")
+    suffix = "/messages" if spec.get("api") == "anthropic" else "/chat/completions"
+    return {"model": name, "endpoint": _provider_endpoint(url_base, suffix),
+            "base_url": url_base}
+
+
+def verify_model_key(
+    *, settings: Settings, provider: str, api_key: str, base_url: str = "", model: str = "",
+    timeout: int = 20,
+) -> dict[str, Any]:
+    """Spend one token proving the key works in editions allowed to use this probe.
+
+    A wizard that stores a key and reports success has verified that the operator can type. The
+    first real evidence otherwise arrives when a build fails an hour later, by which point the
+    key is the last thing anyone suspects. One tiny completion costs a fraction of a cent and
+    turns "saved" into "working".
+    """
+    if not live_model_probe_allowed(settings):
+        raise SetupError(_LIVE_MODEL_PROBE_DENIAL)
+    spec = PROVIDERS.get(provider) or PROVIDERS["custom"]
+    details = model_key_details(provider=provider, base_url=base_url, model=model)
+    name = details["model"]
+    endpoint = details["endpoint"]
+    url_base = details["base_url"]
 
     if spec.get("api") == "anthropic":
-        endpoint = _provider_endpoint(url_base, "/messages")
         body = {"model": name, "max_tokens": 1,
                 "messages": [{"role": "user", "content": "hi"}]}
         headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
                    "content-type": "application/json"}
     else:
-        endpoint = _provider_endpoint(url_base, "/chat/completions")
         body = {"model": name, "max_tokens": 1,
                 "messages": [{"role": "user", "content": "hi"}]}
         headers = {"Authorization": f"Bearer {api_key}",
@@ -917,7 +940,8 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
     # operator cannot tell whether the thing they connected an hour ago is the thing that is
     # saved. Newest first, so the head of this list is the last thing anybody connected.
     saved_rows = connection.execute(
-        text("SELECT source_id, provider, auth_method, connection_status, status, updated_at "
+        text("SELECT source_id, provider, auth_method, connection_status, status, "
+             "connection_metadata, updated_at "
              "FROM entitlement_sources "
              "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
              "                           OR connection_status = 'connected') "
@@ -941,6 +965,20 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
             return source_id[len("setup-"):]
         return by_entitlement.get(source_id, "")
 
+    def _verification_state(row: Any) -> bool:
+        metadata = row["connection_metadata"] or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        state = metadata.get("verification_state")
+        if state in {"verified", "unverified"}:
+            return state == "verified"
+        return row["status"] == "verified" or bool(metadata.get("verified_endpoint"))
+
     saved = [
         {
             "source_id": r["source_id"],
@@ -950,7 +988,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
             "kind": ("subscription" if str(r["auth_method"] or "").endswith("oauth")
                      else "api_key"),
             "connected": r["connection_status"] == "connected",
-            "verified": r["status"] == "verified",
+            "verified": _verification_state(r),
             # Postgres hands back a datetime; a driver that hands back a string is equally
             # displayable, and neither is worth an exception on a status screen.
             "saved_at": (r["updated_at"].isoformat()
@@ -1009,6 +1047,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         "github_connections": int(connections),
         "repositories": int(repos),
         "model_sources": int(models),
+        "model_probe_available": live_model_probe_allowed(settings),
         "model_saved": saved,
         "model_from_environment": env_model,
         "github_from_environment": env_github,

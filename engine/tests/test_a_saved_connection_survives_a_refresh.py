@@ -43,7 +43,7 @@ def connection():
             "CREATE TABLE entitlement_sources ("
             " project_id TEXT, source_id TEXT, provider TEXT, auth_method TEXT,"
             " connection_status TEXT, status TEXT, credential_secret_ref_id TEXT,"
-            " updated_at TIMESTAMP)"))
+            " connection_metadata TEXT, updated_at TIMESTAMP)"))
     with engine.begin() as conn:
         yield conn
 
@@ -55,12 +55,13 @@ def _add(conn, **row):
     row.setdefault("connection_status", "not_connected")
     row.setdefault("status", "declared")
     row.setdefault("credential_secret_ref_id", None)
+    row.setdefault("connection_metadata", "{}")
     row.setdefault("updated_at", datetime(2026, 9, 18, 2, 15, tzinfo=timezone.utc))
     conn.execute(text(
         "INSERT INTO entitlement_sources (project_id, source_id, provider, auth_method,"
-        " connection_status, status, credential_secret_ref_id, updated_at)"
+        " connection_status, status, credential_secret_ref_id, connection_metadata, updated_at)"
         " VALUES (:project_id, :source_id, :provider, :auth_method, :connection_status,"
-        " :status, :credential_secret_ref_id, :updated_at)"), row)
+        " :status, :credential_secret_ref_id, :connection_metadata, :updated_at)"), row)
 
 
 def _model_step(status):
@@ -100,6 +101,19 @@ def test_a_stored_api_key_still_counts(connection):
     status = setup_status(connection, _Settings(), "p")
 
     assert _model_step(status)["done"] is True
+
+
+def test_a_saved_key_is_configured_but_explicitly_unverified(connection):
+    _add(connection, source_id="setup-openai", credential_secret_ref_id="ref_1",
+         status="verified",
+         connection_metadata='{"verification_state": "unverified"}')
+
+    status = setup_status(connection, _Settings(), "p")
+
+    assert status["ready"] is False  # A repository is still required.
+    assert _model_step(status)["done"] is True
+    assert status["model_saved"][0]["verified"] is False
+    assert status["model_probe_available"] is False
 
 
 def test_the_status_says_which_one_was_saved_and_when(connection):

@@ -7,6 +7,14 @@ and checks API health. Model work needs provider credentials you control, throug
 an API key or a supported coding subscription. Leaving both unconnected starts
 the control plane and leaves model work visibly unavailable.
 
+In Community, the console's **Save key without test** action stores an API key
+securely and marks that model **unverified**. Setup does not send a live model
+request: the one-token check needs a budget reservation, leased job, and cost
+receipt. A saved key may still be invalid or lack access to the selected model;
+confirm it through a governed model run before relying on it for work. A
+"configured" setup status means the key is present, not that the provider has
+accepted it.
+
 ## Install
 
 Install from the Community repository:
