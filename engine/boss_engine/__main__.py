@@ -210,10 +210,10 @@ def _cmd_serve_mcp(args) -> int:
     from .mcp import MCPServer
 
     ctx = _ctx()
-    # A no-database process is intentionally an inspection/catalog endpoint;
-    # advertising write tools there would invite a caller to take an action
-    # that cannot create the required durable audit trail.
-    read_only = _serve_mcp_read_only(args) or not ctx.durable_workspace_configured
+    # The server hides native writes without a local Postgres workspace. A
+    # separately authenticated API bridge may still write through the API's
+    # own durable control plane and policy gates.
+    read_only = _serve_mcp_read_only(args)
     http_token = os.environ.get("BOSS_MCP_HTTP_TOKEN") if args.http else None
     if args.http and args.host not in ("127.0.0.1", "localhost", "::1") and not http_token:
         print(
@@ -238,8 +238,34 @@ def _cmd_serve_mcp(args) -> int:
             )
             return 2
 
+    api_surface = None
+    api_url = args.api_url or os.environ.get("BOSS_MCP_API_URL", "")
+    if api_url:
+        from .mcp.api_surface import ApiSurface
+
+        try:
+            # Deliberately never fall back to BOSS_API_KEY: the API container's
+            # ambient owner credential is not authority for an MCP client.
+            api_surface = ApiSurface.connect(
+                api_url, api_key=os.environ.get("BOSS_MCP_API_KEY"),
+                project_id=args.project,
+            )
+        except Exception:
+            print("boss-engine: MCP API catalog unavailable; check API origin and auth",
+                  file=sys.stderr)
+            return 2
+        if os.environ.get("BOSS_MCP_API_KEY") and not api_surface.principal:
+            print(f"boss-engine: MCP API credential is not bound to the selected project "
+                  f"({api_surface.scope_reason or 'unverified'})", file=sys.stderr)
+            return 2
+    elif args.api_domain:
+        print("boss-engine: --api-domain requires --api-url or BOSS_MCP_API_URL",
+              file=sys.stderr)
+        return 2
     server = MCPServer(
-        ctx, project_id=args.project, read_only=read_only, http_token=http_token
+        ctx, project_id=args.project, read_only=read_only,
+        http_token=http_token, api_surface=api_surface,
+        api_domains=set(args.api_domain),
     )
     if args.http:
         import uvicorn  # lazy: only for HTTP transport
@@ -414,6 +440,14 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--host", default="127.0.0.1")
     m.add_argument("--port", type=int, default=8791)
     m.add_argument("--read-only", action="store_true", help="expose read tools only")
+    m.add_argument(
+        "--api-url", default="",
+        help="mounted BOSS API origin for operation discovery (or BOSS_MCP_API_URL)",
+    )
+    m.add_argument(
+        "--api-domain", action="append", default=[],
+        help="advertise typed API tools from one domain (repeat, or use all); catalog works without this",
+    )
     m.add_argument(
         "--allow-writes",
         action="store_true",

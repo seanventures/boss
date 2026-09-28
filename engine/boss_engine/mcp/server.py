@@ -71,22 +71,43 @@ class MCPServer:
         registry: Optional[ToolRegistry] = None,
         read_only: bool = False,
         http_token: Optional[str] = None,
+        api_surface: Any = None,
+        api_domains: Optional[set[str]] = None,
     ):
         self.ctx = ctx
         self.project_id = project_id
         self.actor = actor
         self.registry = registry or build_default_registry()
         self.http_token = http_token
-        # Catalog-only contexts have no durable workspace in which to record a
-        # receipt, approval, lease, or task. Enforce read-only at the transport
-        # boundary as well as at invocation time so every MCP host advertises an
-        # honest capability set.
-        self.read_only = read_only or not getattr(ctx, "durable_workspace_configured", True)
+        # In API-backed mode every call must use the scoped API credential.
+        # Native reads as well as writes could otherwise use raw DATABASE_URL
+        # under actor "mcp" and bypass that member's API permissions.
+        self.api_only = api_surface is not None
+        self.api_tool_names: set[str] = set()
+        self.read_only = read_only
+        self.catalog_only = not getattr(ctx, "durable_workspace_configured", True)
+        if api_surface is not None:
+            pinned = getattr(api_surface, "pinned_project_id", None)
+            if pinned is not None and pinned != project_id:
+                raise ValueError("MCP API project must match the pinned engine project")
+            from .api_surface import register_api_tools
+
+            existing = set(self.registry.names())
+            register_api_tools(
+                self.registry, api_surface, read_only=self.read_only,
+                domains=api_domains,
+            )
+            self.api_tool_names = set(self.registry.names()) - existing
 
     # ---- schema ----------------------------------------------------------
     def _tools(self) -> list[dict]:
-        kind = "read" if self.read_only else None
-        tools = self.registry.mcp_schema(kind=kind)
+        tools = [spec.mcp() for spec in self.registry.specs() if (
+            (not self.api_only or spec.name in self.api_tool_names)
+            and
+            (not self.read_only or spec.kind == "read")
+            and (not self.catalog_only or spec.kind == "read"
+                 or not spec.requires_durable_workspace)
+        )]
         # These fields are transport/session authority, never model arguments.
         for tool in tools:
             schema = tool.get("inputSchema") or {}
@@ -103,10 +124,12 @@ class MCPServer:
         return tools
 
     def _tool_allowed(self, name: str) -> bool:
-        if not self.read_only:
-            return True
         try:
-            return self.registry.get(name).kind == "read"
+            spec = self.registry.get(name)
+            return ((not self.api_only or spec.name in self.api_tool_names)
+                    and (not self.read_only or spec.kind == "read")
+                    and (not self.catalog_only or spec.kind == "read"
+                         or not spec.requires_durable_workspace))
         except Exception:
             return False
 
@@ -152,8 +175,11 @@ class MCPServer:
         for reserved in ("project_id", "_operator_confirmed", "_writes_allowed"):
             args.pop(reserved, None)
         if not self._tool_allowed(name):
+            reason = ("read-only mode" if self.read_only else
+                      "API-backed sessions require API-authorized operations" if self.api_only
+                      else "durable workspace required")
             return _ok(rid, _tool_result(
-                {"ok": False, "error": f"tool '{name}' is not available (read-only mode)"},
+                {"ok": False, "error": f"tool '{name}' is not available ({reason})"},
                 is_error=True,
             ))
         try:

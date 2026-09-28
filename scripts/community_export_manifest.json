@@ -38,12 +38,15 @@
     "packages/specpack/",
     "scripts/install/",
     "scripts/metatron_tui.py",
+    "scripts/audit_mcp_api_parity.py",
     "scripts/reliability_mcp_server.py",
     "scripts/store_subscription_token.py",
     "scripts/seed_demo.py",
     "scripts/wait_for_postgres.py",
     "scripts/tests/test_metatron_tui.py",
     "scripts/tests/test_api_validation_redaction.py",
+    "scripts/tests/test_mcp_api_parity.py",
+    "scripts/tests/test_mcp_access.py",
     "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
@@ -212,7 +215,7 @@
   "makefile_export_rewrite": {
     "source": "Makefile.community",
     "destination": "Makefile",
-    "sha256": "eda5326c779f52fa1838afe62b7fa48f76106db2812fcb453193f0966b627838"
+    "sha256": "e16b4c0bd201d1986ca23c6c2127a50d85e13c0f235d6820952c175b5bd6ae58"
   },
   "schema_export_rewrite": {
     "source": "db/schema.community.sql",

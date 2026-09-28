@@ -55,6 +55,9 @@ class ToolSpec:
     kind: ToolKind = "read"
     #: Only meaningful for writes. Reads change nothing, so they are `safe` by construction.
     reversibility: Reversibility = "safe"
+    #: API-backed tools use the API's durable control plane. Native engine
+    #: writes still require the local Postgres workspace.
+    requires_durable_workspace: bool = True
 
     @property
     def self_executable(self) -> bool:
@@ -187,7 +190,10 @@ class ToolRegistry:
         operator_confirmed: bool = False,
     ) -> dict:
         spec = self.get(name)
-        if spec.kind == "write" and not getattr(ctx, "durable_workspace_configured", True):
+        if (
+            spec.kind == "write" and spec.requires_durable_workspace
+            and not getattr(ctx, "durable_workspace_configured", True)
+        ):
             return {
                 "ok": False,
                 "tool": name,
