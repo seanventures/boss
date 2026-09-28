@@ -78,6 +78,19 @@ def main() -> None:
 
     publish(api, name=NAME, description=DESCRIPTION, args=args, spec={
         "entry_step": "gather",
+        "input_schema": {
+            "required": ["sectors", "to"],
+            "properties": {
+                "sectors": {"title": "Sectors to research", "format": "textarea",
+                            "description": "Topics to cover, in the order you want them."},
+                "brief": {"title": "Writing brief", "format": "textarea",
+                          "description": "Optional; leave blank for the stored house brief.",
+                          "examples": [HOUSE_BRIEF]},
+                "to": {"title": "Recipient email", "description": "Who receives the approved newsletter."},
+                "subject": {"title": "Email subject",
+                            "description": "Optional; defaults to Your weekly newsletter."},
+            },
+        },
         "steps": [
             # A BUILT-IN CAPABILITY, not a step of your own. `research` produces a cited
             # dossier and is gated on real evidence — a sector with thin news comes back
@@ -87,7 +100,7 @@ def main() -> None:
                          "inputs": {"seed": from_input("sectors")}},
              "approval": {"mode": "auto"}, "next": ["write"]},
             step("write", keys["Write the newsletter"],
-                 {"prompt": from_input("brief"),
+                 {"prompt": from_input("brief", default=HOUSE_BRIEF),
                   # The dossier arrives as `context` because a step wires whole values and
                   # cannot build "write from: {dossier}" out of two of them.
                   "context": from_step("gather", "dossier")},
@@ -96,7 +109,7 @@ def main() -> None:
             # this stops twice over. A newsletter is the one thing you want to read first.
             step("send", keys["Email the newsletter"],
                  {"to": from_input("to"),
-                  "subject": from_input("subject"),
+                  "subject": from_input("subject", default="Your weekly newsletter"),
                   "body": from_step("write", "text")},
                  [], agent="program_manager", approval="manual", args=args),
         ],

@@ -90,20 +90,34 @@ def main() -> None:
 
     publish(api, name=NAME, description=DESCRIPTION, args=args, spec={
         "entry_step": "research",
+        "input_schema": {
+            "required": ["trend", "to"],
+            "properties": {
+                "trend": {"title": "Trend", "description": "The trend you want assessed.",
+                          "examples": ["Everyone is posting their AI coding setup"]},
+                "to": {"title": "Reviewer email", "description": "Who receives the script."},
+                "assess_brief": {"title": "Assessment brief", "format": "textarea",
+                                 "description": "Optional; leave blank for the stored relevance brief.",
+                                 "examples": [ASSESS_BRIEF]},
+                "script_brief": {"title": "Script brief", "format": "textarea",
+                                 "description": "Optional; leave blank for the stored script brief.",
+                                 "examples": [SCRIPT_BRIEF]},
+            },
+        },
         "steps": [
             {"id": "research", "kind": "capability",
              "binding": {"capability": "research",
                          "inputs": {"seed": from_input("trend")}},
              "approval": {"mode": "auto"}, "next": ["assess"]},
             step("assess", keys["Assess the trend"],
-                 {"prompt": from_input("assess_brief"),
+                 {"prompt": from_input("assess_brief", default=ASSESS_BRIEF),
                   "context": from_step("research", "dossier")},
                  ["script"], agent="program_manager", args=args),
             # The script is written from the ASSESSMENT, not the raw research — so a trend
             # judged "not ours" produces one honest line rather than a polished script for a
             # video nobody should make.
             step("script", keys["Write the script"],
-                 {"prompt": from_input("script_brief"),
+                 {"prompt": from_input("script_brief", default=SCRIPT_BRIEF),
                   "context": from_step("assess", "text")},
                  ["review"], agent="program_manager", args=args),
             step("review", keys["Send it for review"],

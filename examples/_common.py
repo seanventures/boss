@@ -323,8 +323,12 @@ def agent_step(step_id: str, instructions, nxt: list, *,
     return spec
 
 
-def from_input(field: str) -> dict:
-    return {"from_input": field}
+def from_input(field: str, *, default: str | None = None) -> dict:
+    """Read a run input, using a stored brief when the operator leaves it blank."""
+    reference = {"from_input": field}
+    if default is not None:
+        reference["default"] = default
+    return reference
 
 
 def from_step(step_id: str, field: str) -> dict:

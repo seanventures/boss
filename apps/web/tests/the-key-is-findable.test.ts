@@ -17,7 +17,7 @@ describe("a missing API key explains itself", () => {
     for (const where of ["ON THE SERVER", "FROM YOUR LAPTOP", "BOSS ON THIS MACHINE"]) {
       expect(common).toContain(where);
     }
-    expect(common).toContain("grep '^BOSS_API_KEY=' /opt/boss/.env");
+    expect(common).toContain("source ./boss-community.env.sh");
     expect(common).toContain("remote.sh --host root@YOUR_HOST");
   });
 

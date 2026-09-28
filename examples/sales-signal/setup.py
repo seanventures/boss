@@ -56,16 +56,19 @@ ASSESS_BRIEF = (
     "  WHY NOW: anything in the research that makes this a good moment, or 'nothing found'.\n"
     "  RISKS: what would make this a waste of their time.\n"
     "  UNKNOWNS: what the research did not establish.\n"
+    "Name the specific source-backed fact a first email could mention. "
     "Do not infer budget, headcount or intent that is not in the material. A confident guess "
     "is worse than a gap, because the salesperson will repeat it to the prospect."
 )
 
 DRAFT_BRIEF = (
-    "Write a short first email to this company, for the salesperson to edit and send. Ground "
-    "every claim in the research below — name the thing you are referring to. No flattery, no "
-    "'I hope this finds you well', no invented mutual connections. Four sentences at most, and "
-    "a question they can answer in one line. If the research gives you nothing specific to "
-    "open with, say so instead of writing a generic email."
+    "Prepare one note for the salesperson with two labeled sections: ASSESSMENT and DRAFT TO "
+    "EDIT. In ASSESSMENT, faithfully summarize the fit, why now, risks, and unknowns from the "
+    "assessment below. In DRAFT TO EDIT, write a short first email to the company, grounded "
+    "only in a specific fact named in that assessment. No flattery, no 'I hope this finds you "
+    "well', no invented mutual connections. Four sentences at most, with a question they can "
+    "answer in one line. If there is no specific fact, say why a personalized email cannot yet "
+    "be drafted rather than writing a generic one."
 )
 
 
@@ -88,6 +91,21 @@ def main() -> None:
 
     publish(api, name=NAME, description=DESCRIPTION, args=args, spec={
         "entry_step": "research",
+        "input_schema": {
+            "required": ["company", "salesperson"],
+            "properties": {
+                "company": {"title": "Company", "description": "Name and website to research.",
+                            "examples": ["Acme Corp, acme.com"]},
+                "salesperson": {"title": "Salesperson email",
+                                "description": "Internal recipient for the assessment and draft."},
+                "assess_brief": {"title": "Assessment brief", "format": "textarea",
+                                 "description": "Optional; leave blank for the stored scoring brief.",
+                                 "examples": [ASSESS_BRIEF]},
+                "draft_brief": {"title": "Draft brief", "format": "textarea",
+                                "description": "Optional; leave blank for the stored draft brief.",
+                                "examples": [DRAFT_BRIEF]},
+            },
+        },
         "steps": [
             # BOSS's own research capability: a cited dossier, gated on real evidence. A
             # company with little public activity comes back thin rather than invented, which
@@ -97,19 +115,19 @@ def main() -> None:
                          "inputs": {"seed": from_input("company")}},
              "approval": {"mode": "auto"}, "next": ["assess"]},
             step("assess", keys["Assess the opportunity"],
-                 {"prompt": from_input("assess_brief"),
+                 {"prompt": from_input("assess_brief", default=ASSESS_BRIEF),
                   "context": from_step("research", "dossier")},
                  ["draft"], agent="program_manager", args=args),
             step("draft", keys["Draft the approach"],
-                 {"prompt": from_input("draft_brief"),
-                  "context": from_step("research", "dossier")},
+                 {"prompt": from_input("draft_brief", default=DRAFT_BRIEF),
+                  "context": from_step("assess", "text")},
                  ["notify"], agent="program_manager", args=args),
             # The salesperson reads it before anything goes anywhere near the prospect. This
             # step emails THEM, not the company — the outreach is a draft, deliberately.
             step("notify", keys["Tell the salesperson"],
                  {"to": from_input("salesperson"),
                   "subject": from_input("company"),
-                  "body": from_step("assess", "text")},
+                  "body": from_step("draft", "text")},
                  [], agent="program_manager", approval="manual", args=args),
         ],
     })

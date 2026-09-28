@@ -82,7 +82,11 @@ def _resolve_inputs(
             # first steps read from the run's input instead of a literal.
             field = str(value["from_input"])
             run_input = context.get("input") or {}
-            if field not in run_input:
+            supplied = run_input.get(field)
+            if field not in run_input or (supplied in (None, "") and "default" in value):
+                if "default" in value:
+                    resolved[name] = value["default"]
+                    continue
                 # AN OPTIONAL INPUT THAT WAS NOT SUPPLIED IS SIMPLY ABSENT.
                 #
                 # Same rule `from_step` has had all along, and it was missing here: any
@@ -95,7 +99,7 @@ def _resolve_inputs(
                 raise CapabilityExecutionError(
                     f"this workflow was started without '{field}', which this step needs."
                 )
-            resolved[name] = run_input[field]
+            resolved[name] = supplied
         elif isinstance(value, dict) and "from_step" in value:
             step_id = str(value["from_step"])
             field = str(value.get("field") or "")

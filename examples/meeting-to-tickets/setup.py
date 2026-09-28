@@ -32,7 +32,8 @@ DESCRIPTION = (
 STEPS = [
     {"label": "Read the meeting", "skill_id": "meeting.extract_actions",
      "summary": "Write down what was decided and what somebody has to do. Creates nothing.",
-     "inputs": [{"name": "transcript", "required": True}],
+     "inputs": [{"name": "transcript", "required": True},
+                {"name": "context", "required": False}],
      "agent": "program_manager"},
     {"label": "Create the tickets", "skill_id": "tracker.issues.create",
      "summary": "Create the approved actions as issues in the project's work tracker.",
@@ -60,6 +61,15 @@ def main() -> None:
 
     publish(api, name=NAME, description=DESCRIPTION, args=args, spec={
         "entry_step": "extract",
+        "input_schema": {
+            "required": ["transcript"],
+            "properties": {
+                "transcript": {"title": "Meeting transcript", "format": "textarea",
+                               "description": "Paste the notes or transcript to turn into actions."},
+                "context": {"title": "Meeting context", "format": "textarea",
+                            "description": "Optional team and project background."},
+            },
+        },
         "steps": [
             step("extract", keys["Read the meeting"],
                  {"transcript": from_input("transcript"),
