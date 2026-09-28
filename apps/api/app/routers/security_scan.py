@@ -3,7 +3,7 @@
 Prefix: ``/v1/security-scan``
 
   GET  /scanners              — catalog (stars_note / website / availability)
-  POST /run                   — run one or more scanners (supports simulated=True)
+  POST /run                   — gated until project workspace and receipt preflight exist
   GET  /runs?project_id=      — list recent runs for a project
   GET  /runs/{run_id}         — fetch one run with findings
   POST /runs/{run_id}/gate    — evaluate go/no-go (critical findings fail by default)
@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from boss_engine.services import security_scan as svc
 
 from ..config import get_settings
-from ..db import get_engine
+from ..db import begin, get_engine
 
 router = APIRouter(prefix="/v1/security-scan", tags=["security-scan"])
 
@@ -30,7 +30,7 @@ class SecurityScanRunRequest(BaseModel):
     actor: str = "system"
     path: Optional[str] = Field(
         default=None,
-        description="Filesystem path to scan. Defaults to process CWD when omitted.",
+        description="Reserved for a future project-scoped workspace scan.",
     )
     scanners: Optional[list[str]] = Field(
         default=None,
@@ -41,7 +41,7 @@ class SecurityScanRunRequest(BaseModel):
     )
     simulated: bool = Field(
         default=False,
-        description="When true, return deterministic fixture findings without invoking binaries.",
+        description="Reserved fixture mode; API execution remains gated.",
     )
     timeout_s: int = Field(default=300, ge=5, le=3600)
     fail_on_critical: bool = Field(
@@ -71,37 +71,53 @@ def list_scanners(include_planned: bool = Query(default=True)) -> dict:
                 "Snyk commercial API is never called. Listed as planned bring-your-own only."
             ),
             "simulated": (
-                "POST /run with simulated=true returns fixture findings for E2E without tools."
+                "Fixture findings are available to internal tests; API execution is gated."
+            ),
+            "execution": (
+                "Run is unavailable until project workspace confinement and a durable "
+                "preflight receipt are implemented."
             ),
             "checkov": (
                 "Also used by the governed IaC verify lane; available here as an optional "
                 "project-wide scanner kind."
             ),
         },
+        "execution_available": False,
     }
 
 
 @router.post("/run")
 def run_scan(payload: SecurityScanRunRequest) -> dict:
-    """Run scanners against a path; always supports simulated fixture mode."""
+    """Authorize the project request, then fail closed before any scanner effect.
+
+    A caller-controlled path (including an omitted path that defaults to the API's
+    process CWD) is not a project workspace. The service currently records its
+    receipt after invoking binaries and tolerates receipt failure. Neither is a
+    safe boundary for an API-triggered host scan.
+    """
+    # Import at request time because main mounts this router after defining the
+    # request principal context and project permission guard.
+    from ..main import (
+        current_api_principal,
+        current_transport_authenticated,
+        require_project_actor,
+    )
+
+    if not current_transport_authenticated.get() or not current_api_principal.get():
+        raise HTTPException(status_code=401, detail="Authenticated project member required.")
     settings = get_settings()
-    try:
-        engine = get_engine(settings)
-    except Exception:  # noqa: BLE001
-        engine = None
-    try:
-        return svc.run_scan(
-            project_id=payload.project_id,
-            actor=payload.actor,
-            path=payload.path,
-            scanners=payload.scanners,
-            simulated=payload.simulated,
-            timeout_s=payload.timeout_s,
-            engine=engine,
-            fail_on_critical=payload.fail_on_critical,
+    with begin(get_engine(settings)) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "providerops_manage"
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Security scan execution is unavailable until scans are confined to a "
+            "configured project workspace and a durable receipt is reserved before "
+            "any scanner starts."
+        ),
+    )
 
 
 @router.get("/latest")

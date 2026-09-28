@@ -3,6 +3,8 @@
  * Verifies modules export and area nesting map (no new nav items).
  */
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { IdentityProvidersCatalogView } from "../app/identity-providers-ui";
 import { OncallSreHome } from "../app/oncall-sre-ui";
@@ -98,5 +100,20 @@ describe("platform-ops UI smoke imports", () => {
     expect(typeof KnowledgeGraphPanel).toBe("function");
     expect(typeof CICDPipelinesPanel).toBe("function");
     expect(typeof AiSreHome).toBe("function");
+  });
+});
+
+describe("security scan GA gate", () => {
+  it("shows prior scans without offering an unsafe run action", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SecurityScanCard, {
+        projectId: "boss-dogfood",
+        initialRun: null,
+        scanners: [],
+      }),
+    );
+    expect(markup).toContain("Scanner runs are unavailable");
+    expect(markup).not.toContain("Run scan");
+    expect(markup).not.toContain("Simulated");
   });
 });

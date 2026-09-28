@@ -1,12 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import React, { useState, useTransition } from "react";
 import {
   type SecurityFinding,
   type SecurityScanRun,
   type SecurityScanner,
   evaluateSecurityGate,
-  runSecurityScan,
 } from "../lib/security-scan";
 
 function sevTone(sev: string): string {
@@ -57,7 +56,6 @@ function FindingRow({ f }: { f: SecurityFinding }) {
 }
 
 export function SecurityScanCard({
-  projectId,
   initialRun,
   scanners = [],
 }: {
@@ -68,31 +66,6 @@ export function SecurityScanCard({
   const [run, setRun] = useState<SecurityScanRun>(initialRun);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [simulated, setSimulated] = useState(true);
-
-  const runnable = useMemo(
-    () => scanners.filter((s) => s.status === "supported"),
-    [scanners],
-  );
-
-  const onRun = () => {
-    setError(null);
-    startTransition(async () => {
-      const next = await runSecurityScan({
-        projectId,
-        actor: "console",
-        simulated,
-        scanners: runnable.length
-          ? runnable.slice(0, 4).map((s) => s.id)
-          : undefined,
-      });
-      if (!next) {
-        setError("Scan failed to start — check API connectivity.");
-        return;
-      }
-      setRun(next);
-    });
-  };
 
   const onGate = () => {
     if (!run?.id) return;
@@ -120,31 +93,6 @@ export function SecurityScanCard({
       >
         <h3 style={{ margin: 0 }}>Security scan (OSS)</h3>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <label style={{ fontSize: 12, color: "var(--ink-soft)", display: "flex", gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={simulated}
-              onChange={(e) => setSimulated(e.target.checked)}
-            />
-            Simulated
-          </label>
-          <button
-            type="button"
-            onClick={onRun}
-            disabled={pending}
-            style={{
-              background: "var(--accent)",
-              color: "var(--accent-ink)",
-              border: "none",
-              borderRadius: 8,
-              padding: "6px 13px",
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: pending ? "wait" : "pointer",
-            }}
-          >
-            {pending ? "Running…" : "Run scan"}
-          </button>
           {run?.id ? (
             <button
               type="button"
@@ -165,10 +113,9 @@ export function SecurityScanCard({
       </div>
 
       <p className="detail">
-        Orchestrates market-validated OSS scanners — Semgrep (SAST), Trivy (vuln/FS),
-        OSV-Scanner (deps), Gitleaks (secrets), optional Checkov (IaC). Critical findings
-        fail the gate. Snyk commercial is catalog-only (bring-your-own), never called.
-        Simulated mode returns fixture findings for E2E without tools installed.
+        Scanner runs are unavailable until BOSS confines them to a configured project
+        workspace and reserves a durable receipt before execution. Prior findings and
+        their gates remain available below.
       </p>
 
       {scanners.length > 0 ? (
@@ -197,7 +144,7 @@ export function SecurityScanCard({
       ) : null}
 
       {!run ? (
-        <p className="detail">No scan runs yet — click “Run scan”.</p>
+        <p className="detail">No scan runs yet.</p>
       ) : (
         <>
           <p className="detail" style={{ marginBottom: 8 }}>

@@ -81,8 +81,8 @@ def test_e2e_security_scan_latest_empty_is_200_not_404(client):
     assert body["summary"] is None
 
 
-def test_e2e_security_scan_snyk_is_400_never_invoked(client):
-    """Snyk is catalog-only. Simulated run must fail closed — do not invent Snyk."""
+def test_e2e_security_scan_api_rejects_unauthenticated_run(client):
+    """All API scan execution is gated before Snyk or any scanner is invoked."""
     r = client.post(
         "/v1/security-scan/run",
         json={
@@ -92,25 +92,18 @@ def test_e2e_security_scan_snyk_is_400_never_invoked(client):
             "simulated": True,
         },
     )
-    assert r.status_code == 400, r.text
-    assert "snyk" in r.json().get("detail", "").lower()
+    assert r.status_code == 401, r.text
+    assert sec.list_runs(PROJECT_ID) == []
 
 
-def test_e2e_security_scan_five_scanner_simulated_receipt(client):
-    """Simulated OS/code scan runs all five OSS scanners and records a receipt."""
-    r = client.post(
-        "/v1/security-scan/run",
-        json={
-            "project_id": PROJECT_ID,
-            "actor": "test_operator",
-            "scanners": OSS_SCANNERS,
-            "simulated": True,
-        },
+def test_e2e_security_scan_five_scanner_engine_fixture():
+    """Internal scanner fixture still normalizes all five OSS adapters."""
+    body = sec.run_scan(
+        project_id=PROJECT_ID, actor="test_operator", path="/tmp/fixture",
+        scanners=OSS_SCANNERS, simulated=True, engine=None,
     )
-    assert r.status_code == 200, r.text
-    body = r.json()
     assert body["simulated"] is True
-    assert body["receipt_id"]
+    assert body["receipt_id"] is None
     assert body["dedupe_key"].startswith(f"security_scan:{PROJECT_ID}:")
     assert set(body["scanners"]) == set(OSS_SCANNERS)
     assert {item["scanner"] for item in body["scanner_results"]} == set(OSS_SCANNERS)
