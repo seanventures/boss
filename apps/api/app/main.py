@@ -6634,8 +6634,20 @@ def publish_workflow_run_report_endpoint(run_id: str, project_id: str = "") -> d
     from boss_engine.services.core import create_artifact
     from boss_engine.services.run_retrospective import assemble_workflow, workflow_markdown
 
-    resolved_project = project_id or settings.default_project_id
     with begin(engine) as connection:
+        stored_project = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar()
+        if stored_project is None:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        if project_id and project_id != stored_project:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        # The web proxy sends no actor field. The bound API principal is the actor;
+        # unauthenticated local development retains the seeded console operator.
+        actor = current_api_principal.get() or "executive_console"
+        require_project_actor(connection, stored_project, actor, "audit_export")
+        resolved_project = str(stored_project)
         report = assemble_workflow(connection, resolved_project, run_id)
         if not report.get("ok"):
             raise HTTPException(status_code=404, detail=report.get("error") or "no such run")
@@ -22731,6 +22743,15 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
 @app.get("/v1/workflow-runs/{run_id}", response_model=WorkflowRunDetail)
 def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
     with begin(engine) as connection:
+        stored_project = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar()
+        if stored_project is None:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        require_project_reader(connection, stored_project)
+        if project_id != stored_project:
+            raise HTTPException(status_code=404, detail="workflow run not found")
         try:
             return WorkflowRunDetail(
                 **workflow_runtime.get_run(connection, project_id, run_id)

@@ -16,6 +16,8 @@ def test_run_reports_require_stored_project_membership(client, engine, monkeypat
     key = f"report-key-{suffix}"
     foreign_reader = f"foreign_reader_{suffix}"
     foreign_key = f"foreign-report-key-{suffix}"
+    writer = f"report_writer_{suffix}"
+    writer_key = f"writer-report-key-{suffix}"
     foreign_project = f"report_foreign_{suffix}"
     home_code_run = f"crun_home_{suffix}"
     foreign_code_run = f"crun_foreign_{suffix}"
@@ -23,13 +25,14 @@ def test_run_reports_require_stored_project_membership(client, engine, monkeypat
     foreign_workflow_run = f"wfr_foreign_{suffix}"
 
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
-    monkeypatch.setattr(api_main.settings, "api_keys", f"{key},{foreign_key}")
+    monkeypatch.setattr(api_main.settings, "api_keys", f"{key},{foreign_key},{writer_key}")
     monkeypatch.setattr(
         api_main.settings, "api_key_principals",
-        f"{key}:{reader},{foreign_key}:{foreign_reader}",
+        f"{key}:{reader},{foreign_key}:{foreign_reader},{writer_key}:{writer}",
     )
     headers = {"Authorization": f"Bearer {key}"}
     foreign_headers = {"Authorization": f"Bearer {foreign_key}"}
+    writer_headers = {"Authorization": f"Bearer {writer_key}"}
 
     with engine.begin() as connection:
         workspace_id = connection.execute(
@@ -50,6 +53,11 @@ def test_run_reports_require_stored_project_membership(client, engine, monkeypat
             connection, project_id=foreign_project, member_id=foreign_reader,
             display_name="Foreign report reader", member_type="human", role_keys=[],
             permissions=[], actor="ceo",
+        )
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id=writer,
+            display_name="Report publisher", member_type="human", role_keys=[],
+            permissions=["audit_export"], actor="ceo",
         )
         for code_run, workflow_run, project_id, label in (
             (home_code_run, home_workflow_run, PROJECT, "home-visible-report"),
@@ -97,6 +105,13 @@ def test_run_reports_require_stored_project_membership(client, engine, monkeypat
         assert response.json()["ok"] is True
         assert "home-visible-report" in response.text
 
+    home_detail = client.get(
+        f"/v1/workflow-runs/{home_workflow_run}",
+        params={"project_id": PROJECT}, headers=headers,
+    )
+    assert home_detail.status_code == 200, home_detail.text
+    assert home_detail.json()["id"] == home_workflow_run
+
     for path in (
         f"/v1/code-tasks/{foreign_code_run}/retrospective",
         f"/v1/workflow-runs/{foreign_workflow_run}/report",
@@ -110,6 +125,20 @@ def test_run_reports_require_stored_project_membership(client, engine, monkeypat
         assert allowed.status_code == 200, (path, allowed.text)
         assert allowed.json()["ok"] is True
         assert "foreign-private-report" in allowed.text
+
+    for params in ({"project_id": foreign_project}, {"project_id": PROJECT}):
+        denied_detail = client.get(
+            f"/v1/workflow-runs/{foreign_workflow_run}",
+            params=params, headers=headers,
+        )
+        assert denied_detail.status_code == 403, denied_detail.text
+        assert "foreign-private-report" not in denied_detail.text
+    foreign_detail = client.get(
+        f"/v1/workflow-runs/{foreign_workflow_run}",
+        params={"project_id": foreign_project}, headers=foreign_headers,
+    )
+    assert foreign_detail.status_code == 200, foreign_detail.text
+    assert foreign_detail.json()["id"] == foreign_workflow_run
 
     for path in (
         f"/v1/code-tasks/{foreign_code_run}/retrospective",
@@ -125,3 +154,45 @@ def test_run_reports_require_stored_project_membership(client, engine, monkeypat
     assert client.get(
         "/v1/workflow-runs/does-not-exist/report", headers=headers,
     ).status_code == 404
+
+    report_path = f"/v1/workflow-runs/{home_workflow_run}/report"
+    foreign_report_path = f"/v1/workflow-runs/{foreign_workflow_run}/report"
+    for path, params, auth, expected_status in (
+        (report_path, {"project_id": PROJECT}, headers, 403),
+        (foreign_report_path, {"project_id": foreign_project}, writer_headers, 403),
+        (foreign_report_path, {"project_id": PROJECT}, writer_headers, 404),
+        (report_path, {"project_id": PROJECT}, None, 401),
+    ):
+        denied = client.post(path, params=params, headers=auth)
+        assert denied.status_code == expected_status, (path, denied.text)
+        assert "foreign-private-report" not in denied.text
+
+    with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT count(*) FROM artifacts WHERE artifact_type = 'workflow_report' "
+                 "AND project_id IN (:home, :foreign)"),
+            {"home": PROJECT, "foreign": foreign_project},
+        ).scalar_one() == 0
+
+    published = client.post(
+        report_path, params={"project_id": PROJECT}, headers=writer_headers,
+    )
+    assert published.status_code == 200, published.text
+    assert published.json()["created"] is True
+    artifact_id = published.json()["artifact_id"]
+    repeated = client.post(report_path, headers=writer_headers)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == {"ok": True, "artifact_id": artifact_id, "created": False}
+    with engine.begin() as connection:
+        artifact = connection.execute(
+            text("SELECT project_id, content->>'run_id' AS run_id "
+                 "FROM artifacts WHERE id = :id"),
+            {"id": artifact_id},
+        ).mappings().one()
+        assert artifact["project_id"] == PROJECT
+        assert artifact["run_id"] == home_workflow_run
+        assert connection.execute(
+            text("SELECT count(*) FROM artifacts WHERE artifact_type = 'workflow_report' "
+                 "AND project_id = :foreign"),
+            {"foreign": foreign_project},
+        ).scalar_one() == 0
