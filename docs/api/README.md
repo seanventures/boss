@@ -83,8 +83,11 @@ Always pass a real project-scoped actor on writes (seed creates `ceo`, `system`,
 | **ops** | `/v1/reliability`, `/dashboard`, `/qa`, `/diag` | OpenAPI + ROUTE_INDEX |
 | **meta** | `/v1/meta/*`, `/v1/capabilities`, `/health` | this file |
 
-Starting a code task with `POST /v1/code-tasks` requires `workflow_execute` in the target
-project, including for a simulated run.
+Starting or advancing a code task with `POST /v1/code-tasks`,
+`POST /v1/prd/decompose`, `POST /v1/web-app`, or `POST /v1/code-tasks/step`
+requires `workflow_execute` in the target project. The step route resolves the
+project from the stored run; callers cannot supply a different project to gain
+access. This also applies to simulated runs and plan-only decomposition.
 
 Live domain grouping is also returned by the catalog endpoint (source of truth for agents).
 

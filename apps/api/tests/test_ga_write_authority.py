@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
-from boss_engine.services import code_task_service, secrets_service
+from boss_engine.services import code_task_service, prd_decomposition, secrets_service
 
 
 PROJECT = "boss-dogfood"
@@ -461,3 +461,118 @@ def test_only_configured_worker_principal_can_claim_or_settle_jobs(
     assert client.post(
         "/v1/worker/poll", headers=_auth("runner-key"), json=poll
     ).status_code == 200
+
+
+def test_prd_and_web_app_builds_require_target_project_execution_grant(
+    client, engine, scoped_operator, monkeypatch,
+):
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_runner",
+            display_name="GA runner", member_type="human", role_keys=[],
+            permissions=["workflow_execute"], actor="ceo",
+        )
+
+    calls = []
+
+    def fake_plan(_settings, _prd, *, max_tasks):
+        calls.append(("plan", max_tasks))
+        return [{"title": "Reviewed task"}]
+
+    def fake_decompose(_engine, _settings, _jobs, **kwargs):
+        calls.append(("decompose", kwargs["project_id"]))
+        return {"started": True, "first_run_id": "crun_reviewed"}
+
+    def fake_web_app(_engine, _settings, _jobs, **kwargs):
+        calls.append(("web_app", kwargs["project_id"]))
+        return {"started": True, "run_id": "crun_web_reviewed"}
+
+    monkeypatch.setattr(prd_decomposition, "decompose_prd_into_tasks", fake_plan)
+    monkeypatch.setattr(prd_decomposition, "start_decomposed_build", fake_decompose)
+    monkeypatch.setattr(prd_decomposition, "start_web_app_build", fake_web_app)
+
+    cases = [
+        ("/v1/prd/decompose", {"prd": "Build a small app", "plan_only": True}),
+        ("/v1/prd/decompose", {"prd": "Build a small app"}),
+        ("/v1/web-app", {"directive": "Build a small app"}),
+    ]
+    for path, body in cases:
+        denied = client.post(
+            path, headers=_auth("coo-key"),
+            json={"project_id": PROJECT, "actor": "coo", **body},
+        )
+        assert denied.status_code == 403, denied.text
+        spoofed = client.post(
+            path, headers=_auth("coo-key"),
+            json={"project_id": PROJECT, "actor": "ceo", **body},
+        )
+        assert spoofed.status_code == 403, spoofed.text
+        cross_project = client.post(
+            path, headers=_auth("runner-key"),
+            json={"project_id": scoped_operator, "actor": "ga_runner", **body},
+        )
+        assert cross_project.status_code == 403, cross_project.text
+    assert calls == []
+
+    for path, body in cases:
+        allowed = client.post(
+            path, headers=_auth("ceo-key"),
+            json={"project_id": PROJECT, "actor": "ceo", **body},
+        )
+        assert allowed.status_code == 201, allowed.text
+    assert calls == [("plan", 6), ("decompose", PROJECT), ("web_app", PROJECT)]
+
+
+def test_code_task_step_uses_stored_project_for_execution_authority(
+    client, engine, scoped_operator, monkeypatch,
+):
+    local_run = f"crun_ga_local_{uuid4().hex[:8]}"
+    foreign_run = f"crun_ga_foreign_{uuid4().hex[:8]}"
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id="ga_runner",
+            display_name="GA runner", member_type="human", role_keys=[],
+            permissions=["workflow_execute"], actor="ceo",
+        )
+        connection.execute(
+            text(
+                "INSERT INTO code_task_runs (id, project_id, title) "
+                "VALUES (:local, :project, 'Local run'), "
+                "(:foreign, :other, 'Foreign run')"
+            ),
+            {
+                "local": local_run,
+                "project": PROJECT,
+                "foreign": foreign_run,
+                "other": scoped_operator,
+            },
+        )
+
+    calls = []
+
+    def fake_run(_engine, _settings, _jobs, run_id, *, fencing_token=None):
+        calls.append((run_id, fencing_token))
+        return {"status": "running", "run_id": run_id}
+
+    monkeypatch.setattr(code_task_service, "run_code_task", fake_run)
+    path = "/v1/code-tasks/step"
+    assert client.post(
+        path, headers=_auth("coo-key"),
+        json={"run_id": local_run, "actor": "coo"},
+    ).status_code == 403
+    assert client.post(
+        path, headers=_auth("coo-key"),
+        json={"run_id": local_run, "actor": "ceo"},
+    ).status_code == 403
+    assert client.post(
+        path, headers=_auth("runner-key"),
+        json={"run_id": foreign_run, "actor": "ga_runner", "project_id": PROJECT},
+    ).status_code == 403
+    assert calls == []
+
+    allowed = client.post(
+        path, headers=_auth("ceo-key"),
+        json={"run_id": local_run, "fencing_token": "lease-demo"},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert calls == [(local_run, "lease-demo")]

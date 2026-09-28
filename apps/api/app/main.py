@@ -5427,6 +5427,9 @@ def decompose_prd_endpoint(payload: dict):
     prd = (payload.get("prd") or payload.get("directive") or "").strip()
     if not prd:
         raise HTTPException(status_code=422, detail="prd (or directive) is required.")
+    actor = str(payload.get("actor") or current_api_principal.get() or "ceo")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
     from .services.prd_decomposition import decompose_prd_into_tasks, start_decomposed_build
     max_tasks = int(payload.get("max_tasks") or 6)
     if payload.get("plan_only"):
@@ -5458,6 +5461,9 @@ def build_web_app_endpoint(payload: dict):
     directive = (payload.get("directive") or payload.get("prd") or "").strip()
     if not project_id or not directive:
         raise HTTPException(status_code=422, detail="project_id and directive are required.")
+    actor = str(payload.get("actor") or current_api_principal.get() or "ceo")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
     from .services.prd_decomposition import start_web_app_build
     return start_web_app_build(
         engine, settings, jobs, project_id=project_id, task_id=payload.get("task_id"),
@@ -6171,8 +6177,21 @@ def run_code_task_step_endpoint(payload: dict):
     crash — the PR receipt dedupe makes re-opening the PR a no-op."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    run_id = str(payload.get("run_id") or "").strip()
+    if not run_id:
+        raise HTTPException(status_code=422, detail="run_id is required.")
+    with begin(engine) as connection:
+        run = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if run:
+            actor = str(payload.get("actor") or current_api_principal.get() or "system")
+            require_project_actor(
+                connection, run["project_id"], actor, "workflow_execute"
+            )
     from .services.code_task_service import run_code_task
-    return run_code_task(engine, settings, jobs, payload["run_id"],
+    return run_code_task(engine, settings, jobs, run_id,
                          fencing_token=payload.get("fencing_token"))
 
 
