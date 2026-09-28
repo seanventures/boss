@@ -23,8 +23,9 @@ export type Binding = {
   error?: string;
 };
 
-/** Statuses that mean a deployment is still moving. Anything else is over, one way or another. */
-export const LIVE_STATUSES = new Set(["created", "running", "in_progress", "deploying"]);
+/** Planned runs await a ChangeSet decision; only execution states should poll. */
+export const LIVE_STATUSES = new Set(["running", "in_progress", "deploying"]);
+const PLAN_STATUSES = new Set(["created", "planned"]);
 
 export type ControlsState =
   | { kind: "checking" }
@@ -40,6 +41,7 @@ export type ControlsState =
       canRetry: boolean;
       retryDeploymentId: string | null;
       live: boolean;
+      waitingForReview: boolean;
       liveStatus: string | null;
     };
 
@@ -64,6 +66,7 @@ export function controlsState(
   const latest = binding.deployments?.[0];
   const status = latest?.status ? String(latest.status) : null;
   const live = Boolean(status && LIVE_STATUSES.has(status));
+  const waitingForReview = Boolean(status && PLAN_STATUSES.has(status));
 
   return {
     kind: "ready",
@@ -72,19 +75,22 @@ export function controlsState(
     targetId,
     // Bound AND reviewed AND not already mid-flight. Any one missing and the button would
     // promise something the pipeline cannot honour.
-    canDeploy: Boolean(targetId) && opts.deployable && !live,
+    canDeploy: Boolean(targetId) && opts.deployable && !live && !waitingForReview,
     blockedReason: !targetId
       ? "no destination yet — bind a verified host to deploy this app"
       : !opts.deployable
         ? opts.deployableReason
         : live
           ? "a deployment is already running"
+          : waitingForReview
+            ? "a deployment ChangeSet is awaiting review"
           : "",
     // Retry is for a deployment that FAILED. Offering it on a success would start a second
     // deployment of the same commit for no reason.
     canRetry: status === "failed" && Boolean(latest?.id),
     retryDeploymentId: status === "failed" ? latest?.id ?? null : null,
     live,
+    waitingForReview,
     liveStatus: status,
   };
 }

@@ -4,6 +4,8 @@
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React, { useCallback, useEffect, useState } from "react";
 
+import { consoleHref } from "../../app/console-href";
+import { plannedDeploymentFrom, type PlannedDeployment } from "../../app/deploy-ui";
 import { forgetRunDeployment, loadRunDeployment } from "../../lib/run-deployments";
 import {
   controlsState,
@@ -55,6 +57,8 @@ export function DeployControls({
   const [binding, setBinding] = useState<Binding | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [noteIsError, setNoteIsError] = useState(false);
+  const [plan, setPlan] = useState<PlannedDeployment | null>(null);
 
   const load = useCallback(async () => {
     // A lookup error is carried INTO the state rather than swallowed: controlsState turns it
@@ -88,10 +92,10 @@ export function DeployControls({
   const post = async (
     kind: "deploy" | "retry",
     args: { targetId?: string | null; deploymentRunId?: string | null },
-    said: string,
   ) => {
     setBusy(kind);
     setNote(null);
+    setPlan(null);
     try {
       const res = await fetch("/api/app-deploy", {
         method: "POST",
@@ -101,8 +105,20 @@ export function DeployControls({
         ),
       });
       const data = await res.json().catch(() => ({}));
-      setNote(outcomeMessage(res, data, said));
+      if (!res.ok) {
+        setNoteIsError(true);
+        setNote(outcomeMessage(res, data, ""));
+      } else {
+        const nextPlan = plannedDeploymentFrom(data);
+        if (nextPlan) {
+          setPlan(nextPlan);
+        } else {
+          setNoteIsError(true);
+          setNote("Deployment request did not return a reviewable ChangeSet. No deployment was confirmed.");
+        }
+      }
     } catch (e) {
+      setNoteIsError(true);
       setNote(String((e as Error)?.message ?? e));
     } finally {
       setBusy(null);
@@ -113,6 +129,7 @@ export function DeployControls({
   const unbind = async (targetId: string) => {
     setBusy("unbind");
     setNote(null);
+    setPlan(null);
     try {
       const res = await fetch(
         `/api/deployment-targets?target_id=${encodeURIComponent(targetId)}` +
@@ -120,8 +137,10 @@ export function DeployControls({
         { method: "DELETE" },
       );
       const data = await res.json().catch(() => ({}));
+      setNoteIsError(!res.ok);
       setNote(outcomeMessage(res, data, "target retired — bind a new one to deploy again"));
     } catch (e) {
+      setNoteIsError(true);
       setNote(String((e as Error)?.message ?? e));
     } finally {
       setBusy(null);
@@ -157,19 +176,21 @@ export function DeployControls({
             <button
               type="button"
               className="v2-btn"
-              disabled={busy !== null || !state.canDeploy}
+              disabled={busy !== null || !state.canDeploy || !!plan}
               onClick={() =>
-                void post("deploy", { targetId: state.targetId }, "deployment started")
+                void post("deploy", { targetId: state.targetId })
               }
               data-testid="v2-deploy"
               /* What it will do, before it is pressed — or why it will not. */
               title={
-                state.canDeploy
-                  ? `Ships ${appName} to ${state.host}`
-                  : `Cannot ship: ${state.blockedReason}`
+                plan
+                  ? "This deployment ChangeSet is awaiting review"
+                  : state.canDeploy
+                  ? `Creates a ChangeSet to review before deploying ${appName} to ${state.host}`
+                  : `Cannot plan deployment: ${state.blockedReason}`
               }
             >
-              {busy === "deploy" ? "Deploying…" : "Deploy"}
+              {busy === "deploy" ? "Planning…" : "Plan deployment"}
             </button>
             <button
               type="button"
@@ -194,14 +215,14 @@ export function DeployControls({
           <button
             type="button"
             className="v2-btn v2-btn-quiet"
-            disabled={busy !== null}
+            disabled={busy !== null || !!plan}
             onClick={() =>
-              void post("retry", { deploymentRunId: state.retryDeploymentId }, "retry started")
+              void post("retry", { deploymentRunId: state.retryDeploymentId })
             }
             data-testid="v2-retry"
-            title="Same commit, same target. Redeploy is idempotent by receipt, so a retry cannot double-apply."
+            title="Create a new ChangeSet to review for the same commit and target"
           >
-            {busy === "retry" ? "Retrying…" : "Retry"}
+            {busy === "retry" ? "Planning…" : "Plan retry"}
           </button>
         ) : null}
       </div>
@@ -212,8 +233,24 @@ export function DeployControls({
         </p>
       ) : null}
 
+      {state.waitingForReview && !plan ? (
+        <p className="v2-controls-note" data-testid="v2-controls-plan">
+          No deployment is running. Review its ChangeSet in{" "}
+          <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+        </p>
+      ) : null}
+
+      {plan ? (
+        <p className="v2-controls-note" data-testid="v2-controls-plan" role="status">
+          Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready.
+          Next, open <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>,
+          approve it, then apply it. Run <code>{plan.deployment_run_id}</code> records the plan.
+        </p>
+      ) : null}
+
       {note ? (
-        <p className="v2-controls-note" data-testid="v2-controls-note">
+        <p className="v2-controls-note" data-testid="v2-controls-note"
+           role={noteIsError ? "alert" : "status"}>
           {note}
         </p>
       ) : null}

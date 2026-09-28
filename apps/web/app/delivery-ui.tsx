@@ -11,9 +11,8 @@ import { Spine, type SpineNode } from "./journey-spine-ui";
  * Tasks list wearing one. Deploying, the actual verb of this page, was a text box at the
  * bottom of a target row.
  *
- * So: the wizard is first, `RecentDeployments` lists DEPLOYMENTS, and both hand off to the
- * live stepper in `deploy-ui.tsx` — which can exist at all only because a deployment now
- * records its steps while it runs instead of reporting nothing until it ends.
+ * The wizard creates a reviewable deployment ChangeSet. `RecentDeployments` lists plans and
+ * executed runs; only runs that actually execute use the live stepper in `deploy-ui.tsx`.
  *
  * Kept from the previous version: when no target is configured it says so rather than
  * rendering an empty table that reads like a failure.
@@ -521,7 +520,7 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged, communityEditio
       <p className="detail" style={{ margin: "2px 0 0" }}>
         {target.repo} · {target.target_kind} · {target.target_ref}
         {target.auto_deploy
-          ? communityEdition ? " · auto deploy configured (paused)" : " · deploys on merge"
+          ? communityEdition ? " · auto plan configured (paused)" : " · plans on merge"
           : ""}
         {target.paused ? " · paused" : ""}
       </p>

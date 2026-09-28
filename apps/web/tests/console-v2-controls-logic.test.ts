@@ -82,6 +82,18 @@ describe("Deploy only promises what the pipeline can honour", () => {
     expect(s.kind === "ready" && s.blockedReason).toMatch(/already running/);
   });
 
+  it("a planned ChangeSet blocks duplicate requests without claiming deployment is running", () => {
+    for (const status of ["created", "planned"]) {
+      const s = controlsState(
+        { ...bound, deployments: [{ id: "dep_plan", status }] }, ready,
+      );
+      expect(s.kind === "ready" && s.canDeploy).toBe(false);
+      expect(s.kind === "ready" && s.live).toBe(false);
+      expect(s.kind === "ready" && s.waitingForReview).toBe(true);
+      expect(s.kind === "ready" && s.blockedReason).toContain("awaiting review");
+    }
+  });
+
   it("a blocked Deploy always carries a reason", () => {
     // A disabled control with no reason is what sends people to the API to find out.
     const cases: Array<[Binding, typeof ready]> = [
@@ -154,8 +166,8 @@ describe("Unbind", () => {
 
 describe("what gets reported afterwards", () => {
   it("success reports the thing that was actually promised", () => {
-    expect(outcomeMessage({ ok: true, status: 200 }, {}, "deployment started"))
-      .toBe("deployment started");
+    expect(outcomeMessage({ ok: true, status: 200 }, {}, "target retired"))
+      .toBe("target retired");
   });
 
   it("a failure reports the API's reason, not the hoped-for message", () => {

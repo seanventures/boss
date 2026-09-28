@@ -52,7 +52,9 @@ import {
   followUpCodeTaskAction,
   conveneMeetingAction,
 } from "./actions";
-import { LiveDeployment } from "./deploy-ui";
+import {
+  ChangeSetNextStep, LiveDeployment, plannedDeploymentFrom, type PlannedDeployment,
+} from "./deploy-ui";
 import { Markdown } from "./markdown";
 import { ClientRelativeTime } from "./client-relative-time";
 import { JourneySpine } from "./journey-spine-ui";
@@ -1097,7 +1099,7 @@ function SetupDeployment({ run, projectId, actor, onDone }: {
             });
             setBusy(false);
             setMsg(r.ok
-              ? `target set: ${r.data?.host ?? "host"} — deploy it once below`
+              ? `target set: ${r.data?.host ?? "host"} — plan its first deployment below`
               : (r.error ?? "could not set the target"));
             if (r.ok) onDone();
           }}
@@ -1191,20 +1193,14 @@ async function retireTarget(targetId: string, actor: string): Promise<{ ok: bool
 function DeploymentLine({ run, projectId, actor, deployable }: {
   run: CodeTaskRun; projectId: string; actor: string;
   /** Has this app produced reviewed code? A blocked or still-building task has nothing to
-   *  ship, and offering "Deploy now" there promises something the pipeline cannot honour —
-   *  it would clone, build, transfer, and only then fail at the health gate. */
+   *  ship, and offering a deployment plan there promises something the pipeline cannot honour. */
   deployable: boolean;
 }) {
   const [linked, setLinked] = useState<string | null>(null);
   const [targetId, setTargetId] = useState<string | null>(null);
   const [deploys, setDeploys] = useState<any[]>([]);
   const [retrying, setRetrying] = useState(false);
-  // Set the moment a deploy is accepted and cleared only when a live run is
-  // visible. Without it the button re-enabled as soon as the POST returned —
-  // before any deployment_run existed to render — so the card still said "not
-  // deployed" with an ACTIVE button beside it, and a second click would start a
-  // second deployment of the same commit.
-  const [starting, setStarting] = useState(false);
+  const [plan, setPlan] = useState<PlannedDeployment | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   // Whether the binding has been READ yet. Without this, `targetId` is null for the first
@@ -1251,9 +1247,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // Poll only while something is actually moving. A card that polls forever is a card that
   // keeps a browser and an API busy describing a deployment that finished yesterday.
   const latest = deploys[0];
-  const live = latest && ["created", "running", "in_progress", "deploying"].includes(latest.status);
-  // The deployment row now reports its own state, so the optimistic latch can stand down.
-  useEffect(() => { if (latest) setStarting(false); }, [latest]);
+  const live = latest && ["running", "in_progress", "deploying"].includes(latest.status);
   useEffect(() => {
     if (!live) return;
     const t = window.setInterval(() => { void reload(); }, 4000);
@@ -1261,7 +1255,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   }, [live, reload]);
 
   // No deployment yet. That is either "no destination" (offer to link one) or "linked but
-  // never shipped" (offer the first deploy). Rendering nothing here is what left an already
+  // never shipped" (offer the first deployment plan). Rendering nothing here is what left an already
   // merged app with no way forward on its own card.
   // Nothing to ship, or still shipping it: the row would be an empty promise on a card that
   // already says BLOCKED or BUILDING two inches above.
@@ -1278,6 +1272,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // to follow the state and show the history as history.
   if (!latest || (loaded && !targetId)) {
     return (
+      <div className="ct-deploy-wrap">
       <div className="ct-deploy-line" data-testid="app-deployment-none">
         {latest && loaded && !targetId ? (
           <span className="detail ct-deploy-history" title={latest.failure_reason ?? undefined}>
@@ -1290,11 +1285,14 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
             <span className="cap-badge tone-amber">not deployed</span>
             <span className="detail">{linked}</span>
             <button className="cap-btn primary ct-deploy-action"
-                    disabled={retrying || starting}
+                    disabled={retrying || !!plan}
                     data-testid="app-deploy-first"
+                    title={plan
+                      ? "This deployment ChangeSet is awaiting review"
+                      : "Create a ChangeSet to review before deploying this app"}
                     onClick={async (e) => {
                       e.stopPropagation();
-                      setRetrying(true); setNote(null);
+                      setRetrying(true); setNote(null); setPlan(null);
                       const r = await appDeployOp({
                         op: "deploy",
                         actor,
@@ -1302,13 +1300,16 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                         run_id: run.id,
                         target_id: targetId ?? "",
                       });
-                      setNote(r.ok ? null : (r.error ?? "deploy failed"));
-                      if (r.ok) setStarting(true);
+                      const nextPlan = r.ok ? plannedDeploymentFrom(r.data) : null;
+                      setPlan(nextPlan);
+                      setNote(r.ok
+                        ? (nextPlan ? null : "Deployment request did not return a reviewable ChangeSet. No deployment was confirmed.")
+                        : (r.error ?? "deployment planning failed"));
                       setRetrying(false);
                       await reload();
                     }}>
               <RocketLaunch size={15} weight="fill" aria-hidden />{" "}
-              {retrying || starting ? "Deploying…" : "Deploy now"}
+              {retrying ? "Planning…" : "Plan deployment"}
             </button>
             {/* THE UNDO THAT WAS NEVER THERE.
                 Once an app was bound to a host and port the card only ever offered "Deploy
@@ -1316,7 +1317,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                 nowhere but the database. Retiring keeps the history: deployment runs and
                 health samples reference the target row. */}
             <button className="cap-btn ct-deploy-action"
-                    disabled={retrying || starting || !targetId}
+                    disabled={retrying || !targetId}
                     data-testid="app-target-retire"
                     title="Unbind this app from its host and port. Deployment history is kept."
                     onClick={async (e) => {
@@ -1336,11 +1337,14 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
           <SetupDeployment run={run} projectId={projectId} actor={actor} onDone={load} />
         )}
       </div>
+      {plan ? <ChangeSetNextStep plan={plan} /> : null}
+      </div>
     );
   }
 
   const ok = ["succeeded", "deployed", "completed"].includes(latest.status);
   const failed = ["failed", "rolled_back", "execute_failed", "blocked"].includes(latest.status);
+  const planned = ["created", "planned"].includes(latest.status);
   const where = latest.host_name || latest.environment || "target";
 
   return (
@@ -1348,7 +1352,8 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
     <div className="ct-deploy-line" data-testid="app-deployment"
          data-deploy-status={latest.status}>
       <span className={`cap-badge ${ok ? "tone-green" : failed ? "tone-red" : "tone-amber"}`}>
-        {ok ? "deployed" : failed ? "deploy failed" : latest.status}
+        {ok ? "deployed" : failed ? "deploy failed"
+          : planned ? "awaiting ChangeSet review" : latest.status}
       </span>
       <span className="detail">
         {where}
@@ -1366,19 +1371,23 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
               {String(latest.failure_reason).slice(0, 60)}
             </span>
           ) : null}
-          <button className="cap-btn primary ct-deploy-action" disabled={retrying}
+          <button className="cap-btn primary ct-deploy-action" disabled={retrying || !!plan}
                   data-testid="app-deployment-retry"
-                  title="Ship the same commit to the same target again"
+                  title="Create a new ChangeSet for the same commit and target"
                   onClick={async (e) => {
                     e.stopPropagation();
-                    setRetrying(true); setNote(null);
+                    setRetrying(true); setNote(null); setPlan(null);
                     const r = await appDeployOp({ op: "retry", actor, deployment_run_id: latest.id });
-                    setNote(r.ok ? "retry started" : (r.error ?? "retry failed"));
+                    const nextPlan = r.ok ? plannedDeploymentFrom(r.data) : null;
+                    setPlan(nextPlan);
+                    setNote(r.ok
+                      ? (nextPlan ? null : "Redeploy request did not return a reviewable ChangeSet. No deployment was confirmed.")
+                      : (r.error ?? "redeploy planning failed"));
                     setRetrying(false);
                     await reload();
                   }}>
             <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}
-            {retrying ? "Retrying…" : "Retry"}
+            {retrying ? "Planning…" : "Plan retry"}
           </button>
           {/* RETRY IS NOT ALWAYS THE ANSWER.
               A deployment that fails because the target itself is wrong — no domain, or the
@@ -1405,6 +1414,11 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
           {note ? <span className="detail">{note}</span> : null}
         </>
       ) : null}
+      {planned && !plan ? (
+        <span className="detail">No deployment is running. Review its ChangeSet in{" "}
+          <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+        </span>
+      ) : null}
       {/* Steps, timings and logs, without leaving the card. Reuses the CI/CD stepper rather
           than drawing a second one: it renders real recorded state, and a lookalike here
           would be a second opinion about what a deployment is doing. */}
@@ -1420,6 +1434,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
         <LiveDeployment runId={latest.id} />
       </div>
     ) : null}
+    {plan ? <ChangeSetNextStep plan={plan} /> : null}
     </div>
   );
 }

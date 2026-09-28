@@ -27,7 +27,9 @@ import {
   retireHostAction,
   verifyDeploymentHostAction,
 } from "./actions";
-import { LiveDeployment } from "./deploy-ui";
+import {
+  ChangeSetNextStep, plannedDeploymentFrom, type PlannedDeployment,
+} from "./deploy-ui";
 
 type Secret = {
   secret_ref_id: string; name: string; backend: string; secret_kind: string;
@@ -786,7 +788,7 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
   const { busy, run: perform } = useBusyAction(onChanged);
   const pending = !!busy;
   const [ref, setRef] = useState("");
-  const [runId, setRunId] = useState<string | null>(null);
+  const [plan, setPlan] = useState<PlannedDeployment | null>(null);
   // Branches for THIS target's repo, so "which build" is a choice rather than a memory test.
   // Loaded lazily: a page with several targets should not fan out to the repo host on render.
   const [refs, setRefs] = useState<{ name: string; sha: string }[]>([]);
@@ -836,7 +838,7 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <input type="checkbox" checked={state.auto} disabled={pending || communityEdition}
                onChange={(e) => toggle({ auto_deploy: e.target.checked })} />
-        {communityEdition ? "deploy on merge (paused in Community)" : "deploy on merge"}
+        {communityEdition ? "plan on merge (paused in Community)" : "plan deployment on merge"}
       </label>
       <label style={{ display: "flex", gap: 6, alignItems: "center",
                       color: state.paused ? "#d29922" : undefined }}>
@@ -850,39 +852,41 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
       <datalist id={`refs-${target.id}`}>
         {refs.map((r) => <option key={r.name} value={r.name}>{r.sha}</option>)}
       </datalist>
-      {/* Deploy no longer BLOCKS until the deployment ends, so this button no longer reports
-          the outcome — it hands over to the live stepper below, which does. Reporting
-          `out.status` here now would print "started" and stop, which is how a working deploy
-          came to look like a button that does nothing. */}
-      {/* One action, two honest names. Deploying a target that is already running REPLACES
-          what is there — a new run, so the previous one keeps its history — and calling that
-          "Deploy" invites the question "is there a redeploy somewhere else?". There is not. */}
-      <ActionButton label={shipped ? "Redeploy" : "Deploy"} busyLabel="Starting"
-              disabled={communityEdition}
+      {/* A request creates a reviewable ChangeSet; it does not start execution. */}
+      <ActionButton label={shipped ? "Plan redeployment" : "Plan deployment"}
+              busyLabel="Planning"
+              disabled={communityEdition || !!plan}
               title={communityEdition
                 ? "Community host deployment awaits approval and recovery steps"
+                : plan
+                  ? "This deployment ChangeSet is awaiting review"
                 : shipped
-                  ? "Ship this target again — a new deployment run at the branch or sha above"
-                  : "Ship this target for the first time"}
-              busy={busy === "Deploying"}
-              onClick={() => { setMsg(null); setRunId(null);
-                void perform("Deploying", async () => {
+                  ? "Create a new ChangeSet to review before redeploying this target"
+                  : "Create a ChangeSet to review before deploying this target"}
+              busy={busy === "Planning"}
+              onClick={() => { setMsg(null); setPlan(null);
+                void perform("Planning", async () => {
                   const out: any = await deployTargetAction(target.id, ref);
-                  if (out?.error || !out?.deployment_run_id) {
-                    setMsg(`failed: ${out?.error || "no deployment was started"}`);
+                  if (out?.error) {
+                    setMsg(String(out.error));
                     return;
                   }
-                  setRunId(out.deployment_run_id);
+                  const nextPlan = plannedDeploymentFrom(out);
+                  if (!nextPlan) {
+                    setMsg("Deployment request did not return a reviewable ChangeSet. No deployment was started.");
+                    return;
+                  }
+                  setPlan(nextPlan);
                 }); }} />
       <TeardownControls />
       {communityEdition && <span className="detail">
         Community deployment is paused until approval and recovery steps are ready.
       </span>}
-      {msg && <span className="detail">{msg}</span>}
+      {msg && <span className="detail" role="alert" style={{ color: "#f85149" }}>{msg}</span>}
     </div>
-    {runId && (
+    {plan && (
       <div style={{ maxWidth: 760 }}>
-        <LiveDeployment runId={runId} />
+        <ChangeSetNextStep plan={plan} />
       </div>
     )}
    </div>

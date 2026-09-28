@@ -222,13 +222,26 @@ type WizardTarget = {
   auto_deploy?: boolean; paused?: boolean;
 };
 
-type PlannedDeployment = {
+export type PlannedDeployment = {
   deployment_run_id: string;
   changeset_id: string;
   next_action: "approve_and_apply_changeset";
 };
 
-function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
+export function plannedDeploymentFrom(value: unknown): PlannedDeployment | null {
+  if (!value || typeof value !== "object") return null;
+  const out = value as Record<string, unknown>;
+  if (out.status !== "planned" || typeof out.deployment_run_id !== "string"
+      || !out.deployment_run_id || typeof out.changeset_id !== "string"
+      || !out.changeset_id || out.next_action !== "approve_and_apply_changeset") return null;
+  return {
+    deployment_run_id: out.deployment_run_id,
+    changeset_id: out.changeset_id,
+    next_action: "approve_and_apply_changeset",
+  };
+}
+
+export function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
   return (
     <div style={{ ...box, borderColor: "rgba(210,153,34,.35)" }} role="status">
       <strong>Deployment plan created</strong>
@@ -294,12 +307,12 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
       setErr(typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 220));
       return;
     }
-    if (out?.status !== "planned" || !out.deployment_run_id || !out.changeset_id
-        || out.next_action !== "approve_and_apply_changeset") {
+    const nextPlan = plannedDeploymentFrom(out);
+    if (!nextPlan) {
       setErr("Deployment request did not return a reviewable ChangeSet. No deployment was started.");
       return;
     }
-    setPlan(out as PlannedDeployment);
+    setPlan(nextPlan);
   };
 
   if (!open) {
@@ -466,13 +479,13 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
       setErrors((current) => ({ ...current, [id]: String(out.error) }));
       return;
     }
-    if (out?.status !== "planned" || !out.deployment_run_id || !out.changeset_id
-        || out.next_action !== "approve_and_apply_changeset") {
+    const nextPlan = plannedDeploymentFrom(out);
+    if (!nextPlan) {
       setErrors((current) => ({ ...current,
         [id]: "Redeploy request did not return a reviewable ChangeSet. No deployment was started." }));
       return;
     }
-    setPlannedFrom((current) => ({ ...current, [id]: out as PlannedDeployment }));
+    setPlannedFrom((current) => ({ ...current, [id]: nextPlan }));
     setOpenId(null);
   };
 

@@ -4,18 +4,24 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 vi.mock("../app/actions", () => ({
   deployTargetAction: vi.fn(),
   getDeliveryDefaultsAction: vi.fn(async () => ({ owner: "example" })),
   getDeploymentAction: vi.fn(),
   listRefsAction: vi.fn(async () => ({ branches: [], default_branch: "main" })),
   redeployAction: vi.fn(),
+  setAutoDeployAction: vi.fn(),
 }));
 
 import {
   deployTargetAction, getDeploymentAction, redeployAction,
 } from "../app/actions";
 import { DeployWizard, LiveDeployment, RecentDeployments } from "../app/deploy-ui";
+import { TargetControls } from "../app/delivery-manage";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -129,5 +135,33 @@ describe("deployment ChangeSet review flow", () => {
     expect(host.textContent).not.toContain("Deployed");
     expect(host.textContent).not.toContain("Open demo.example.test");
     expect(onFinished).not.toHaveBeenCalled();
+  });
+
+  it("shows the target-card ChangeSet instead of an immediate deploy", async () => {
+    vi.mocked(deployTargetAction).mockResolvedValue(plan);
+    await act(async () => root.render(
+      <TargetControls target={target} communityEdition={false} />,
+    ));
+    await act(async () => button("Plan deployment").click());
+
+    expect(host.textContent).toContain("Deployment plan created");
+    expect(host.textContent).toContain("chg_new");
+    expect(host.textContent).not.toContain("Deploying");
+    expect(button("Plan deployment").hasAttribute("disabled")).toBe(true);
+    expect(getDeploymentAction).not.toHaveBeenCalled();
+  });
+
+  it("shows a target-card 409 reason", async () => {
+    vi.mocked(deployTargetAction).mockResolvedValue({
+      error: "Direct host deployment is disabled until a policy-guarded ChangeSet exists.",
+    });
+    await act(async () => root.render(
+      <TargetControls target={target} communityEdition={false} />,
+    ));
+    await act(async () => button("Plan deployment").click());
+
+    expect(host.querySelector('[role="alert"]')?.textContent)
+      .toContain("Direct host deployment is disabled");
+    expect(host.textContent).not.toContain("Deployment plan created");
   });
 });

@@ -213,37 +213,29 @@ describe("a step's output shows what it says, not which keys it has", () => {
   });
 });
 
-describe("a bound app can actually be shipped from the deploy step", () => {
+describe("a bound app can request a gated deployment from the deploy step", () => {
   const SOURCE = readFileSync(
     new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
 
-  it("offers Deploy now once a target is bound", () => {
-    // A deploy step marked SUCCEEDED whose own detail read status=blocked, on an app
-    // answering "not found", with no control anywhere to try again. Setting the target says
-    // WHERE it would go; nothing said GO.
+  it("offers a deployment plan once a target is bound", () => {
+    // Binding says where a deployment would go; planning creates the reviewable ChangeSet.
     expect(SOURCE).toContain('data-testid="dw-ship-now"');
-    expect(SOURCE).toContain("Deploy now");
+    expect(SOURCE).toContain("Plan deployment");
   });
 
   it("uses the console's existing deploy op rather than a new path", () => {
     expect(SOURCE).toContain('op: "deploy"');
   });
 
-  it("waits for the outcome instead of reporting acceptance", () => {
-    // "Started" is what lets a deploy that then fails leave a step claiming success.
-    expect(SOURCE).toContain('"succeeded", "failed", "blocked", "rolled_back"');
-    expect(SOURCE).toContain("shipped — the link above opens it");
+  it("shows the ChangeSet review step without claiming execution", () => {
+    expect(SOURCE).toContain("plannedDeploymentFrom(d)");
+    expect(SOURCE).toContain("Nothing has deployed. ChangeSet");
+    expect(SOURCE).toContain("approve it, then apply it");
   });
 
-  it("matches the deployment it started, not merely the newest row", () => {
-    // This app already has older deployment runs; reading "the newest" would report a
-    // blocked deploy from yesterday as the outcome of this click.
-    expect(SOURCE).toContain("const startedId");
-    expect(SOURCE).toContain("list.find((x) => x.id === startedId)");
-  });
-
-  it("reads the shape run-deployments actually returns", () => {
-    expect(SOURCE).toContain("body?.runs?.[buildRunId]?.deployments");
+  it("does not poll a plan as if a deployment had started", () => {
+    const shipNow = SOURCE.slice(SOURCE.indexOf("function ShipNow("), SOURCE.indexOf("function stepCaptain("));
+    expect(shipNow).not.toContain("/api/run-deployments");
   });
 });
 

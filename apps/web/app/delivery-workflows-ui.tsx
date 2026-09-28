@@ -18,6 +18,7 @@ import { inputsWithTheDirective, missingRequired, workflowInputFields }
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
+import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -2911,7 +2912,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
 //: than a retry, which is exactly what an operator hit: two runs for one project, both live.
 const ACTIVE_RUN_STATES = new Set(["running", "waiting", "ready", "leased", "queued", "paused"]);
 
-/** SHIP IT, FROM THE STEP WHOSE JOB IS SHIPPING.
+/** PLAN A DEPLOYMENT, FROM THE STEP WHOSE JOB IS SHIPPING.
  *
  *  A deploy step marked SUCCEEDED whose own detail read `status=blocked`, on an app that
  *  answers "not found" — and no control anywhere to try again. The operator set the target
@@ -2919,26 +2920,23 @@ const ACTIVE_RUN_STATES = new Set(["running", "waiting", "ready", "leased", "que
  *  GO. The gate only appears while a run is waiting at it, so once the step had been recorded
  *  as done there was no way to ship at all, from any screen.
  *
- *  The console already had this plumbing — the `deploy` op posts to /v1/deployments — and the
- *  workflow view simply never offered it.
- *
- *  It reports the OUTCOME, not the acceptance. "Started" is what the previous generation of
- *  this button would have said, and a deploy that starts and then fails is exactly how a step
- *  ends up claiming success over a blocked release.
+ *  The `deploy` op creates a ChangeSet for review. It cannot claim a deployment is running
+ *  or shipped until that ChangeSet is approved and applied.
  */
-function ShipNow({ projectId, buildRunId, target, appName, alreadyLive, onDone }: {
-  projectId: string; buildRunId: string; target: DeployTarget; appName: string;
-  /** Something is already serving at this target. Then this button REPLACES it, and calling
-   *  that "Deploy now" next to a live "Open the app" link is just wrong. */
+function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
+  projectId: string; buildRunId: string; target: DeployTarget;
+  /** Something already serves at this target; the plan proposes replacing it. */
   alreadyLive: boolean;
   onDone: () => void;
 }) {
-  const [state, setState] = useState<"idle" | "shipping" | "done">("idle");
+  const [state, setState] = useState<"idle" | "planning" | "planned">("idle");
+  const [plan, setPlan] = useState<PlannedDeployment | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const ship = useCallback(async () => {
-    setState("shipping");
-    setMsg("shipping — building, transferring, then health-checking…");
+    setState("planning");
+    setMsg(null);
+    setPlan(null);
     try {
       const r = await fetch("/api/app-deploy", {
         method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
@@ -2951,60 +2949,47 @@ function ShipNow({ projectId, buildRunId, target, appName, alreadyLive, onDone }
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         setState("idle");
-        setMsg(d?.error ?? `could not start the deploy (HTTP ${r.status})`);
+        setMsg(d?.error ?? `could not plan the deployment (HTTP ${r.status})`);
         return;
       }
-      // WAIT FOR THE ANSWER, AND FOR THE RIGHT DEPLOY. A deploy takes tens of seconds;
-      // reporting "started" and stopping is how an operator ends up staring at a card that
-      // never changes. The id that was just created is matched exactly — this app already has
-      // older deployment runs against it, and reading "the newest row" would have reported a
-      // blocked deploy from yesterday as the outcome of this click.
-      const startedId = String(d?.deployment_run_id ?? d?.id ?? "");
-      for (let i = 0; i < 40; i += 1) {
-        await new Promise((done) => setTimeout(done, 3000));
-        const poll = await fetch(
-          `/api/run-deployments?run_ids=${encodeURIComponent(buildRunId)}`
-          + `&app_names=${encodeURIComponent(appName)}`, { cache: "no-store" });
-        const body = await poll.json().catch(() => ({}));
-        const list = (body?.runs?.[buildRunId]?.deployments ?? []) as Array<{
-          id?: string; status?: string; failure_reason?: string; started_at?: string;
-        }>;
-        const row = (startedId && list.find((x) => x.id === startedId))
-          // No id came back: fall back to the most recently STARTED, which is this one.
-          || [...list].sort((a, b) =>
-            String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0];
-        const status = String(row?.status ?? "");
-        if (["succeeded", "failed", "blocked", "rolled_back"].includes(status)) {
-          setState("done");
-          setMsg(status === "succeeded"
-            ? "shipped — the link above opens it"
-            : `${status}: ${row?.failure_reason ?? "no reason recorded"}`);
-          onDone();
-          return;
-        }
+      const nextPlan = plannedDeploymentFrom(d);
+      if (!nextPlan) {
+        setState("idle");
+        setMsg("Deployment request did not return a reviewable ChangeSet. No deployment was confirmed.");
+        return;
       }
-      setState("idle");
-      setMsg("still going after two minutes — leaving it running; refresh to see where it got to");
+      setPlan(nextPlan);
+      setState("planned");
       onDone();
     } catch (e) {
       setState("idle");
       setMsg(String((e as Error)?.message ?? e));
     }
-  }, [projectId, buildRunId, target, appName, onDone]);
+  }, [projectId, buildRunId, target, onDone]);
 
   return (
     <div className="dw-ship" data-testid="dw-ship">
-      <button type="button" className="cap-btn primary" disabled={state === "shipping"}
+      <button type="button" className="cap-btn primary" disabled={state !== "idle"}
               onClick={ship} data-testid="dw-ship-now">
-        {state === "shipping" ? "Shipping…" : alreadyLive ? "Redeploy" : "Deploy now"}
+        {state === "planning" ? "Planning…"
+          : alreadyLive ? "Plan redeployment" : "Plan deployment"}
       </button>
       <span className="detail">
         {alreadyLive
-          ? <>Replaces what is running at {target.domains?.[0] ?? target.app_name} with this build.</>
-          : <>Ships this build to <b>{target.app_name}</b> · {target.environment}
+          ? <>Creates a ChangeSet to review before replacing what runs at{" "}
+               {target.domains?.[0] ?? target.app_name}.</>
+          : <>Creates a ChangeSet to review before deploying <b>{target.app_name}</b> · {target.environment}
              {target.domains?.[0] ? ` (${target.domains[0]})` : ""}.</>}
       </span>
-      {msg ? <span className="detail dw-ship-msg" data-testid="dw-ship-msg">{msg}</span> : null}
+      {plan ? (
+        <span className="detail dw-ship-msg" data-testid="dw-ship-plan" role="status">
+          Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready.
+          Next, open <a href={consoleHref(
+            typeof window !== "undefined" ? window.location.search : "", { area: "infra" },
+          )}>ProviderOps ChangeSet Review</a>, approve it, then apply it.
+        </span>
+      ) : null}
+      {msg ? <span className="detail dw-ship-msg" data-testid="dw-ship-msg" role="alert">{msg}</span> : null}
     </div>
   );
 }
@@ -3572,7 +3557,6 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         && !needsYou(step)
         && decidedButNotMoved(step) !== "approved" ? (
         <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
-                 appName={typeof runInput.title === "string" ? runInput.title : shippedTo.app_name}
                  alreadyLive={!!liveAppUrl} onDone={onBound} />
       ) : null}
 
