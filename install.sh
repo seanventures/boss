@@ -679,29 +679,53 @@ ${COMPOSE[@]} \
   -f scripts/install/community-compose.yml \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  up -d --build </dev/null
+  build </dev/null
 
-ui_ok "Containers started"
+# A rerun/upgrade may already have a worker polling the old API. Keep it up
+# during the image build, then pause it before changing the API or schema.
+# On a first install there is no worker to stop.
+# shellcheck disable=SC2086
+RUNNING_SERVICES="$(${COMPOSE[@]} \
+  -f scripts/install/community-compose.yml \
+  --env-file "$ENV_FILE" \
+  $COMPOSE_PROFILES \
+  ps --status running --services </dev/null)"
+if printf '%s\n' "$RUNNING_SERVICES" | grep -qx worker; then
+  ui_info "Pausing the existing worker until the project is seeded"
+  # shellcheck disable=SC2086
+  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES stop worker </dev/null
+fi
+
+# Start only the database and API for bootstrap. A fresh worker cannot poll
+# before the default project and its actor memberships exist.
+# shellcheck disable=SC2086
+${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  $COMPOSE_PROFILES up -d --no-build db api </dev/null
+ui_ok "Database and API started"
 
 # The store has to be PROVISIONED, not merely running. `infisical bootstrap` returns the
 # machine-identity token exactly once, so bootstrap_infisical.sh writes it to .env before doing
 # anything else — re-running against an already-bootstrapped instance returns nothing.
 if [[ "$SECRET_STORE" == "infisical" ]]; then
   ui_step "Provisioning the secret store"
+  # Infisical needs its own services before bootstrap, but the worker must
+  # remain stopped until the project seed below has succeeded.
+  # shellcheck disable=SC2086
+  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES up -d --no-build infisical-redis infisical </dev/null
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
        sh "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" "$ENV_FILE" </dev/null >/dev/null 2>&1; then
       # THE VALUES ARRIVE AFTER THE CONTAINERS DID.
       #
       # bootstrap writes BOSS_INFISICAL_URL / _PROJECT_ID / _TOKEN into .env, and compose reads
-      # .env when it CREATES a container. api and worker were created before any of that
-      # existed, so they hold the variables with empty values and BOSS reports "no secret
-      # store" on an install where Infisical is running perfectly. Recreate them so they read
-      # what was just written.
+      # .env when it CREATES a container. API was created before those values existed, so
+      # recreate it. The worker has not started yet and will read them after seeding.
       # shellcheck disable=SC2086
       ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
-        $COMPOSE_PROFILES up -d --no-deps --force-recreate api worker </dev/null >/dev/null 2>&1 \
-        || ui_warn "could not restart api/worker — they may not see the secret store yet"
+        $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate api </dev/null >/dev/null 2>&1 \
+        || ui_warn "could not restart API — it may not see the secret store yet"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
     else
       # NOT FATAL, and not silent. BOSS falls back through its store chain to the database, so
@@ -755,6 +779,13 @@ else
   ui_ok "Database seeded (project boss-dogfood)"
 fi
 rm -f "$SEED_ERR"
+
+# Start the worker and optional console only after the project and actors are
+# available. The same order applies to a first install, rerun, and upgrade.
+# shellcheck disable=SC2086
+${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  $COMPOSE_PROFILES up -d --no-build </dev/null
+ui_ok "Containers started"
 
 # ---- post checks -----------------------------------------------------------
 ui_step "Verifying Community independence"
