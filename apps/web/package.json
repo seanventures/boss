@@ -1,6 +1,7 @@
 {
   "name": "boss-web",
   "private": true,
+  "license": "Apache-2.0",
   "version": "0.14.0",
   "scripts": {
     "dev": "next dev",

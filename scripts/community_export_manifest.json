@@ -29,6 +29,7 @@
     "db/",
     "engine/boss_engine/",
     "engine/tests/",
+    "engine/LICENSE",
     "engine/pyproject.toml",
     "engine/requirements.txt",
     "packages/api-client/",

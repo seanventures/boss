@@ -5,6 +5,6 @@
   "bin": { "create-boss": "index.js" },
   "type": "commonjs",
   "engines": { "node": ">=18" },
-  "files": ["index.js", "README.md"],
-  "license": "SEE LICENSE IN ../../LICENSE"
+  "files": ["index.js", "README.md", "LICENSE"],
+  "license": "Apache-2.0"
 }

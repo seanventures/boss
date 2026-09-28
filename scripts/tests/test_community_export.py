@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 from scripts.generate_feature_docs import parse_traceability
@@ -85,6 +86,27 @@ def test_community_license_is_checksum_pinned(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("unreviewed root license was accepted")
+
+
+def test_exported_package_metadata_has_a_resolvable_apache_license() -> None:
+    root = export.ROOT
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    assert "engine/LICENSE" in manifest["include"]
+    engine_metadata = tomllib.loads((root / "engine/pyproject.toml").read_text())
+    assert engine_metadata["project"]["license"]["file"] == "LICENSE"
+    assert (root / "engine/LICENSE").is_file()
+
+    for path in (
+        "package.json",
+        "apps/web/package.json",
+        "packages/api-client/package.json",
+        "packages/create-boss/package.json",
+    ):
+        package = json.loads((root / path).read_text())
+        assert package["license"] == "Apache-2.0"
+    create_boss = json.loads((root / "packages/create-boss/package.json").read_text())
+    assert "LICENSE" in create_boss["files"]
+    assert (root / "packages/create-boss/LICENSE").read_bytes() == (root / "LICENSE").read_bytes()
 
 
 def test_local_import_graph_finds_withheld_modules() -> None:
