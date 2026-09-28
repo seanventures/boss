@@ -277,7 +277,7 @@ install_vm_deps() {
   fi
   ui_step "Installing missing VM dependencies"
   "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git openssl python3
+  "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git make openssl python3
   if ! need_cmd docker || ! docker compose version >/dev/null 2>&1; then
     # Replacing an existing container runtime can interrupt unrelated workloads.
     for pkg in docker.io docker-compose docker-compose-v2 podman-docker containerd runc; do
@@ -306,11 +306,14 @@ install_vm_deps() {
   fi
 }
 
-if ! need_cmd git || ! need_cmd curl || ! need_cmd openssl || ! need_cmd python3 || ! need_cmd docker || ! docker compose version >/dev/null 2>&1; then
+if ! need_cmd git || ! need_cmd curl || ! need_cmd openssl || ! need_cmd python3 || ! need_cmd docker || ! docker compose version >/dev/null 2>&1 || { [[ "$OS" == Linux ]] && ! need_cmd make; }; then
   install_vm_deps
 fi
 need_cmd git && need_cmd curl && need_cmd openssl && need_cmd python3 && need_cmd docker ||
   die "git, curl, OpenSSL, Python 3 and Docker are required."
+if [[ "$OS" == Linux ]]; then
+  need_cmd make || die "make is required for the Community command targets. Remove --no-install-deps to install it on supported VMs."
+fi
 
 # Adding the current user to the docker group would grant root-equivalent access and does
 # not take effect in this shell. Use sudo for this install when the socket requires it.

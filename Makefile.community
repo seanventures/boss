@@ -3,9 +3,15 @@
 # an existing install from its checkout; they never print credentials.
 
 SHELL := /bin/sh
-COMPOSE := docker compose -f scripts/install/community-compose.yml --env-file .env
+# A fresh installer session cannot yet use the docker group added for future logins.
+# Match the installer: use the socket directly when possible, then noninteractive sudo.
+DOCKER := $(shell if docker info >/dev/null 2>&1; then printf 'docker'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then printf 'sudo -n docker'; fi)
+COMPOSE := $(DOCKER) compose -f scripts/install/community-compose.yml --env-file .env
 
-.PHONY: help dev seed status check stop metatron
+.PHONY: help dev seed status check stop metatron docker-ready
+
+docker-ready:
+	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or run sudo -v and retry; a new login also activates docker-group access.' >&2; exit 1; }
 
 help:
 	@printf '%s\n' 'BOSS Community' \
@@ -17,22 +23,22 @@ help:
 	  '  make stop    Stop services and keep data' \
 	  'Install first: curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash'
 
-dev: .env
+dev: .env docker-ready
 	$(COMPOSE) --profile web up -d --build
 
-seed: .env
+seed: .env docker-ready
 	$(COMPOSE) exec -T api python -c 'from boss_engine.bootstrap import seed; seed()'
 
-status: .env
+status: .env docker-ready
 	$(COMPOSE) --profile web ps
 
 check: .env
 	./scripts/install/checkup.sh
 
-metatron: .env
+metatron: .env docker-ready
 	$(COMPOSE) exec api sh -c 'BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" python scripts/metatron_tui.py'
 
-stop: .env
+stop: .env docker-ready
 	$(COMPOSE) --profile web stop
 
 .env:
