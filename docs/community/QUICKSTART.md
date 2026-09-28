@@ -36,6 +36,10 @@ API key or console password. A rerun keeps existing credentials and data. It
 leaves the operator GitHub owner/repo unbound until you configure them; the
 installer's source repository is not your project repository.
 
+If the installer added your user to the Docker group, sign out of the VM and
+back in before running the `docker compose` commands below. Group membership
+does not change in the current login session.
+
 Installing coding CLIs does not sign in to subscriptions. A laptop login is
 not available on the VM. Codex and Claude have explicit connect steps after
 official VM login; see “Optional coding subscriptions” in `scripts/install/README.md`

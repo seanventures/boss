@@ -42,6 +42,10 @@ On rerun, the existing database/API credentials, model keys, secret-store encryp
 console login, public URL, and port settings are retained. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
 
+If the installer added your account to the Docker group, sign out and back in
+before running the `docker compose` commands in this guide. The current login
+session does not gain new group membership automatically.
+
 Mission Control has a separate single-operator password and signed session secret,
 generated on first install and stored only in the private `.env`. The password is
 never the BOSS API key. On the VM, retrieve or rotate it deliberately:
