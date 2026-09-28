@@ -48,7 +48,7 @@ terms and notices to be preserved and reviewed before export.
    license links, package metadata, dependency attributions, and paid-code
    exclusion. Record the candidate commit, file count, and checker result.
 3. Complete a full reachable-history secret scan of the candidate publication
-   history. Review the eight previously reported findings, including the
+   history. Review the 13 currently reported private-source findings, including the
    historical environment backup; rotate any live credentials and scan again.
 4. Pass clean x86 VM installer, upgrade, backup, and recovery acceptance on the
    exact export candidate. Retain Linux ARM64 runtime evidence as a separate
