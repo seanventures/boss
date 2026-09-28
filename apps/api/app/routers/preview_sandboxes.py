@@ -34,16 +34,31 @@ class ReserveRequest(BaseModel):
 
 
 class HeartbeatRequest(BaseModel):
+    project_id: str
     actor: str
     ttl_seconds: Optional[int] = Field(default=None, ge=60, le=604800)
 
 
 class ReleaseRequest(BaseModel):
+    project_id: str
     actor: str
 
 
 def _svc() -> PreviewSandboxService:
     return PreviewSandboxService(get_settings())
+
+
+def _require_preview_operator(
+    connection: Any, project_id: str, actor: str, *, mutating: bool = False
+) -> None:
+    # The host-backed reserve forwards run_cmd and env, and release can destroy a
+    # running preview. Bind the claimed actor to the transport principal and the
+    # project before calling the service or the sandbox host.
+    from apps.api.app.main import require_project_actor
+
+    require_project_actor(connection, project_id, actor, "providerops_manage")
+    if mutating:
+        require_project_actor(connection, project_id, actor, "workflow_execute")
 
 
 @router.post("")
@@ -52,6 +67,9 @@ def reserve_preview_sandbox(payload: ReserveRequest) -> dict[str, Any]:
     """Reserve a durable preview sandbox (host-backed or simulated)."""
     try:
         with begin(get_engine()) as connection:
+            _require_preview_operator(
+                connection, payload.project_id, payload.actor, mutating=True
+            )
             return _svc().reserve(
                 connection,
                 project_id=payload.project_id,
@@ -78,11 +96,13 @@ def reserve_preview_sandbox(payload: ReserveRequest) -> dict[str, Any]:
 @router.get("/")
 def list_preview_sandboxes(
     project_id: str = Query(...),
+    actor: str = Query(...),
     limit: int = Query(50, ge=1, le=200),
     include_expired: bool = Query(False),
 ) -> dict[str, Any]:
     """List durable preview sandbox records for a project (reaps expired)."""
     with begin(get_engine()) as connection:
+        _require_preview_operator(connection, project_id, actor)
         items = _svc().list(
             connection,
             project_id,
@@ -95,11 +115,13 @@ def list_preview_sandboxes(
 @router.get("/{preview_id}")
 def get_preview_sandbox(
     preview_id: str,
-    project_id: Optional[str] = Query(None),
+    project_id: str = Query(...),
+    actor: str = Query(...),
 ) -> dict[str, Any]:
     """Status of one durable preview sandbox."""
     try:
         with begin(get_engine()) as connection:
+            _require_preview_operator(connection, project_id, actor)
             return _svc().get(
                 connection, preview_id, project_id=project_id
             )
@@ -114,6 +136,12 @@ def heartbeat_preview_sandbox(
     """TTL heartbeat — extends reservation; fail closed if released/failed/host down."""
     try:
         with begin(get_engine()) as connection:
+            _require_preview_operator(
+                connection, payload.project_id, payload.actor, mutating=True
+            )
+            # The URL id must belong to the authorized project before the host
+            # receives a heartbeat or the durable TTL is changed.
+            _svc().get(connection, preview_id, project_id=payload.project_id)
             return _svc().heartbeat(
                 connection,
                 preview_id,
@@ -140,6 +168,11 @@ def release_preview_sandbox(
         raise HTTPException(status_code=422, detail="actor is required")
     try:
         with begin(get_engine()) as connection:
+            _require_preview_operator(
+                connection, payload.project_id, actor, mutating=True
+            )
+            # A cross-project id may never reach the host DELETE path.
+            _svc().get(connection, preview_id, project_id=payload.project_id)
             return _svc().release(
                 connection, preview_id, actor=actor.strip()
             )

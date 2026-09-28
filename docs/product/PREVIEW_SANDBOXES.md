@@ -9,14 +9,20 @@ the host owns the process.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/v1/preview-sandboxes` | Reserve / create (upsert by `project_id` + `app_id`) |
-| `GET` | `/v1/preview-sandboxes?project_id=` | List (reaps expired) |
-| `GET` | `/v1/preview-sandboxes/{id}` | Status |
+| `GET` | `/v1/preview-sandboxes?project_id=&actor=` | List (reaps expired) |
+| `GET` | `/v1/preview-sandboxes/{id}?project_id=&actor=` | Status |
 | `POST` | `/v1/preview-sandboxes/{id}/heartbeat` | TTL heartbeat (extends `expires_at`) |
 | `POST` | `/v1/preview-sandboxes/{id}/release` | Release (host DELETE + local `released`) |
 
 Body fields for reserve: `project_id`, `app_id`, `actor`, optional
 `image_or_build`, `run_cmd`, `env`, `port`, `ttl_seconds`, `run_id`, `repo`,
 `branch`, `simulate`.
+
+Heartbeat and release bodies require `project_id` and `actor`. The URL sandbox
+ID must belong to that project. Reserve, heartbeat, and release require both
+`providerops_manage` and `workflow_execute` for the transport-authenticated
+actor; list and get require `providerops_manage`. Responses never include
+submitted environment values.
 
 ## Fail-closed vs simulate
 

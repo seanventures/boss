@@ -28954,6 +28954,12 @@ paths:
         schema:
           type: string
           title: Project Id
+      - name: actor
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Actor
       - name: limit
         in: query
         required: false
@@ -29026,6 +29032,12 @@ paths:
         schema:
           type: string
           title: Project Id
+      - name: actor
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Actor
       - name: limit
         in: query
         required: false
@@ -29136,12 +29148,16 @@ paths:
           title: Preview Id
       - name: project_id
         in: query
-        required: false
+        required: true
         schema:
-          anyOf:
-          - type: string
-          - type: 'null'
+          type: string
           title: Project Id
+      - name: actor
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Actor
       responses:
         '200':
           description: Successful Response
@@ -59986,6 +60002,9 @@ components:
       title: GrantRequest
     HeartbeatRequest:
       properties:
+        project_id:
+          type: string
+          title: Project Id
         actor:
           type: string
           title: Actor
@@ -59998,6 +60017,7 @@ components:
           title: Ttl Seconds
       type: object
       required:
+      - project_id
       - actor
       title: HeartbeatRequest
     HostedMarketplaceListingListResponse:
@@ -60877,11 +60897,15 @@ components:
         an agent BOSS is already watching do work, where the only fact to hand is its key.'
     ReleaseRequest:
       properties:
+        project_id:
+          type: string
+          title: Project Id
         actor:
           type: string
           title: Actor
       type: object
       required:
+      - project_id
       - actor
       title: ReleaseRequest
     RemediationCreateRequest:

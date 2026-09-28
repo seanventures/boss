@@ -87,9 +87,9 @@ def _serialize(row: Any) -> dict[str, Any]:
     for key in ("expires_at", "last_heartbeat_at", "created_at", "updated_at"):
         if data.get(key) is not None:
             data[key] = _iso(data[key])
-    env = data.pop("env_json", None)
-    if env is not None:
-        data["env"] = env if isinstance(env, dict) else {}
+    # The host may receive credentials in env. Keep those values out of reserve,
+    # list, get, heartbeat, and release API responses.
+    data.pop("env_json", None)
     return data
 
 
