@@ -63,6 +63,13 @@ catalog taxonomy. Live domain counts may differ by image and edition; `/ops`
 and `/coverage --json` read the running API. No Community snapshot operation
 falls into the catalog's “Other” domain.
 
+All 530 Community JSON request bodies expose named top-level fields for
+`/describe`; 452 operations have no JSON body. Eighty-four bodies document
+fields while preserving the handlers' existing pass-through input behavior, so
+their field types are guidance rather than a new validation promise. Nested
+extension objects can still be flexible. The API returns the final validation
+and policy result when `/op` invokes an operation.
+
 ## Practical workflows
 
 | Workflow | Discover | Invoke through the TUI | Governing server boundary |

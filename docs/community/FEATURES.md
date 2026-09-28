@@ -28,13 +28,16 @@ This is the Community feature checklist. A status here describes the implementat
 |---|---|
 | HTTP control-plane API (OpenAPI) | ✅ |
 | CLI | ✅ |
-| MCP server for agent clients | ✅ |
+| MCP server for agent clients | ◐ All 982 mounted Community operations are mapped; 853 are eligible for API policy checks, 75 sensitive operator actions await a trusted confirmation path, and 54 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
 | Self-hosted Mission Control console | ✅ |
 | API-first clients (`packages/api-client`) | ✅ |
 
 The [terminal API guide](TERMINAL_API.md) covers Metatron commands, direct
-`/v1/` calls, and one-shot JSON for scripts. Server-side policy and audit
-checks apply to terminal requests as they do to other API clients.
+`/v1/` calls, and one-shot JSON for scripts. The [terminal capability
+matrix](TERMINAL_CAPABILITY_MATRIX.md) and [MCP operation
+matrix](mcp-api-capability-matrix.json) map the mounted surfaces. Server-side
+policy and audit checks apply to terminal requests as they do to other API
+clients.
 
 ## Models & skills
 

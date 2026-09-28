@@ -217,15 +217,16 @@ and KMS lease/resolve routes that can return raw secret material. Customer
 secret-management routes remain
 available through API permission checks with redacted results.
 
-The mounted OpenAPI schema has **84 Community routes with a loose JSON body**
-and no property-level typing (71 otherwise callable, 13 operator-only). MCP
-adds audited, descriptive field maps for 18 of those routes (16 otherwise
-callable, two operator-only), including required fields for elastic capacity,
-provider usage, Goldeneye nodes, work trackers, and Cloud linking. These maps
-come from existing curated request documentation checked against Community
-handlers; they do not change API validation or authorization. The matrix labels
-them `curated_json_body` and keeps the mounted schema quality separately.
-**66 Community routes remain loose** in MCP discovery. The API request schemas
-still need tightening for runtime-validated typing. The public Community export
-can verify its mounted subset with
+All **530 Community operations with a JSON request body** now expose named
+top-level fields in the mounted OpenAPI schema; the other 452 operations have
+no JSON body. No Community JSON body remains loose at the top level. Of the
+530, **446** use Pydantic field handling and **84** use pass-through fields to
+preserve existing handler coercion and status codes. The latter fields help MCP
+clients construct requests, but their types are not enforced by Pydantic. Some
+nested payloads remain intentionally flexible. The matrix's
+`request_body_type_enforcement` field makes this distinction explicit; its
+legacy `runtime_validated_input_schema` field describes the mounted field
+schema and does not guarantee field-type enforcement. The API handler and its
+policy checks remain authoritative. The public Community export can verify its
+mounted subset with
 `python scripts/audit_mcp_api_parity.py --check-community`.
