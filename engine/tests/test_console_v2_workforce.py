@@ -7,8 +7,6 @@ than the agents. Everything here is about not doing that again.
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from boss_engine.services.console_v2_workforce import (
     IDLE,
     STUCK,
@@ -46,7 +44,7 @@ class FakeConn:
             rows = self.data["handoffs"]
         elif "from llm_calls" in low or "join llm_calls" in low:
             rows = self.data["spend"]
-        elif "count(*) filter (where status = 'succeeded')" in low:
+        elif "count(*) filter (where s.status = 'succeeded')" in low:
             rows = self.data["step_work"]
         elif "from code_task_runs" in low:
             rows = self.data.get("live_runs", [])
@@ -673,8 +671,9 @@ def test_a_step_still_running_is_not_counted_as_a_failure():
 
 def test_the_order_is_stable_when_two_agents_have_done_the_same_amount():
     """A list that reshuffles between renders is a list nobody can scan."""
-    conn = lambda: FakeConn(roles=[role("qa"), role("architect")],
-                            spend=[lcall("check_tests", calls=5), lcall("plan", calls=5)])
+    def conn():
+        return FakeConn(roles=[role("qa"), role("architect")],
+                        spend=[lcall("check_tests", calls=5), lcall("plan", calls=5)])
     first = [a["id"] for a in workforce(conn(), "proj")["agents"]]
     second = [a["id"] for a in workforce(conn(), "proj")["agents"]]
     assert first == second

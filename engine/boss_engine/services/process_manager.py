@@ -50,6 +50,8 @@ CANARY_PRD = (
 )
 
 CANARY_WINDOW_SECONDS = 3600
+CANARY_ORIGIN = "process_manager_canary"
+LEGACY_CANARY_TITLE = "PM simulated canary"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS process_managers (
@@ -476,7 +478,7 @@ class ProcessManagerService:
                 "apply": True,
                 "simulated": True,
                 "auto_build": False,
-                "title": "PM simulated canary",
+                "title": LEGACY_CANARY_TITLE,
             })
         return planned
 
@@ -555,9 +557,10 @@ class ProcessManagerService:
                 project_id=project_id,
                 actor=actor,
                 prd=CANARY_PRD,
-                title=str(move.get("title") or "PM simulated canary")[:200],
+                title=str(move.get("title") or LEGACY_CANARY_TITLE)[:200],
                 simulated=True,
                 auto_build=False,
+                origin=CANARY_ORIGIN,
             )
             emit_event(
                 connection, project_id, "process_manager.canary_started", actor,
@@ -631,8 +634,15 @@ class ProcessManagerService:
             if run.get("status") != "completed":
                 continue
             inp = _as_obj(run.get("input"))
-            ctx = _as_obj(run.get("context"))
-            if not (inp.get("simulated") or ctx.get("simulated")):
+            # A customer's simulated process is not this steward's health check. Older
+            # canaries had no origin, so recognize only the exact system-authored title.
+            origin = str(inp.get("origin") or "")
+            is_canary = origin == CANARY_ORIGIN or (
+                not origin
+                and run.get("actor") == "system"
+                and run.get("title") == LEGACY_CANARY_TITLE
+            )
+            if not is_canary or inp.get("simulated") is not True or inp.get("auto_build") is not False:
                 continue
             created = _parse_dt(run.get("created_at") or run.get("updated_at"))
             if created is None:

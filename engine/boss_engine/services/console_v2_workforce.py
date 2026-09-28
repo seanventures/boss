@@ -90,6 +90,17 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             LEFT JOIN agent_process_runs r ON r.id = s.run_id
             WHERE s.project_id = :p
               AND s.created_at > now() - make_interval(hours => :h)
+              -- The always-on process manager runs a simulated health check. Its steps
+              -- remain in the audit tables, but they are not customer agent work.
+              AND NOT (
+                COALESCE(r.input->>'simulated', 'false') = 'true'
+                AND COALESCE(r.input->>'auto_build', 'false') = 'false'
+                AND (
+                  COALESCE(r.input->>'origin', '') = 'process_manager_canary'
+                  OR (COALESCE(r.input->>'origin', '') = ''
+                      AND r.actor = 'system' AND r.title = 'PM simulated canary')
+                )
+              )
             ORDER BY s.role_key, s.created_at DESC
             """
         ),
@@ -119,12 +130,22 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
               ON prev.run_id = s.run_id
              AND prev.step_key = s.handoff_from
              AND prev.project_id = s.project_id
+            JOIN agent_process_runs r ON r.id = s.run_id
             WHERE s.project_id = :p
               AND s.handoff_from IS NOT NULL
               AND s.handoff_from <> ''
               -- An agent handing work to itself is a step, not a relationship.
               AND prev.role_key <> s.role_key
               AND s.created_at > now() - make_interval(hours => :h)
+              AND NOT (
+                COALESCE(r.input->>'simulated', 'false') = 'true'
+                AND COALESCE(r.input->>'auto_build', 'false') = 'false'
+                AND (
+                  COALESCE(r.input->>'origin', '') = 'process_manager_canary'
+                  OR (COALESCE(r.input->>'origin', '') = ''
+                      AND r.actor = 'system' AND r.title = 'PM simulated canary')
+                )
+              )
             GROUP BY prev.role_key, s.role_key
             ORDER BY count(*) DESC
             LIMIT 60
@@ -193,7 +214,6 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     for role in roles:
         key = role["role_key"]
         step = latest.get(key)
-        cost = spend.get(key, {})
         work = spend.get(key) or {}
         sw = step_work.get(key) or {}
         now_on = live.get(key)
@@ -338,17 +358,27 @@ def _step_work(connection, project_id: str, hours: float) -> dict[str, dict]:
     rows = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT role_key,
+            SELECT s.role_key,
                    count(*)                                        AS steps,
-                   count(*) FILTER (WHERE status = 'succeeded')    AS ok_steps,
-                   count(*) FILTER (WHERE status IN ('failed', 'error')) AS failed_steps,
-                   count(DISTINCT run_id)                          AS runs,
-                   max(created_at)                                 AS last_at
-            FROM agent_process_steps
-            WHERE project_id = :p
-              AND created_at > now() - make_interval(hours => :h)
-              AND role_key IS NOT NULL
-            GROUP BY role_key
+                   count(*) FILTER (WHERE s.status = 'succeeded')  AS ok_steps,
+                   count(*) FILTER (WHERE s.status IN ('failed', 'error')) AS failed_steps,
+                   count(DISTINCT s.run_id)                        AS runs,
+                   max(s.created_at)                               AS last_at
+            FROM agent_process_steps s
+            JOIN agent_process_runs r ON r.id = s.run_id
+            WHERE s.project_id = :p
+              AND s.created_at > now() - make_interval(hours => :h)
+              AND s.role_key IS NOT NULL
+              AND NOT (
+                COALESCE(r.input->>'simulated', 'false') = 'true'
+                AND COALESCE(r.input->>'auto_build', 'false') = 'false'
+                AND (
+                  COALESCE(r.input->>'origin', '') = 'process_manager_canary'
+                  OR (COALESCE(r.input->>'origin', '') = ''
+                      AND r.actor = 'system' AND r.title = 'PM simulated canary')
+                )
+              )
+            GROUP BY s.role_key
             """
         ),
         {"p": project_id, "h": int(hours)},
@@ -427,12 +457,22 @@ def _live_work(connection, project_id: str) -> dict[str, dict]:
     for row in connection.execute(
         sql(
             """
-            SELECT DISTINCT ON (role_key) role_key, action, step_key, run_id
-            FROM agent_process_steps
-            WHERE project_id = :p
-              AND status IN ('running', 'in_progress', 'pending')
-              AND created_at > now() - interval '2 hours'
-            ORDER BY role_key, created_at DESC
+            SELECT DISTINCT ON (s.role_key) s.role_key, s.action, s.step_key, s.run_id
+            FROM agent_process_steps s
+            JOIN agent_process_runs r ON r.id = s.run_id
+            WHERE s.project_id = :p
+              AND s.status IN ('running', 'in_progress', 'pending')
+              AND s.created_at > now() - interval '2 hours'
+              AND NOT (
+                COALESCE(r.input->>'simulated', 'false') = 'true'
+                AND COALESCE(r.input->>'auto_build', 'false') = 'false'
+                AND (
+                  COALESCE(r.input->>'origin', '') = 'process_manager_canary'
+                  OR (COALESCE(r.input->>'origin', '') = ''
+                      AND r.actor = 'system' AND r.title = 'PM simulated canary')
+                )
+              )
+            ORDER BY s.role_key, s.created_at DESC
             """
         ),
         {"p": project_id},

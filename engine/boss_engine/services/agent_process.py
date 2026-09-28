@@ -392,6 +392,7 @@ class AgentProcessService:
         self, connection: Connection, *, project_id: str, actor: str,
         prd: str, title: str = "", process_key: str = "prd_to_accepted_work",
         simulated: bool = False, auto_build: bool = False,
+        origin: str | None = None,
         attach_run_id: str | None = None,
         official: bool = False,
         engine: str | None = None,
@@ -425,6 +426,7 @@ class AgentProcessService:
                     "prd": prd,
                     "simulated": bool(simulated),
                     "auto_build": bool(auto_build),
+                    **({"origin": origin} if origin else {}),
                     "attach_run_id": attach_run_id,
                     "official": bool(official),
                     "engine": engine,
@@ -527,7 +529,6 @@ class AgentProcessService:
         if isinstance(spec, str):
             spec = json.loads(spec)
         spec = validate_process_spec(spec)
-        steps_by_id = {item["id"]: item for item in spec["steps"]}
         done = {item["step_key"]: item for item in run.get("steps") or []}
         progressed = True
         safety = 0

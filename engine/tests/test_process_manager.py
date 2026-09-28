@@ -11,7 +11,13 @@ from sqlalchemy import create_engine, text
 
 from boss_engine.config import Settings
 from boss_engine.services.agent_process import AgentProcessService
-from boss_engine.services.process_manager import ProcessManagerService, validate_action
+from boss_engine.services.console_v2_workforce import org_chart, workforce
+from boss_engine.services.process_manager import (
+    CANARY_ORIGIN,
+    LEGACY_CANARY_TITLE,
+    ProcessManagerService,
+    validate_action,
+)
 from boss_engine.services.receipts import ReceiptService
 
 
@@ -115,6 +121,7 @@ def test_tick_empty_project_creates_template_canary_and_metrics(db, project_id):
         inp = json.loads(inp)
     assert inp.get("simulated") is True
     assert inp.get("auto_build") is False
+    assert inp.get("origin") == CANARY_ORIGIN
     assert runs[0]["status"] == "completed"
 
     metrics = result["metrics"]
@@ -132,6 +139,81 @@ def test_tick_empty_project_creates_template_canary_and_metrics(db, project_id):
     assert steward["last_metrics"]
     assert steward["last_evidence"]
     assert result["receipt_id"]
+
+
+def test_first_run_canary_stays_audited_without_polluting_customer_work(db, project_id):
+    result = _svc().tick(db, project_id=project_id, actor="system")
+    processes = AgentProcessService(Settings())
+    run = processes.list_runs(db, project_id)[0]
+    steps = processes.list_steps(db, run["id"])
+
+    assert run["status"] == "completed"
+    assert len(steps) == 11
+    assert run["receipt_id"] and result["receipt_id"]
+    assert _pm_receipts(db, project_id)
+
+    roster = workforce(db, project_id)
+    chart = org_chart(db, project_id)
+    assert roster["agents"] == []
+    assert roster["handoffs"] == []
+    assert roster["unregistered"] == []
+    assert chart["nodes"] == []
+    assert chart["edges"] == []
+
+    # If a system check stalls midway, it still must not look like customer work.
+    db.execute(text("UPDATE agent_process_runs SET status = 'running' WHERE id = :id"),
+               {"id": run["id"]})
+    db.execute(text("UPDATE agent_process_steps SET status = 'running' WHERE id = :id"),
+               {"id": steps[0]["id"]})
+    assert workforce(db, project_id)["agents"] == []
+
+
+def test_customer_simulation_remains_work_and_does_not_replace_system_canary(db, project_id):
+    processes = AgentProcessService(Settings())
+    preview = processes.start_run(
+        db, project_id=project_id, actor="ceo",
+        prd="# Customer preview\nCheck an internal draft.",
+        title="Customer preview", simulated=True, auto_build=False,
+    )
+    assert preview["status"] == "completed"
+    before = workforce(db, project_id)
+    assert "product_manager" in before["unregistered"]
+    assert before["handoffs"]
+    assert sum(agent.get("steps") or 0 for agent in before["agents"]) == len(preview["steps"])
+
+    _svc().tick(db, project_id=project_id, actor="system")
+    runs = processes.list_runs(db, project_id)
+    assert len(runs) == 2
+    assert sum(run["input"].get("origin") == CANARY_ORIGIN for run in runs) == 1
+
+    after = workforce(db, project_id)
+    assert after["unregistered"] == before["unregistered"]
+    assert after["handoffs"] == before["handoffs"]
+    assert [(agent["id"], agent["steps"]) for agent in after["agents"]] == [
+        (agent["id"], agent["steps"]) for agent in before["agents"]
+    ]
+
+
+def test_legacy_system_canary_is_excluded_without_hiding_simulated_user_run(db, project_id):
+    processes = AgentProcessService(Settings())
+    legacy = processes.start_run(
+        db, project_id=project_id, actor="system",
+        prd="# Old canary\nCheck the process.",
+        title=LEGACY_CANARY_TITLE, simulated=True, auto_build=False,
+    )
+    assert legacy["status"] == "completed"
+    assert workforce(db, project_id)["agents"] == []
+
+    preview = processes.start_run(
+        db, project_id=project_id, actor="ceo",
+        prd="# Customer preview\nCheck the process.",
+        title=LEGACY_CANARY_TITLE, simulated=True, auto_build=False,
+    )
+    assert preview["status"] == "completed"
+    assert workforce(db, project_id)["unregistered"]
+    _svc().tick(db, project_id=project_id, actor="system")
+    # The old system run satisfies the steward's one-hour check; the user run does not.
+    assert len(processes.list_runs(db, project_id)) == 2
 
 
 def test_second_tick_same_minute_does_not_duplicate_receipt(db, project_id):
