@@ -199,7 +199,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "5fca923224bc070e870e6879c10a30424449c6e6c04a32e302566907802c2a0f"
+    "sha256": "4134a53f3a7f3d91b8d35bbfaa8aaf6977d5c852511a29238da726861d7e4f3f"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -219,7 +219,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "242e026605e6daa9f4b40a73d5a1c353690043f497e0a236c7fb30f61e268b4b"
+    "sha256": "666ae0351420adaf3f6fe4396f3bf5f4c30130077aec637bf77ca1620c370922"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
@@ -254,7 +254,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "2928ed30e1ac573a3428fe315c6efd7d1d8f6f1a64a6902792b76657ecf2c71d",
-    "output_sha256": "da9a26c007741ef58e0430a7cf322483e65e2132cc984a96c1c63cb73050f5f0"
+    "source_sha256": "4551f824d786a5b25fe0f56ad36d03911bacb4132ccedb45630deee752cc2f24",
+    "output_sha256": "9383b94a30ad43a819d19a560066473bbb2bb59d0fc84a2ffaabf3017a183b8d"
   }
 }

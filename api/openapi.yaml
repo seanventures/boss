@@ -31624,6 +31624,118 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/setup/decision-model:
+    get:
+      summary: Setup Decision Model Status
+      description: 'Which model answers this project''s typed decisions, and whether a Jev key is held.
+
+        Read like /v1/setup/status: it names whether a key exists, never the key.'
+      operationId: get_v1_setup_decision_model_2cf5020c
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Setup Decision Model Status V1 Setup Decision Model Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/setup/decision-model/key:
+    post:
+      summary: Setup Store Decision Key
+      description: 'Hand BOSS a TypeSafe key. It is proved with one tiny decision before it is stored, and
+
+        storing it switches this project''s decisions to Jev (Claude still answers when Jev is
+
+        unsure). Optional: BOSS decides on the Claude subscription without it.'
+      operationId: post_v1_setup_decision_model_key_9318fb50
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Setup Store Decision Key V1 Setup Decision Model Key Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/runs/{run_id}:
+    delete:
+      summary: Delete Delivery Workflow Run
+      description: 'Remove a finished run from the console.
+
+
+        There was no way to get rid of a run at all. Cancelling stops the work and leaves the row,
+
+        and a deadlettered run is already terminal — so cancelling one does nothing and the operator
+
+        is stuck looking at it. Building one workflow left eighteen of them on the screen.
+
+
+        A run that is still going is refused, with what to do instead. See `workflows.delete_run`.'
+      operationId: delete_v1_delivery_workflows_runs_run_id_55f8afc1
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: operator
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Delete Delivery Workflow Run V1 Delivery Workflows Runs  Run Id  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+
 components:
   securitySchemes:
     BossBearerAuth:
@@ -55123,6 +55235,11 @@ components:
         type:
           type: string
           title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
       type: object
       required:
       - loc
@@ -59988,7 +60105,7 @@ components:
         actor:
           type: string
           title: Actor
-          default: operator
+          default: ''
         expires_at:
           anyOf:
           - type: string
@@ -60375,7 +60492,7 @@ components:
         actor:
           type: string
           title: Actor
-          default: system
+          default: ''
         purpose:
           type: string
           title: Purpose
@@ -61023,7 +61140,7 @@ components:
         actor:
           type: string
           title: Actor
-          default: system
+          default: ''
       type: object
       required:
       - project_id
@@ -61040,7 +61157,7 @@ components:
         actor:
           type: string
           title: Actor
-          default: operator
+          default: ''
       type: object
       required:
       - project_id
@@ -61744,7 +61861,7 @@ components:
         actor:
           type: string
           title: Actor
-          default: operator
+          default: ''
         purpose:
           type: string
           title: Purpose
