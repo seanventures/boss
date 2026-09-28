@@ -13052,14 +13052,12 @@ paths:
   /v1/setup/coding-agents/connect:
     post:
       summary: Setup Connect Coding Agent
-      description: 'Import a subscription the operator already has, after proving it answers.
+      description: 'Import an existing subscription. Community records eligible CLIs without live proof.
 
 
-        Same order as the model-key route and for the same reason: a CLI reports "logged in" from
+        A live proof turn is available only where model cost is governed; otherwise the first
 
-        a token on disk, which says somebody signed in once — not that the session still works or
-
-        the plan is active. One real turn turns that into evidence.'
+        governed job tests the recorded connection and reports any authentication failure.'
       operationId: post_v1_setup_coding_agents_connect_21455358
       requestBody:
         content:
@@ -13087,14 +13085,12 @@ paths:
   /v1/setup/model:
     post:
       summary: Setup Model Endpoint
-      description: 'Prove a model key works, then store it and register the source.
+      description: 'Save a model key; paid editions also probe it before storing.
 
 
-        IN THAT ORDER, deliberately. Storing first and verifying afterwards leaves a broken key
+        Community stores it as unverified because a live one-token completion needs a governed
 
-        recorded as configured, and the operator learns an hour later when a build fails — by which
-
-        point the key is the last thing anyone suspects.'
+        budget reservation, leased job, and cost receipt that this setup route does not create.'
       operationId: post_v1_setup_model_8a5e5abb
       requestBody:
         content:

@@ -12,15 +12,19 @@
 - Community source includes 34 agent YAML definitions and five opt-in example
   workflows. The integration engine suite passed 5,092 tests with 13 skips
   and one expected failure on disposable PostgreSQL 16; web passed 2,454 with
-  one skip and built for production. Final security tests and export checks
-  still need rerunning after the active auth and Dockerfile fixes.
-- A low-permission transport-authenticated API key reproduced cross-project
-  writes in MCP server and secret routes. `/v1/jobs` enqueue authorization
-  is also being fixed. Do not export or release until these regressions have
-  negative and positive tests and the resulting tree is requalified.
+  one skip and built for production. Focused project-authorization and Plane
+  tests pass after the security repairs; the final clean-VM run is pending the
+  frozen export.
+- Project-scoped API authority now covers the reproduced MCP, secrets, and job
+  enqueue gaps plus related routes. Plane writes use durable effect receipts,
+  and HTTPS verification is the default. Source `29daa8ca` produced a
+  1,816-file export with zero mechanical blockers. Its proposed local new-root
+  history passed Gitleaks tree/history scans; TruffleHog found 11 unverified
+  fixture/identifier detections and zero verified findings. No export has been
+  pushed to the Community target.
 - Counsel reference `01049940` covers the first-party Apache decision. It
-  does not close third-party redistribution, reachable-history, fresh-VM,
-  exact-release QA, partner, or public-visibility gates in
+  does not close third-party redistribution, private-history credential
+  disposition, fresh-VM, exact-release QA, partner, or public-visibility gates in
   `docs/operations/PUBLIC_FLIP_CHECKLIST.md`.
 
 ## 2026-08-19 official trio 3/3 — Grok session handoff

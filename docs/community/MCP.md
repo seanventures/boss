@@ -1,7 +1,7 @@
 # Drive BOSS Community with MCP
 
-The Community engine exposes its typed tool registry through MCP. The same
-registry powers the native engine agent and `python -m boss_engine call`. The MCP server
+The Community engine exposes its typed tool registry through MCP. The native
+agent and `python -m boss_engine call` share those tool definitions. The MCP server
 is an agent interface to the engine; the HTTP control plane remains the complete
 API for BOSS administration and integrations.
 
@@ -10,7 +10,8 @@ API for BOSS administration and integrations.
 The Community installer already starts Postgres and seeds the default project.
 From the install directory, configure an MCP client to launch this command
 over stdio. The API container already has `DATABASE_URL`; `--project` fixes
-the session project. Stdio supports governed write tools by default.
+the session project. Stdio exposes write-capable tools by default; give Docker
+access and the MCP session only to clients you trust with that project's work.
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env \

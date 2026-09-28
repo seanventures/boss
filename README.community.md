@@ -36,7 +36,7 @@ safeguards are completed. Existing Discovery dossiers, investigation results, an
 records remain readable. The SSH install and tunnel commands above still work; they do not
 deploy an app through BOSS.
 
-The console and [terminal](docs/community/TERMINAL_API.md) use the authenticated HTTP API. [MCP](docs/community/MCP.md) exposes a project-scoped set of governed engine tools with its own transport access controls; its available actions differ from the HTTP API.
+The console and [terminal](docs/community/TERMINAL_API.md) use the authenticated HTTP API. [MCP](docs/community/MCP.md) runs under a configured project with separate transport controls and is intended for trusted clients; its available actions differ from the HTTP API.
 
 For a guided start, [five example workflows](examples/README.md) show agents
 researching, preparing content, and handing external actions to a person for

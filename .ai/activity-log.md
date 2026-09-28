@@ -1,5 +1,20 @@
 # BOSS Autonomous Activity Log
 
+## 2026-09-28 — Codex — BOSS-293 interim Community export and final preparation
+
+- Integrated project-scoped API authorization, Plane effect receipts and
+  verified Plane TLS. Focused authorization, Plane, exporter and example tests,
+  repository lint, production web build, and strict docs build passed.
+- Source `29daa8ca` exported 1,816 selected files with zero mechanical
+  blockers. A proposed local one-root history passed Gitleaks tree/history
+  scans; TruffleHog reported 11 unverified fixture/identifier detections and
+  zero verified findings. No export was pushed to the Community target.
+- The interim export passed clean Ubuntu 24.04 x86 first install and lifecycle
+  checks. A new pristine guest is staged for the final source export.
+  Third-party license/notice review, private source-history credential
+  disposition, exact-release live QA, partner status, and release controls
+  remain open.
+
 ## 2026-09-28 — Codex — BOSS-293/BOSS-448 Community integration checkpoint
 
 - Created isolated draft PR #280 for the integrated Community candidate.

@@ -2,8 +2,10 @@
 
 **Target:** `seanventures/boss` (created empty and private on 2026-09-24).
 **Source:** private `seanheiney/boss` monorepo.
-**Status (2026-09-28):** integrated export candidate under review; no code has
-been pushed to the target. The public flip is blocked by the
+**Status (2026-09-28):** interim source `29daa8ca` produced a 1,816-file candidate with
+zero mechanical blockers and passed a clean x86 VM lifecycle. New security changes
+require a fresh exact export and VM repeat; no code has been
+pushed to the target. The public flip is blocked by the
 [release checklist](PUBLIC_FLIP_CHECKLIST.md).
 
 ## Product and license boundary
@@ -16,10 +18,10 @@ The Community product contract is in [`BOSS_COMMUNITY_EDITION_SPEC.md`](../produ
 
 | Surface | Community candidate | Boundary work before export |
 |---|---|---|
-| Runtime | `engine/`, Community API and worker code, migrations | The Community entrypoint, OpenAPI and schema are split and checksum-pinned. The final API write-auth review and exported runtime acceptance are in progress. Preserve durable tasks, policy, receipts, ProviderOps, self-hosted SSO, and the self-hosted Goldeneye control plane. |
+| Runtime | `engine/`, Community API and worker code, migrations | The Community entrypoint, OpenAPI and schema are split and checksum-pinned. Project-scoped write/read authority, Plane effect receipts, and verified Plane TLS are integrated. Interim exported runtime acceptance passed; security fixes and a final repeat remain. Preserve durable tasks, policy, receipts, ProviderOps, self-hosted SSO, and the self-hosted Goldeneye control plane. |
 | Web | Community Mission Control, project/organization management, tasks, decisions, live coordination | The Community root route and API client are split from paid source. The integrated source web suite and production build pass. Verify the final export build and runtime. |
-| Packages | API client, Community specpack, Community workflows/policies/roles and examples | The Community pack uses Apache-2.0 and omits the private commercial packaging policy. Package metadata and third-party notices still need final review. |
-| Installer | VM bootstrap, Compose, official coding CLIs, Community docs | The source-tree x86 VM lifecycle passed. Repeat on the exact export; verify public dependencies and CLI login guidance. |
+| Packages | API client, Community specpack, Community workflows/policies/roles and examples | The Community pack uses Apache-2.0 and omits the private commercial packaging policy. Five optional examples now declare console inputs and stored defaults; the sales and video handoffs were repaired. Package metadata and third-party notices still need final review. |
+| Installer | VM bootstrap, Compose, official coding CLIs, Community docs | The source-tree and interim `29daa8ca` export passed the clean x86 VM lifecycle. Repeat on the final exact export after the security changes. |
 | Operations | Public README, contributing/issue forms, security policy, license and applicable notices | The root `LICENSE` is checksum-pinned in the export. Finish third-party terms, public-reference, private-host and reachable-history reviews. |
 
 Known paid/private candidates to exclude or refactor are `apps/account_connect/`, `apps/api/app/adapters_enterprise/`, hosted Account Connect and marketplace routes, Cloud billing/managed-worker code, `engine/boss_engine/services/cloud_product.py`, Enterprise cluster/support code, `packages/specpack/packs/enterprise_edition.yaml`, and private production Goldeneye deployment material. This is an **inspection list**, not an exhaustive allowlist. The standalone Goldeneye kit and self-hosted `/v1/goldeneye/*` control plane are Community per [`GOLDENEYE_PAAS.md`](../product/GOLDENEYE_PAAS.md); they require private-reference and dependency review, not blanket exclusion. Self-hosted SSO, ProviderOps, and the core governed runtime are also Community despite some `enterprise` names in route and object paths; classification must follow behavior, not filenames.
@@ -34,3 +36,25 @@ Known paid/private candidates to exclude or refactor are `apps/account_connect/`
 6. Push the reviewed snapshot to the **private** target for final review after the exact candidate tree, its proposed history, and dependencies pass review. Change visibility only after every applicable BOSS-293 gate has evidence. Re-scan immediately before the flip.
 
 The target repository stays private and empty until steps 1–3 produce a clean candidate. The counsel decision is recorded, but this document is not publication approval.
+
+The interim `29daa8ca` candidate's local new-root history is `87d06bfddf47872d67e5c66dd3802bbd34838f76`
+(tree `26760fad320de3edf4ea9f650c46e010ac9aff93`). Gitleaks found zero
+findings in its exported tree and reachable history; TruffleHog produced 11
+unverified fixture/identifier detections and zero verified findings. The
+sanitized disposition is in the private task artifact
+`community-history-scan-29daa8ca.md`. This local history has not been pushed.
+
+The interim VM run passed first install, rerun with preserved secrets, backup
+and restore, same-tree upgrade, safe uninstall and reinstall, API authentication
+and edition checks, TUI/MCP reads, the default browser flow, and five optional
+example dry runs. It is evidence for the installer design, not qualification of
+the later security changes. A new exact source export must repeat the VM run.
+
+A separate Gitleaks scan of all 3,113 private-source commits found 13
+historical matches. Four are values in a removed environment backup under
+`BOSS_GITHUB_TOKEN`, `AZURE_OPENAI_KEY`, `DEEPSEEK_API_KEY`, and
+`OPENROUTER_API_KEY`; their revocation or rotation is unverified. The other
+nine were dispositioned as test fixtures, gateway README examples, or prose
+false positives in the private
+`private-source-history-disposition.md` report. No credential value is
+reproduced here.

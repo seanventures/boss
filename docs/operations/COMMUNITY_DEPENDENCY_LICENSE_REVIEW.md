@@ -2,9 +2,10 @@
 
 **Status (2026-09-28): interim image inventory; PF-1 and PF-4 remain open.**
 The source checkout and the first x86 Linux export candidate were inspected.
-That candidate failed first-install completion and has since changed. These
-findings are review inputs, not third-party notice clearance or a legal
-compatibility decision. Re-run against the final export and built images.
+That candidate failed first-install completion and has since changed. Source
+`29daa8ca` has a zero-blocker 1,816-file export and passed its clean x86 image
+run. These findings are review inputs, not third-party notice clearance
+or a legal compatibility decision. Re-run against the final built images.
 
 ## Evidence collected
 

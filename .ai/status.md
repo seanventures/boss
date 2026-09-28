@@ -15,18 +15,24 @@
   passed 2,454 tests with one skip; its production build passed. These are
   source-tree checks, not final exported-image or live QA proof.
 - A security review reproduced cross-project writes through MCP server and
-  secret routes using a low-permission authenticated principal. Job enqueue
-  authority is also under repair. The final export, exact-history scans,
-  clean x86 VM run, third-party notices, and release-commit proof remain open.
-  Keep PR #280 draft and the target repository private.
+  secret routes using a low-permission authenticated principal. Project-scoped
+  authority now covers those gaps and job enqueue, with focused tests. Plane
+  writes have durable receipts and HTTPS verifies certificates by default.
+- Source `29daa8ca` produced a 1,816-file export with zero mechanical
+  blockers. The proposed local one-root history has zero Gitleaks findings and
+  11 unverified, zero verified TruffleHog fixture/identifier detections. Its
+  interim clean x86 VM run passed; the final exact-source repeat is pending.
+  Third-party terms, private-history credential disposition, release-commit
+  proof and public controls remain open. Keep PR
+  #280 draft and the target repository private.
 
 ## 2026-09-28 BOSS-300 Community Apache decision (integration in progress)
 
 - Product owner confirmed counsel approval for Apache License 2.0 for the
   reviewed full Community export at `seanventures/boss`, reference `01049940`.
-- `ai/codex/boss-300-apache-decision` records the decision, aligns the Community
-  pack and release checklist, and makes `public-flip-check` report only its
-  mechanical subset. BOSS-300 stays In Progress until implementation is merged.
+- PR #278 merged the decision, Community pack and release checklist changes.
+  `public-flip-check` reports only its mechanical subset. BOSS-300 stays In
+  Progress until third-party terms and notices are dispositioned.
 - The target remains private and empty. BOSS-293 still needs the exact export,
   reachable-history review, clean VM acceptance, live QA and claims evidence.
 

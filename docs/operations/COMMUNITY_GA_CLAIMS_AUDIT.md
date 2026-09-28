@@ -25,6 +25,5 @@ installation remains available. A governed ChangeSet, approval, budget, and
 ResourceReceipt path is still required to offer real Goldeneye host changes in
 Community. The non-Community real path remains a separate qualification item.
 
-The static `api/openapi.community.yaml:5873` still describes the code-task SSH
-deploy route. Regenerate and review Community OpenAPI from the gated API at the
-final export rather than manually changing generated route descriptions here.
+The Community OpenAPI contract was regenerated from the gated API for the
+integration candidate. Recheck its route and schema parity at the final export.
