@@ -15,13 +15,17 @@ def test_repository_catalog_and_host_reads_are_project_scoped(client, engine, mo
     foreign = f"repo_foreign_{suffix}"
     reader = f"repo_reader_{suffix}"
     key = f"repo-key-{suffix}"
+    manager = f"repo_manager_{suffix}"
+    manager_key = f"repo-manager-key-{suffix}"
     home_repo = f"home-{suffix}"
     foreign_repo = f"foreign-{suffix}"
     other_repo = f"other-{suffix}"
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
-    monkeypatch.setattr(api_main.settings, "api_keys", key)
-    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:{reader}")
+    monkeypatch.setattr(api_main.settings, "api_keys", f"{key},{manager_key}")
+    monkeypatch.setattr(api_main.settings, "api_key_principals",
+                        f"{key}:{reader},{manager_key}:{manager}")
     headers = {"Authorization": f"Bearer {key}"}
+    manager_headers = {"Authorization": f"Bearer {manager_key}"}
 
     with engine.begin() as connection:
         workspace_id = connection.execute(
@@ -36,6 +40,11 @@ def test_repository_catalog_and_host_reads_are_project_scoped(client, engine, mo
             connection, project_id=home, member_id=reader,
             display_name="Repo reader", member_type="human", role_keys=[],
             permissions=[], actor="ceo",
+        )
+        api_main.members.upsert_member(
+            connection, project_id=home, member_id=manager,
+            display_name="Repo manager", member_type="human", role_keys=[],
+            permissions=["providerops_manage"], actor="ceo",
         )
         for run_id, project_id, repo, branch in (
             (f"crun_home_{suffix}", home, home_repo, "branch-home"),
@@ -76,18 +85,27 @@ def test_repository_catalog_and_host_reads_are_project_scoped(client, engine, mo
     ).status_code == 403
     assert client.get(
         f"/v1/delivery/repos/owner/{foreign_repo}/apps", headers=headers,
+    ).status_code == 403
+    assert client.get(
+        f"/v1/delivery/repos/owner/{home_repo}/refs", headers=headers,
+    ).status_code == 403
+    assert client.get(
+        f"/v1/delivery/repos/owner/{home_repo}/apps", headers=headers,
+    ).status_code == 403
+    assert client.get(
+        f"/v1/delivery/repos/owner/{foreign_repo}/apps", headers=manager_headers,
     ).status_code == 404
     assert host_calls == []
 
     refs = client.get(
-        f"/v1/delivery/repos/owner/{home_repo}/refs", headers=headers,
+        f"/v1/delivery/repos/owner/{home_repo}/refs", headers=manager_headers,
     )
     assert refs.status_code == 200, refs.text
     names = {item["name"] for item in refs.json()["branches"]}
     assert "branch-home" in names
     assert "branch-other" not in names and "branch-private" not in names
     apps = client.get(
-        f"/v1/delivery/repos/owner/{home_repo}/apps", headers=headers,
+        f"/v1/delivery/repos/owner/{home_repo}/apps", headers=manager_headers,
     )
     assert apps.status_code == 200, apps.text
     assert host_calls

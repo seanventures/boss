@@ -7484,7 +7484,10 @@ def delivery_repo_refs_endpoint(owner: str, repo: str, project_id: Optional[str]
     from .services.delivery_sources import known_repos, repo_refs
     project_id = resolve_list_project_id(project_id)
     with begin(engine) as connection:
-        require_project_reader(connection, project_id)
+        require_project_actor(
+            connection, project_id,
+            current_api_principal.get() or "executive_console", "providerops_manage",
+        )
         if not any(item["owner"] == owner and item["repo"] == repo
                    for item in known_repos(connection, settings, project_id)):
             raise HTTPException(status_code=404, detail="repository not found in project")
@@ -7501,7 +7504,10 @@ def delivery_repo_apps_endpoint(
     from .services.delivery_sources import known_repos, repo_apps
     project_id = resolve_list_project_id(project_id)
     with begin(engine) as connection:
-        require_project_reader(connection, project_id)
+        require_project_actor(
+            connection, project_id,
+            current_api_principal.get() or "executive_console", "providerops_manage",
+        )
         if not any(item["owner"] == owner and item["repo"] == repo
                    for item in known_repos(connection, settings, project_id)):
             raise HTTPException(status_code=404, detail="repository not found in project")
