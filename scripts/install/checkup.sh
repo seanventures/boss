@@ -100,9 +100,11 @@ if [ "${#DOCKER[@]}" -gt 0 ]; then
 fi
 if [ -z "$compiled" ]; then warn "console → API: could not read the address it was built with (web container not running?)"
 elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
-  if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${BOSS_PUBLIC_URL:-}" ]; then
+  if [ -n "${BOSS_PUBLIC_URL:-}" ]; then
     bad "console → API: built with $compiled — a browser on another machine cannot reach that.
         Rebuild web with --public-url (see scripts/install/README.md)"
+  elif [ -n "${SSH_CONNECTION:-}" ]; then
+    warn "console → API: $compiled uses loopback; forward both console :$WEB_PORT and API :$API_PORT over SSH before opening it in a browser"
   else ok "console → API: $compiled (local install)"; fi
 else ok "console → API: $compiled"; fi
 

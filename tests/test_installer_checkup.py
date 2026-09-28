@@ -10,7 +10,9 @@ from pathlib import Path
 CHECKUP = Path(__file__).resolve().parents[1] / "scripts/install/checkup.sh"
 
 
-def _run_checkup(tmp_path: Path, *, sudo_allowed: bool) -> tuple[subprocess.CompletedProcess[str], str]:
+def _run_checkup(
+    tmp_path: Path, *, sudo_allowed: bool, ssh_connection: bool = False, public_url: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "docker.log"
@@ -62,6 +64,10 @@ def _run_checkup(tmp_path: Path, *, sudo_allowed: bool) -> tuple[subprocess.Comp
         "BOSS_TEST_LOG": str(log),
         "BOSS_TEST_SUDO_ALLOWED": "1" if sudo_allowed else "0",
     }
+    if ssh_connection:
+        env["SSH_CONNECTION"] = "client 12345 server 22"
+    if public_url:
+        env["BOSS_PUBLIC_URL"] = "https://boss.example.test"
     result = subprocess.run(
         ["bash", str(CHECKUP)], env=env, text=True, capture_output=True, timeout=20,
     )
@@ -86,3 +92,18 @@ def test_checkup_reports_docker_access_problem_without_fake_missing_services(tmp
     assert "Docker is unavailable" in result.stdout
     assert "containers: missing" not in result.stdout
     assert " ps " not in commands and " exec " not in commands
+
+
+def test_ssh_loopback_console_requires_tunnel_without_failing_host_checkup(tmp_path: Path) -> None:
+    result, _ = _run_checkup(tmp_path, sudo_allowed=True, ssh_connection=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "forward both console :3000 and API :8000 over SSH" in result.stdout
+    assert "BOSS is ready." in result.stdout
+
+
+def test_public_url_cannot_use_loopback_console_api(tmp_path: Path) -> None:
+    result, _ = _run_checkup(tmp_path, sudo_allowed=True, public_url=True)
+
+    assert result.returncode == 1
+    assert "Rebuild web with --public-url" in result.stdout

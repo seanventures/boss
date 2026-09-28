@@ -41,6 +41,7 @@ SUB_TOKEN=""
 SECRET_STORE=""
 ACCEPT_DB_FALLBACK=0
 EXTRA_INSTALL_ARGS=()
+REMOTE_DOCKER="docker"
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
 say()  { printf "  %s\n" "$*"; }
@@ -168,7 +169,13 @@ preflight() {
   local missing
   missing="$(rshq 'for c in docker tar; do command -v $c >/dev/null 2>&1 || echo $c; done')"
   [[ -z "$missing" ]] || die "missing on the host: $(echo "$missing" | tr '\n' ' ')"
-  rshq 'docker info >/dev/null 2>&1' || die "docker is installed on the host but not usable by this user"
+  if rshq 'docker info >/dev/null 2>&1'; then
+    REMOTE_DOCKER="docker"
+  elif rshq 'command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1'; then
+    REMOTE_DOCKER="sudo -n docker"
+  else
+    die "Docker is unavailable on the host; start it or allow this user to run sudo docker"
+  fi
 }
 
 # The host's own numbers, because an install that cannot fit is better refused than
@@ -314,9 +321,9 @@ cmd_update() {
   # PROFILES MUST MATCH WHAT IS RUNNING or compose treats the bundled secret store as unwanted
   # and takes it down mid-update, stranding every secret behind it.
   local profiles=""
-  rshq "docker ps --filter name=boss-community-infisical- -q | grep -q ." \
+  rshq "$REMOTE_DOCKER ps --filter name=boss-community-infisical- -q | grep -q ." \
     && profiles="--profile secrets"
-  local compose="docker compose -f scripts/install/community-compose.yml --env-file .env $profiles"
+  local compose="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file .env $profiles"
 
   say "building — this takes a few minutes"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
@@ -360,7 +367,7 @@ cmd_uninstall() {
 verify_clean() {
   head_ "Verifying the host"
   local c e rc=0
-  c="$(rshq "docker ps -aq --filter label=com.docker.compose.project=boss-community | wc -l" || echo 0)"
+  c="$(rshq "$REMOTE_DOCKER ps -aq --filter label=com.docker.compose.project=boss-community | wc -l" || echo 0)"
   e="$(rshq "[ -f '$DIR/.env' ] && echo yes || echo no")"
   [[ "${c:-0}" -eq 0 ]] && ok "no containers" || { warn "$c container(s) left"; rc=1; }
   if [[ "$PURGE_DATA" -eq 1 ]]; then
@@ -376,7 +383,7 @@ cmd_status() {
   preflight
   report_capacity
   say ""
-  rsh "docker ps --filter name=boss-community --format '  {{.Names}}\t{{.Status}}\t{{.Ports}}'" || true
+  rsh "$REMOTE_DOCKER ps --filter name=boss-community --format '  {{.Names}}\t{{.Status}}\t{{.Ports}}'" || true
   say ""
   say "shipped commit: $(rshq "cat '$DIR/.boss-shipped-commit' 2>/dev/null" || echo unknown)"
 }
@@ -399,7 +406,7 @@ cmd_smoke() {
   local fails=0
 
   local up
-  up="$(rshq "docker ps --filter name=boss-community --filter status=running -q | wc -l")"
+  up="$(rshq "$REMOTE_DOCKER ps --filter name=boss-community --filter status=running -q | wc -l")"
   [[ "${up:-0}" -ge 3 ]] && ok "containers running ($up)" || { warn "only ${up:-0} running"; fails=1; }
 
   local health
@@ -428,7 +435,7 @@ cmd_smoke() {
   fi
 
   local tables
-  tables="$(rshq "docker exec \$(docker ps -q --filter name=boss-community-db) psql -U boss -d boss -tAc \"select count(*) from information_schema.tables where table_schema='public'\" 2>/dev/null")"
+  tables="$(rshq "$REMOTE_DOCKER exec \$($REMOTE_DOCKER ps -q --filter name=boss-community-db) psql -U boss -d boss -tAc \"select count(*) from information_schema.tables where table_schema='public'\" 2>/dev/null")"
   [[ "${tables:-0}" -gt 50 ]] && ok "database schema applied ($tables tables)" \
                               || { warn "only ${tables:-0} tables — schema may not have applied"; fails=1; }
 
@@ -441,7 +448,7 @@ cmd_smoke() {
   # A CONSOLE BUILT FOR THE WRONG URL IS THE FAILURE THAT LOOKS LIKE SUCCESS: it serves 200 and
   # every link inside points at a port on the operator's laptop.
   local baked host
-  baked="$(rshq "docker exec \$(docker ps -q --filter name=boss-community-web) printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null")"
+  baked="$(rshq "$REMOTE_DOCKER exec \$($REMOTE_DOCKER ps -q --filter name=boss-community-web) printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null")"
   if [[ -n "$baked" ]]; then
     # SAY WHERE TO GO, not just what was compiled in. Reported as "console: <api url>" this
     # sent an operator to the API port, where `/` is a 404 and the install looks broken.
@@ -608,7 +615,7 @@ cmd_logs() {
   preflight
   local svc="${SERVICE:-api}"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
-    "docker logs -f --tail 100 \$(docker ps -q --filter name=boss-community-$svc)"
+    "$REMOTE_DOCKER logs -f --tail 100 \$($REMOTE_DOCKER ps -q --filter name=boss-community-$svc)"
 }
 
 case "$CMD" in
