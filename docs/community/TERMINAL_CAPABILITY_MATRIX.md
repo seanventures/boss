@@ -1,10 +1,10 @@
 # Terminal capability matrix
 
-This matrix describes the BOSS-430 TUI mapping against the frozen Community
-API contract at `1a8102a2` and the running API's capability catalog. It is a
-map of reachable HTTP controls, not an authorization or end-to-end execution
-claim. The live `/coverage` command is authoritative for the currently running
-edition and image.
+This matrix describes the BOSS-430 TUI mapping against the BOSS-416 Community
+and private API contract snapshots and the running API's capability catalog. It
+is a map of reachable HTTP controls, not an authorization or end-to-end
+execution claim. The live `/coverage` command is authoritative for the
+currently running edition and image.
 
 ## Mapping method
 
@@ -17,39 +17,47 @@ method-and-path operation ID and JSON `path`, `query`, and `body` arguments.
 from OpenAPI. Both invocation paths use the same API key, project scope, and
 server enforcement as direct HTTP clients.
 
-The generated Community contract contains **981** HTTP operations: **968**
-operator `/v1/` operations, each with a unique stable operation ID and a
-JSON/path/query shape addressable by `/op`; **13** health, SAML, and SCIM
+The BOSS-416 static Community contract contains **981** HTTP operations:
+**968** operator `/v1/` operations, each with a unique stable operation ID and
+a JSON/path/query shape addressable by `/op`; **13** health, SAML, and SCIM
 protocol routes remain outside the authenticated `/v1/` operator command.
-The private contract has **1,022** operations: **1,009** `/v1/` operations,
-of which **1,007** are `/op` addressable. The two remaining `/v1/` routes are
-inbound webhook receivers that require request-signature headers and are not
-operator actions. The private static contract has 529 older operations without
-an `operationId`; the TUI generates a stable method-and-path alias for these
-when the live API mounts them.
+In the published Community repository, this contract is `api/openapi.yaml`;
+private source keeps the same Community snapshot at
+`api/openapi.community.yaml`.
+The static private contract has **1,022** operations: **1,009** `/v1/`
+operations, of which **1,007** are `/op` addressable. The two remaining `/v1/`
+routes are inbound webhook receivers that require request-signature headers
+and are not operator actions. All **1,022** static private operations have a
+unique `operationId`. That private contract is `api/openapi.yaml` only in the
+private source repository. The TUI's stable method-and-path alias remains
+available even if a live server uses a different runtime ID.
 
-| Product area | Community `/v1/` operations | Examples discoverable with `/ops` |
+| API catalog domain | Community `/v1/` operations in the BOSS-416 snapshot | Examples discoverable with `/ops` |
 | --- | ---: | --- |
-| Core work and finance | 40 | Tasks, decisions, budget status/reservation, receipts |
-| Work planning | 55 | Workflow definitions, mappings, roadmap and portfolio work |
-| Delivery and runtime | 205 | Workflow runs, code tasks, deployments, PR and execution evidence |
-| Delivery CI/CD | 20 | Pipeline and release controls |
-| Agent Studio | 72 | Agent definitions, versions, validation, runs and skills |
-| ProviderOps | 63 | Provider accounts, resources, ChangeSets and deployment targets |
-| Model capacity | 20 | Entitlements and route decisions |
-| Governance | 47 | Assurance, approvals, claims and evidence |
-| Operations | 146 | Health, incidents, reliability and fleet controls |
-| Knowledge | 20 | Artifacts, memory and search |
-| Auth and identity | 21 | Sessions, members and identity controls |
-| Cloud and commercial | 20 | Edition status and configured cloud connections |
+| Delivery | 228 | Workflow runs, code tasks, deployments and previews |
+| Operations | 184 | Health, incidents, reliability and fleet controls |
+| Agents | 125 | Agent definitions, runs, skills and process controls |
+| ProviderOps | 67 | Provider accounts, resources, ChangeSets and deployment targets |
+| Governance | 58 | Assurance, approvals, claims and evidence |
+| Core | 57 | Tasks, decisions, budget status, receipts and events |
+| Work | 57 | Workflow definitions, mappings, roadmap and portfolio work |
+| Models | 31 | Model gateway, entitlements and route decisions |
+| Knowledge | 28 | Artifacts, learning and search |
+| Delivery CI/CD | 23 | Pipeline and release controls |
+| Cloud | 20 | Edition status and configured cloud connections |
+| Meta | 19 | Capability catalog and API coverage |
+| Auth | 18 | Sessions, members and API keys |
+| Console | 16 | Executive console read models |
+| Workspace | 12 | Organizations, projects and departments |
 | Goldeneye | 11 | Goldeneye service integration |
-| Meta | 16 | Capability catalog and API coverage |
-| Other classified routes | 212 | Projects, additional model and marketplace controls |
+| Setup | 9 | Bootstrap and first-run setup |
+| Identity | 5 | Identity provider catalog and configuration |
 | **Total** | **968** | All mounted `/v1/` operations are searchable by method/path/summary |
 
-The table uses the API catalog's current domain classifier. It groups 212
-otherwise unclassified routes under “Other”; this is a navigation label, not
-an absence of TUI coverage.
+The table classifies the static Community contract with the BOSS-416 API
+catalog taxonomy. Live domain counts may differ by image and edition; `/ops`
+and `/coverage --json` read the running API. No Community snapshot operation
+falls into the catalog's “Other” domain.
 
 ## Practical workflows
 

@@ -1,5 +1,59 @@
 """Metatron Captain HTTP — persistent session, goals, watch, proposal-only drive."""
 
+from apps.api.app import main as api_main
+from apps.api.app.routers import metatron_captain
+
+
+def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
+    """The installer binds its operator key to ceo; TUI defaults to executive_console."""
+    key = "fake-installer-ceo-key"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:ceo")
+    seen = []
+
+    class FakeCaptain:
+        def session_turn(self, _connection, *, actor, **_kwargs):
+            seen.append(("session", actor))
+            return {"actor": actor}
+
+        def watch_once(self, _connection, *, actor, **_kwargs):
+            seen.append(("watch", actor))
+            return {"actor": actor}
+
+        def drive(self, _connection, *, actor, **_kwargs):
+            seen.append(("drive", actor))
+            return {"actor": actor}
+
+        def overwatch_once(self, _connection, *, actor, **_kwargs):
+            seen.append(("overwatch", actor))
+            return {"actor": actor}
+
+    monkeypatch.setattr(metatron_captain, "_captain", FakeCaptain)
+    headers = {"X-Boss-Api-Key": key}
+    session = client.get("/v1/auth/session", headers=headers)
+    assert session.status_code == 200, session.text
+    assert session.json()["principal_member_id"] == "ceo"
+
+    for route, body in (
+        ("session", {"message": "Show my work"}),
+        ("watch", {}),
+        ("drive", {"auto": False}),
+        ("overwatch", {}),
+    ):
+        response = client.post(
+            f"/v1/metatron/{route}",
+            json={"project_id": "boss-dogfood", "actor": "executive_console", **body},
+            headers=headers,
+        )
+        assert response.status_code == 200, (route, response.text)
+    assert seen == [
+        ("session", "executive_console"),
+        ("watch", "executive_console"),
+        ("drive", "executive_console"),
+        ("overwatch", "executive_console"),
+    ]
+
 
 def test_captain_session_remembers_and_sets_goal(client):
     remember = client.post(

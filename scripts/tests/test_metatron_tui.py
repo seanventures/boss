@@ -333,6 +333,143 @@ def test_http_errors_are_visible_and_redact_the_key():
     assert "***" in rendered or "redacted" in rendered.lower()
 
 
+def test_credential_validation_echo_is_redacted_in_http_error():
+    credential = "FAKE-CREDENTIAL-VALUE-123"
+    provider_key = "FAKE-PROVIDER-KEY-456"
+    nested_secret = "FAKE-NESTED-SECRET-789"
+    underscore_key = "FAKE-UNDERSCORE-API-KEY-321"
+    opener = FakeOpener([(422, {
+        "detail": [{"loc": ["body", "project_id"], "input": {
+            "value": credential,
+            "config": {"provider": {
+                "apiKey": provider_key,
+                "secret": nested_secret,
+                "nested": {"api_key": underscore_key},
+            }},
+            "note": "missing project_id",
+        }}]
+    })])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    line = (
+        '/api POST /v1/entitlements/sources/openai_api/credential '
+        f'{{"value":"{credential}","config":{{"provider":'
+        f'{{"apiKey":"{provider_key}","secret":"{nested_secret}",'
+        f'"nested":{{"api_key":"{underscore_key}"}}}}}}}}'
+    )
+    rendered = client.handle(tui.parse_line(line))
+    assert "HTTP 422" in rendered
+    assert "missing project_id" in rendered
+    assert credential not in rendered
+    assert provider_key not in rendered
+    assert nested_secret not in rendered
+    assert underscore_key not in rendered
+    assert SECRET not in rendered
+
+
+def test_success_response_and_plain_text_error_redact_nested_submitted_secrets():
+    token = "FAKE-AUTH-TOKEN-123"
+    password = "FAKE-PASSWORD-456"
+    opener = FakeOpener([
+        (200, {"echo": {"auth": {"accessToken": token}, "password": password}, "status": "accepted"}),
+        (400, f"rejected token={token}, password={password}".encode()),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    line = (
+        '/api POST /v1/tasks '
+        f'{{"auth":{{"accessToken":"{token}"}},"password":"{password}"}}'
+    )
+    successful = client.handle(tui.parse_line(line))
+    failed = client.handle(tui.parse_line(line))
+    assert '"status": "accepted"' in successful
+    assert "HTTP 400" in failed
+    assert all(secret not in output for secret in (token, password) for output in (successful, failed))
+
+
+def test_transport_failure_does_not_echo_request_or_exception_body():
+    credential = "FAKE-CREDENTIAL-IN-URLERROR"
+    def failed_transport(_request, timeout=None):
+        raise URLError(f"request body included {credential}")
+    client = tui.MetatronClient(_config(), urlopen=failed_transport)
+    rendered = client.handle(tui.parse_line(
+        f'/api POST /v1/entitlements/sources/openai_api/credential {{"value":"{credential}"}}'
+    ))
+    assert "unreachable" in rendered
+    assert credential not in rendered
+
+    def failed_unexpectedly(_request, timeout=None):
+        raise RuntimeError(f"request body included {credential}")
+    client = tui.MetatronClient(_config(), urlopen=failed_unexpectedly)
+    rendered = client.handle(tui.parse_line(
+        f'/api POST /v1/entitlements/sources/openai_api/credential {{"value":"{credential}"}}'
+    ))
+    assert "HTTP 0" in rendered
+    assert "RuntimeError" in rendered
+    assert credential not in rendered
+
+    class UnreadableErrorBody:
+        def read(self, *_args):
+            raise RuntimeError(f"request body included {credential}")
+
+        def close(self):
+            return None
+
+    def failed_error_read(request, timeout=None):
+        raise HTTPError(request.full_url, 502, "error", {}, UnreadableErrorBody())
+    client = tui.MetatronClient(_config(), urlopen=failed_error_read)
+    rendered = client.handle(tui.parse_line(
+        f'/api POST /v1/entitlements/sources/openai_api/credential {{"value":"{credential}"}}'
+    ))
+    assert "HTTP 502" in rendered
+    assert "response body unavailable" in rendered
+    assert credential not in rendered
+
+
+def test_secret_query_value_is_redacted_from_error_echo():
+    query_key = "FAKE-QUERY-KEY-123"
+    client = tui.MetatronClient(
+        _config(), urlopen=FakeOpener([(400, {"detail": f"bad api_key={query_key}"})])
+    )
+    rendered = client.handle(tui.parse_line(f"/api GET /v1/tasks?api_key={query_key}"))
+    assert "HTTP 400" in rendered
+    assert query_key not in rendered
+
+
+def test_operation_id_invocation_redacts_credential_validation_input():
+    credential = "FAKE-MODEL-KEY-FOR-OP-123"
+    document = {"paths": {"/v1/entitlements/sources/{source_id}/credential": {
+        "post": {
+            "operationId": "upload_runtime_id",
+            "parameters": [{"name": "source_id", "in": "path", "required": True}],
+            "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+        }
+    }}}
+    alias = tui.operation_records(document)[0]["operation_id"]
+    opener = FakeOpener([
+        (200, document),
+        (422, {"detail": [{"loc": ["body", "project_id"], "input": {"value": credential}}]}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    rendered = client.handle(tui.parse_line(
+        f'/op {alias} {{"path":{{"source_id":"openai_api"}},"body":{{"value":"{credential}"}}}}'
+    ))
+    assert "HTTP 422" in rendered
+    assert credential not in rendered
+
+
+def test_one_shot_json_redacts_submitted_credential(monkeypatch, capsys):
+    credential = "FAKE-CREDENTIAL-FOR-JSON-123"
+    opener = FakeOpener([(422, {"detail": [{"input": {"value": credential}}]})])
+    monkeypatch.setenv("BOSS_API_URL", "https://boss-api.test")
+    monkeypatch.setenv("BOSS_API_KEY", SECRET)
+    monkeypatch.setenv("BOSS_PROJECT_ID", "boss-dogfood")
+    monkeypatch.setattr(tui, "urlopen", opener)
+    command = f'/api POST /v1/entitlements/sources/openai_api/credential {{"value":"{credential}"}}'
+    assert tui.main(["--exec", command, "--json"]) == 1
+    output = capsys.readouterr()
+    assert json.loads(output.out)["status"] == 422
+    assert credential not in output.out + output.err
+
+
 def test_one_shot_json_has_machine_readable_result_and_failure_exit(monkeypatch, capsys):
     opener = FakeOpener(
         [(200, {"items": [{"id": "task-1"}]}), (403, {"detail": f"denied key={SECRET}"})]
@@ -540,7 +677,10 @@ def test_operation_catchall_path_allows_nested_files_only_for_declared_route():
 
 def test_community_snapshot_maps_every_operator_operation():
     yaml = pytest.importorskip("yaml")
-    document = yaml.safe_load((ROOT / "api" / "openapi.community.yaml").read_text(encoding="utf-8"))
+    # The public export installs the Community contract as api/openapi.yaml.
+    community_path = ROOT / "api" / "openapi.community.yaml"
+    contract = community_path if community_path.exists() else ROOT / "api" / "openapi.yaml"
+    document = yaml.safe_load(contract.read_text(encoding="utf-8"))
     records = tui.operation_records(document)
     assert len(records) == 981
     operator_records = [record for record in records if record["path"].startswith("/v1/")]
@@ -551,6 +691,8 @@ def test_community_snapshot_maps_every_operator_operation():
 
 
 def test_private_snapshot_maps_every_operator_operation_except_inbound_callbacks():
+    if not (ROOT / "api" / "openapi.community.yaml").exists():
+        pytest.skip("private contract is absent from the Community export")
     yaml = pytest.importorskip("yaml")
     document = yaml.safe_load((ROOT / "api" / "openapi.yaml").read_text(encoding="utf-8"))
     records = tui.operation_records(document)

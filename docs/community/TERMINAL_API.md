@@ -66,6 +66,9 @@ OpenAPI), terminal addressability, raw `/api` addressability, and an explicit
 has permission or that a paid edition feature is enabled. The API remains the
 authority for edition, permissions, policies, approvals, budget gates,
 receipts, and audit records. The terminal creates no separate execution path.
+If an API response echoes a submitted credential, the terminal redacts values
+from nested secret, token, password, API-key, and credential fields (including
+`value` on credential routes) before showing or returning the response.
 See [Terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) for exact
 snapshot counts and workflow examples. API contract parity is tracked as
 BOSS-416; this terminal work is BOSS-430.

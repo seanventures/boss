@@ -18,8 +18,8 @@ import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, TextIO
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlencode, urlsplit
+from urllib.error import HTTPError
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -101,6 +101,72 @@ def redact(text: str, secret: str = "") -> str:
     if secret and secret in redacted:
         redacted = redacted.replace(secret, "***")
     return redacted
+
+
+def _secret_field(name: str) -> bool:
+    with_word_breaks = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    normalized = re.sub(r"[^a-z0-9]+", "_", with_word_breaks.lower()).strip("_")
+    if normalized in {
+        "secret", "secrets", "secret_value", "secret_key", "secret_access_key",
+        "aws_secret_access_key", "token", "access_token", "refresh_token",
+        "password", "passphrase", "api_key", "apikey", "private_key",
+        "client_secret", "credential", "credentials", "credential_value", "authorization",
+    }:
+        return True
+    return normalized.endswith(("_secret", "_token", "_password", "_api_key", "_private_key"))
+
+
+def _request_secrets(body: Any, path: str) -> set[str]:
+    """Collect submitted credential values without retaining or printing them."""
+    segments = set(urlsplit(path).path.lower().split("/"))
+    credential_route = bool(segments & {"credential", "credentials", "secret", "secrets"})
+    secrets: set[str] = set()
+
+    def visit(value: Any, *, sensitive: bool = False) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                field_name = str(key)
+                visit(item, sensitive=sensitive or _secret_field(field_name)
+                      or (credential_route and field_name.lower() == "value"))
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, sensitive=sensitive)
+        elif sensitive and isinstance(value, str) and value:
+            secrets.add(value)
+
+    visit(body)
+    for name, value in parse_qsl(urlsplit(path).query, keep_blank_values=True):
+        if _secret_field(name) and value:
+            secrets.add(value)
+    return secrets
+
+
+def _redact_response(raw: str, *, api_key: str, body: Any, path: str) -> str:
+    secrets = _request_secrets(body, path)
+    secrets.add(api_key)
+    # Redact decoded string fields first so escaped JSON values and short
+    # secrets are handled without corrupting the response structure.
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if payload is not None:
+        def scrub(value: Any) -> Any:
+            if isinstance(value, str):
+                for secret in sorted(secrets, key=len, reverse=True):
+                    if secret:
+                        value = value.replace(secret, "***")
+                return value
+            if isinstance(value, list):
+                return [scrub(item) for item in value]
+            if isinstance(value, dict):
+                return {scrub(key): scrub(item) for key, item in value.items()}
+            return value
+
+        return json.dumps(scrub(payload), ensure_ascii=False)
+    for secret in sorted(secrets, key=len, reverse=True):
+        raw = redact(raw, secret)
+    return raw
 
 
 def join_url(base: str, path: str) -> str:
@@ -414,19 +480,28 @@ class MetatronClient:
         }
         if encoded is not None:
             headers["Content-Type"] = "application/json"
-        request = Request(url, data=encoded, headers=headers, method=method)
         try:
+            request = Request(url, data=encoded, headers=headers, method=method)
             with self._opener()(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
                 raw = response.read().decode("utf-8", errors="replace")
                 status = int(getattr(response, "status", 200) or 200)
         except HTTPError as error:
-            raw = redact(error.read().decode("utf-8", errors="replace"), self.config.api_key)
             status = int(error.code)
+            try:
+                error_body = error.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 — response read failures may contain request bodies
+                return {"__http_error__": True, "status": status,
+                        "body": "response body unavailable"}
+            raw = _redact_response(
+                error_body,
+                api_key=self.config.api_key, body=body, path=path,
+            )
             return {"__http_error__": True, "status": status, "body": raw}
-        except URLError as error:
-            reason = redact(str(getattr(error, "reason", error)), self.config.api_key)
-            return {"__http_error__": True, "status": 0, "body": f"unreachable: {reason}"}
-        raw = redact(raw, self.config.api_key)
+        except Exception as error:  # noqa: BLE001 — transport errors may contain request bodies
+            reason_type = type(getattr(error, "reason", error)).__name__
+            return {"__http_error__": True, "status": 0,
+                    "body": f"unreachable: request failed before an HTTP response ({reason_type})"}
+        raw = _redact_response(raw, api_key=self.config.api_key, body=body, path=path)
         if not raw.strip():
             return {"status": status}
         try:
