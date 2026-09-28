@@ -24,7 +24,6 @@ import hmac
 import json
 import logging
 import re
-import ssl
 import urllib.request
 from secrets import compare_digest
 from typing import Any, Optional
@@ -111,7 +110,8 @@ class PlaneWebhookService:
         url = f"{base}/api/v1/workspaces/{ws}/projects/{project_id}/labels/"
         try:
             req = urllib.request.Request(url, headers={"X-API-Key": token})
-            with urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()) as r:
+            from .plane_client import plane_ssl_context
+            with urllib.request.urlopen(req, timeout=10, context=plane_ssl_context(self.settings)) as r:
                 data = json.load(r)
             rows = data.get("results", data) if isinstance(data, dict) else data
             m = {str(x["id"]): str(x["name"]) for x in rows

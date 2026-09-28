@@ -1236,6 +1236,12 @@ class Settings(BaseSettings):
     plane_api_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("PLANE_API_KEY", "PLANE_API_TOKEN")
     )
+    # TLS verification is on by default. Operators with a private Plane CA can
+    # supply its PEM file; skipping verification requires an explicit opt-in.
+    plane_tls_ca_file: Optional[str] = Field(default=None, alias="PLANE_TLS_CA_FILE")
+    plane_tls_insecure_skip_verify: bool = Field(
+        default=False, alias="PLANE_TLS_INSECURE_SKIP_VERIFY"
+    )
     # HMAC secret Plane signs each delivery with (X-Plane-Signature). Inbound requests whose
     # signature doesn't match are rejected. Absent => the webhook endpoint stays fail-closed.
     plane_webhook_secret: Optional[str] = Field(

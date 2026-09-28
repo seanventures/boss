@@ -26,6 +26,15 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def plane_ssl_context(settings) -> ssl.SSLContext:
+    """Build the shared Plane REST TLS policy for writes and webhook label reads."""
+    if getattr(settings, "plane_tls_insecure_skip_verify", False):
+        logger.warning("Plane TLS certificate verification explicitly disabled by operator")
+        return ssl._create_unverified_context()
+    ca_file = str(getattr(settings, "plane_tls_ca_file", None) or "").strip()
+    return ssl.create_default_context(cafile=ca_file or None)
+
+
 def _looks_like_secret_ref(value: object) -> bool:
     return str(value or "").strip().startswith("sref_")
 
@@ -34,7 +43,7 @@ class PlaneClient:
     def __init__(self, settings) -> None:
         self.settings = settings
         self._state_cache: dict[str, dict[str, str]] = {}   # project_id -> {state_name_lower: id}
-        self._ctx_cls = ssl._create_unverified_context()
+        self._ctx_cls = plane_ssl_context(settings)
         self._connection = None
 
     # --- connection ----------------------------------------------------------

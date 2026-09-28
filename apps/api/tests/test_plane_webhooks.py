@@ -3,7 +3,9 @@ and idempotency. Hermetic — the pure pieces need no DB, and ingest() runs agai
 connection with start_code_task monkeypatched, so nothing here touches Postgres."""
 import hashlib
 import hmac
+import io
 import json
+import ssl
 
 from apps.api.app import main as api_main
 from apps.api.app.config import Settings
@@ -91,6 +93,20 @@ def test_resolve_labels_maps_uuids_to_names(monkeypatch):
     assert svc._resolve_labels("proj-1", {"boss:bug"}) == {"boss:bug"}
     # no project id -> can't resolve, returns as-is
     assert svc._resolve_labels(None, {_UUID}) == {_UUID}
+
+
+def test_label_fetch_uses_verified_plane_tls_context(monkeypatch):
+    contexts = []
+
+    def fake_open(_request, *, timeout, context):
+        contexts.append((timeout, context))
+        return io.BytesIO(b'{"results": []}')
+
+    monkeypatch.setattr(plane_webhooks.urllib.request, "urlopen", fake_open)
+    assert _svc(PLANE_BASE_URL="https://plane.local.example.test", PLANE_API_KEY="tok")._project_labels("proj-1") == {}
+    assert len(contexts) == 1 and contexts[0][0] == 10
+    assert contexts[0][1].verify_mode == ssl.CERT_REQUIRED
+    assert contexts[0][1].check_hostname is True
 
 
 def test_ingest_accepts_uuid_labelled_issue_after_resolution(monkeypatch):

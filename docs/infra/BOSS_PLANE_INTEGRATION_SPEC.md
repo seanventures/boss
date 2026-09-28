@@ -133,6 +133,8 @@ auto code‑task, behind the `PLANE_INTEGRATION_ENABLED` flag (default off). Awa
 PLANE_INTEGRATION_ENABLED  master flag — default false (fail-closed until Sean's P0 is done)
 PLANE_BASE_URL             e.g. https://plane.local.sean.network
 PLANE_API_TOKEN            outbound calls (Phase 2+). Accepts PLANE_API_KEY too (already in the store)
+PLANE_TLS_CA_FILE           optional PEM CA bundle for a private Plane certificate authority
+PLANE_TLS_INSECURE_SKIP_VERIFY  default false; explicit local-only fallback if no CA is available
 PLANE_WEBHOOK_SECRET       HMAC secret to verify inbound webhooks  ← THE ONE STILL MISSING
 PLANE_PROJECT_MAP          {"<plane_project_id>": {"owner":"...","repo":"...","project_id":"..."}}
 PLANE_WATCH_LABELS         boss:coding,boss:bug,boss:design (comma/newline separated)

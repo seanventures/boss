@@ -1,6 +1,8 @@
 """P2/P4 — outbound Plane client: state resolution + set_state/add_comment, all best-effort."""
+import ssl
 from types import SimpleNamespace
 
+from apps.api.app.services import plane_client
 from apps.api.app.services.plane_client import PlaneClient
 
 
@@ -16,6 +18,42 @@ def test_enabled_requires_base_and_token():
     assert _client().enabled() is True
     assert _client(plane_base_url="", plane_project_url="").enabled() is False
     assert _client(plane_api_token="").enabled() is False
+
+
+def test_tls_verifies_certificates_by_default_and_fails_closed(monkeypatch):
+    c = _client()
+    assert c._ctx_cls.verify_mode == ssl.CERT_REQUIRED
+    assert c._ctx_cls.check_hostname is True
+    contexts = []
+
+    def reject_untrusted(_request, *, timeout, context):
+        contexts.append((timeout, context))
+        raise ssl.SSLCertVerificationError("untrusted certificate")
+
+    monkeypatch.setattr(plane_client.urllib.request, "urlopen", reject_untrusted)
+    assert c.add_comment("proj", "iss", "<p>hi</p>") is False
+    assert contexts == [(10, c._ctx_cls)]
+
+
+def test_tls_private_ca_and_explicit_local_opt_out(monkeypatch):
+    seen = []
+    original = ssl.create_default_context
+
+    def with_ca(*, cafile=None):
+        seen.append(cafile)
+        return original()
+
+    monkeypatch.setattr(plane_client.ssl, "create_default_context", with_ca)
+    trusted = _client(plane_tls_ca_file="/operator/private-plane-ca.pem")
+    assert seen == ["/operator/private-plane-ca.pem"]
+    assert trusted._ctx_cls.verify_mode == ssl.CERT_REQUIRED
+
+    local = _client(
+        plane_base_url="https://plane.local.sean.network",
+        plane_tls_insecure_skip_verify=True,
+    )
+    assert local._ctx_cls.verify_mode == ssl.CERT_NONE
+    assert local._ctx_cls.check_hostname is False
 
 
 def test_ctx_derives_from_project_url_when_base_unset():
