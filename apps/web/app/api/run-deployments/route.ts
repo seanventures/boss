@@ -28,6 +28,49 @@ export const dynamic = "force-dynamic";
  *  in a single handler — the client batcher chunks, and this refuses the rest rather than
  *  quietly truncating, which would report "not deployed" for the runs it dropped. */
 const MAX_IDS = 60;
+// One page can ask about sixty runs, and several page chunks can arrive together. Letting
+// each chunk open sixty API requests at once can saturate the API's database connection pool.
+const MAX_CONCURRENT_LOOKUPS = 4;
+const LOOKUP_TIMEOUT_MS = 3_000;
+const BATCH_BUDGET_MS = 12_000;
+
+type RunResult = { error: string } | Record<string, unknown>;
+type RunEntry = readonly [string, RunResult];
+
+async function lookupDeployment(
+  id: string, name: string, remainingMs: number,
+): Promise<RunEntry> {
+  const controller = new AbortController();
+  const timeoutError = { error: "deployment lookup timed out" };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Race the response (including JSON parsing) against the deadline. Aborting fetch alone is
+  // insufficient if a transport or test double does not settle when it receives the signal.
+  const timedOut = new Promise<RunEntry>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve([id, timeoutError]);
+    }, Math.min(LOOKUP_TIMEOUT_MS, remainingMs));
+  });
+  const request = (async (): Promise<RunEntry> => {
+    const query = name ? `?app_name=${encodeURIComponent(name)}` : "";
+    try {
+      const response = await fetch(
+        `${API_URL}/v1/code-tasks/${encodeURIComponent(id)}/deployments${query}`,
+        { headers: authHeaders({}), cache: "no-store", signal: controller.signal },
+      );
+      if (!response.ok) return [id, { error: `HTTP ${response.status}` }];
+      return [id, await response.json()];
+    } catch (error) {
+      if (controller.signal.aborted) return [id, timeoutError];
+      return [id, { error: String((error as Error)?.message ?? error) }];
+    }
+  })();
+  try {
+    return await Promise.race([request, timedOut]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -48,24 +91,22 @@ export async function GET(req: Request) {
     );
   }
 
-  const results = await Promise.all(
-    ids.map(async (id, i) => {
-      const name = names[i] ? `?app_name=${encodeURIComponent(names[i])}` : "";
-      try {
-        const r = await fetch(
-          `${API_URL}/v1/code-tasks/${encodeURIComponent(id)}/deployments${name}`,
-          { headers: authHeaders({}), cache: "no-store" },
-        );
-        if (!r.ok) return [id, { error: `HTTP ${r.status}` }] as const;
-        return [id, await r.json()] as const;
-      } catch (e) {
-        // One card's failure must not blank the other fifty-nine. The error rides along on
-        // that entry so the card can say "couldn't check" instead of "not deployed" — those
-        // are different facts and the second one is a lie.
-        return [id, { error: String((e as Error)?.message ?? e) }] as const;
-      }
-    }),
-  );
+  const deadline = Date.now() + BATCH_BUDGET_MS;
+  // Pre-fill every position: work that never starts before the deadline must still tell its
+  // card "couldn't check". An omitted key would otherwise look like no deployment.
+  const results: RunEntry[] = ids.map((id) => [id, { error: "deployment lookup budget exhausted" }]);
+  let next = 0;
+  async function worker() {
+    while (next < ids.length) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return;
+      const index = next++;
+      results[index] = await lookupDeployment(ids[index], names[index], remainingMs);
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(MAX_CONCURRENT_LOOKUPS, ids.length) }, () => worker(),
+  ));
 
   return NextResponse.json({ runs: Object.fromEntries(results) });
 }
