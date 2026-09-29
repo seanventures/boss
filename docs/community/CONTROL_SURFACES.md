@@ -39,8 +39,8 @@ require a reservation, decision, or separate approval before they can proceed.
 The [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) maps all 986
 mounted Community HTTP operations; 973 `/v1/` operator operations are
 addressable by `/op`. The [MCP operation matrix](mcp-api-capability-matrix.json)
-accounts for all 986: 854 are eligible for API policy checks, 37 sensitive
-actions require separate human approval of an exact request, 28 remain held
+accounts for all 986: 854 are eligible for API policy checks, 28 sensitive
+actions require separate human approval of an exact request, 37 remain held
 for route-specific safety gaps, and 67 protocol or internal routes are excluded. The API
 and terminal can submit operator requests, but existing server checks can
 deny or hold an action. A mapped operation does not imply that an edition

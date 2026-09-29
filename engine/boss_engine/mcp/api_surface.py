@@ -110,13 +110,6 @@ _HIGH_RISK_ACTION_TAILS = frozenset({
     "promote", "apply", "destroy", "wipe", "reject", "delegate", "revise",
     "redeploy", "auto-deploy", "provision", "bootstrap", "rotate", "adopt-key", "install-key", "grant",
 })
-_CONFIRMABLE_APPROVAL_PATTERNS = (
-    r"^/v1/decisions/\{decision_id\}/(approve|reject|revise|delegate|execute)$",
-    r"^/v1/changesets/\{changeset_id\}/approve$",
-    r"^/v1/previews/\{preview_id\}/approve$",
-    r"^/v1/github/merge-authorizations/\{authorization_id\}/authorize$",
-    r"^/v1/github/resolution-plans/\{plan_id\}/approve$",
-)
 _CONFIRMABLE_EXACT = frozenset({
     # Project-scoped authority changes; the API still checks each permission.
     ("POST", "/v1/members"),
@@ -218,11 +211,7 @@ def needs_operator_confirmation(method: str, path: str) -> bool:
 
 def confirmation_eligible(method: str, path: str) -> bool:
     """Permit reviewed project-scoped transitions with an auditable API effect."""
-    return (method, path) in _CONFIRMABLE_EXACT or (
-        method == "POST" and any(
-            re.match(pattern, path) for pattern in _CONFIRMABLE_APPROVAL_PATTERNS
-        )
-    )
+    return (method, path) in _CONFIRMABLE_EXACT
 
 
 def _schema_fields(operation: dict, location: str) -> tuple[dict, list[str]]:

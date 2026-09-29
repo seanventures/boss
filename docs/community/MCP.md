@@ -194,7 +194,7 @@ operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|
-| Community | 854 | 37 | 28 | 67 |
+| Community | 854 | 28 | 37 | 67 |
 | Paid-only additions | 39 | 0 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
@@ -207,7 +207,7 @@ through `workflow_manage`. A task can be soft-archived with `task_create` and
 an audit event; a paused workflow migration can be rolled back only before
 its new steps execute, with `workflow_manage` and an audit event.
 
-For the 37 confirmation-gated actions, MCP calls `api_request_confirmation`
+For the 28 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest
 of the complete request, its method and target, and a limited review summary;
 it never stores the raw body. A **separate human CEO member** reviews the
@@ -234,19 +234,24 @@ the approval as one `/op` JSON argument:
 
 ```text
 /op get_v1_mcp_confirmations_d1bc4240 {"query":{"project_id":"boss-dogfood"}}
-/op post_v1_mcp_confirmations_confirmation_id_approve_3742b3e9 {"path":{"confirmation_id":"mcpconf_<id>"},"body":{"project_id":"boss-dogfood","reviewed_digest":"<digest>","reviewed_request":{"project_id":"boss-dogfood","operation":"post_v1_decisions_decision_id_reject_3d532536","method":"POST","path":"/v1/decisions/dec_123/reject","query":{},"body":{"actor":"mcp_operator","note":"Reject after review"}}}}
+/op post_v1_mcp_confirmations_confirmation_id_approve_3742b3e9 {"path":{"confirmation_id":"mcpconf_<id>"},"body":{"project_id":"boss-dogfood","reviewed_digest":"<digest>","reviewed_request":{"project_id":"boss-dogfood","operation":"post_v1_members_7de05164","method":"POST","path":"/v1/members","query":{},"body":{"project_id":"boss-dogfood","actor":"mcp_operator","member_id":"new_agent","display_name":"New agent","member_type":"agent","role_keys":["operator"],"permissions":["task_create"]}}}}
 ```
 
 The human must replace the example values with the exact request they
 reviewed, including every body and query field. A mismatch fails before
-approval. The confirmation endpoints are excluded
+approval. The dedicated MCP member also needs `member_manage` for this
+example; the default `make mcp-setup` grants do not include it. The confirmation endpoints are excluded
 from MCP tool dispatch: the client cannot approve itself. The reviewer must
 be an active `member_type=human` CEO with `decision_resolve` permission.
 
-The 28 held Community and two paid-only actions return
+The 37 held Community and two paid-only actions return
 `operator_only_unavailable`. They include direct host/provider effects without
 a governed ChangeSet/receipt path, host key material, global or ID-only routes
 without a sound project boundary, and routes lacking API-side actor checks.
+Nine decision and approval routes remain held because their domain records
+would attribute approval to the MCP agent; GitHub merge authorization also
+rejects authorization by the actor who requested it. These routes need
+route-specific attested-human attribution and policy checks before MCP use.
 See the [operation matrix](mcp-api-capability-matrix.json) for each mounted
 operation's current disposition.
 

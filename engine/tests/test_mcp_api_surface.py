@@ -667,9 +667,7 @@ def test_ambient_owner_principal_cannot_authorize_api_bridge():
 
 def test_sensitive_mcp_request_needs_exact_separate_confirmation():
     schema = {"paths": {
-        "/v1/decisions/{decision_id}/reject": {"post": {
-            "parameters": [{"name": "decision_id", "in": "path", "required": True,
-                            "schema": {"type": "string"}}],
+        "/v1/members": {"post": {
             "requestBody": {"required": True, "content": {"application/json": {
                 "schema": {"type": "object", "properties": {
                     "actor": {"type": "string"}, "note": {"type": "string"},
@@ -677,6 +675,7 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
             }}},
         }},
         "/v1/goldeneye/apps/deploy": {"post": {"summary": "Deploy directly"}},
+        "/v1/decisions/{decision_id}/reject": {"post": {}},
     }}
     seen = []
 
@@ -691,26 +690,27 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
                           transport=httpx.MockTransport(send))
     surface = ApiSurface(schema, client=client, principal="mcp-member",
                          pinned_project_id="alpha")
-    alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
+    alias = operation_alias("POST", "/v1/members")
     held = operation_alias("POST", "/v1/goldeneye/apps/deploy")
+    held_decision = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
     assert surface.describe(alias)["availability"] == "confirmation_required"
     assert "confirmation_id" in surface.describe(alias)["inputSchema"]["properties"]
-    assert surface.invoke(alias, project_id="alpha", path={"decision_id": "d1"},
+    assert surface.invoke(alias, project_id="alpha",
                           body={"note": "reviewed"})["error"] == "confirmation_required"
     assert surface.invoke(held, project_id="alpha")["error"] == "operator_only_unavailable"
+    assert surface.invoke(held_decision, project_id="alpha")["error"] == "operator_only_unavailable"
     assert seen == []
 
-    proposed = surface.invoke(alias, project_id="alpha", path={"decision_id": "d1"},
-                              body={"note": "reviewed"}, propose_confirmation=True)
+    proposed = surface.invoke(alias, project_id="alpha", body={"note": "reviewed"},
+                              propose_confirmation=True)
     assert proposed["ok"] and proposed["status"] == 201
     proposal = json.loads(seen[-1].content)
     assert proposal == {
         "project_id": "alpha", "operation": alias, "method": "POST",
-        "path": "/v1/decisions/d1/reject", "query": {},
+        "path": "/v1/members", "query": {},
         "body": {"note": "reviewed", "actor": "mcp-member"},
     }
-    assert surface.invoke(alias, project_id="alpha", path={"decision_id": "d1"},
-                          body={"note": "reviewed"},
+    assert surface.invoke(alias, project_id="alpha", body={"note": "reviewed"},
                           confirmation_id="mcpconf_" + "a" * 20)["ok"]
     assert seen[-1].headers["X-BOSS-MCP-Confirmation"] == "mcpconf_" + "a" * 20
     assert seen[-1].headers["X-BOSS-MCP-Project"] == "alpha"
@@ -724,7 +724,7 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
     reply = server.handle({
         "jsonrpc": "2.0", "id": 4, "method": "tools/call",
         "params": {"name": "api_write_operation", "arguments": {
-            "operation": alias, "path": {"decision_id": "d1"},
+            "operation": alias,
             "body": {"note": "reviewed"},
             "confirmation_id": "mcpconf_" + "a" * 20,
         }},

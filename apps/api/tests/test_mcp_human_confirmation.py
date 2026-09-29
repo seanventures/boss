@@ -23,7 +23,7 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
     suffix = uuid4().hex[:10]
     mcp_key, human_key, system_key = (f"mcp-{suffix}", f"human-{suffix}", f"system-{suffix}")
     mcp_member = f"mcp_member_{suffix}"
-    decision_id = f"dec_mcp_confirm_{suffix}"
+    new_member = f"new_member_{suffix}"
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
     monkeypatch.setattr(api_main.settings, "api_keys", f"{mcp_key},{human_key},{system_key}")
     monkeypatch.setattr(
@@ -34,16 +34,16 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
         api_main.members.upsert_member(
             connection, project_id=PROJECT, member_id=mcp_member,
             display_name="Dedicated MCP caller", member_type="agent",
-            role_keys=["ceo"], permissions=["decision_resolve"], actor="ceo",
+            role_keys=[], permissions=["member_manage"], actor="ceo",
         )
-        connection.execute(text("""
-            INSERT INTO decisions (id, project_id, question, risk_tier, status)
-            VALUES (:id, :project_id, 'Reject this test decision?', 1, 'pending')
-        """), {"id": decision_id, "project_id": PROJECT})
 
-    alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
-    path = f"/v1/decisions/{decision_id}/reject"
-    body = {"actor": mcp_member, "note": "Human-reviewed test rejection"}
+    alias = operation_alias("POST", "/v1/members")
+    path = "/v1/members"
+    body = {
+        "project_id": PROJECT, "actor": mcp_member,
+        "member_id": new_member, "display_name": "Human-reviewed test member",
+        "member_type": "agent", "role_keys": ["operator"], "permissions": ["task_create"],
+    }
     requested = {
         "project_id": PROJECT, "operation": alias, "method": "POST",
         "path": path, "query": {}, "body": body,
@@ -71,7 +71,7 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
     assert client.post(f"/v1/mcp-confirmations/{confirmation_id}/approve",
                        headers=_headers(human_key), json={
                            **approval, "reviewed_request": {
-                               **requested, "body": {**body, "note": "unreviewed change"},
+                               **requested, "body": {**body, "permissions": ["member_manage"]},
                            },
                        }).status_code == 409
     preview = client.get("/v1/mcp-confirmations", headers=_headers(human_key),
@@ -89,15 +89,16 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
     assert client.post(path, headers={**_headers(mcp_key),
                                       "X-BOSS-MCP-Operation": alias},
                        json=body).status_code == 409
-    # A changed request cannot consume the approval or touch the decision.
+    # A changed request cannot consume the approval or create the member.
     assert client.post(path, headers=effect_headers,
-                       json={**body, "note": "Changed by model"}).status_code == 409
+                       json={**body, "permissions": ["member_manage"]}).status_code == 409
     with engine.begin() as connection:
-        assert connection.execute(text("SELECT status FROM decisions WHERE id = :id"),
-                                  {"id": decision_id}).scalar_one() == "pending"
+        assert connection.execute(text("""
+            SELECT count(*) FROM project_members WHERE member_id = :id
+        """), {"id": new_member}).scalar_one() == 0
     effected = client.post(path, headers=effect_headers, json=body)
-    assert effected.status_code == 200, effected.text
-    assert effected.json()["status"] == "rejected"
+    assert effected.status_code == 201, effected.text
+    assert effected.json()["member_id"] == new_member
     assert client.post(path, headers=effect_headers, json=body).status_code == 409
     with engine.begin() as connection:
         events = connection.execute(text("""
@@ -109,7 +110,7 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
         "mcp.confirmation_consumed", "mcp.confirmation_api_result",
     }
     assert next(event for event in events if event["event_type"] ==
-                "mcp.confirmation_api_result")["data"]["status_code"] == 200
+                "mcp.confirmation_api_result")["data"]["status_code"] == 201
     assert {event["actor"] for event in events} == {mcp_member, "ceo"}
 
 
@@ -119,7 +120,6 @@ def test_confirmation_never_stores_secret_body_and_expires_closed(
     suffix = uuid4().hex[:10]
     mcp_key, human_key = f"mcp-{suffix}", f"human-{suffix}"
     mcp_member = f"mcp_member_{suffix}"
-    decision_id = f"dec_mcp_secret_{suffix}"
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
     monkeypatch.setattr(api_main.settings, "api_keys", f"{mcp_key},{human_key}")
     monkeypatch.setattr(api_main.settings, "api_key_principals",
@@ -128,18 +128,19 @@ def test_confirmation_never_stores_secret_body_and_expires_closed(
         api_main.members.upsert_member(
             connection, project_id=PROJECT, member_id=mcp_member,
             display_name="Dedicated MCP caller", member_type="agent",
-            role_keys=[], permissions=["decision_resolve"], actor="ceo",
+            role_keys=[], permissions=["member_manage"], actor="ceo",
         )
-        connection.execute(text("""
-            INSERT INTO decisions (id, project_id, question, risk_tier, status)
-            VALUES (:id, :project_id, 'Secret test decision?', 1, 'pending')
-        """), {"id": decision_id, "project_id": PROJECT})
-    alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
+    alias = operation_alias("POST", "/v1/members")
     secret = "not-a-real-secret-98765"
-    body = {"actor": mcp_member, "note": secret, "auth": {"api_key": secret}}
+    body = {
+        "project_id": PROJECT, "actor": mcp_member,
+        "member_id": f"new_member_{suffix}", "display_name": "Secret test member",
+        "member_type": "agent", "role_keys": [], "permissions": ["task_create"],
+        "note": secret, "auth": {"api_key": secret},
+    }
     requested = {
         "project_id": PROJECT, "operation": alias, "method": "POST",
-        "path": f"/v1/decisions/{decision_id}/reject", "query": {}, "body": body,
+        "path": "/v1/members", "query": {}, "body": body,
     }
     proposal = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key), json=requested)
     assert proposal.status_code == 201, proposal.text
@@ -193,10 +194,10 @@ def test_multi_project_mcp_key_cannot_request_cross_project_confirmation(
             display_name="Multi-project MCP caller", member_type="agent",
             role_keys=[], permissions=["decision_resolve"], actor="ceo",
         )
-    alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
+    alias = operation_alias("POST", "/v1/members")
     response = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key), json={
         "project_id": PROJECT, "operation": alias, "method": "POST",
-        "path": "/v1/decisions/any/reject", "query": {},
+        "path": "/v1/members", "query": {},
         "body": {"actor": mcp_member, "project_id": other_project},
     })
     assert response.status_code == 403
@@ -205,3 +206,25 @@ def test_multi_project_mcp_key_cannot_request_cross_project_confirmation(
         assert connection.execute(text("""
             SELECT count(*) FROM mcp_confirmations WHERE requested_by = :member
         """), {"member": mcp_member}).scalar_one() == 0
+
+
+def test_mcp_confirmation_headers_fail_when_transport_auth_is_disabled(
+    client, engine, monkeypatch,
+):
+    monkeypatch.setattr(api_main.settings, "require_api_auth", False)
+    monkeypatch.setattr(api_main.settings, "oidc_enabled", False)
+    monkeypatch.setattr(api_main.settings, "enterprise_saml_enabled", False)
+    alias = operation_alias("POST", "/v1/members")
+    response = client.post("/v1/members", headers={
+        "X-BOSS-MCP-Operation": alias,
+        "X-BOSS-MCP-Confirmation": "mcpconf_" + "a" * 20,
+        "X-BOSS-MCP-Project": PROJECT,
+    }, json={"project_id": PROJECT, "actor": "ceo", "member_id": "nope",
+             "display_name": "No auth"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "mcp_auth_required"
+    with engine.begin() as connection:
+        assert connection.execute(text("""
+            SELECT count(*) FROM project_members WHERE project_id = :project_id
+              AND member_id = 'nope'
+        """), {"project_id": PROJECT}).scalar_one() == 0
