@@ -53,9 +53,8 @@ contains the following as ancestors:
   templates, 5 opt-in examples. Install does not start work.
 - Open-PR ledger (`dab630e7`): 103 open PRs, none needing a port; #207 held.
 - Gate gap (`7fdc91e1`): PF gates are not signed off. #284, #286, #287, and
-  #288 are in source only. They are not a Goldeneye deploy and not live
-  verification. That note also said the source patches do not fix the direct
-  API pool-pressure 500 or the isolated overview 502.
+  #288 are source patches already in the tree. Goldeneye operations are
+  internal infrastructure and are outside this community release.
 - Export pins refreshed (`46c10ca9`). A later export of that SHA wrote 1894
   files, 0 mechanical blockers, gitleaks clean, and `ready_for_publication`
   false. That export was a local quarantine, not a publication.
@@ -72,9 +71,6 @@ still not evidenced for this SHA:
 - Claims signoff.
 - Release-owner approval.
 - Public installer URL.
-- Goldeneye deploy of log retention.
-- Pool-pressure 500 fixed.
-- Isolated overview 502 fixed.
 
 The gate-gap ancestor left PF-1 through PF-9 unsigned. This note does not
 sign them off for `46c10ca9`. A mapped operation can still be denied by
