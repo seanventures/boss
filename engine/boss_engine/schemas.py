@@ -2637,6 +2637,8 @@ class DecisionCard(BaseModel):
 class DecisionInboxResponse(BaseModel):
     project_id: str
     items: list[DecisionCard]
+    limit: Optional[int] = None
+    offset: int = 0
 
 
 class DecisionActionRequest(BaseModel):
@@ -2708,6 +2710,8 @@ class ArtifactDetail(ArtifactSummary):
 class ArtifactListResponse(BaseModel):
     project_id: str
     items: list[ArtifactSummary]
+    limit: int = 25
+    offset: int = 0
 
 
 class ChangeJournalItem(BaseModel):
@@ -2733,6 +2737,8 @@ class ChangeJournalDetail(ChangeJournalItem):
 class ChangeJournalResponse(BaseModel):
     project_id: str
     items: list[ChangeJournalItem]
+    limit: int = 25
+    offset: int = 0
 
 
 class DeadletterItem(BaseModel):
@@ -2759,6 +2765,8 @@ class DeadletterItem(BaseModel):
 class DeadletterListResponse(BaseModel):
     project_id: str
     items: list[DeadletterItem]
+    limit: int = 50
+    offset: int = 0
 
 
 class DeadletterIncidentRequest(BaseModel):
@@ -2992,6 +3000,8 @@ class OutboxMessageSummary(BaseModel):
 class OutboxMessageListResponse(BaseModel):
     project_id: str
     items: list[OutboxMessageSummary]
+    limit: int = 50
+    offset: int = 0
 
 
 class CommsChannelPolicySummary(BaseModel):
@@ -3080,6 +3090,8 @@ class InboxMessageSummary(BaseModel):
 class InboxMessageListResponse(BaseModel):
     project_id: str
     items: list[InboxMessageSummary]
+    limit: int = 50
+    offset: int = 0
 
 
 class RoleSummary(BaseModel):

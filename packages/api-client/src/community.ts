@@ -1221,6 +1221,8 @@ export type SelfImprovementProposalDetail = SelfImprovementProposalSummary;
 export type SelfImprovementProposalListResponse = {
   project_id: string;
   items: SelfImprovementProposalSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type SelfImprovementCanaryRequest = {
@@ -1870,6 +1872,8 @@ export type DecisionCard = {
 export type DecisionInboxResponse = {
   project_id: string;
   items: DecisionCard[];
+  limit?: number | null;
+  offset: number;
 };
 
 export type DecisionActionRequest = {
@@ -2251,6 +2255,8 @@ export type ArtifactDetail = ArtifactSummary & {
 export type ArtifactListResponse = {
   project_id: string;
   items: ArtifactSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type ChangeJournalItem = {
@@ -2276,6 +2282,8 @@ export type ChangeJournalDetail = ChangeJournalItem & {
 export type ChangeJournalResponse = {
   project_id: string;
   items: ChangeJournalItem[];
+  limit: number;
+  offset: number;
 };
 
 export type ReceiptResponse = {
@@ -6389,12 +6397,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getTask(taskId: string) {
       return request<TaskSummary>("GET", `/v1/tasks/${encodeURIComponent(taskId)}`);
     },
-    listSelfImprovementProposals(projectId: string, limit = 25) {
+    listSelfImprovementProposals(projectId: string, limit = 25, offset = 0) {
       return request<SelfImprovementProposalListResponse>(
         "GET",
         "/v1/self-improvement/proposals",
         {
-          query: { project_id: projectId, limit },
+          query: { project_id: projectId, limit, offset },
         },
       );
     },
@@ -6452,9 +6460,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         `/v1/artifacts/${encodeURIComponent(artifactId)}`,
       );
     },
-    listChangeJournal(projectId: string, limit = 25) {
+    listChangeJournal(projectId: string, limit = 25, offset = 0) {
       return request<ChangeJournalResponse>("GET", "/v1/change-journal", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     getChangeJournalItem(projectId: string, artifactId: string) {
@@ -7920,9 +7928,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
-    listDecisions(projectId: string) {
+    listDecisions(projectId: string, limit?: number, offset = 0) {
       return request<DecisionInboxResponse>("GET", "/v1/decisions/inbox", {
-        query: { project_id: projectId },
+        query: { project_id: projectId, limit, offset },
       });
     },
     getDecision(decisionId: string, projectId?: string) {

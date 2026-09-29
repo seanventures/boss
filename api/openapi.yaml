@@ -2245,6 +2245,13 @@ paths:
           type: integer
           default: 25
           title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Artifact list including data_boundary classifications
@@ -8011,6 +8018,13 @@ paths:
           type: integer
           default: 50
           title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Outbox list including data_boundary classifications
@@ -8091,6 +8105,13 @@ paths:
           type: integer
           default: 50
           title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Inbox list including data_boundary classifications
@@ -8121,6 +8142,21 @@ paths:
         schema:
           type: string
           title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Decision cards
@@ -9036,6 +9072,13 @@ paths:
           type: integer
           default: 25
           title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Change journal items backed by durable artifacts
@@ -9197,6 +9240,13 @@ paths:
           type: integer
           default: 50
           title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Deadletters, including related webhook delivery identity and
@@ -30914,6 +30964,14 @@ components:
             $ref: '#/components/schemas/ArtifactSummary'
           type: array
           title: Items
+        limit:
+          type: integer
+          title: Limit
+          default: 25
+        offset:
+          type: integer
+          title: Offset
+          default: 0
       type: object
       required:
       - project_id
@@ -32900,6 +32958,14 @@ components:
             $ref: '#/components/schemas/ChangeJournalItem'
           type: array
           title: Items
+        limit:
+          type: integer
+          title: Limit
+          default: 25
+        offset:
+          type: integer
+          title: Offset
+          default: 0
       type: object
       required:
       - project_id
@@ -34070,6 +34136,14 @@ components:
             $ref: '#/components/schemas/DeadletterItem'
           type: array
           title: Items
+        limit:
+          type: integer
+          title: Limit
+          default: 50
+        offset:
+          type: integer
+          title: Offset
+          default: 0
       type: object
       required:
       - project_id
@@ -34352,6 +34426,15 @@ components:
             $ref: '#/components/schemas/DecisionCard'
           type: array
           title: Items
+        limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+          default: 0
       type: object
       required:
       - project_id
@@ -40900,6 +40983,14 @@ components:
             $ref: '#/components/schemas/InboxMessageSummary'
           type: array
           title: Items
+        limit:
+          type: integer
+          title: Limit
+          default: 50
+        offset:
+          type: integer
+          title: Offset
+          default: 0
       type: object
       required:
       - project_id
@@ -45900,6 +45991,14 @@ components:
             $ref: '#/components/schemas/OutboxMessageSummary'
           type: array
           title: Items
+        limit:
+          type: integer
+          title: Limit
+          default: 50
+        offset:
+          type: integer
+          title: Offset
+          default: 0
       type: object
       required:
       - project_id

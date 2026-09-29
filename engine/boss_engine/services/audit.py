@@ -55,7 +55,7 @@ class AuditTrailService:
         return [dict(row) for row in rows]
 
     def list_change_journal(
-        self, connection: Connection, project_id: str, limit: int
+        self, connection: Connection, project_id: str, limit: int, offset: int = 0
     ) -> list[dict]:
         rows = connection.execute(
             text(
@@ -66,13 +66,14 @@ class AuditTrailService:
                 WHERE project_id = :project_id
                   AND artifact_type IN :artifact_types
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ).bindparams(bindparam("artifact_types", expanding=True)),
             {
                 "project_id": project_id,
                 "artifact_types": sorted(self.CHANGE_ARTIFACT_TYPES),
                 "limit": limit,
+                "offset": offset,
             },
         ).mappings().all()
         return [self._change_journal_item(row) for row in rows]

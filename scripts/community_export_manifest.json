@@ -240,7 +240,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "996906aa1bc302b50fd570101789862485f6974f4cd3c503e030f4c40f057f1a"
+    "sha256": "2b46df8d228693baaed3a6131d9ef89f51784f83a1aabc8437c833459a79bfac"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
@@ -275,8 +275,8 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "a76cab2a1fabf913d32e60bb5eb119f38f0a93fd3d2fc5cda622bcd0c842be7c",
-    "output_sha256": "033ab4499049de8c94ce756c889f0a3ff34f4a1eddb82273321744a2cb326890"
+    "source_sha256": "aa37c638d16822632558ce687154895a3bd5355e5a7bc0ade9341520a7837b4a",
+    "output_sha256": "23b28955c0284d714f65c433b3cc766a71fe90c76d5a0404cd2ee37678a94a92"
   },
   "reviewed_notice_sha256": {
     "THIRD-PARTY-NOTICES.md": "a9722d7d3c861b02eddae4ead71beaf7a1ff88b7d9fbe31c0374d3d23aeb9191",
