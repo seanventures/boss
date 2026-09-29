@@ -34,6 +34,7 @@ def test_revoked_ceo_key_cannot_restore_membership_or_change_autonomy(
                  "WHERE project_id = :project_id AND member_id = 'ceo'"),
             {"project_id": PROJECT},
         )
+        api_main.members.seed_default_members(connection, PROJECT, actor="bootstrap")
 
     body = {"project_id": PROJECT, "actor": "ceo", "mode": "full_auto"}
     assert client.post("/v1/console/v2/autonomy", headers=_headers(ceo_key),
@@ -72,6 +73,7 @@ def test_permission_removed_from_ceo_is_not_restored_by_authorization(
                  "WHERE project_id = :project_id AND member_id = 'ceo'"),
             {"project_id": PROJECT},
         )
+        api_main.members.seed_default_members(connection, PROJECT, actor="bootstrap")
 
     assert client.post(
         "/v1/console/v2/autonomy", headers=_headers(ceo_key),

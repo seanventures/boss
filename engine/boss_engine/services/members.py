@@ -12,8 +12,7 @@ from ..config import Settings
 from .core import emit_event
 
 # System/default member ids installed during explicit project bootstrap.
-# Authorization checks must never re-seed them: doing so can restore a revoked
-# membership or permission while handling the request it was meant to deny.
+# Seeding is insert-only: it must not restore a revoked membership or permission.
 DEFAULT_MEMBER_IDS = frozenset({
     "ceo", "cto", "cao", "vp_agents", "release_manager",
     "metatron", "coo", "executive_console", "system",
@@ -233,17 +232,44 @@ class MemberDirectoryService:
         ]
 
         for member in defaults:
-            self.upsert_member(
-                connection,
-                project_id=project_id,
-                member_id=member["member_id"],
-                display_name=member["display_name"],
-                member_type=member["member_type"],
-                role_keys=member["role_keys"],
-                permissions=member["permissions"],
-                actor=actor,
-                emit_install_event=False,
-            )
+            # Bootstrap runs again on upgrades. An ordinary upsert would turn an
+            # inactive default member back on, or grant back a removed permission.
+            # The database conflict clause also makes concurrent seed calls safe.
+            inserted = connection.execute(
+                text(
+                    """
+                    INSERT INTO project_members (
+                        id, project_id, member_id, display_name, member_type,
+                        role_keys, permissions, status, created_by
+                    ) VALUES (
+                        :id, :project_id, :member_id, :display_name, :member_type,
+                        CAST(:role_keys AS JSONB), CAST(:permissions AS JSONB),
+                        'active', :created_by
+                    )
+                    ON CONFLICT (project_id, member_id) DO NOTHING
+                    RETURNING id
+                    """
+                ),
+                {
+                    "id": f"pm_{project_id}_{member['member_id']}",
+                    "project_id": project_id,
+                    "member_id": member["member_id"],
+                    "display_name": member["display_name"],
+                    "member_type": member["member_type"],
+                    "role_keys": json.dumps(member["role_keys"]),
+                    "permissions": json.dumps(member["permissions"]),
+                    "created_by": actor,
+                },
+            ).scalar_one_or_none()
+            if inserted:
+                self._mirror_to_org(
+                    connection, project_id=project_id,
+                    member_id=member["member_id"],
+                    display_name=member["display_name"],
+                    member_type=member["member_type"],
+                    role_keys=member["role_keys"],
+                    permissions=member["permissions"], actor=actor,
+                )
 
     def list_members(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
         project_rows = connection.execute(

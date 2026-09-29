@@ -570,11 +570,9 @@ class SelfHostedIdentityService:
                 {"project_id": project_id, "member_id": member_id},
             )
             # Older BOSS versions mirrored every project member into
-            # org_members. MemberDirectory deliberately falls back to an active
-            # org member when the project row is inactive, so only disabling the
-            # project row leaves a deprovisioned SCIM user authorized and visible.
-            # Retain both rows for audit history, but disable the matching
-            # org-level mirror as part of the same deprovisioning transaction.
+            # org_members. An inactive project row now overrides that fallback
+            # for this project, and the org mirror must also be deactivated to
+            # remove access to sibling projects. Retain both rows for audit.
             connection.execute(
                 text(
                     """
