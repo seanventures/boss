@@ -18,6 +18,11 @@ from boss_engine.config import Settings
 from boss_engine.services.intent_router import IntentRouter, RouterTurn
 
 
+class _Capability:
+    enabled = True
+    reason = None
+
+
 class _Manifest:
     def resolve(self, *_a, **_k):
         return None
@@ -27,6 +32,9 @@ class _Manifest:
 
     def disabled(self, *_a, **_k):
         return []
+
+    def get(self, *_a, **_k):
+        return _Capability()
 
 
 #: Every env var that could make Settings look configured when the test says it is not.
@@ -71,7 +79,6 @@ def _route(router, message: str, calls: list):
     "list the tools you can call that CHANGE something",   # the one that regressed
     "fix the deployment",
     "build a settings page",
-    "First research auth providers and then implement the login page",
     "add a currency picker",
 ])
 def test_every_message_reaches_the_agent_when_a_model_exists(message):
@@ -82,6 +89,32 @@ def test_every_message_reaches_the_agent_when_a_model_exists(message):
     assert calls == [message], (
         f"{message!r} never reached the agent — the deterministic matcher actuated it instead")
     assert turn.reply == "answered"
+
+
+def test_a_phased_command_stays_governed_when_a_model_exists():
+    """A configured model must not swallow a phased command into an unbudgeted agent turn.
+
+    "First research, then implement" is propose_command. Discovery, meetings, PRDs,
+    and phased commands stay on the governed path so the reservation still happens.
+    """
+    message = "First research auth providers and then implement the login page"
+    answers: list = []
+    dispatched: list = []
+    router = _router()
+    router._answer = lambda *_a, **_k: (answers.append(message), RouterTurn(reply="answered"))[1]
+
+    def _dispatch(_connection, name, _arguments, **_k):
+        dispatched.append(name)
+        return RouterTurn(reply="governed")
+
+    router._dispatch = _dispatch
+    turn = router.route_turn(
+        None, project_id="p", actor="ceo",
+        messages=[{"role": "user", "content": message}], manifest=_Manifest(),
+    )
+    assert answers == [], "a phased command must not reach the agent"
+    assert dispatched == ["propose_command"]
+    assert turn.reply == "governed"
 
 
 def test_it_is_not_gated_on_the_classifier_flag():
