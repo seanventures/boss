@@ -8,8 +8,8 @@
   "counts": {
     "api_policy_gated": 854,
     "excluded": 67,
-    "human_confirmation_gated": 28,
-    "operator_only_unavailable": 37
+    "human_confirmation_gated": 29,
+    "operator_only_unavailable": 36
   },
   "operations": [
     {
@@ -9018,15 +9018,15 @@
       "alias": "post_v1_improvement_programs_trials_trial_id_promote_ad428b11",
       "domain": "ops",
       "summary": "Promote Improvement Trial",
-      "mcp_status": "operator_only_unavailable",
-      "reason": "trusted_operator_confirmation_unavailable",
+      "mcp_status": "human_confirmation_gated",
+      "reason": "fresh_human_confirmation_required",
       "input_schema_quality": "typed_json_body",
       "mounted_input_schema_quality": "typed_json_body",
       "request_body_type_enforcement": "pydantic_fields",
       "curated_input_fields": false,
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
-      "domain_scoped_direct_tool": false,
+      "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },

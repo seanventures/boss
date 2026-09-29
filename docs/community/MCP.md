@@ -194,7 +194,7 @@ operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|
-| Community | 854 | 28 | 37 | 67 |
+| Community | 854 | 29 | 36 | 67 |
 | Paid-only additions | 39 | 0 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
@@ -207,7 +207,7 @@ through `workflow_manage`. A task can be soft-archived with `task_create` and
 an audit event; a paused workflow migration can be rolled back only before
 its new steps execute, with `workflow_manage` and an audit event.
 
-For the 28 confirmation-gated actions, MCP calls `api_request_confirmation`
+For the 29 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest
 of the complete request, its method and target, and a limited review summary;
 it never stores the raw body. A **separate human CEO member** reviews the
@@ -244,7 +244,7 @@ example; the default `make mcp-setup` grants do not include it. The confirmation
 from MCP tool dispatch: the client cannot approve itself. The reviewer must
 be an active `member_type=human` CEO with `decision_resolve` permission.
 
-The 37 held Community and two paid-only actions return
+The 36 held Community and two paid-only actions return
 `operator_only_unavailable`. They include direct host/provider effects without
 a governed ChangeSet/receipt path, host key material, global or ID-only routes
 without a sound project boundary, and routes lacking API-side actor checks.

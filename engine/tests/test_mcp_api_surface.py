@@ -345,6 +345,7 @@ def test_held_and_confirmable_routes_never_dispatch_without_approval():
         "/v1/activity/retention/prune": {"post": {}},
         "/v1/deployment-hosts/{host_id}/key": {"post": {}},
         "/v1/delivery/deploy": {"post": {}},
+        "/v1/improvement-programs/trials/{trial_id}/promote": {"post": {}},
         "/v1/kms/keys/{key_entry_id}/lease": {"post": {}},
         "/v1/kms/leases/{lease_id}/resolve": {"post": {}},
     }}
@@ -362,6 +363,10 @@ def test_held_and_confirmable_routes_never_dispatch_without_approval():
         }
         result = surface.invoke(alias, project_id="alpha")
         assert result["ok"] is False
+    proposal_alias = operation_alias(
+        "POST", "/v1/improvement-programs/trials/{trial_id}/promote"
+    )
+    assert surface.describe(proposal_alias)["availability"] == "confirmation_required"
     assert seen == []
 
 

@@ -133,6 +133,9 @@ _CONFIRMABLE_EXACT = frozenset({
     # This queues an already-authorized merge. The worker rechecks current
     # head, reviews, checks, branch policy, and lease before provider write.
     ("POST", "/v1/github/merge-authorizations/{authorization_id}/enqueue"),
+    # Promotion creates a proposal from a measured winning trial. It does not
+    # adopt the baseline or roll out code; both remain behind their own gates.
+    ("POST", "/v1/improvement-programs/trials/{trial_id}/promote"),
     # Local configuration and reversible/archived project records.
     ("DELETE", "/v1/event-subscriptions/{subscription_id}"),
     ("DELETE", "/v1/webhook-endpoints/{endpoint_id}"),
