@@ -851,7 +851,6 @@ function ModelStep({ projectId, actor, providers, saved, onDone }: {
       <AskBoss about={`connecting ${chosen?.label ?? provider} as the model BOSS builds with`}
                problem={result && !result.ok ? result.text : null} />
       <RoleModels projectId={projectId} actor={actor} />
-      <DecisionModel projectId={projectId} actor={actor} />
     </article>
   );
 }
@@ -1097,54 +1096,3 @@ function DecisionKeyForm(
   );
 }
 
-/**
- * Who answers the multiple-choice questions — a workflow's typed_decision step picking a branch.
- *
- * Claude by default. TypeSafe's Jev is OPTIONAL and billed to the operator's own TypeSafe
- * account, so it is offered, never assumed: the card says which one is actually deciding,
- * because "typesafe" chosen with no key still means Claude.
- */
-function DecisionModel({ projectId, actor }: { projectId: string; actor: string }) {
-  const [status, setStatus] = useState<DecisionStatus | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(
-        `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
-        { cache: "no-store" });
-      if (r.ok) setStatus((await r.json()) as DecisionStatus);
-    } catch { setStatus(null); }
-  }, [projectId]);
-  useEffect(() => { void load(); }, [load]);
-
-  const deciding = status?.effective_backend === "typesafe"
-    ? `TypeSafe Jev (${status.typesafe_model}), with Claude as the second opinion`
-    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} where it is installed, `
-      + `and this install's API model on the worker`;
-
-  return (
-    <article className="stack-card" data-testid="setup-decision-model">
-      <div className="section-head">
-        <div>
-          {/* Not "Decision model": the dropdown above already carries that name, and two
-              sections with one heading is how the key box went unfound. */}
-          <h2 className="eyebrow">TypeSafe Jev key (optional)</h2>
-          <p className="detail">
-            Workflow decisions — which branch to take, which team gets a ticket — are now
-            answered by: <strong>{status ? deciding : "…"}</strong>.
-            {status?.backend === "typesafe" && !status.typesafe_key
-              ? " TypeSafe is selected but no key is saved, so it is not deciding yet." : ""}
-          </p>
-        </div>
-      </div>
-      <div className="setup-form">
-        <DecisionKeyForm projectId={projectId} actor={actor} hasKey={status?.typesafe_key}
-                         keyUrl={status?.key_url ?? "https://console.typesafe.ai/keys"}
-                         note={"Jev answers in well under a second for a fraction of a cent, "
-                               + "billed to your own TypeSafe account. BOSS proves the key "
-                               + "with one tiny decision before saving it."}
-                         onSaved={() => void load()} />
-      </div>
-    </article>
-  );
-}
