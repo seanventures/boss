@@ -211,8 +211,10 @@ For the 37 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest
 of the complete request, its method and target, and a limited review summary;
 it never stores the raw body. A **separate human CEO member** reviews the
-request through a trusted operator workflow and approves its digest through
-the terminal or API. The human credential must not be available to the MCP
+complete request and submits that exact `reviewed_request` plus its digest
+through the terminal or API. The server recomputes the digest from the human's
+submitted method, path, query, and body before approval; it never persists the
+review submission. The human credential must not be available to the MCP
 client. Approval expires in five minutes and is consumed atomically by one
 matching request. Existing API permissions, budget, ChangeSet, receipt, and
 route policies still apply. Request, approval, consumption, and HTTP result
@@ -220,13 +222,24 @@ are distinct audit events.
 
 The human can find the pending request with `/ops mcp-confirmations` and
 `/op` on the GET confirmation operation, then approve it with `/op` on the
-POST approve operation, passing `project_id` and `reviewed_digest`. Direct API
+POST approve operation, passing `project_id`, `reviewed_digest`, and the
+complete `reviewed_request` object. Direct API
 equivalents are `GET /v1/mcp-confirmations?project_id=...` and
 `POST /v1/mcp-confirmations/{id}/approve`. The MCP client then calls
 `api_write_operation` with **identical** path, query, and body plus the returned
-`confirmation_id`. The stored summary omits free-form body/query values, so
-the human must review the full proposed request in their trusted operator
-workflow before approving its digest. The confirmation endpoints are excluded
+`confirmation_id`. The stored summary omits free-form body/query values; the
+human must inspect the full request they submit for approval. For example,
+with the human's own TUI key, use the operation IDs from `/describe` and send
+the approval as one `/op` JSON argument:
+
+```text
+/op get_v1_mcp_confirmations_d1bc4240 {"query":{"project_id":"boss-dogfood"}}
+/op post_v1_mcp_confirmations_confirmation_id_approve_3742b3e9 {"path":{"confirmation_id":"mcpconf_<id>"},"body":{"project_id":"boss-dogfood","reviewed_digest":"<digest>","reviewed_request":{"project_id":"boss-dogfood","operation":"post_v1_decisions_decision_id_reject_3d532536","method":"POST","path":"/v1/decisions/dec_123/reject","query":{},"body":{"actor":"mcp_operator","note":"Reject after review"}}}}
+```
+
+The human must replace the example values with the exact request they
+reviewed, including every body and query field. A mismatch fails before
+approval. The confirmation endpoints are excluded
 from MCP tool dispatch: the client cannot approve itself. The reviewer must
 be an active `member_type=human` CEO with `decision_resolve` permission.
 

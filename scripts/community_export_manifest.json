@@ -229,7 +229,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "643bcedcb1918b04e6ae20d7ef81328b3a415086ef891248ad2381036d1753e0"
+    "sha256": "c88c1e6ad1a90df2617cd0aec5478493a833be6dd1e9fc8fc6ffb7cebdc6a2bd"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
@@ -264,7 +264,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "96bed515fe2547bf7456e3522cd3aa30134e62aa4a8ae9c01f8197f62a6d02b6",
-    "output_sha256": "5436a245fca308693e8259a67ca0055f0af3f23d597184245de407c773039b99"
+    "source_sha256": "6a7c767832cf4081a18ed51be17a4d854c5acbe61ce4261fa7d04990e364d911",
+    "output_sha256": "6212bd0066259f83d7ee260201165482ee75a9df7593c3af9cb5f20fbdf37cfb"
   }
 }

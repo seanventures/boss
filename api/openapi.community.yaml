@@ -47960,10 +47960,13 @@ components:
         reviewed_digest:
           type: string
           title: Reviewed Digest
+        reviewed_request:
+          $ref: '#/components/schemas/McpConfirmationRequest'
       type: object
       required:
       - project_id
       - reviewed_digest
+      - reviewed_request
       title: McpConfirmationApproval
     McpConfirmationRequest:
       properties:

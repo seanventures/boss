@@ -3035,6 +3035,7 @@ class McpConfirmationRequest(BaseModel):
 class McpConfirmationApproval(BaseModel):
     project_id: str
     reviewed_digest: str
+    reviewed_request: McpConfirmationRequest
 
 
 def _require_human_mcp_reviewer(connection, project_id: str) -> str:
@@ -3111,11 +3112,24 @@ def approve_mcp_confirmation(
 ) -> dict:
     with begin(engine) as connection:
         approver = _require_human_mcp_reviewer(connection, payload.project_id)
+        reviewed = payload.reviewed_request
+        if reviewed.project_id != payload.project_id:
+            raise HTTPException(status_code=409, detail="reviewed_project_mismatch")
+        try:
+            verified_digest = mcp_confirmation.request_digest(
+                project_id=reviewed.project_id, operation=reviewed.operation,
+                method=reviewed.method, path=reviewed.path,
+                query=reviewed.query, body=reviewed.body,
+            )
+        except mcp_confirmation.ConfirmationError as error:
+            raise HTTPException(status_code=422, detail=error.code) from error
+        if verified_digest != payload.reviewed_digest:
+            raise HTTPException(status_code=409, detail="reviewed_digest_mismatch")
         try:
             return mcp_confirmation.approve_request(
                 connection, project_id=payload.project_id,
                 confirmation_id=confirmation_id, approver=approver,
-                reviewed_digest=payload.reviewed_digest,
+                reviewed_digest=verified_digest,
             )
         except mcp_confirmation.ConfirmationError as error:
             raise HTTPException(status_code=409, detail=error.code) from error

@@ -44,10 +44,11 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
     alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
     path = f"/v1/decisions/{decision_id}/reject"
     body = {"actor": mcp_member, "note": "Human-reviewed test rejection"}
-    proposal = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key), json={
+    requested = {
         "project_id": PROJECT, "operation": alias, "method": "POST",
         "path": path, "query": {}, "body": body,
-    })
+    }
+    proposal = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key), json=requested)
     assert proposal.status_code == 201, proposal.text
     request = proposal.json()
     confirmation_id = request["id"]
@@ -57,7 +58,8 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
     assert digest and len(digest) == 64
 
     # The model's own key and a system member cannot be the human reviewer.
-    approval = {"project_id": PROJECT, "reviewed_digest": digest}
+    approval = {"project_id": PROJECT, "reviewed_digest": digest,
+                "reviewed_request": requested}
     assert client.post(f"/v1/mcp-confirmations/{confirmation_id}/approve",
                        headers=_headers(mcp_key), json=approval).status_code == 403
     assert client.post(f"/v1/mcp-confirmations/{confirmation_id}/approve",
@@ -65,6 +67,12 @@ def test_exact_human_confirmation_is_scoped_single_use_and_audited(
     assert client.post(f"/v1/mcp-confirmations/{confirmation_id}/approve",
                        headers=_headers(human_key), json={
                            **approval, "reviewed_digest": "0" * 64,
+                       }).status_code == 409
+    assert client.post(f"/v1/mcp-confirmations/{confirmation_id}/approve",
+                       headers=_headers(human_key), json={
+                           **approval, "reviewed_request": {
+                               **requested, "body": {**body, "note": "unreviewed change"},
+                           },
                        }).status_code == 409
     preview = client.get("/v1/mcp-confirmations", headers=_headers(human_key),
                          params={"project_id": PROJECT})
@@ -129,10 +137,11 @@ def test_confirmation_never_stores_secret_body_and_expires_closed(
     alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
     secret = "not-a-real-secret-98765"
     body = {"actor": mcp_member, "note": secret, "auth": {"api_key": secret}}
-    proposal = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key), json={
+    requested = {
         "project_id": PROJECT, "operation": alias, "method": "POST",
         "path": f"/v1/decisions/{decision_id}/reject", "query": {}, "body": body,
-    })
+    }
+    proposal = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key), json=requested)
     assert proposal.status_code == 201, proposal.text
     assert secret not in proposal.text
     confirmation_id = proposal.json()["id"]
@@ -150,6 +159,7 @@ def test_confirmation_never_stores_secret_body_and_expires_closed(
                            headers=_headers(human_key), json={
                                "project_id": PROJECT,
                                "reviewed_digest": stored["request_digest"],
+                               "reviewed_request": requested,
                            })
     assert response.status_code == 409
     assert response.json()["detail"] == "confirmation_expired"
