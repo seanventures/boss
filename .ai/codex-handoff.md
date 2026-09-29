@@ -1,6 +1,61 @@
 # Codex Handoff
 
-## 2026-09-28 BOSS-293 Community integration and release hold
+## 2026-09-28 current BOSS-293 integration checkpoint
+
+- Work in `/Volumes/DataSSD1/boss-community-ga-integration/boss` on
+  `ai/codex/boss-293-community-integrate`; draft [PR #280](https://github.com/seanheiney/boss/pull/280)
+  is still private and behind the release gates. The original checkout and
+  live Goldeneye deployment are unchanged.
+- BOSS-448 audited 291 remote branch refs and 90 open PRs. Paramg #174/#191,
+  current `origin/main` through `6407e2f9`, and missing Cursor shell/SQL
+  containment are integrated. The older PRs remain open for review and
+  housekeeping after this integration is current on GitHub.
+- Current source `0db60f6c8318c37cf846409363c1755f81f99bda` exports
+  1,880 Community files with zero mechanical blockers. Its exact unpublished
+  one-root commit `af200616ce793cb169c4fcfb15adf3f7abf508bb` matches every
+  file, mode and symlink; full-history Gitleaks found zero and TruffleHog
+  found 11 unverified fixture/identifier matches, zero verified. The pristine
+  Ubuntu x86 VM and separate stdin-piped install passed for this exact source;
+  see the [sanitized report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-0db60f6c/qualification-report.md).
+  The earlier
+  `37f44df7` export has 1,879 files. Its unpublished one-root commit
+  `4e1841e89ccac07169fa65afc03869d2ebfbd540` matches those 1,879 files,
+  modes and symlinks exactly. Full-history Gitleaks found zero;
+  TruffleHog without verification found 11 unverified fixtures/identifiers,
+  zero verified. The exact pristine Ubuntu x86 VM passed untouched install,
+  UI, API/TUI/MCP reads and safe writes, scoped confirmation, rerun,
+  backup/restore, upgrade and safe uninstall/reinstall. It exposed a missing
+  Grok CLI inside API/worker images; `eb4b4ec7` repairs that source gap.
+  The later `main`, MCP and model-setting changes are all in the qualified
+  `0db60f6c` freeze.
+- Final-source engine suite passed 5,243 with 128 skips and one expected
+  failure on bootstrapped disposable PostgreSQL. Final-source full web suite
+  passed 2,468 with one skip. Focused MCP/TUI, model-setting and exact-export
+  API tests, repository lint/type check, production web build, both OpenAPI
+  generator/parity checks, and generated docs passed. The broad
+  Community API run stopped after 13 passes; its expensive database reset
+  makes the source-focused checks more practical. No final-source broad
+  Community API suite or release-commit live QA proof exists yet.
+- BOSS-451 holds typed-decision model spending and TypeSafe key proof. Native
+  MCP, model turns, workflows and investigations cannot run unscoped SQL;
+  only explicit local paid admin CLI calls retain it. API/TUI/MCP operation
+  mapping is documented in `docs/community/CONTROL_SURFACES.md`: 973 `/v1`
+  terminal routes are addressable, and all 986 HTTP operations are classified
+  for MCP. Current `0db60f6c` counts are 854 API-policy eligible, 29 exact
+  human confirmation, 36 held for route-specific gaps, and 67 protocol or
+  internal. The latest tranche added one confirmed proposal transition; 29 focused tests and
+  matrix validation passed. All nine approval routes and direct provider
+  effects remain held. Do not claim every mapped feature is runnable.
+- Counsel reference `01049940` covers the first-party Apache decision. Third-
+  party redistribution/notices, private-history credential rotation, exact
+  image legal review, live release-commit QA, partner and claims review, target
+  security controls and owner release signoff remain open. Later TUI usability
+  [PR #281](https://github.com/seanheiney/boss/pull/281) adds direct task
+  commands with 45 focused passing tests and is not in the `0db60f6c` VM
+  freeze. MCP human-approval attribution work is in a separate branch; both
+  need review and new exact-source qualification before a release.
+
+## Earlier 2026-09-28 BOSS-293 Community integration checkpoint (superseded)
 
 - Work in `ai/codex/boss-293-community-integrate` and draft
   [PR #280](https://github.com/seanheiney/boss/pull/280). Keep the original

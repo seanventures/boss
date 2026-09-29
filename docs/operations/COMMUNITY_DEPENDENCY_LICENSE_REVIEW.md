@@ -1,11 +1,11 @@
 # Community dependency and notice review — BOSS-300 / BOSS-293
 
-**Status (2026-09-28): frozen-image inventory and interim source review complete;
+**Status (2026-09-28): exact `0db60f6c` Community image inventory recorded;
 PF-1 and PF-4 remain open.**
-The source checkout and interim x86 Linux candidates were inspected. Frozen
-source `1a8102a2` has a zero-blocker 1,845-file export and passed first install
-on a pristine x86 VM. These findings are review inputs, not third-party notice
-clearance or a legal compatibility decision.
+The source checkout and pristine x86 Linux images were inspected. The exact
+source exports 1,880 files with zero mechanical blockers. These findings are
+review inputs, not third-party notice clearance or a legal compatibility
+decision.
 
 ## Evidence collected
 
@@ -187,6 +187,58 @@ Chromium notice set; and global Codex CLI native/dependency notices. The final
 image inventory must also confirm Node and `qrcode-terminal` license paths and
 separately cover the optional Redis/Infisical profile if that profile ships.
 
+The later `4ab3e729` clean-VM global npm inventory also surfaced
+`spdx-exceptions@2.5.0` under CC-BY-3.0 in API and web. Its versioned credit
+and license text need the same final-image attribution disposition as
+`caniuse-lite`; this was absent from the earlier review list. The
+[supplemental notice review](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-license-notice-review-62aa369d.md)
+records the observed package and the remaining exact-image checks.
+
+The Community API and worker image now install the official
+`@xai-official/grok@1.0.41` CLI and its matching Linux architecture package.
+The npm registry metadata identifies both as Apache-2.0. The pinned
+Linux-x64 and Linux-arm64 npm tarballs each advertise
+`THIRD_PARTY_NOTICES.md`; verify the relevant notice is retained in each final
+image and review its contents.
+This repairs a source/runtime mismatch: the documentation required a Grok
+login inside the API container even though the image previously installed
+only Claude Code and Codex.
+
+## Exact `0db60f6c` x86 runtime image inventory
+
+The pristine Ubuntu 24.04 x86 build produced local image IDs API
+`sha256:4e72c3ebca8efb6f84236f7855fae0f1c929097d1e67539e2048270a9be0d974`,
+worker
+`sha256:934751be75b304268de88877d56876e63c766648b19185551238334cf4cfa225`,
+web
+`sha256:6baef616c4c2ad883fabd083c37a83483cdfe110ac5b9f4eef27695571fc9c99`,
+and PostgreSQL
+`sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea`.
+These are local image identities, not published image digests. The
+[package summary](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-0db60f6c/qa-inventory-summary.json)
+records 59 Python distributions in each API/worker image, 103 web pnpm
+packages, 210/210/204 global npm entries, and 354/354/88 Debian packages.
+Every inventoried Debian package has an installed copyright notice.
+
+Both API and worker images run Grok `1.0.41`, Claude Code `2.1.197`, and Codex
+`0.158.0`. The installed Grok Linux x64 platform package retains
+`THIRD_PARTY_NOTICES.md` (SHA-256
+`e8785a6098a7ee780cd2db35745b8e53061cfb1b6da19147a308579466ea4e50`).
+The Grok top-level package root has no separate license file. In both images,
+`qrcode-terminal` retains its Apache license file (SHA-256
+`b3c7a2fadb2515b8106eae58439a4b9c0581a4eaa88d6a265701f8d4dd7dadb8`),
+and `setuptools==79.0.1` retains a license file (SHA-256
+`86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741`)
+despite incomplete license metadata. The
+[exact-image notice paths and hashes](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-0db60f6c/notices/qa-notices.txt)
+are retained outside the public export.
+
+This inventory narrows file-presence questions. It does not settle Claude Code
+or Grok redistribution terms, CC-BY credit, GPL/LGPL source and notice duties,
+the Linux Psycopg binary, sharp/libvips, Chromium, or optional Redis/Infisical
+profiles. A named reviewer must approve the exact image and notice set before
+PF-1 and PF-4 close.
+
 ## Required disposition before PF-1/PF-4 can close
 
 1. Repeat the package and notice inventory on the final x86 Linux web, API and
@@ -194,7 +246,7 @@ separately cover the optional Redis/Infisical profile if that profile ships.
    optional platforms.
 2. Check each distributed package's license and included text. Preserve required
    copyright, license and attribution notices in the shipped artifact; review
-   `psycopg[binary]`, sharp/libvips, `caniuse-lite`, packaged coding CLIs,
+   `psycopg[binary]`, sharp/libvips, `caniuse-lite`, `spdx-exceptions`, packaged coding CLIs,
    Debian ffmpeg, Node and Playwright browser binaries explicitly with counsel.
 3. Review the Community `LICENSE`, package metadata, Goldeneye kit terms and
    any final `NOTICE` against the exact export. Record the reviewer, evidence

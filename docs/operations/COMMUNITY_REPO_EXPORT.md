@@ -2,12 +2,13 @@
 
 **Target:** `seanventures/boss` (created empty and private on 2026-09-24).
 **Source:** private `seanheiney/boss` monorepo.
-**Status (2026-09-28):** frozen source
-`1a8102a2eb7945afda64f72fb18906c134541bdd` produced a 1,845-file
-candidate with zero mechanical blockers. Its full installer lifecycle passed
-on a pristine Ubuntu 24.04 x86_64 VM. A first-run system-canary presentation
-repair is being prepared on BOSS-438, so the next candidate will need its own
-qualification. No code has been pushed to the target. The public flip is blocked by the
+**Status (2026-09-28):** current source
+`0db60f6c8318c37cf846409363c1755f81f99bda` produced a 1,880-file
+candidate with zero mechanical blockers. Its pristine Ubuntu 24.04 x86_64 VM
+and unpublished one-root history passed technical review. A separate pristine
+guest passed the exact installer through stdin with local file transport.
+The public HTTPS path remains untested while the target is private and empty.
+No code has been pushed to the target. The public flip is blocked by the
 [release checklist](PUBLIC_FLIP_CHECKLIST.md).
 
 ## Product and license boundary
@@ -20,10 +21,10 @@ The Community product contract is in [`BOSS_COMMUNITY_EDITION_SPEC.md`](../produ
 
 | Surface | Community candidate | Boundary work before export |
 |---|---|---|
-| Runtime | `engine/`, Community API and worker code, migrations | The Community entrypoint, OpenAPI and schema are split and checksum-pinned. Project-scoped write/read authority, Plane effect receipts, and verified Plane TLS are integrated. Frozen-source tests and exported-image API/worker runtime probes passed; a planned follow-up will require requalification. Preserve durable tasks, policy, receipts, ProviderOps, self-hosted SSO, and the self-hosted Goldeneye control plane. |
+| Runtime | `engine/`, Community API and worker code, migrations | The Community entrypoint, OpenAPI and schema are split and checksum-pinned. Project-scoped write/read authority, Plane effect receipts, and verified Plane TLS are integrated. The exact `0db60f6c` image passed representative API/worker runtime probes; any later source change requires requalification. Preserve durable tasks, policy, receipts, ProviderOps, self-hosted SSO, and the self-hosted Goldeneye control plane. |
 | Web | Community Mission Control, project/organization management, tasks, decisions, live coordination | The Community root route and API client are split from paid source. The frozen-source web suite, lint/type check and production build pass; the final exported console loaded authenticated Team structure, Agent Studio, Agent work and Workflow Catalogue screens in the VM. First-run organization remains a UX follow-up. |
 | Packages | API client, Community specpack, Community workflows/policies/roles and examples | The Community pack uses Apache-2.0 and omits the private commercial packaging policy. Five optional examples now declare console inputs and stored defaults; the sales and video handoffs were repaired. Package metadata and third-party notices still need final review. |
-| Installer | VM bootstrap, Compose, official coding CLIs, Community docs | The source-tree and interim export passed the clean x86 VM lifecycle. Frozen export first install, rerun, backup/scratch restore, same-tree upgrade, safe uninstall/reinstall, health, edition, authentication, loopback ports and owner/worker key separation passed on a fresh x86 VM. Grok CLI was verified on the host; Claude/Codex in the API image. No CLI authentication or model call was exercised. |
+| Installer | VM bootstrap, Compose, official coding CLIs, Community docs | Exact `0db60f6c` first install, rerun, backup/scratch restore, same-tree and changed-code upgrade, safe uninstall/reinstall, health, edition, authentication, loopback ports and owner/worker key separation passed on fresh x86 VMs. A second pristine guest passed stdin-piped installation with local file transport. API/worker images contain Grok, Claude Code and Codex. No CLI authentication or model call was exercised; public HTTPS delivery remains untested. |
 | Operations | Public README, contributing/issue forms, security policy, license and applicable notices | The root `LICENSE` is checksum-pinned in the export. Finish third-party terms, public-reference, private-host and reachable-history reviews. |
 
 Known paid/private candidates to exclude or refactor are `apps/account_connect/`, `apps/api/app/adapters_enterprise/`, hosted Account Connect and marketplace routes, Cloud billing/managed-worker code, `engine/boss_engine/services/cloud_product.py`, Enterprise cluster/support code, `packages/specpack/packs/enterprise_edition.yaml`, and private production Goldeneye deployment material. This is an **inspection list**, not an exhaustive allowlist. The standalone Goldeneye kit and self-hosted `/v1/goldeneye/*` control plane are Community per [`GOLDENEYE_PAAS.md`](../product/GOLDENEYE_PAAS.md); they require private-reference and dependency review, not blanket exclusion. Self-hosted SSO, ProviderOps, and the core governed runtime are also Community despite some `enterprise` names in route and object paths; classification must follow behavior, not filenames.
@@ -69,6 +70,38 @@ console screenshots, and five example dry runs. It also records a first-run
 system canary that appears in customer Agent work. BOSS-438 will repair that
 presentation without suppressing audit history, and the resulting source must
 be exported and qualified again before publication.
+
+The later `37f44df7` export selected 1,879 files with zero mechanical
+blockers. Its unpublished local new-root history is
+`4e1841e89ccac07169fa65afc03869d2ebfbd540` (tree
+`ee72330c41ccbc4fbfce48ff02d7ac996f8a1825`). A path-by-path comparison
+matched every selected file, executable mode and symlink. Full-history Gitleaks
+found zero; TruffleHog without verification found 11 unverified synthetic
+fixture or identifier matches, zero verified. The sanitized
+[history report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-37f44df7/history-scan-summary.md)
+records those dispositions and the four old private-source credential fields
+that still lack rotation or revocation evidence. Its pristine x86 VM passed
+install and runtime lifecycle; the
+[sanitized report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-37f44df7/qualification-report.md)
+records the Grok image gap that was repaired after this source. These results
+do not qualify any later source commit.
+
+The current `0db60f6c` export selected 1,880 files with zero mechanical
+blockers. Its local unpublished new-root commit is
+`af200616ce793cb169c4fcfb15adf3f7abf508bb` (tree
+`2c69a0c2e10aa8bf2685ac124386c5e3ff738a65`), with one reachable
+commit and no remote. All selected paths, content, modes and symlinks match.
+Full-history Gitleaks found zero; TruffleHog without verification found 11
+unverified fixture or identifier matches, zero verified. The
+[sanitized exact-candidate report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-0db60f6c/history-scan-summary.md)
+records the dispositions. Four old private-source credential fields still
+need rotation or revocation receipts. Its
+[sanitized clean-VM report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-0db60f6c/qualification-report.md)
+records first-run access, representative API/TUI/MCP operations, 11
+human-confirmation checks, lifecycle preservation, changed-code upgrade and
+a second pristine stdin-piped install using local file transport. Provider
+login, paid model calls, every mapped route, and public HTTPS delivery were
+not exercised. Any later source change needs its own qualification.
 
 A separate Gitleaks scan of all 3,113 private-source commits found 13
 historical matches. Four are values in a removed environment backup under

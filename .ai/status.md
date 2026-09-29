@@ -1,35 +1,52 @@
 # BOSS Autonomous Delivery Status
 
-## 2026-09-28 BOSS-293/BOSS-448 Community integration candidate
+## 2026-09-28 BOSS-293/BOSS-448 Community integration checkpoint
 
 - Draft [PR #280](https://github.com/seanheiney/boss/pull/280) is the isolated
   integration branch for the full Community export, installer, console, five
   optional workflow examples, and branch reconciliation. The private source
   checkout and live Goldeneye deployment are unchanged.
-- BOSS-448 reviewed 89 open PRs in #174–#279. Forty heads are ancestors of
-  the integration branch, 13 are patch-equivalent, and the remaining draft
-  changes are reworked or superseded. Canaries #174/#191 need separate
-  disposition. Do not close the older PRs before #280 is pushed and merged.
-- Frozen source `1a8102a2eb7945afda64f72fb18906c134541bdd` passed the full
-  engine suite against disposable PostgreSQL 16: 5,167 passed, 128 skipped,
-  one expected failure. The web suite passed 2,455 tests with one skip; lint,
-  type check, production build, generated-doc check and strict docs build
-  passed. These are source-tree checks, not live release-commit QA proof.
-- A security review reproduced cross-project writes through MCP server and
-  secret routes using a low-permission authenticated principal. Project-scoped
-  authority now covers those gaps and job enqueue, with focused tests. Plane
-  writes have durable receipts and HTTPS verifies certificates by default.
-- The frozen source produced a 1,845-file export with zero mechanical blockers.
-  Its proposed local new-root commit `bb16111b` has zero Gitleaks tree/history
-  findings and 11 unverified, zero verified TruffleHog fixture/identifier
-  detections. Its exact clean x86 VM full installer lifecycle passed, including
-  rerun, backup/restore, upgrade, and safe uninstall/reinstall. A first-run
-  system canary incorrectly appears as customer Agent work; BOSS-438 is fixing
-  the view while preserving its audit trail. TUI and MCP coverage workstreams
-  are also active. Their next source candidate will need requalification.
-  Third-party terms, private-history credential disposition, release-commit
-  proof and public controls remain open. Keep PR #280 draft and the target
-  repository private.
+- BOSS-448 inventoried 291 remote refs and all 90 open PRs. Paramg #174/#191
+  were ported; the active Cursor, Sean, and Grok behavior is present, reworked,
+  or covered by the shell, raw-SQL, and test-fixture repairs on this branch.
+  The older PRs remain open pending integration-PR review and housekeeping.
+- `origin/main` through Paramg's `6407e2f9` is merged. Final candidate source
+  `0db60f6c8318c37cf846409363c1755f81f99bda` selects 1,880 Community
+  files with zero mechanical blockers; its exact pristine Ubuntu 24.04 x86 VM
+  and separate stdin-piped install passed. Its unpublished one-root commit `af200616` matches all 1,880
+  entries; full-history Gitleaks found zero and TruffleHog found 11 unverified
+  fixture/identifier matches, zero verified. The prior `37f44df7` VM lifecycle
+  passed but exposed a missing Grok CLI in API/worker, repaired in `eb4b4ec7`.
+  The latest source also masks incompatible inherited model defaults.
+- The interim `37f44df7` local one-root history `4e1841e8` contains exactly
+  its 1,879 selected files, including modes and symlinks. Full-history Gitleaks
+  found zero; TruffleHog without verification found 11 unverified fixtures or
+  identifiers, with zero verified results. Four credential fields in the
+  separate private source history still lack rotation or revocation evidence.
+- Final-source engine suite passed 5,243 with 128 skips and one expected
+  failure on bootstrapped disposable PostgreSQL. The final-source full web
+  suite passed 2,468 with one skip; production build and repository lint passed.
+  Focused model-setting, MCP, OpenAPI, export and exact-export API tests passed.
+  The broad Community API suite was
+  stopped after 13 passing tests because its database resets made it slow.
+  Do not treat these as live release-commit proof.
+- BOSS-451 pauses typed-decision model calls and TypeSafe key proof until spend
+  has durable reservation, lease, receipt and settlement. Unscoped SQL is held
+  out of model, MCP, workflow and investigation paths; explicit local paid
+  admin CLI calls retain it. Current TUI maps 973 `/v1` operator routes; MCP
+  accounts for all 986 HTTP operations: 854 API-policy eligible, 29 exact
+  human-confirmation gated, 36 held for route-specific safety gaps, and 67
+  internal/protocol excluded. Mapping does not prove every feature can run.
+- The [exact x86 VM report](/Users/sean/.codex/visualizations/2026/09/28/01a0e916-4f7e-7c91-b3e6-a8bbeeeca9bb/community-ga-0db60f6c/qualification-report.md)
+  records eight smoke gates, UI, representative API/TUI/MCP writes, 11 MCP
+  confirmation checks, rerun, backup/restore, two upgrade forms, safe
+  uninstall/reinstall, and a second pristine stdin-piped install with local
+  transport. Public HTTPS delivery and live model/provider calls were not
+  exercised. TUI usability [PR #281](https://github.com/seanheiney/boss/pull/281)
+  is separately drafted and requires a new export and VM after integration.
+  Third-party terms, private-history credential rotation, release-commit QA,
+  partner/claims signoff and target controls remain open.
+  Keep PR #280 draft and the target repository private and empty.
 
 ## 2026-09-28 BOSS-300 Community Apache decision (integration in progress)
 
@@ -38,11 +55,12 @@
 - PR #278 merged the decision, Community pack and release checklist changes.
   `public-flip-check` reports only its mechanical subset. BOSS-300 stays In
   Progress until third-party terms and notices are dispositioned.
-- The target remains private and empty. BOSS-293 still needs the exact export,
-  reachable-history review, clean VM acceptance, live QA and claims evidence.
+- The target remains private and empty. BOSS-293 still needs the final exact
+  export, reachable-history review, clean VM acceptance, live QA and claims
+  evidence.
 
 
-## 2026-09-24 Community feedback and public-release preparation
+## Historical 2026-09-24 Community feedback and public-release preparation (superseded)
 
 - `ai/codex/community-feedback-public` is scoped to BOSS-431 contributor intake,
   GitHub triage language, private security reporting, and BOSS-293 checklist evidence.
