@@ -16,6 +16,13 @@ from apps.api.app.services.agent_studio import (
 PROJECT_ID = "boss-dogfood"
 
 
+def _shipped_agent_keys() -> set[str]:
+    return {
+        path.stem
+        for path in (get_settings().specpack_root / "agents").glob("*.yaml")
+    }
+
+
 class _UndefinedTable(Exception):
     """Stand-in for psycopg.errors.UndefinedTable (name is what we match)."""
 
@@ -25,6 +32,7 @@ _UndefinedTable.__name__ = "UndefinedTable"
 
 def test_catalog_seed_is_idempotent_receipted_and_never_spends(client, engine):
     settings = get_settings()
+    expected_agent_keys = _shipped_agent_keys()
     with begin(engine) as connection:
         jobs_before = connection.execute(text("SELECT count(*) FROM jobs")).scalar_one()
         reservations_before = connection.execute(
@@ -38,7 +46,8 @@ def test_catalog_seed_is_idempotent_receipted_and_never_spends(client, engine):
     assert first.status_code == 200, first.text
     body = first.json()
     assert body["status"] == "seeded"
-    assert body["agent_count"] == 34, body["skipped"]
+    assert body["agent_count"] == len(expected_agent_keys), body["skipped"]
+    assert {item["agent_key"] for item in body["agents"]} == expected_agent_keys
     assert body["panel_count"] == 3
     assert body["workflow_count"] >= 1
     assert len(body["workflows"]) == body["workflow_count"]
@@ -96,7 +105,7 @@ def test_mobile_template_is_selectable_but_does_not_claim_device_execution(clien
     )
     assert response.status_code == 200, response.text
     items = response.json()["items"]
-    assert len(items) == 34
+    assert {item["id"] for item in items} == _shipped_agent_keys()
     assert sum(item["id"] == "mobile_app_operator" for item in items) == 1
     assert sum(
         item["id"] != "mobile_app_operator"

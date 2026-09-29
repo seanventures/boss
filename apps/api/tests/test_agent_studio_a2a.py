@@ -85,6 +85,13 @@ def _leased_job(item: dict[str, Any]) -> LeasedJob:
     )
 
 
+def _shipped_agent_keys() -> set[str]:
+    return {
+        path.stem
+        for path in (get_settings().specpack_root / "agents").glob("*.yaml")
+    }
+
+
 def test_seeded_catalog_compiles_and_runs_a_specialist(engine):
     settings = get_settings()
     studio = AgentStudioService(settings)
@@ -93,7 +100,7 @@ def test_seeded_catalog_compiles_and_runs_a_specialist(engine):
     with engine.begin() as connection:
         agents = studio.list_agents(connection, settings.default_project_id)
         panels = studio.list_panels(connection, settings.default_project_id)
-        assert len(agents) == 34
+        assert {item["agent_key"] for item in agents} == _shipped_agent_keys()
         assert len(panels) == 3
         assert all(item["status"] == "active" for item in agents)
         assert all(item["status"] == "active" for item in panels)
@@ -687,7 +694,7 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     )
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["agents"]) == 13
+    assert {item["agent_key"] for item in payload["agents"]} == _shipped_agent_keys()
     assert len(payload["panels"]) == 3
     assert len(payload["workflows"]) >= 1
     assert all("versions" in workflow for workflow in payload["workflows"])
@@ -698,6 +705,7 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
 
 def test_agent_studio_catalog_smoke_checks_every_seeded_agent_without_external_effects(client):
     settings = get_settings()
+    expected_agent_keys = _shipped_agent_keys()
 
     response = client.post(
         "/v1/agent-studio/catalog-smoke",
@@ -706,29 +714,16 @@ def test_agent_studio_catalog_smoke_checks_every_seeded_agent_without_external_e
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["agent_count"] == 13
-    assert payload["passed_count"] + payload["failed_count"] + payload["blocked_count"] == 13
+    assert payload["agent_count"] == len(expected_agent_keys)
+    assert payload["passed_count"] + payload["failed_count"] + payload["blocked_count"] == len(expected_agent_keys)
     assert payload["execution_mode"] == "deterministic_compile_only"
     assert payload["model_calls"] == payload["tool_calls"] == payload["external_effects"] == 0
-    assert {item["agent_key"] for item in payload["items"]} == {
-        "backend_engineer",
-        "cfo",
-        "chief_architect",
-        "chief_operator",
-        "database_administrator",
-        "devops_engineer",
-        "frontend_engineer",
-        "full_stack_engineer",
-        "product_manager",
-        "qa_engineer",
-        "security_engineer",
-        "ui_designer",
-        "ux_engineer",
-    }
+    assert {item["agent_key"] for item in payload["items"]} == expected_agent_keys
 
 
 def test_agent_studio_catalog_seed_is_explicit_idempotent_and_never_dispatches(client):
     settings = get_settings()
+    expected_agent_keys = _shipped_agent_keys()
 
     first = client.post(
         "/v1/agent-studio/catalog/seed",
@@ -736,7 +731,8 @@ def test_agent_studio_catalog_seed_is_explicit_idempotent_and_never_dispatches(c
     )
     assert first.status_code == 200, first.text
     assert first.json()["status"] == "seeded"
-    assert first.json()["agent_count"] == 13
+    assert first.json()["agent_count"] == len(expected_agent_keys)
+    assert {item["agent_key"] for item in first.json()["agents"]} == expected_agent_keys
     assert first.json()["panel_count"] == 3
     assert first.json()["external_effects"] == 0
 
