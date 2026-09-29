@@ -817,3 +817,64 @@ def test_malformed_auth_and_project_responses_fail_closed_without_raw_payload():
         assert marker not in surface.scope_reason
         operation = surface.operations[operation_alias("GET", "/v1/tasks")]
         assert surface.availability(operation) != "callable"
+
+
+def test_schedule_input_edit_is_typed_session_bound_and_not_a_new_plane():
+    """Discovery, typed body, and the write all go through the existing schedule operation."""
+    schema = {"paths": {"/v1/delivery-workflows/schedules": {
+        "get": {"parameters": [
+            {"name": "project_id", "in": "query", "required": True, "schema": {"type": "string"}},
+            {"name": "actor", "in": "query", "required": True, "schema": {"type": "string"}},
+        ]},
+        "post": {"requestBody": {"required": True, "content": {"application/json": {"schema": {
+            "type": "object",
+            "required": ["project_id", "workflow_key", "name", "cadence"],
+            "properties": {
+                "project_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "workflow_key": {"type": "string"},
+                "name": {"type": "string"},
+                "cadence": {"type": "string"},
+                "timezone": {"type": "string"},
+                "input": {"type": "object", "additionalProperties": {"type": "string"}},
+                "schedule_id": {"type": "string"},
+            },
+        }}}}}},
+    }}
+    seen = []
+
+    def send(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content) if request.content else {})
+        return httpx.Response(200, json={"id": "wsc_1", "ok": True})
+
+    client = httpx.Client(base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(send))
+    surface = ApiSurface(schema, client=client, principal="operator", pinned_project_id="alpha")
+    alias = operation_alias("POST", "/v1/delivery-workflows/schedules")
+    found = surface.find(query="schedule", limit=5)
+    assert any(item["alias"] == alias for item in found["operations"])
+    body = surface.describe(alias)["inputSchema"]["properties"]["body"]
+    assert body["properties"]["input"]["type"] == "object"
+    assert "schedule_id" in body["properties"]
+    assert "schedule_id" not in body["required"]
+    result = surface.invoke(alias, project_id="alpha", body={
+        "workflow_key": "weekly_newsletter",
+        "name": "Weekly newsletter — Monday",
+        "cadence": "weekly",
+        "timezone": "Europe/London",
+        "schedule_id": "wsc_1",
+        "input": {"sectors": "energy", "to": "reader@example.com"},
+    })
+    assert result["ok"] is True
+    assert seen[-1] == {
+        "workflow_key": "weekly_newsletter",
+        "name": "Weekly newsletter — Monday",
+        "cadence": "weekly",
+        "timezone": "Europe/London",
+        "schedule_id": "wsc_1",
+        "input": {"sectors": "energy", "to": "reader@example.com"},
+        "project_id": "alpha",
+        "actor": "operator",
+    }
+    listed = surface.invoke(
+        operation_alias("GET", "/v1/delivery-workflows/schedules"), project_id="alpha")
+    assert listed["ok"] is True

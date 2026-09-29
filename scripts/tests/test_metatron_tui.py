@@ -1044,3 +1044,55 @@ print(json.dumps({'openapi': len(records), 'operator': len(operator)}))
     assert result.returncode == 0, result.stderr
     counts = json.loads(result.stdout)
     assert counts == {"openapi": 986, "operator": 973}
+
+
+def test_schedule_edit_uses_typed_op_input_and_returns_the_api_result():
+    """The terminal addresses the existing schedule operation; it does not invent a second one."""
+    document = {"paths": {"/v1/delivery-workflows/schedules": {"post": {
+        "summary": "Create Workflow Schedule",
+        "requestBody": {"required": True, "content": {"application/json": {"schema": {
+            "type": "object",
+            "required": ["project_id", "workflow_key", "name", "cadence"],
+            "properties": {
+                "project_id": {"type": "string"},
+                "workflow_key": {"type": "string"},
+                "name": {"type": "string"},
+                "cadence": {"type": "string"},
+                "timezone": {"type": "string"},
+                "schedule_id": {"type": "string"},
+                "input": {"type": "object", "properties": {
+                    "sectors": {"type": "string"},
+                    "to": {"type": "string"},
+                }, "required": ["sectors", "to"]},
+            },
+        }}}},
+    }}}}
+    alias = tui.operation_records(document)[0]["operation_id"]
+    opener = FakeOpener([
+        (200, document),
+        (200, {"id": "wsc_1", "input": {"sectors": "energy", "to": "reader@example.com"}}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    described = client.handle(tui.parse_line(f"/describe {alias}"))
+    assert "input" in described
+    assert "schedule_id" in described
+    assert "sectors" in described
+    result = client.dispatch(tui.parse_line(
+        f'/op {alias} {{"body":{{"workflow_key":"weekly_newsletter",'
+        f'"name":"Weekly newsletter — Monday","cadence":"weekly",'
+        f'"timezone":"Europe/London","schedule_id":"wsc_1",'
+        f'"input":{{"sectors":"energy","to":"reader@example.com"}}}}}}'
+    ))
+    assert result["id"] == "wsc_1"
+    assert opener.calls[1]["method"] == "POST"
+    assert opener.calls[1]["url"].endswith("/v1/delivery-workflows/schedules")
+    assert opener.calls[1]["headers"]["x-boss-api-key"] == SECRET
+    assert opener.calls[1]["body"] == {
+        "project_id": "boss-dogfood",
+        "workflow_key": "weekly_newsletter",
+        "name": "Weekly newsletter — Monday",
+        "cadence": "weekly",
+        "timezone": "Europe/London",
+        "schedule_id": "wsc_1",
+        "input": {"sectors": "energy", "to": "reader@example.com"},
+    }

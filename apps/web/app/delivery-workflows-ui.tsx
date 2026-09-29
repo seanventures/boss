@@ -13,7 +13,7 @@ import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
-import { inputsWithTheDirective, missingRequired, workflowInputFields }
+import { inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields }
   from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { RunReportPanel } from "./run-report-ui";
@@ -132,7 +132,36 @@ type Schedule = {
   next_run_at: string | null;
   last_run_at: string | null;
   last_error: string | null;
+  /** Present on every schedule the API returns. Optional on the type so an older
+   *  payload still renders the sentence and the pause control. */
+  cadence?: string;
+  minute?: number;
+  hour?: number;
+  weekday?: number | null;
+  timezone?: string;
+  input?: Record<string, unknown>;
 };
+
+type ScheduleDraft = {
+  workflowKey: string;
+  name: string;
+  scheduleId: string | null;
+  timezone: string;
+  values: Record<string, string>;
+};
+
+function browserTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function scheduleFormValues(input: Record<string, unknown> | undefined): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input ?? {})) {
+    if (value == null) continue;
+    values[key] = typeof value === "string" ? value : String(value);
+  }
+  return values;
+}
 
 export type RunStep = {
   step_id: string;
@@ -648,6 +677,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft | null>(null);
   // WHAT WAS JUST MADE, so the builder can SAY it was made.
   //
   // Import worked and looked like it had not: the form closed, the toolbar came back looking
@@ -1038,20 +1068,46 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                                                 sample: true });
           }}
           onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
-          onSchedule={async (key, name) => {
+          scheduleDraft={scheduleDraft}
+          onOpenSchedule={(item, existing) => {
             // ASKED, NOT ASSUMED. Monday 08:00 is the common case and the zone is not
             // guessable — a report arriving at 3am because the browser's zone was used and
-            // nobody said so is the failure this avoids.
-            const zone = window.prompt(
-              `Run "${name}" every Monday at 08:00 — in which time zone?\n\n`
-              + "An IANA name: Europe/London, America/New_York, Asia/Kolkata, UTC.",
-              Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
-            if (!zone) return;
-            const result = await act(`Schedule ${name}`, "schedule", {
-              workflow_key: key, name: `${name} — weekly`,
-              cadence: "weekly", weekday: 0, hour: 8, minute: 0, timezone: zone,
+            // nobody said so is the failure this avoids. Required inputs are asked here too:
+            // the schedule runs them unattended, so a button that stores only a time zone
+            // cannot start a newsletter.
+            setScheduleDraft({
+              workflowKey: item.workflow_key,
+              name: existing?.name ?? item.name,
+              scheduleId: existing?.id ?? null,
+              timezone: existing?.timezone || browserTimeZone(),
+              values: scheduleFormValues(existing?.input),
             });
-            if (result.ok) await load();
+          }}
+          onCancelSchedule={() => setScheduleDraft(null)}
+          onChangeSchedule={(next) => setScheduleDraft(next)}
+          onSubmitSchedule={async (draft) => {
+            const chosen = installed.find((w) => w.workflow_key === draft.workflowKey);
+            const fields = workflowInputFields(chosen?.input_schema);
+            // REQUIRED INPUTS ARE STORED WITH THE SCHEDULE. Blank required fields stay
+            // on the form; the API would refuse them, and a click that fails after the
+            // operator thought it was saved is the gap this replaces.
+            if (missingRequired(fields, draft.values).length || !draft.timezone.trim()) return;
+            const existing = schedules.find((s) => s.id === draft.scheduleId);
+            const result = await act(
+              draft.scheduleId ? `Update schedule ${draft.name}` : `Schedule ${draft.name}`,
+              "schedule",
+              {
+                workflow_key: draft.workflowKey,
+                name: existing?.name ?? `${draft.name} — weekly`,
+                cadence: existing?.cadence ?? "weekly",
+                weekday: existing?.weekday ?? 0,
+                hour: existing?.hour ?? 8,
+                minute: existing?.minute ?? 0,
+                timezone: draft.timezone.trim(),
+                input: suppliedInputs(fields, draft.values),
+                ...(draft.scheduleId ? { schedule_id: draft.scheduleId } : {}),
+              });
+            if (result.ok) setScheduleDraft(null);
           }}
           onToggleSchedule={async (id, enabled) => {
             setBusy(enabled ? "Resume schedule" : "Pause schedule");
@@ -4152,14 +4208,19 @@ function ownWorkflows(installed: Installed[]): Installed[] {
  *
  *  Same cards, their own tab, plus the one thing a workflow of your own needs that a catalogue
  *  entry does not — a way to say when it should run without anybody asking. */
-function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule,
+function YoursView({ installed, schedules, busy, onStart, onEditMine, scheduleDraft,
+                     onOpenSchedule, onCancelSchedule, onChangeSchedule, onSubmitSchedule,
                      onToggleSchedule, onDeleteSchedule }: {
   installed: Installed[];
   schedules: Schedule[];
   busy: string | null;
   onStart: (key: string, workClass: string) => void;
   onEditMine: (definitionId: string) => void;
-  onSchedule: (key: string, name: string) => void;
+  scheduleDraft: ScheduleDraft | null;
+  onOpenSchedule: (item: Installed, existing?: Schedule) => void;
+  onCancelSchedule: () => void;
+  onChangeSchedule: (next: ScheduleDraft) => void;
+  onSubmitSchedule: (draft: ScheduleDraft) => void;
   onToggleSchedule: (id: string, enabled: boolean) => void;
   onDeleteSchedule: (id: string) => void;
 }) {
@@ -4183,8 +4244,62 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule
     );
   }
 
+  const drafting = scheduleDraft
+    ? installed.find((item) => item.workflow_key === scheduleDraft.workflowKey)
+    : undefined;
+  const draftFields = workflowInputFields(drafting?.input_schema);
+  const draftMissing = scheduleDraft ? missingRequired(draftFields, scheduleDraft.values) : [];
+
   return (
     <div className="dw-catalogue">
+      {scheduleDraft && drafting ? (
+        <form className="dw-sched-draft-form" data-testid="dw-sched-draft-form"
+              onSubmit={(event) => { event.preventDefault(); onSubmitSchedule(scheduleDraft); }}>
+          <span className="dw-field-label">
+            <label htmlFor="dw-sched-draft-zone">
+              {scheduleDraft.scheduleId ? "Edit" : "Run"} &quot;{drafting.name}&quot; every
+              Monday at 08:00 — in which time zone?
+            </label>
+          </span>
+          <input id="dw-sched-draft-zone" className="input" value={scheduleDraft.timezone}
+                 data-testid="dw-sched-draft-zone"
+                 onChange={(event) => onChangeSchedule(
+                   { ...scheduleDraft, timezone: event.target.value })} />
+          {draftFields.map((field) => (
+            <div className="dw-wiz-input" key={field.name}>
+              <span className="dw-field-label">
+                <label htmlFor={`dw-sched-draft-input-${field.name}`}>{field.label}</label>
+                {field.required ? <em className="dw-req"> required</em> : null}
+              </span>
+              {field.kind === "multiline" ? (
+                <textarea id={`dw-sched-draft-input-${field.name}`} rows={3}
+                          value={scheduleDraft.values[field.name] ?? ""}
+                          data-testid={`dw-sched-draft-input-${field.name}`}
+                          onChange={(event) => onChangeSchedule({
+                            ...scheduleDraft,
+                            values: { ...scheduleDraft.values, [field.name]: event.target.value },
+                          })} />
+              ) : (
+                <input id={`dw-sched-draft-input-${field.name}`} className="input"
+                       value={scheduleDraft.values[field.name] ?? ""}
+                       data-testid={`dw-sched-draft-input-${field.name}`}
+                       onChange={(event) => onChangeSchedule({
+                         ...scheduleDraft,
+                         values: { ...scheduleDraft.values, [field.name]: event.target.value },
+                       })} />
+              )}
+            </div>
+          ))}
+          <div className="dw-card-actions">
+            <button type="submit" className="cap-btn primary"
+                    disabled={!!busy || !scheduleDraft.timezone.trim() || draftMissing.length > 0}
+                    data-testid="dw-sched-draft-save">
+              {draftMissing.length ? `Needs ${draftMissing.join(", ")}` : "Save schedule"}
+            </button>
+            <button type="button" className="cap-btn" onClick={onCancelSchedule}>Cancel</button>
+          </div>
+        </form>
+      ) : null}
       <div className="dw-grid">
         {ours.map((item) => {
           const mine = byWorkflow.get(item.workflow_key) ?? [];
@@ -4260,6 +4375,9 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule
                           {s.enabled ? "pause" : "resume"}
                         </button>
                         <button type="button" className="linklike" disabled={!!busy}
+                                data-testid={`dw-sched-edit-${s.id}`}
+                                onClick={() => onOpenSchedule(item, s)}>edit inputs</button>
+                        <button type="button" className="linklike" disabled={!!busy}
                                 onClick={() => onDeleteSchedule(s.id)}>remove</button>
                       </span>
                     </li>
@@ -4285,7 +4403,7 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, onSchedule
                 {item.active_version ? (
                   <button type="button" className="cap-btn" disabled={!!busy}
                           data-testid={`dw-schedule-${item.workflow_key}`}
-                          onClick={() => onSchedule(item.workflow_key, item.name)}>
+                          onClick={() => onOpenSchedule(item)}>
                     Schedule
                   </button>
                 ) : null}

@@ -60667,6 +60667,11 @@ components:
           - type: boolean
           - type: 'null'
           title: Enabled
+        schedule_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Schedule Id
       additionalProperties: true
       type: object
       required:

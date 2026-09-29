@@ -164,6 +164,10 @@ class WorkflowScheduleBody(ProjectBody):
     timezone: str | None = None
     input: dict[str, Any] | None = None
     enabled: bool | None = None
+    # Present only when the caller is replacing the inputs of a schedule that already
+    # exists. Absent means create. The same body stays one operation, so the mounted
+    # count does not grow for an edit of values the create call already accepted.
+    schedule_id: str | None = None
 
 
 class WorkflowScheduleEnabledBody(ProjectBody):
