@@ -85,8 +85,18 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
     """Create the durable run row and kick off the pipeline in a background thread.
 
     deep=True runs a multi-source parallel scout sweep (competitor/pain/demand/timing) for a richer,
-    more cited dossier — the deeper second pass for a promising idea."""
-    require_discovery_runtime(settings)
+    more cited dossier — the deeper second pass for a promising idea.
+
+    Community research stays blocked until the caller has already reserved budget
+    and written a receipt. A direct start, with no governance, still raises.
+    """
+    governed = bool(
+        governance
+        and governance.get("reservation_id")
+        and governance.get("receipt_id")
+    )
+    if not governed:
+        require_discovery_runtime(settings)
     run_id = make_id("drun")
     engine = get_engine()
     init_state = {"deep": deep}

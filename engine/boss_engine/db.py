@@ -230,7 +230,10 @@ def _record_schema_apply(raw_connection, total: int, failures: list[str]) -> Non
             )
         raw_connection.commit()
     except Exception as exc:  # noqa: BLE001 — a bookkeeping row must never block a boot
-        raw_connection.rollback()
+        try:
+            raw_connection.rollback()
+        except Exception:
+            pass
         print(f"[ensure_schema] could not record this apply: {exc}")
 
 

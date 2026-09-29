@@ -19,9 +19,9 @@ PID = "boss-dogfood"
 def test_role_for_stage_map():
     assert role_for_stage("write_tests") == "qa"
     assert role_for_stage("implement") == "software_engineer"
-    assert role_for_stage("review_code") == "reviewer"
+    assert role_for_stage("review_code") == "adversarial_reviewer"
     assert role_for_stage("security_check") == "security_reviewer"
-    assert role_for_stage("design") == "architect"
+    assert role_for_stage("design") == "chief_architect"
     assert role_for_stage("mystery_stage") is None
 
 

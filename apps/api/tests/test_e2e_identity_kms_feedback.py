@@ -97,15 +97,68 @@ def test_identity_catalog_unknown_and_blueprint_apply_is_dry_run_only(client):
     assert "dry-run" in detail or "not supported" in detail
 
 
-def test_community_does_not_claim_cloud_account_connect(client):
-    """Criterion 5: Community SSO is not hosted Cloud Account Connect."""
-    link = client.get("/v1/account-connect/link")
-    assert link.status_code == 404, link.text
-    post = client.post(
-        "/v1/account-connect/link",
-        json={"project_id": PROJECT_ID, "actor": ACTOR},
+def test_community_does_not_claim_cloud_account_connect():
+    """Criterion 5: a Community process does not mount hosted Account Connect.
+
+    The shared test client is the enterprise-mounted app, so a paid route that
+    is present there answers 405. Community omission is a separate boot.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = os.pathsep.join((str(root), str(root / "engine")))
+    environment.pop("DATABASE_URL", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import anyio\n"
+                "from apps.api.app.main import app\n"
+                "\n"
+                "async def call(method, path, body=b''):\n"
+                "    messages = []\n"
+                "    sent = False\n"
+                "    scope = {\n"
+                "        'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1',\n"
+                "        'method': method, 'scheme': 'http', 'path': path,\n"
+                "        'raw_path': path.encode(), 'query_string': b'',\n"
+                "        'headers': [(b'content-type', b'application/json'), (b'host', b'test')],\n"
+                "        'client': ('127.0.0.1', 123), 'server': ('test', 80),\n"
+                "    }\n"
+                "    async def receive():\n"
+                "        nonlocal sent\n"
+                "        if sent:\n"
+                "            return {'type': 'http.disconnect'}\n"
+                "        sent = True\n"
+                "        return {'type': 'http.request', 'body': body, 'more_body': False}\n"
+                "    async def send(message):\n"
+                "        messages.append(message)\n"
+                "    await app(scope, receive, send)\n"
+                "    status = next(m['status'] for m in messages if m['type'] == 'http.response.start')\n"
+                "    payload = b''.join(m.get('body', b'') for m in messages if m['type'] == 'http.response.body')\n"
+                "    return status, payload\n"
+                "\n"
+                "get_status, get_body = anyio.run(call, 'GET', '/v1/account-connect/link')\n"
+                "assert get_status == 404, get_body\n"
+                "post_status, post_body = anyio.run(\n"
+                "    call, 'POST', '/v1/account-connect/link',\n"
+                "    b'{\"project_id\":\"boss-dogfood\",\"actor\":\"ceo\"}',\n"
+                ")\n"
+                "assert post_status == 404, post_body\n"
+            ),
+        ],
+        cwd=root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    assert post.status_code == 404, post.text
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_oidc_enabled_without_issuer_fails_closed_503(client):

@@ -268,6 +268,21 @@ def human_attributed_permission(method: str, path: str) -> str | None:
     return _HUMAN_ATTRIBUTED_CONFIRMATIONS.get((method, path))
 
 
+# A non-human without this grant is forbidden. The MCP hold is for a caller
+# who would otherwise be allowed to perform the effect.
+_GRANT_BEFORE_MCP_HOLD = {
+    ("DELETE", "/v1/mcp/servers/{server_id}"): "pack_manage",
+    ("POST", "/v1/worker-autoscaling/apply"): "infra_provision",
+    ("POST", "/v1/budget/set_intensity"): "budget_manage",
+    ("DELETE", "/v1/event-subscriptions/{subscription_id}"): "integration_manage",
+}
+
+
+def grant_before_mcp_hold(method: str, path: str) -> str | None:
+    """Project permission to check before returning an MCP hold."""
+    return _GRANT_BEFORE_MCP_HOLD.get((method, path))
+
+
 def _schema_fields(operation: dict, location: str) -> tuple[dict, list[str]]:
     properties: dict[str, dict] = {}
     required: list[str] = []

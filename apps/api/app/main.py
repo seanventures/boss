@@ -34,6 +34,7 @@ from boss_engine.services.coordination_read_model import (
 from boss_engine.mcp.api_surface import (
     confirmation_eligible as mcp_confirmation_eligible,
     exclusion_reason as mcp_exclusion_reason,
+    grant_before_mcp_hold as mcp_grant_before_hold,
     human_attributed_permission as mcp_human_attributed_permission,
     needs_operator_confirmation as mcp_needs_operator_confirmation,
     operation_alias as mcp_operation_alias,
@@ -1380,10 +1381,16 @@ async def request_validation_without_input(_request: Request, exc: RequestValida
     detail = []
     for error in exc.errors():
         error_type = str(error.get("type") or "value_error")
+        msg = str(error.get("msg") or "")
+        submitted = error.get("input")
+        if submitted not in (None, "", [], {}) and str(submitted) in msg:
+            msg = ""
+        if not msg:
+            msg = "Field required" if error_type == "missing" else "Invalid request value"
         detail.append({
             "type": error_type,
             "loc": list(error.get("loc") or ()),
-            "msg": "Field required" if error_type == "missing" else "Invalid request value",
+            "msg": msg,
         })
     return JSONResponse(status_code=422, content={"detail": detail})
 
@@ -1569,6 +1576,38 @@ def _require_exclusive_mcp_project(connection, *, principal: str, project_id: st
     """), {"principal": principal}).scalars())
     if accessible != {project_id} or principal in {"ceo", "system", "executive_console"}:
         raise HTTPException(status_code=403, detail="exclusive_mcp_project_required")
+
+
+async def _deny_missing_grant_before_mcp_hold(
+    request: Request, principal: str, route_path: str,
+) -> Optional[JSONResponse]:
+    """403 when this principal lacks the route's grant. None to continue."""
+    permission = mcp_grant_before_hold(request.method, route_path)
+    if not permission or not principal:
+        return None
+    project_id = (request.query_params.get("project_id") or "").strip()
+    if not project_id and request.method in {"POST", "PUT", "PATCH"}:
+        raw = await request.body()
+        if raw:
+            try:
+                body = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                body = None
+            if isinstance(body, dict):
+                key = "scope_id" if route_path == "/v1/budget/set_intensity" else "project_id"
+                value = body.get(key)
+                if isinstance(value, str):
+                    project_id = value.strip()
+    if not project_id:
+        return None
+    try:
+        with begin(engine) as connection:
+            require_project_actor(connection, project_id, principal, permission)
+    except HTTPException as error:
+        return JSONResponse(
+            status_code=error.status_code, content={"detail": error.detail},
+        )
+    return None
 
 
 def _authenticated_principal_is_human(connection, principal: str) -> bool:
@@ -1760,6 +1799,11 @@ async def require_transport_auth_for_v1(request: Request, call_next):
             with begin(engine) as connection:
                 human_principal = _authenticated_principal_is_human(connection, principal)
             if not human_principal and not mcp_operation:
+                denied = await _deny_missing_grant_before_mcp_hold(
+                    request, principal, matched[1],
+                )
+                if denied is not None:
+                    return denied
                 detail = ("mcp_confirmation_required"
                           if mcp_confirmation_eligible(request.method, matched[1])
                           else "mcp_operation_held")

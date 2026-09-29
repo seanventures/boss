@@ -121,10 +121,12 @@ class MetatronCommand:
         out = dict(snapshot)
 
         def _count(sql: str) -> int:
+            # Savepoint: a missing fleet table is a zero, not a poisoned transaction.
             try:
                 from sqlalchemy import text
 
-                return int(connection.execute(text(sql), {"p": project_id}).scalar_one() or 0)
+                with connection.begin_nested():
+                    return int(connection.execute(text(sql), {"p": project_id}).scalar_one() or 0)
             except Exception:
                 return 0
 

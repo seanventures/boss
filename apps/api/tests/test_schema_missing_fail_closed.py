@@ -62,7 +62,7 @@ def test_ensure_schema_reconciles_columns_before_full_sql(monkeypatch, tmp_path)
         return 2, []
 
     class FakeCursor:
-        def execute(self, sql):
+        def execute(self, sql, params=None):
             order.append("execute")
 
         def __enter__(self):
@@ -77,6 +77,9 @@ def test_ensure_schema_reconciles_columns_before_full_sql(monkeypatch, tmp_path)
 
         def commit(self):
             order.append("commit")
+
+        def rollback(self):
+            order.append("rollback")
 
         def close(self):
             order.append("close")

@@ -290,12 +290,14 @@ def test_intent_router_answer_agent_uses_discuss_registry():
     """Tool-grounded discuss path must use the project-pinned discuss registry."""
     from boss_engine.tools import build_discuss_read_registry
 
-    router = IntentRouter(get_settings())
+    settings = get_settings()
+    router = IntentRouter(settings)
     agent = router._answer_agent()
     names = set(agent.registry.names())
+    edition = str(getattr(settings, "boss_edition", "community") or "community")
     assert "query_db" not in names
-    assert names == set(build_discuss_read_registry().names())
-    assert "create_code_task" not in names
+    assert names == set(build_discuss_read_registry(edition=edition).names())
+    assert "create_code_task" in names
 
 
 def test_retry_code_task_requires_task_create_actor(client, engine):

@@ -4,10 +4,10 @@
 Do not publish, announce, or mark BOSS-293 done.
 `ready_for_publication` stays false.
 `PUBLIC_FLIP_CHECKLIST.md` is not signed off.
-**Product source:** `1f4176e6520dd7556d74f58ee3fecd8cf1f1a348` on
-`ai/codex/boss-293-community-integrate`. A documentation commit that only
-updates this file does not change that product tree. The release commit is
-the tip of this branch at the moment the annotated tag `v1.0-rc1` is moved.
+**Product source:** `1f4176e6520dd7556d74f58ee3fecd8cf1f1a348`, plus the
+qualification fixes committed after `1d400797`. The annotated tag `v1.0-rc1`
+was moved to `1d400797` and is not moved again by those fixes. The release
+commit on `main` is the tip of `ai/codex/boss-293-community-integrate`.
 **Tag:** `v1.0-rc1` still peels to `c96f9ac33ff96cbb255a5e6a60e5d549e48a7061`.
 It has not been moved onto the product source above, and it has not been pushed.
 **Package version:** `1.0.0-rc.1` on root, web, API client, engine, and the Helm
@@ -93,12 +93,21 @@ contains the following as ancestors:
   for #284, #286, #287, and #288 are already in the tree. They are not a live
   deploy, and they are not product scope for this community release.
 - Community `main.py` export pins on this tree are source
-  `fffc6e9ca00b8e158da4f041e34b48b9843fea6df61e3f4dafe0b617a15389a6` and output
-  `12b7b0a3fc3a9705c39f28d6a2cde082481e2da0dda9ab4ae101de775103caa2`, with one
+  `5bd9b720f20e9385fb7aa34b12c2a979efc36311b1473397d9f7146daa2fe14c` and output
+  `2efe93e90db8fad2c77b8f3bae36e5f091faa22386ca92fa37d8c7361a0878d3`, with one
   account gate. A parent-run export of ancestor `d73e0cea` wrote 1908 files,
-  0 mechanical blockers, and `ready_for_publication` false. `1f4176e6` changed
-  the community page rewrite pin, so that file count is not the export of
-  this tip. `ready_for_publication` stays false.
+  and the export of `1d400797` wrote 1914 files, both with 0 mechanical
+  blockers and `ready_for_publication` false. The pin above is the main.py
+  rewrite after the qualification fixes. `ready_for_publication` stays false.
+
+## Qualification fixes after `1d400797`
+
+A fresh run of the 63 tests that the older qualify-46 process reported as
+failed now passes on this tree. Missing project grants return 403 before an
+MCP hold. Named discovery and meetings still reserve budget when a model key
+is set. A decision question routes to a meeting. Self-improvement evidence
+names every empty field. A missing optional fleet table does not abort the
+captain transaction. `ready_for_publication` stays false.
 
 ## Still not evidenced
 

@@ -112,5 +112,12 @@ def test_mcp_server_protocol(monkeypatch):
     replies = [json.loads(x) for x in out]
     assert replies[0]["result"]["serverInfo"]["name"] == "boss-sre"
     tools = {t["name"] for t in replies[1]["result"]["tools"]}
-    assert tools == {"list_incidents", "get_investigation", "diagnose_incident"}
+    assert tools == {
+        "list_incidents",
+        "get_investigation",
+        "diagnose_incident",
+        "list_capabilities",
+        "verify_incident",
+        "page_incident",
+    }
     assert "inc_9" in replies[2]["result"]["content"][0]["text"]

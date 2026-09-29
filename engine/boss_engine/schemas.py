@@ -30,6 +30,24 @@ def _require_non_empty_mapping(
     return values
 
 
+def _require_evidence(
+    metrics: dict[str, Any], evidence_refs: list[str]
+) -> tuple[dict[str, Any], list[str]]:
+    """Report every missing evidence field, not only the first one."""
+    problems: list[str] = []
+    try:
+        metrics = _require_non_empty_mapping(metrics, "metrics")
+    except ValueError as exc:
+        problems.append(str(exc))
+    try:
+        evidence_refs = _require_non_empty_string_list(evidence_refs, "evidence_refs")
+    except ValueError as exc:
+        problems.append(str(exc))
+    if problems:
+        raise ValueError(" ".join(problems))
+    return metrics, evidence_refs
+
+
 class HealthResponse(BaseModel):
     status: str
     database_connected: bool
@@ -2527,9 +2545,8 @@ class SelfImprovementCanaryRequest(BaseModel):
         self.actor = _require_text(self.actor, "actor")
         self.outcome = _require_text(self.outcome, "outcome")
         self.summary = _require_text(self.summary, "summary")
-        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
-        self.evidence_refs = _require_non_empty_string_list(
-            self.evidence_refs, "evidence_refs"
+        self.metrics, self.evidence_refs = _require_evidence(
+            self.metrics, self.evidence_refs
         )
         return self
 
@@ -2547,9 +2564,8 @@ class SelfImprovementRolloutRequest(BaseModel):
         self.summary = _require_text(self.summary, "summary")
         if self.external_ref is not None:
             self.external_ref = _require_text(self.external_ref, "external_ref")
-        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
-        self.evidence_refs = _require_non_empty_string_list(
-            self.evidence_refs, "evidence_refs"
+        self.metrics, self.evidence_refs = _require_evidence(
+            self.metrics, self.evidence_refs
         )
         return self
 
@@ -2567,9 +2583,8 @@ class SelfImprovementRollbackRequest(BaseModel):
         self.reason = _require_text(self.reason, "reason")
         if self.external_ref is not None:
             self.external_ref = _require_text(self.external_ref, "external_ref")
-        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
-        self.evidence_refs = _require_non_empty_string_list(
-            self.evidence_refs, "evidence_refs"
+        self.metrics, self.evidence_refs = _require_evidence(
+            self.metrics, self.evidence_refs
         )
         return self
 

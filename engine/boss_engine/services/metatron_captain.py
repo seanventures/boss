@@ -1048,8 +1048,11 @@ class MetatronCaptain:
         summary = health.get("summary") or {}
 
         def _count(sql: str) -> int:
+            # A missing optional table must stay zero without aborting the
+            # surrounding transaction. A bare except leaves Postgres aborted.
             try:
-                return int(connection.execute(text(sql), {"p": project_id}).scalar_one() or 0)
+                with connection.begin_nested():
+                    return int(connection.execute(text(sql), {"p": project_id}).scalar_one() or 0)
             except Exception:
                 return 0
 
@@ -1093,17 +1096,18 @@ class MetatronCaptain:
     def _latest_run_scorecard(self, connection: Connection, project_id: str) -> dict[str, Any] | None:
         """Attach the newest completed run's v1.1 card. Missing stays None."""
         try:
-            row = connection.execute(
-                text(
-                    """
-                    SELECT state, finalize_ctx, status
-                    FROM code_task_runs
-                    WHERE project_id=:p AND status='completed'
-                    ORDER BY updated_at DESC LIMIT 1
-                    """
-                ),
-                {"p": project_id},
-            ).mappings().first()
+            with connection.begin_nested():
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT state, finalize_ctx, status
+                        FROM code_task_runs
+                        WHERE project_id=:p AND status='completed'
+                        ORDER BY updated_at DESC LIMIT 1
+                        """
+                    ),
+                    {"p": project_id},
+                ).mappings().first()
         except Exception:
             return None
         if not row:

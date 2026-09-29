@@ -4362,7 +4362,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     first_payload = first.json()
     assert first_payload["pack_id"] == "core_v1"
     assert first_payload["install_status"] == "installed"
-    assert first_payload["role_count"] == 20
+    assert first_payload["role_count"] == 21
 
     second = client.post(
         "/v1/packs/install",
@@ -4382,6 +4382,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
         "cto",
         "deployment_manager",
         "design_critic",
+        "docs_writer",
         "finops_sentinel",
         "infra_steward",
         "integration_validator",

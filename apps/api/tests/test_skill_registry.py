@@ -163,9 +163,9 @@ def test_real_skill_invocation_fails_closed_for_unbacked_skill(client, engine):
             settings.default_project_id,
             "skill.execute",
             {
-                "skill_id": "model.generate_text",
+                "skill_id": "model.route_via_entitlement_broker",
                 "caller": "worker",
-                "inputs": {"prompt": "hello"},
+                "inputs": {"task_kind": "chat"},
             },
         )
         leased = lease_service.claim_job(
@@ -174,11 +174,11 @@ def test_real_skill_invocation_fails_closed_for_unbacked_skill(client, engine):
         assert leased is not None and leased["id"] == job["id"]
 
     response = client.post(
-        "/v1/skills/model.generate_text/invoke",
+        "/v1/skills/model.route_via_entitlement_broker/invoke",
         json={
             "project_id": settings.default_project_id,
             "caller": "worker",
-            "inputs": {"prompt": "hello"},
+            "inputs": {"task_kind": "chat"},
             "mock": False,
             "created_by_job_id": leased["id"],
             "worker_id": "worker-unbacked",

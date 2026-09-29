@@ -1,5 +1,7 @@
 boto3==1.43.51
 fastapi==0.115.12
+# Account Connect form routes are imported by the API suite; FastAPI Form needs this.
+python-multipart==0.0.32
 httpx==0.28.1
 openai==1.93.0
 pydantic-settings==2.10.1

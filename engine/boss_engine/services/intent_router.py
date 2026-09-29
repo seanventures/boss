@@ -18,7 +18,7 @@ from .capability_manifest import CapabilityManifest
 from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
-from .discovery_service import require_discovery_runtime, start_discovery
+from .discovery_service import start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
 from .meeting_service import start_meeting_run
@@ -1556,18 +1556,15 @@ class IntentRouter:
         # That flag governs the older LLM CLASSIFIER (`_model_intent`), a different mechanism
         # from the tool-calling agent. The agent is the same one that answers every question in
         # this console today; if a model is configured at all, it is available.
-        if self.settings.openai_api_key or self.settings.azure_openai_key:
-            return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
-                                mode=mode,
-                                thread_id=thread_id,
-                                role=role)
-
-        # No model available — fall back to keywords rather than doing nothing.
+        # A configured model used to swallow every turn, including named discovery
+        # and meetings, so those paths never reserved budget. Questions and
+        # create_code_task still go to the agent when a model exists. Discovery,
+        # meetings, PRDs, and phased commands stay on the governed path.
         name, arguments = self._deterministic_intent(latest)
-        if name is None:
-            # DISCUSS BY DEFAULT: an unclassified message is a question / discussion, NOT a build
-            # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
-            # every greeting, question, or test string). Work starts only on an explicit intent.
+        model_configured = bool(
+            self.settings.openai_api_key or self.settings.azure_openai_key
+        )
+        if name is None or (model_configured and name == "create_code_task"):
             return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
                                 thread_id=thread_id,
@@ -1583,7 +1580,15 @@ class IntentRouter:
             "start_agent_process": "agent_process",
         }[name]
         capability = manifest.get(capability_id)
-        if capability is None or not capability.enabled:
+        # A missing GitHub target means the PR has nowhere to land yet. The run
+        # is still created locally; opening the PR fails closed until a repo is set.
+        missing_repo_only = (
+            name == "create_code_task"
+            and capability is not None
+            and not capability.enabled
+            and "GitHub repository" in (capability.reason or "")
+        )
+        if (capability is None or not capability.enabled) and not missing_repo_only:
             reason = capability.reason if capability else "Capability is not registered."
             return RouterTurn(reply=f"I can’t start that here: {reason}")
 
@@ -2743,7 +2748,6 @@ class IntentRouter:
 
         if name == "run_discovery":
             self._require(connection, project_id, actor, "task_create")
-            require_discovery_runtime(self.settings)
             seed = str(arguments.get("seed") or "").strip()
             title = str(arguments.get("title") or seed[:120] or "Discovery")
             reservation_amount = self.settings.plan_budget_usd_micros * 4
@@ -3030,6 +3034,23 @@ class IntentRouter:
             or (message.strip().endswith("?") and not polite_imperative)
         )
 
+        # A decision the operator asked for is a meeting. Diagnostic openers
+        # ("why", "what") stay questions. "Should we use Postgres or Mongo?"
+        # used to die here because the question mark returned before the matcher.
+        if (
+            not starts_discussion
+            and not embedded_question
+            and not looks_like_sql
+            and re.search(
+                r"\b(should we|decide between|design review|architecture decision)\b",
+                lowered,
+            )
+        ):
+            return "create_meeting", {
+                "title": self._short_title(message, "Decision meeting"),
+                "purpose": message,
+            }
+
         # A QUESTION IS A QUESTION, whichever verb it happens to contain.
         #
         # This guard existed but was applied to `create_code_task` ALONE, while every other
@@ -3066,11 +3087,6 @@ class IntentRouter:
             return "propose_command", {"command": message}
         if re.search(r"\b(prd|product requirements?|requirements document|write a spec)\b", lowered):
             return "create_prd", {"directive": message}
-        if re.search(r"\b(should we|decide between|design review|architecture decision)\b", lowered):
-            return "create_meeting", {
-                "title": self._short_title(message, "Decision meeting"),
-                "purpose": message,
-            }
         if re.search(r"\b(research|compare|investigate|market scan|discover)\b", lowered):
             return "run_discovery", {
                 "title": self._short_title(message, "Discovery"),
