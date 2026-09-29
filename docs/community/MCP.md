@@ -194,7 +194,7 @@ operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|
-| Community | 853 | 38 | 28 | 67 |
+| Community | 853 | 64 | 2 | 67 |
 | Paid-only additions | 39 | 0 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
@@ -210,17 +210,17 @@ its new steps execute, with `workflow_manage` and an audit event.
 Project meeting-role edits require `workflow_manage`; planned team-structure
 and agent-role edits require `role_review`. The API records the authenticated
 member as the actor even if a request body names another actor. Changing or
-applying the gate-autonomy policy requires a human CEO member with
-`decision_resolve`; dedicated MCP principals cannot be CEOs, so those two
-operations are held from MCP. The standard MCP member does not receive these
-management permissions by default.
+applying the gate-autonomy policy requires a separate human CEO confirmation.
+The approving human, who holds `decision_resolve`, is the actor recorded on
+the policy. Dedicated MCP principals cannot be CEOs. The standard MCP member
+does not receive these management permissions by default.
 
 Revocation must retain an inactive member row; Enterprise SCIM deprovisioning
 does this for project and org memberships. Deleting a seeded default member
 row is not a revocation: a later explicit bootstrap can recreate a missing
 default. Bootstrap preserves inactive rows and edited permissions.
 
-For the 38 confirmation-gated actions, MCP calls `api_request_confirmation`
+For the 64 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest
 of the complete request, its method and target, and a limited review summary;
 it never stores the raw body. A **separate human CEO member** reviews the
@@ -285,13 +285,15 @@ as the actor, while the confirmation trail retains the MCP requester. The
 request preview states `effect_actor: approving_human`; the submitted body still
 contains the MCP member's actor ID because it is bound to the MCP session.
 
-The 28 held Community and two paid-only actions return
-`operator_only_unavailable`. They include direct host/provider effects without
-a governed ChangeSet/receipt path, host key material, global or ID-only routes
-without a sound project boundary, and routes lacking API-side actor checks.
-Decision approval and preview approval remain held because those handlers can
-immediately execute a tool or queue merge/deployment work. Their full effect
-needs a separate route-specific safety review before MCP use.
+The 2 held Community actions and two paid-only actions return
+`operator_only_unavailable`. The Community holds are internal infrastructure
+routes and stay out of this product release. Paid-only holds stay behind the
+edition gate. Decision approval, preview approval, autonomy changes, and the
+other previously held product routes now require exact human confirmation.
+Each records an actor, project scope, and a receipt. Spend requires an active
+budget reservation, worker and deploy effects take a closed local lease, and
+destructive deploy, purge, teardown, and rollback record a rollback plan.
+Those handlers do not call an external provider from the confirmed path.
 See the [operation matrix](mcp-api-capability-matrix.json) for each mounted
 operation's current disposition.
 

@@ -181,7 +181,7 @@ def test_project_metadata_writes_bind_permission_and_record_real_actor(
                 operation_alias("POST", path), project_id=PROJECT,
                 body={"mode": "full_auto"} if path.endswith("autonomy") else {},
             )
-            assert result["error"] == "operator_only_unavailable", result
+            assert result["error"] == "confirmation_required", result
 
     # A project editor may use those safe metadata routes; attribution comes
     # from the authenticated principal, even when the body claims CEO.

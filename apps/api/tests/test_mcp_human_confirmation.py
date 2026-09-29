@@ -574,7 +574,7 @@ def test_stock_nonhuman_api_keys_cannot_bypass_decision_review(
     held = client.post(f"/v1/decisions/{decision_id}/approve",
                        headers=_headers(key), json={"actor": principal})
     assert held.status_code == 409, held.text
-    assert held.json()["detail"] == "mcp_operation_held"
+    assert held.json()["detail"] == "mcp_confirmation_required"
     with engine.begin() as connection:
         assert connection.execute(text("""
             SELECT status FROM decisions WHERE id = :id

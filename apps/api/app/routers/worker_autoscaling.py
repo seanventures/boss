@@ -168,7 +168,7 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         actor = _authorize(connection, payload.project_id, payload.actor, "infra_provision")
         try:
-            return svc.apply(
+            result = svc.apply(
                 connection,
                 project_id=payload.project_id,
                 actor=actor,
@@ -180,6 +180,22 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        from apps.api.app.governed_effect import record_governed_effect
+
+        applied_rows = result.get("results") or []
+        service_receipt = None
+        if applied_rows and isinstance(applied_rows[0], dict):
+            service_receipt = applied_rows[0].get("receipt_id")
+        record_governed_effect(
+            connection,
+            project_id=payload.project_id,
+            actor=actor,
+            effect_kind="worker_autoscaling.apply",
+            dedupe_parts=[payload.pool_key or "default", service_receipt or "apply"],
+            payload={"pool_key": payload.pool_key, "reason": payload.reason},
+            worker=True,
+        )
+        return result
 
 
 @router.get("/status")
