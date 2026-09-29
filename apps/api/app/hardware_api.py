@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS hardware_places (
   name TEXT NOT NULL,
   provider_key TEXT,
   status TEXT NOT NULL,
+  agent_state TEXT NOT NULL DEFAULT 'absent',
   is_default BOOLEAN NOT NULL DEFAULT false,
   endpoint TEXT,
   labels JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -84,6 +85,10 @@ CREATE TABLE IF NOT EXISTS hardware_places (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT hardware_places_kind CHECK (kind IN ('local', 'agent', 'provider')),
   CONSTRAINT hardware_places_status CHECK (status IN ('ready', 'pending', 'retired')),
+  CONSTRAINT hardware_places_agent_state CHECK (agent_state IN ('absent', 'installed')),
+  CONSTRAINT hardware_places_ready_needs_agent CHECK (
+    status <> 'ready' OR agent_state = 'installed'
+  ),
   CONSTRAINT hardware_places_provider_key_value CHECK (
     provider_key IS NULL OR provider_key IN ('aws', 'digitalocean', 'generic')
   ),
@@ -337,6 +342,9 @@ def _iso(value: Any) -> str | None:
 
 
 def _stored_agent_state(row: dict[str, Any]) -> str:
+    column = row.get("agent_state")
+    if column in _AGENT_STATES:
+        return str(column)
     raw = (row.get("labels") or {}).get("agent_state") or "absent"
     if raw not in _AGENT_STATES:
         return "absent"
@@ -350,7 +358,7 @@ def present_place(row: dict[str, Any]) -> dict[str, Any]:
         data = _as_dict(row)
     labels = dict(data.get("labels") or {})
     labels.pop("enroll_token_hash", None)
-    agent_state = labels.get("agent_state") or "absent"
+    agent_state = _stored_agent_state(data)
     if agent_state not in _AGENT_STATES:
         agent_state = "absent"
     labels["agent_state"] = agent_state
@@ -403,10 +411,10 @@ def _insert_place(
         text(
             """
             INSERT INTO hardware_places (
-              id, project_id, kind, name, provider_key, status, is_default,
+              id, project_id, kind, name, provider_key, status, agent_state, is_default,
               endpoint, labels, secret_ref, created_by
             ) VALUES (
-              :id, :project_id, :kind, :name, :provider_key, :status, :is_default,
+              :id, :project_id, :kind, :name, :provider_key, :status, :agent_state, :is_default,
               NULL, CAST(:labels AS JSONB), :secret_ref, :actor
             )
             RETURNING *
@@ -419,6 +427,7 @@ def _insert_place(
             "name": name,
             "provider_key": provider_key,
             "status": status,
+            "agent_state": labels.get("agent_state") if labels.get("agent_state") in _AGENT_STATES else "absent",
             "is_default": is_default,
             "labels": _labels_json(labels),
             "secret_ref": secret_ref,
@@ -533,6 +542,7 @@ def ensure_local_place(
                 UPDATE hardware_places
                 SET name = :hostname,
                     status = :status,
+                    agent_state = :agent_state,
                     labels = labels || CAST(:labels AS JSONB),
                     updated_at = now()
                 WHERE project_id = :project_id AND kind = 'local'
@@ -542,6 +552,7 @@ def ensure_local_place(
             {
                 "hostname": host,
                 "status": status,
+                "agent_state": kept_state,
                 "labels": _labels_json(labels),
                 "project_id": project,
             },
@@ -717,6 +728,7 @@ def mark_place_ready(
             """
             UPDATE hardware_places
             SET status = 'ready',
+                agent_state = 'installed',
                 endpoint = COALESCE(:endpoint, endpoint),
                 labels = labels || CAST(:labels AS JSONB),
                 updated_at = now()
@@ -772,6 +784,7 @@ def enroll_agent(connection: Any, token: str) -> dict[str, Any]:
             """
             UPDATE hardware_places
             SET status = 'ready',
+                agent_state = 'installed',
                 labels = (labels - 'enroll_token_hash')
                     || CAST(:installed AS JSONB),
                 updated_at = now()
