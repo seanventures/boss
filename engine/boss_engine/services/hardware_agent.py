@@ -451,7 +451,7 @@ def mint_agent_enroll_command(
     control_plane = _control_plane(control_plane_url)
     stored_labels = _labels(labels)
     kernel = _kernel()
-    if kernel is not None:
+    if kernel is not None and _dialect(connection) == "postgresql":
         created = kernel.register_agent_place(
             connection,
             project_id=project,
@@ -620,14 +620,6 @@ def accept_agent_call_home(connection: Any, report: dict[str, Any]) -> dict[str,
     extra = dict(labels)
     extra.update({"hostname": hostname, "arch": arch, "os": os_name, "source": "node-agent"})
     dialect = _dialect(connection)
-    kernel = _kernel()
-    if kernel is not None:
-        kernel.mark_place_ready(
-            connection,
-            place_id=place["id"],
-            endpoint=endpoint,
-            labels=extra,
-        )
     connection.execute(
         text(
             f"""
