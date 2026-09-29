@@ -1,5 +1,13 @@
 # Codex Handoff
 
+## 2026-09-29 Grok Community GA finish handoff
+
+Use [the Grok GA completion brief](agents/grok-community-ga-finish.md) for the
+current integration starting point, branch reconciliation, exact-source test
+plan, public-release gates, and publication sequence. Its code checkpoint is
+`236d9699`; refresh refs before work. The older snapshots below are retained
+as history and do not qualify the current release candidate.
+
 ## 2026-09-28 current BOSS-293 integration checkpoint
 
 - Work in `/Volumes/DataSSD1/boss-community-ga-integration/boss` on
