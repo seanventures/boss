@@ -26187,6 +26187,9 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
+from .hardware_api import mount_hardware_routes
+
+mount_hardware_routes(app, require_project_actor, require_project_reader)
 register_community_cloud_routes(app, engine, cloud_product, require_project_actor)
 paid_router = None
 if str(settings.boss_edition).strip().lower() in ENTERPRISE_EDITIONS:

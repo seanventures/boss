@@ -30536,6 +30536,201 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/places:
+    get:
+      tags:
+      - hardware
+      summary: Get Places
+      operationId: get_v1_hardware_places_bd4f3d67
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaceListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/places/local:
+    post:
+      tags:
+      - hardware
+      summary: Post Local Place
+      operationId: post_v1_hardware_places_local_bf77df53
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalPlaceRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/places/agents:
+    post:
+      tags:
+      - hardware
+      summary: Post Agent Place
+      operationId: post_v1_hardware_places_agents_40e6c9eb
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentPlaceRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentPlaceResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/agents/enroll:
+    post:
+      tags:
+      - hardware
+      summary: Post Enroll
+      description: Unauthenticated node call-home. The body token is the credential.
+      operationId: post_v1_hardware_agents_enroll_39d2f599
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/places/providers:
+    post:
+      tags:
+      - hardware
+      summary: Post Provider Place
+      operationId: post_v1_hardware_places_providers_3c6acbfb
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderPlaceRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/places/{place_id}/propose:
+    post:
+      tags:
+      - hardware
+      summary: Post Propose
+      operationId: post_v1_hardware_places_place_id_propose_f993ddda
+      parameters:
+      - name: place_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Place Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProposeRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/hardware/resolve:
+    get:
+      tags:
+      - hardware
+      summary: Get Resolve
+      operationId: get_v1_hardware_resolve_ec4dee8f
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Project Id
+      - name: place_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Place Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     A2AAcknowledgeRequest:
@@ -31833,6 +32028,39 @@ components:
       - plan_id
       - summary
       title: AgentPendingConfirmation
+    AgentPlaceRequest:
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+          title: Project Id
+        actor:
+          type: string
+          minLength: 1
+          title: Actor
+        name:
+          type: string
+          minLength: 1
+          title: Name
+      additionalProperties: false
+      type: object
+      required:
+      - project_id
+      - actor
+      - name
+      title: AgentPlaceRequest
+    AgentPlaceResponse:
+      properties:
+        place:
+          $ref: '#/components/schemas/PlaceBody'
+        enroll_command:
+          type: string
+          title: Enroll Command
+      type: object
+      required:
+      - place
+      - enroll_command
+      title: AgentPlaceResponse
     AgentRuntimeResolveRequest:
       properties:
         project_id:
@@ -34820,6 +35048,31 @@ components:
       - created_at
       - updated_at
       title: ChangeSetSummary
+    ChangesetProposal:
+      properties:
+        id:
+          type: string
+          title: Id
+        status:
+          type: string
+          title: Status
+        applied_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Applied At
+        operations:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Operations
+      type: object
+      required:
+      - id
+      - status
+      - operations
+      title: ChangesetProposal
     ChannelConnectBody:
       properties:
         project_id:
@@ -39358,6 +39611,17 @@ components:
       - to
       - dedupe_key
       title: EmailTestRequest
+    EnrollRequest:
+      properties:
+        token:
+          type: string
+          minLength: 1
+          title: Token
+      additionalProperties: false
+      type: object
+      required:
+      - token
+      title: EnrollRequest
     EnterpriseIdentityProviderListResponse:
       properties:
         project_id:
@@ -46118,6 +46382,23 @@ components:
       - project_id
       - title
       title: InitiativeRequest
+    InstallProposal:
+      properties:
+        script:
+          type: string
+          title: Script
+        description:
+          type: string
+          title: Description
+        applied:
+          type: boolean
+          title: Applied
+      type: object
+      required:
+      - script
+      - description
+      - applied
+      title: InstallProposal
     IntegrationConnectionCreateRequest:
       properties:
         project_id:
@@ -48015,6 +48296,42 @@ components:
       - total_calls
       - total_cost_usd_micros
       title: LlmCallSummaryResponse
+    LocalPlaceRequest:
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+          title: Project Id
+        actor:
+          type: string
+          minLength: 1
+          title: Actor
+        hostname:
+          type: string
+          minLength: 1
+          title: Hostname
+        arch:
+          type: string
+          minLength: 1
+          title: Arch
+        os:
+          type: string
+          minLength: 1
+          title: Os
+        agent_state:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent State
+      additionalProperties: false
+      type: object
+      required:
+      - project_id
+      - actor
+      - hostname
+      - arch
+      - os
+      title: LocalPlaceRequest
     ManualDeployBody:
       properties:
         target_id:
@@ -51776,6 +52093,101 @@ components:
       - project_id
       - name
       title: PipelineProfileDefaultBody
+    PlaceBody:
+      properties:
+        id:
+          type: string
+          title: Id
+        project_id:
+          type: string
+          title: Project Id
+        kind:
+          type: string
+          title: Kind
+        name:
+          type: string
+          title: Name
+        status:
+          type: string
+          title: Status
+        is_default:
+          type: boolean
+          title: Is Default
+        agent_state:
+          type: string
+          title: Agent State
+        ready:
+          type: boolean
+          title: Ready
+        installer_machine:
+          type: boolean
+          title: Installer Machine
+        hostname:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hostname
+        arch:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Arch
+        os:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Os
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+        secret_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Secret Ref
+        endpoint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Endpoint
+        labels:
+          additionalProperties: true
+          type: object
+          title: Labels
+      type: object
+      required:
+      - id
+      - project_id
+      - kind
+      - name
+      - status
+      - is_default
+      - agent_state
+      - ready
+      - installer_machine
+      - labels
+      title: PlaceBody
+    PlaceListResponse:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        default_place_id:
+          type: string
+          title: Default Place Id
+        places:
+          items:
+            $ref: '#/components/schemas/PlaceBody'
+          type: array
+          title: Places
+      type: object
+      required:
+      - project_id
+      - default_place_id
+      - places
+      title: PlaceListResponse
     PlanCreateRequest:
       properties:
         project_id:
@@ -52813,6 +53225,62 @@ components:
       - org_name
       - created_at
       title: ProjectSummary
+    ProposeRequest:
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+          title: Project Id
+        actor:
+          type: string
+          minLength: 1
+          title: Actor
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        operations:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Operations
+      additionalProperties: false
+      type: object
+      required:
+      - project_id
+      - actor
+      title: ProposeRequest
+    ProposeResponse:
+      properties:
+        applied:
+          type: boolean
+          title: Applied
+        ready:
+          type: boolean
+          title: Ready
+        place:
+          $ref: '#/components/schemas/PlaceBody'
+        install:
+          $ref: '#/components/schemas/InstallProposal'
+        changeset:
+          $ref: '#/components/schemas/ChangesetProposal'
+      type: object
+      required:
+      - applied
+      - ready
+      - place
+      - install
+      - changeset
+      title: ProposeResponse
     ProposedAction:
       properties:
         id:
@@ -53466,6 +53934,37 @@ components:
       - detail
       - created_at
       title: ProviderHealthSummary
+    ProviderPlaceRequest:
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+          title: Project Id
+        actor:
+          type: string
+          minLength: 1
+          title: Actor
+        provider:
+          type: string
+          minLength: 1
+          title: Provider
+        secret_ref:
+          type: string
+          minLength: 1
+          title: Secret Ref
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+      additionalProperties: false
+      type: object
+      required:
+      - project_id
+      - actor
+      - provider
+      - secret_ref
+      title: ProviderPlaceRequest
     ProviderSloEvaluateRequest:
       properties:
         project_id:
@@ -55383,6 +55882,26 @@ components:
       - project_id
       - agent_id
       title: ResolveLeaseRequest
+    ResolveResponse:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        place_id:
+          type: string
+          title: Place Id
+        default_place_id:
+          type: string
+          title: Default Place Id
+        place:
+          $ref: '#/components/schemas/PlaceBody'
+      type: object
+      required:
+      - project_id
+      - place_id
+      - default_place_id
+      - place
+      title: ResolveResponse
     ResourceAllocationPlanRequest:
       properties:
         project_id:
