@@ -1170,12 +1170,20 @@ class NativeCodeAgent:
     ) -> str:
         from .openai_adapter import groq_qwen_context_limits
 
-        configured = int(getattr(self.settings, "code_agent_context_files", 14) or 0)
+        # Hermetic callers pass self=None to exercise the packer without an LLM
+        # adapter. A live agent still clamps to its configured file budget.
+        settings = getattr(self, "settings", None)
+        if settings is None:
+            requested = int(limit or 0)
+            if requested <= 0:
+                return ""
+            return build_repo_context(cwd, task=task, limit=requested)
+        configured = int(getattr(settings, "code_agent_context_files", 14) or 0)
         if configured <= 0:
             return ""
         file_limit, max_bytes, head_bytes = groq_qwen_context_limits(
-            model or getattr(self.settings, "openai_model", None),
-            base_url=str(getattr(self.settings, "openai_base_url", "") or ""),
+            model or getattr(settings, "openai_model", None),
+            base_url=str(getattr(settings, "openai_base_url", "") or ""),
             engine=str(getattr(self, "engine", "") or ""),
             file_limit=min(int(limit or configured), configured),
         )

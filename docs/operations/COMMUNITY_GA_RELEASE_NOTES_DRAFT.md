@@ -49,7 +49,7 @@ integration candidate for review, not a publication.
   secret reference. A capacity proposal names the hardware agent and stays
   planned until approval, an active budget reservation, and a change-set
   dedupe key. Tests do not call a provider.
-- Thirty-four bundled agent definitions, twelve workflow templates, and five
+- Thirty-four bundled agent definitions, twelve workflow templates and five
   opt-in example workflows. Installing definitions or examples starts no work.
   Catalog proof tests at `e63439e9` cover those counts.
 - Choosing a workflow for a change runs that workflow. Inline remains the

@@ -1364,13 +1364,15 @@ class GitHubCodeSyncService:
                     INSERT INTO resource_receipts (
                         id, project_id, changeset_id, operation_id, receipt_id,
                         dedupe_key, provider, action, resource_type, resource_ref,
-                        status, request_hash
+                        status, request_hash, created_at
                     )
                     VALUES (
                         :id, :project_id, :changeset_id, :operation_id,
                         :receipt_id, :dedupe_key, 'github', :action,
                         'github_branch_ref', :resource_ref, 'in_progress',
-                        :request_hash
+                        :request_hash,
+                        clock_timestamp()
+                            + (:operation_index * INTERVAL '1 microsecond')
                     )
                     """
                 ),
@@ -1384,6 +1386,7 @@ class GitHubCodeSyncService:
                     "action": action,
                     "resource_ref": resource_ref,
                     "request_hash": json_hash(payload),
+                    "operation_index": operation_index,
                 },
             )
             connection.execute(
