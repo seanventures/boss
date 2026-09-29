@@ -605,12 +605,16 @@ def start_code_task(
     # the guard cover the path projects are actually started on, rather than only the one a tool
     # happens to use. Lifted to the top level so everything downstream — the adopt bookkeeping,
     # the console's "which run governs this" — sees it in the one place it has always looked.
-    if not run_finalize.get("workflow_run_id"):
+    _chose_a_workflow = bool(run_finalize.get("workflow_version_id"))
+    # A WORKFLOW PICKED FOR THIS CHANGE IS NOT OVERRULED BY THE ONE THE PROJECT CAME FROM. A
+    # change to a panel-born project carries that panel's run in `origin`; lifting it made the
+    # change "already governed", so the workflow the operator had just picked was recorded and
+    # never started — the change ran inline under a choice that said otherwise.
+    if not run_finalize.get("workflow_run_id") and not _chose_a_workflow:
         _from_origin = (run_finalize.get("origin") or {}).get("workflow_run_id")
         if _from_origin:
             run_finalize["workflow_run_id"] = str(_from_origin)
     _already_governed = bool(run_finalize.get("workflow_run_id"))
-    _chose_a_workflow = bool(run_finalize.get("workflow_version_id"))
     _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark")
     _is_new_project = (not _already_governed) and (_chose_a_workflow or (
         not any(run_finalize.get(k) for k in _continuation)
