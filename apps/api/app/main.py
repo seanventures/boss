@@ -1467,6 +1467,23 @@ DEFAULT_PROJECT_READ_PATHS = frozenset({
 })
 
 
+def _route_relative_path(request: Request) -> str:
+    """Use the path FastAPI routes after removing an ASGI proxy root_path.
+
+    ASGI servers may include root_path in scope['path']. Request.url.path then
+    includes the proxy prefix even though the mounted /v1 route still matches.
+    Match Starlette's route-path boundary: a partial prefix is not a root path.
+    Security checks and exact MCP digests must use that route-relative path.
+    """
+    path = request.scope["path"]
+    root_path = request.scope.get("root_path", "")
+    if root_path and path.startswith(root_path):
+        suffix = path[len(root_path):]
+        if not suffix or suffix.startswith("/"):
+            return suffix
+    return path
+
+
 @lru_cache(maxsize=1024)
 def matched_get_route(path: str, root_path: str) -> tuple[Any, Optional[str]] | None:
     """Find the GET route before dispatch so project reads can be checked first."""
@@ -1495,10 +1512,7 @@ def requested_get_project_id(request: Request) -> Optional[str]:
         return None
     path = request.scope["path"]
     root_path = request.scope.get("root_path", "")
-    route_path = (
-        path[len(root_path):]
-        if root_path and path.startswith(f"{root_path}/") else path
-    )
+    route_path = _route_relative_path(request)
     if (
         "project_id" not in request.query_params
         and route_path not in DEFAULT_PROJECT_READ_PATHS
@@ -1583,7 +1597,8 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     )
     # The browser-facing preview proxy and injected feedback are capability-gated by the
     # unguessable preview id and TTL. Startup logs require API auth and project membership.
-    _parts = request.url.path.split("/")
+    route_path = _route_relative_path(request)
+    _parts = route_path.split("/")
     is_preview_capability = (
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews"
         and _parts[4] in {"web", "feedback"}
@@ -1594,13 +1609,13 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         and _parts[2] == "webhooks"
         and _parts[3] == "inbound"
     )
-    is_github_webhook = request.url.path == "/v1/webhooks/github"
+    is_github_webhook = route_path == "/v1/webhooks/github"
     # Plane's issue webhook is a machine callback that verifies its own X-Plane-Signature HMAC,
     # so it is exempt from transport auth exactly like the GitHub webhook.
-    is_plane_webhook = request.url.path == "/v1/webhooks/plane"
-    is_bitbucket_webhook = request.url.path == "/v1/webhooks/bitbucket"
+    is_plane_webhook = route_path == "/v1/webhooks/plane"
+    is_bitbucket_webhook = route_path == "/v1/webhooks/bitbucket"
     # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
-    is_reliability_alert = request.url.path == "/v1/reliability/alert"
+    is_reliability_alert = route_path == "/v1/reliability/alert"
     # An investigation's sandbox authenticates with a token minted for that ONE investigation,
     # checked per request, scoped to its project, carrying its read/fix mode, and cleared the
     # moment it finishes. That is a narrower credential than the API key, not a way around it —
@@ -1635,7 +1650,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     ):
         return JSONResponse(status_code=403, content={"detail": "mcp_auth_required"})
     if (
-        not request.url.path.startswith("/v1/")
+        not route_path.startswith("/v1/")
         or not auth_required
         or is_preview_capability
         or is_inbound_webhook
@@ -1736,7 +1751,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         confirmed_project = request.headers.get("X-BOSS-MCP-Project")
         if confirmation_id and not mcp_operation:
             return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_without_operation"})
-        matched = (_matched_mcp_operation(request.method, request.url.path)
+        matched = (_matched_mcp_operation(request.method, route_path)
                    if mcp_operation or request.method in {"POST", "PUT", "PATCH", "DELETE"}
                    else None)
         if (matched is not None
@@ -1789,7 +1804,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                             connection, project_id=confirmed_project,
                             confirmation_id=confirmation_id, requester=principal,
                             operation=mcp_operation, method=request.method,
-                            path=request.url.path, query=dict(query_items), body=body,
+                            path=route_path, query=dict(query_items), body=body,
                         )
                         _require_human_mcp_member(
                             connection, confirmed_project, approved_by,

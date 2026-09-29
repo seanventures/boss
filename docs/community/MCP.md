@@ -245,7 +245,10 @@ equivalents are `GET /v1/mcp-confirmations?project_id=...` and
 `POST /v1/mcp-confirmations/{id}/approve`. The MCP client then calls
 `api_write_operation` with **identical** path, query, and body plus the returned
 `confirmation_id`. The stored summary omits free-form body/query values; the
-human must inspect the full request they submit for approval. For example,
+human must inspect the full request they submit for approval. When BOSS is
+served behind a proxy prefix, the reviewed path remains the
+route-relative `/v1/...` path; the proxy prefix is not part of the digest.
+For example,
 with the human's own TUI key, use the operation IDs from `/describe` and send
 the approval as one `/op` JSON argument:
 

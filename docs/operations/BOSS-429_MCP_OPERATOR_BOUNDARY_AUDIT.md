@@ -88,6 +88,8 @@ The API accepts a proposal only from an authenticated, dedicated API-key princip
 
 The approval-route gate classifies the authenticated principal from its active member records before dispatch, even when the request has no MCP headers. A nonhuman or ambiguously typed API-key, OIDC, or SAML identity cannot call an approval or other MCP-confirmation-gated action directly. This includes keys bound to the seeded `system` and `executive_console` members; neither identity is a human-review exemption. The installed MCP key must remain bound to a dedicated nonhuman member, while the console's human key or human OIDC/SAML session follows the ordinary API policy and audit path.
 
+The transport boundary uses FastAPI's route-relative path when an ASGI `root_path` proxy prefix is present. This keeps API authentication, callback exemptions, operation matching, and the exact confirmation digest aligned with the mounted `/v1/...` route. A proxied request cannot skip auth by adding the prefix, and the prefix does not create a second approval identity for the same route.
+
 ## Held route families
 
 - Direct host, deployment, provider, and Goldeneye effects lack a consistently enforced ChangeSet, budget reservation, resource receipt, or rollback path. Some deployment endpoints currently return `409` or suppress a host teardown error; confirmation alone would not make them safe.
