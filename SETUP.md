@@ -426,7 +426,7 @@ running directly on your host.
 | Subscription | What travels | Key |
 |---|---|---|
 | Codex | the whole `~/.codex/auth.json` | `CODEX_AUTH_JSON` |
-| Claude Code | the token from `claude setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| Claude Code | does not travel. Setup-token import is disabled | CLI-owned login only |
 | Cursor | nothing — not supported here | — |
 
 Do **not** set `CODEX_ACCESS_TOKEN`. Codex reads that variable itself and errors on it.
@@ -509,60 +509,18 @@ in its database — add `--accept-database-fallback` to say yes deliberately.
 
 ### Claude Code
 
-On your own machine:
+Claude setup-token import is disabled. No provider or counsel clearance for copying a
+Claude session token into BOSS is recorded in this repository. Counsel reference
+`01049940` covers first-party Apache licensing only and does not clear this path.
 
-```bash
-claude setup-token
-```
+Do not run `claude setup-token` into the installer, `remote.sh subscription --provider
+claude_code`, `store_subscription_token.py claude_code`, or the console paste box. Those
+commands refuse before they read or store a token.
 
-That prints a long-lived token made for headless use. It is a separate credential from the
-session you sign in with, so BOSS holding it does not disturb your own login.
-
-The token now has to reach BOSS. **Pick one of these three — they all do the same job**, and
-which is easiest depends on what you have open, not on where BOSS is running.
-
-**1. The console** — works for any install, nothing to set up.
-
-Setup → Step two → Provider **Claude Code subscription** → paste it into *Token from
-`claude setup-token`* → **Store and connect**. BOSS writes it to this install's secret store
-and keeps a reference rather than the value. Community records the connection without a
-live proof turn. No restart and nothing to put in a file.
-
-**2. One command — when BOSS is on a server you reach over SSH.**
-
-```bash
-claude setup-token | ./scripts/install/remote.sh \
-  --host root@YOUR.SERVER.IP --key ~/.ssh/id_ed25519 \
-  subscription --provider claude_code
-```
-
-Nothing to set first: it reads the server's own API key. The token goes in on the pipe, so it
-reaches neither your shell history nor the server's process list. If that install has no secret
-store, BOSS stops rather than putting a live credential in its database — add
-`--accept-database-fallback` to say yes deliberately.
-
-**3. From the shell — any install, local or remote.**
-
-`store_subscription_token.py` does not care where BOSS is; it posts the credential to whatever
-`$BOSS_API` points at. Set that pair first — see
-[Setting `$BOSS_API` and `$BOSS_API_KEY`](#setting-boss_api-and-boss_api_key) — and for a server
-they are the server's address and the server's key, **not** `127.0.0.1` unless you opened a
-tunnel.
-
-```bash
-claude setup-token | python3 scripts/store_subscription_token.py claude_code --stdin
-```
-
-That stores it. It does not connect it, so do that too:
-
-```bash
-curl -sS -X POST "$BOSS_API/v1/setup/coding-agents/connect" \
-  -H "x-boss-api-key: $BOSS_API_KEY" -H 'Content-Type: application/json' \
-  -d '{"project_id":"boss-dogfood","actor":"ceo","provider":"claude_code","prove":false}'
-```
-
-`connect` checks and records the CLI connection. In Community, "connected" does not mean
-that a model has answered; the first governed job must establish that.
+The supported path is the CLI-owned login: run `claude auth login` as the `boss` user
+inside the API container, then rerun the installer with `--connect-claude-local`. BOSS
+records status and does not receive OAuth bytes. See
+[model connections](docs/community/MODEL_CONNECTIONS.md).
 
 ---
 
@@ -673,7 +631,7 @@ knowing before you are looking at a failure.
 
 | | On a server |
 |---|---|
-| Claude Code | `claude setup-token` on your own machine, paste the value into Step two. It is a separate long-lived credential — your own login is untouched. |
+| Claude Code | Setup-token import is disabled. Use `claude auth login` as `boss` inside the API container, then `--connect-claude-local`. |
 | Codex | `docker exec -it <api-container> codex login --device-auth` and follow the URL. The container gets its own session, because one ChatGPT session cannot serve two machines. |
 
 **Nothing needs to be in the environment.** Credentials go through the console into this

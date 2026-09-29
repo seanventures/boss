@@ -138,9 +138,9 @@ does not send OAuth bytes to a BOSS endpoint or database. It refuses to record
 a local subscription if `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or a
 previously stored setup token could make the status misleading. Community does
 not run a live proof turn during setup, so model use remains unverified until a
-governed job succeeds. The existing `--connect-claude` token-import path is
-still present pending provider/owner disposition and must not be treated as
-cleared for public release.
+governed job succeeds. `--connect-claude` and the other Claude setup-token
+import commands are disabled. No provider or counsel clearance for copying a
+Claude session token is recorded in this repository.
 
 The separate `--connect-codex` path imports the VM user's CLI auth JSON into
 BOSS's secret backend. A database-backed install asks for
@@ -449,7 +449,9 @@ project list, and an artifact before reopening the console.
 
 The artifact restore overlays its archive. Files created after the backup
 remain unless removed separately; review the current volume first. BOSS does
-not archive the Claude CLI's session. A normal upgrade or safe uninstall keeps
+not archive the Claude CLI's session volume. The backup's `.env` copy blanks
+`CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_AUTH_JSON`, and those values are removed
+from the dump and artifact archive if they appear there. A normal upgrade or safe uninstall keeps
 its named volume; after an explicit volume purge or moving to another machine,
 run `claude auth login` inside the API container again. A remote archive
 install uses `.boss-shipped-commit` rather than Git; recover it by shipping

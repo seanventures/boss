@@ -4,12 +4,12 @@
 The installer and worker run in different containers/accounts. Host login discovery is
 informational. An operator can sign Claude Code in directly as the container's boss user,
 then record that local CLI connection without passing OAuth material through this script.
-The older token import remains available pending provider/owner disposition.
+The older Claude setup-token import is disabled: no provider or counsel clearance
+is recorded for copying that session into BOSS.
 """
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 import os
 import shutil
@@ -74,23 +74,11 @@ def codex_credential() -> str:
 
 
 def claude_credential() -> str:
-    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    if token:
-        return token
-    if not shutil.which("claude"):
-        raise RuntimeError("Claude CLI missing; use --install-coding-clis first")
-    print("Run `claude setup-token` in another VM terminal, then paste its token here.")
-    print("The official CLI handles browser/device prompts; BOSS never displays the token.")
-    try:
-        with open("/dev/tty", "r"):
-            pass
-        token = getpass.getpass("Claude setup token (hidden): ").strip()
-    except (EOFError, OSError) as exc:
-        raise RuntimeError("No terminal available; supply CLAUDE_CODE_OAUTH_TOKEN in the environment") from exc
-    if len(token) < 20 or any(char.isspace() for char in token) or \
-            token.startswith(("http://", "https://", "<")):
-        raise RuntimeError("No usable Claude setup token was entered")
-    return token
+    raise RuntimeError(
+        "Claude setup-token import is disabled. No provider or counsel clearance is "
+        "recorded for copying a Claude session token into BOSS. Use --connect-claude-local "
+        "after claude auth login as the boss user inside the API container."
+    )
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
@@ -154,6 +142,13 @@ def main() -> int:
     parser.add_argument("--connect-claude-local", action="store_true")
     parser.add_argument("--accept-database-fallback", action="store_true")
     args = parser.parse_args()
+    if args.connect_claude:
+        raise RuntimeError(
+            "Claude setup-token import is disabled. No provider or counsel clearance is "
+            "recorded for copying a Claude session token into BOSS. Use "
+            "--connect-claude-local after claude auth login as the boss user inside the "
+            "API container."
+        )
     if args.connect_claude and args.connect_claude_local:
         raise RuntimeError("Choose one Claude connection path for this run")
     # A container-owned login has nothing to do with this VM user's CLI home. In
@@ -165,7 +160,8 @@ def main() -> int:
               "--env-file .env exec -u boss api grok login --device-auth")
         print("For Claude local login: run `claude auth login` as boss inside the API container")
         print("Then rerun the installer with --connect-claude-local; no token is copied")
-        print("To import older Codex/Claude credentials, use --connect-codex or --connect-claude.")
+        print("To import a Codex CLI auth file, use --connect-codex.")
+        print("Claude setup-token import is disabled; use --connect-claude-local.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:

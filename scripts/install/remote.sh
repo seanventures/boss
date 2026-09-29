@@ -113,8 +113,8 @@ examples:
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key tunnel
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key \
       model --provider openrouter --model anthropic/claude-sonnet-4.5
-  claude setup-token | scripts/install/remote.sh --host root@192.0.2.202 \
-      --key ~/.config/boss/deploy_key subscription --provider claude_code
+  # claude_code setup-token import is disabled (no recorded counsel clearance).
+  # Codex still uses: remote.sh ... subscription --provider codex
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key uninstall --yes
 USAGE
 }
@@ -275,7 +275,8 @@ cmd_install() {
   printf "\n${B}What next${N}\n\n"
   say "Check it:        ${D}remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
   say "An API key:      ${D}remote.sh --host $HOST${KEY:+ --key $KEY} model --provider openrouter${N} (hidden prompt)"
-  say "A subscription:  ${D}claude setup-token | remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider claude_code${N}"
+  say "Codex subscription: ${D}remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider codex${N}"
+  say "Claude: setup-token import is disabled; use claude auth login inside the API container, then --connect-claude-local"
   say "Shell variables: ${D}eval \"\$(remote.sh --host $HOST${KEY:+ --key $KEY} env)\"${N}"
   printf "\n"
 }
@@ -551,7 +552,10 @@ except (ValueError, TypeError):
 # been told how to set for a remote install, and a script that stores the token in the WRONG
 # install because it writes to whichever BOSS is local. Both calls belong on the server.
 cmd_subscription() {
-  [[ -n "$PROVIDER" ]] || die "--provider is required (claude_code | codex)"
+  [[ -n "$PROVIDER" ]] || die "--provider is required (codex; claude_code setup-token import is disabled)"
+  if [[ "$PROVIDER" == "claude_code" ]]; then
+    die "Claude setup-token import is disabled. No provider or counsel clearance is recorded for copying a Claude session token into BOSS. Sign in with claude auth login as the boss user inside the API container, then rerun the installer with --connect-claude-local."
+  fi
   local token="$SUB_TOKEN"
   if [[ -z "$token" ]]; then
     [[ ! -t 0 ]] || die "no token: pass --token, or pipe one in (claude setup-token | … subscription --provider claude_code)"

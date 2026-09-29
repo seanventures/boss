@@ -539,6 +539,16 @@ def store_coding_agent_credential(
     from .secret_backends import default_secret_backend
     from .secrets_service import put_secret
 
+    # The Claude setup-token import copies a provider session into BOSS. Repo
+    # counsel reference 01049940 covers first-party Apache licensing only.
+    # No provider or counsel clearance for this import was found, so it cannot run.
+    if provider == "claude_code":
+        raise SetupError(
+            "Claude setup-token import is disabled. No provider or counsel clearance "
+            "is recorded for copying a Claude session token into BOSS. Use the "
+            "CLI-owned login inside the API container (--connect-claude-local)."
+        )
+
     spec = load_specs(settings).get(provider)
     if spec is None:
         raise SetupError(
