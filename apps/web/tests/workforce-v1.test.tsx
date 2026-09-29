@@ -210,6 +210,18 @@ describe("v1 Org Chart", () => {
     expect(row).toContain(">Place<");
   });
 
+  it("installs a template into Studio without starting work or a reporting line", () => {
+    const src = codeOnly("app/workforce-ui.tsx");
+    const installer = src.slice(src.indexOf("const installTemplate"), src.indexOf("const visibleTemplates"));
+    expect(installer).toContain("/v1/agent-studio/templates/");
+    expect(installer).toContain("/install");
+    expect(installer).toContain("no work has started");
+    expect(installer).not.toMatch(/\/runs|start_run|startAgentRun|catalog-smoke|place\(/);
+    expect(src).toContain("They do not add reporting lines or start work.");
+    expect(src).toContain("Adding it does not start work.");
+    expect(src).not.toContain("roster-scorebar");
+  });
+
   it("offers work and definition on roles with no recent handoffs", () => {
     // Isolated rows render only in the observed view, which static markup does not switch
     // to. The same helpers the tree uses have to be on that row, not behind Place.
