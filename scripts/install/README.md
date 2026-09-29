@@ -312,6 +312,8 @@ database container but kept its named data volume. The current backup refuses
 to guess which mutable `postgres:16-alpine` image should reopen that data. If
 `backup.sh` reports a missing Postgres container, use this recovery path before
 upgrading. Do not run the new installer or `compose up` against that volume yet.
+Confirm that the old stack is stopped and no other container is writing to its
+database volume; the offline copy below is valid only while the volume is idle.
 
 First identify a **local, reviewed Postgres 16 image ID** from the host's
 deployment records or cached image inventory. Prefer the image ID the old
