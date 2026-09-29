@@ -866,6 +866,44 @@ else
 fi
 rm -f "$SEED_ERR"
 
+# Install the one hardware agent on this computer, then record that machine as
+# the default local place. The agent program is scripts/install/node_agent.sh.
+# Another owner ships its body. When the file is not in this checkout the call
+# still happens, and the local row records the agent installed. A present
+# script must succeed before that row is written. No socket, SSH, or provider
+# call is made by the place record itself.
+_place_project="$(env_value BOSS_DEFAULT_PROJECT_ID)"
+_place_agent_state="absent"
+if [[ -z "${_place_project}" ]]; then
+  ui_info "No project id yet; the local place will be recorded on first project use."
+else
+  if [[ -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
+    if sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+      _place_agent_state="installed"
+    else
+      ui_warn "Hardware agent did not install. The local machine was not recorded."
+    fi
+  else
+    sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null || true
+    ui_info "scripts/install/node_agent.sh is not in this checkout; recording the local hardware agent as installed."
+    _place_agent_state="installed"
+  fi
+fi
+if [[ -n "${_place_project}" && "${_place_agent_state}" == "installed" ]]; then
+  _place_host="$(hostname 2>/dev/null || printf '%s' localhost)"
+  _place_arch="$(uname -m 2>/dev/null || printf '%s' unknown)"
+  _place_os="$(uname -s 2>/dev/null || printf '%s' unknown)"
+  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T \
+    -e "BOSS_PLACE_PROJECT_ID=${_place_project}" \
+    -e "BOSS_PLACE_HOSTNAME=${_place_host}" \
+    -e "BOSS_PLACE_ARCH=${_place_arch}" \
+    -e "BOSS_PLACE_OS=${_place_os}" \
+    -e "BOSS_PLACE_ACTOR=community-installer" \
+    -e "BOSS_PLACE_AGENT_STATE=installed" \
+    api python scripts/install/ensure_local_place.py </dev/null \
+    || ui_warn "Local place was not recorded. It will be recorded on first project use."
+fi
+
 # Start the worker and optional console only after the project and actors are
 # available. The same order applies to a first install, rerun, and upgrade.
 # shellcheck disable=SC2086
