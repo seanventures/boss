@@ -275,8 +275,8 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "4bb70c4987f15d931db4331e2285889038b8d20a06f1cdd933846378c3bbf593",
-    "output_sha256": "430c253684d036996ef727b98f2bb059a5f040b7b261495be1061deef7e974d2"
+    "source_sha256": "fffc6e9ca00b8e158da4f041e34b48b9843fea6df61e3f4dafe0b617a15389a6",
+    "output_sha256": "12b7b0a3fc3a9705c39f28d6a2cde082481e2da0dda9ab4ae101de775103caa2"
   },
   "reviewed_notice_sha256": {
     "THIRD-PARTY-NOTICES.md": "a9722d7d3c861b02eddae4ead71beaf7a1ff88b7d9fbe31c0374d3d23aeb9191",
