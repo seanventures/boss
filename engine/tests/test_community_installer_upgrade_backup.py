@@ -509,28 +509,53 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
         assert "installed Postgres container is missing" in absent.stderr
         volume = f"{project}_pg"
         assert _run("docker", "volume", "inspect", volume).returncode == 0
-        offline = tmp_path / "offline-pg.tar"
-        with offline.open("wb") as archive:
-            archived = subprocess.run(
-                ["docker", "run", "--rm", "--pull", "never", "--mount",
-                 f"type=volume,source={volume},target=/data,readonly", "--entrypoint", "tar",
-                 image_id, "-C", "/data", "-cf", "-", "."],
-                stdout=archive, stderr=subprocess.PIPE, timeout=60, check=False,
-            )
-        assert archived.returncode == 0, archived.stderr.decode(errors="replace")
-        assert offline.stat().st_size > 0
-        override = tmp_path / "reviewed-db-image.yml"
-        override.write_text(f"services:\n  db:\n    image: {image_id}\n")
-        recovery = ("docker", "compose", "-f", compose_path, "-f", override,
-                    "--env-file", installed / ".env")
-        assert _run(*recovery, "up", "-d", "--no-deps", "--no-build", "--pull", "never", "db").returncode == 0
-        for _ in range(30):
-            if _run(*recovery, "exec", "-T", "db", "pg_isready", "-U", "boss", "-d", "boss").returncode == 0:
-                break
-            subprocess.run(["sleep", "1"], check=False)
-        else:
-            pytest.fail("recovered Postgres did not become ready")
-        assert _run(*recovery, "stop", "db").returncode == 0
+        guide = (REPO / "scripts/install/README.md").read_text()
+        recovery = guide.split("### Recover an older safe uninstall\n", 1)[1].split(
+            "```bash\n", 1,
+        )[1].split("\n```", 1)[0].split("\n./scripts/install/backup.sh", 1)[0]
+        recovery = recovery.replace("cd ~/boss", f"cd {shlex.quote(str(installed))}")
+        recovery = recovery.replace(
+            "DB_IMAGE_ID=sha256:REPLACE_WITH_REVIEWED_LOCAL_POSTGRES_16_IMAGE_ID",
+            f"DB_IMAGE_ID={image_id}",
+        )
+        recovery_home = tmp_path / "recovery-home"
+        recovery_home.mkdir()
+        recovery_env = {
+            **os.environ,
+            "HOME": str(recovery_home),
+            "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG", str(Path.home() / ".docker")),
+        }
+
+        # A customized Compose project without its expected volume must fail
+        # before Docker run can silently create a new empty named volume.
+        missing_project = f"{project}missing"
+        missing = _run("bash", "-c", recovery, cwd=REPO,
+                       env={**recovery_env, "COMPOSE_PROJECT_NAME": missing_project})
+        assert missing.returncode != 0
+        assert _run("docker", "volume", "inspect", f"{missing_project}_pg").returncode != 0
+        assert not list((recovery_home / "boss-backups").glob("legacy-pg-offline.*/postgres-volume.tar"))
+        assert _run(*compose, "ps", "--all", "-q", "db").stdout.strip() == ""
+
+        # An existing but empty volume produces a nonempty tar header. Archive
+        # validation must reject it before Compose creates a database.
+        empty_project = f"{project}empty"
+        empty_volume = f"{empty_project}_pg"
+        assert _run("docker", "volume", "create", empty_volume).returncode == 0
+        try:
+            empty_env = {**recovery_env, "COMPOSE_PROJECT_NAME": empty_project}
+            empty = _run("bash", "-c", recovery, cwd=REPO, env=empty_env)
+            assert empty.returncode != 0
+            assert _run(*compose, "ps", "--all", "-q", "db", env=empty_env).stdout.strip() == ""
+            assert not list((recovery_home / "boss-backups").glob("legacy-pg-offline.*/postgres-volume.tar"))
+        finally:
+            _run("docker", "volume", "rm", empty_volume)
+
+        recovered = _run("bash", "-c", recovery, cwd=REPO, env=recovery_env)
+        assert recovered.returncode == 0, recovered.stderr
+        archives = list((recovery_home / "boss-backups").glob("legacy-pg-offline.*/postgres-volume.tar"))
+        assert len(archives) == 1
+        assert _run("tar", "-xOf", archives[0], "./PG_VERSION").stdout.strip() == "16"
+        assert _run("tar", "-tf", archives[0], "./global/pg_control").returncode == 0
         assert _run("docker", "image", "tag", "postgres:16-alpine", api_image).returncode == 0
         restored = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
                         "--backup-dir", tmp_path / "backups", cwd=REPO)
