@@ -74,6 +74,17 @@ def test_a_credential_is_optional_rather_than_required_to_boot(compose: str) -> 
                 assert ":-}" in line, f"{service}: {line.strip()} should default to empty"
 
 
+def test_claude_cli_owned_config_survives_api_worker_recreation(compose: str) -> None:
+    """Both processes must see the same CLI-owned home, including .claude.json."""
+    for service in NEEDS_CREDENTIALS:
+        block = _service_block(compose, service)
+        assert "CLAUDE_CONFIG_DIR: /home/boss/.claude" in block
+        assert "boss_community_claude_home:/home/boss/.claude" in block
+    assert "\n  boss_community_claude_home:\n" in compose
+    backup = (REPO / "scripts" / "install" / "backup.sh").read_text()
+    assert "/home/boss/.claude" not in backup
+
+
 # --- the optional secret store ----------------------------------------------
 
 

@@ -2,9 +2,9 @@
 """Discover VM coding CLIs; record a subscription only on an explicit request.
 
 The installer and worker run in different containers/accounts. Host login discovery is
-informational. Claude's official setup token and Codex's own auth file can be imported
-through BOSS's governed credential endpoint; a Grok device session stays local to the
-API/worker's shared account and is never copied or parsed here.
+informational. An operator can sign Claude Code in directly as the container's boss user,
+then record that local CLI connection without passing OAuth material through this script.
+The older token import remains available pending provider/owner disposition.
 """
 from __future__ import annotations
 
@@ -119,24 +119,60 @@ def connect(api_url: str, api_key: str, provider: str) -> None:
     print(f"  {provider}: connection recorded; model use remains unverified")
 
 
+def claude_local_session_ready(api_url: str, api_key: str) -> None:
+    """Read only BOSS's sanitized container-side status; never inspect CLI auth files."""
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/v1/setup/coding-agents?project_id=boss-dogfood",
+        headers={"x-boss-api-key": api_key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"BOSS Claude status refused: HTTP {exc.code}") from None
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("BOSS Claude status could not be read") from exc
+    agents = body.get("agents") if isinstance(body, dict) else None
+    claude = next((row for row in agents if isinstance(row, dict)
+                   and row.get("name") == "claude_code"), None) if isinstance(agents, list) else None
+    if not claude or claude.get("installed") is not True:
+        raise RuntimeError("Claude Code is not installed in the BOSS API container")
+    if claude.get("token_present"):
+        raise RuntimeError("BOSS already holds a Claude setup token. Remove that legacy "
+                           "credential before selecting the CLI-owned login path")
+    if claude.get("authenticated") is not True or claude.get("auth_method") not in {
+            "claude_ai", "oauth", "oauth_token"}:
+        raise RuntimeError("Claude Code is not signed in with a subscription in the BOSS API "
+                           "container. Run the provider's login as the boss user there first")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--connect-codex", action="store_true")
     parser.add_argument("--connect-claude", action="store_true")
+    parser.add_argument("--connect-claude-local", action="store_true")
     parser.add_argument("--accept-database-fallback", action="store_true")
     args = parser.parse_args()
-    found = discover()
-    if not (args.connect_codex or args.connect_claude):
+    if args.connect_claude and args.connect_claude_local:
+        raise RuntimeError("Choose one Claude connection path for this run")
+    # A container-owned login has nothing to do with this VM user's CLI home. In
+    # particular, do not ask the host Claude CLI to read its own session for it.
+    found = ({} if args.connect_claude_local and not args.connect_codex else discover())
+    if not (args.connect_codex or args.connect_claude or args.connect_claude_local):
         print("To authenticate Codex on a headless VM: codex login --device-auth")
         print("For Grok: docker compose -f scripts/install/community-compose.yml "
               "--env-file .env exec -u boss api grok login --device-auth")
-        print("For Claude: claude login, then claude setup-token in a VM terminal")
-        print("To bind Codex/Claude, rerun with --connect-codex or --connect-claude explicitly.")
+        print("For Claude local login: run `claude auth login` as boss inside the API container")
+        print("Then rerun the installer with --connect-claude-local; no token is copied")
+        print("To import older Codex/Claude credentials, use --connect-codex or --connect-claude.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:
         raise RuntimeError("BOSS_API_KEY is needed to connect subscriptions")
+    if args.connect_claude_local:
+        claude_local_session_ready(args.api_url, api_key)
+        connect(args.api_url, api_key, "claude_code")
     for provider, wanted in (("codex", args.connect_codex),
                              ("claude_code", args.connect_claude)):
         if not wanted:

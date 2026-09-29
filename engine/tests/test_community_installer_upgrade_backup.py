@@ -450,9 +450,11 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
         f"    image: {api_image}\n"
         "    volumes:\n"
         "      - artifacts:/var/lib/boss/artifacts\n"
+        "      - claude-home:/home/boss/.claude\n"
         "volumes:\n"
         "  pg: {}\n"
         "  artifacts: {}\n"
+        "  claude-home: {}\n"
     )
     (installed / ".env").write_text("BOSS_DB_PASSWORD=fixture\n")
     _git("init", cwd=installed)
@@ -463,6 +465,10 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
     compose = ("docker", "compose", "-f", compose_path, "--env-file", installed / ".env")
     try:
         assert _run("docker", "image", "tag", "postgres:16-alpine", api_image).returncode == 0
+        marker = _run(*compose, "run", "--rm", "--no-deps", "--pull", "never", "-T",
+                      "--entrypoint", "sh", "api", "-c",
+                      "printf opaque-cli-test > /home/boss/.claude/session-marker")
+        assert marker.returncode == 0, marker.stderr
         result = _run(*compose, "up", "-d", "--no-deps", "--pull", "never", "db")
         assert result.returncode == 0, result.stderr
         for _ in range(30):
@@ -484,6 +490,11 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
 
         assert backup.returncode == 0, backup.stderr
         assert (Path(backup.stdout.strip()) / "boss.dump").stat().st_size > 0
+        # BOSS does not copy the provider-owned CLI session into its backup.
+        # The named volume itself survives a safe stop or source upgrade.
+        assert not (Path(backup.stdout.strip()) / "claude-home.tar").exists()
+        assert all(b"opaque-cli-test" not in path.read_bytes()
+                   for path in Path(backup.stdout.strip()).iterdir() if path.is_file())
         assert _run(*compose, "ps", "--all", "-q", "db").stdout.strip() == container_id
         assert _run("docker", "inspect", "--format", "{{.Image}}", container_id).stdout.strip() == image_id
         assert _run("docker", "inspect", "--format", "{{.State.Status}}", container_id).stdout.strip() == "exited"
@@ -503,6 +514,7 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
         # leaving the volume. Preserve an offline copy, then recreate only DB
         # from an explicitly selected, already-cached immutable image ID.
         assert _run(*compose, "down").returncode == 0
+        assert _run("docker", "volume", "inspect", f"{project}_claude-home").returncode == 0
         absent = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
                       "--backup-dir", tmp_path / "backups", cwd=REPO)
         assert absent.returncode != 0

@@ -91,6 +91,7 @@ INSTALL_DEPS=1
 DISCOVER_SUBSCRIPTIONS=0
 CONNECT_CODEX=0
 CONNECT_CLAUDE=0
+CONNECT_CLAUDE_LOCAL=0
 INSTALL_CODING_CLIS=0
 ACCEPT_DATABASE_FALLBACK=0
 SECRET_STORE_EXPLICIT=0
@@ -126,6 +127,7 @@ Options:
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
   --connect-codex        Explicitly import this VM user's Codex ChatGPT login into BOSS
   --connect-claude       Explicitly import a provider-minted Claude Code setup token
+  --connect-claude-local Record the CLI-owned Claude login made inside the API container
   --accept-database-fallback  Allow a subscription credential in Postgres if no secret store
   --secret-store WHICH    database (default) or infisical. Both stay on your own machine:
                             database   4 containers. Credentials are held by BOSS's own
@@ -158,6 +160,7 @@ while [[ $# -gt 0 ]]; do
     --install-coding-clis) INSTALL_CODING_CLIS=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --connect-codex) CONNECT_CODEX=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --connect-claude) CONNECT_CLAUDE=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
+    --connect-claude-local) CONNECT_CLAUDE_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --accept-database-fallback) ACCEPT_DATABASE_FALLBACK=1; shift ;;
     --openai-key) OPENAI_KEY_PRESET="$2"; shift 2 ;;
     --anthropic-key) ANTHROPIC_KEY_PRESET="$2"; shift 2 ;;
@@ -180,6 +183,9 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+if [[ "$CONNECT_CLAUDE" -eq 1 && "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
+  die "Choose --connect-claude or --connect-claude-local, not both."
+fi
 
 if [[ -n "${BOSS_PREUPGRADE_BACKUP_DIR:-}" ]]; then
   ui_warn 'Ignoring a legacy pre-upgrade backup path; this installer will make its own fresh snapshot before updating source.'
@@ -890,13 +896,18 @@ fi
 rm -f "$EDITION_BODY"
 
 if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
-  ui_step "Discovering coding subscriptions on this VM"
-  if [[ "$CONNECT_CLAUDE" -eq 1 ]] && [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
-    die "Claude subscription connection would use ANTHROPIC_API_KEY for headless work. Remove that key from .env, then rerun --connect-claude."
+  ui_step "Checking coding subscription connections"
+  if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] &&
+     [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
+    die "Claude subscription connection would use ANTHROPIC_API_KEY for headless work. Remove that key from .env, then rerun the selected Claude connection option."
+  fi
+  if [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] && [[ -n "$(env_value CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
+    die "The CLI-owned Claude login requires an empty CLAUDE_CODE_OAUTH_TOKEN. Remove the legacy token from .env first."
   fi
   _subscription_args=(--api-url "$API_URL")
   [[ "$CONNECT_CODEX" -eq 1 ]] && _subscription_args+=(--connect-codex)
   [[ "$CONNECT_CLAUDE" -eq 1 ]] && _subscription_args+=(--connect-claude)
+  [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] && _subscription_args+=(--connect-claude-local)
   [[ "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]] && _subscription_args+=(--accept-database-fallback)
   BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_subscription_args[@]}" </dev/null ||
     die "Coding subscription discovery/connection failed; BOSS core remains available."

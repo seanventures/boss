@@ -48,8 +48,8 @@ def test_the_other_specs_still_register_their_own_harness():
 
 def test_the_variable_is_the_login_so_there_is_nothing_to_sign_in():
     """Verified against claude 2.1.273: with CLAUDE_CODE_OAUTH_TOKEN set and nothing on disk,
-    `claude auth status` reports loggedIn true. There is no login subcommand to feed and no
-    file to place — which is exactly why Claude never had codex's two-machines problem."""
+    `claude auth status` reports loggedIn true. There is no token-fed login subcommand and no
+    file for BOSS to place. The separate CLI-owned `claude auth login` uses a shared volume."""
     assert CLAUDE.token_env == "CLAUDE_CODE_OAUTH_TOKEN"
     assert CLAUDE.token_login_args == ()
     assert CLAUDE.auth_file_secret == ""
@@ -72,6 +72,63 @@ def test_the_auth_check_reads_a_field_not_a_sentence():
     assert re.search(CLAUDE.auth_ok_pattern, signed_in)
     assert not re.search(CLAUDE.auth_fail_pattern, signed_in)
     assert re.search(CLAUDE.auth_fail_pattern, signed_out)
+
+
+def test_claude_detection_returns_only_safe_status_fields(monkeypatch):
+    from boss_engine.services import cli_harness
+
+    private = "private-oauth-material-must-not-appear"
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(cli_harness.shutil, "which", lambda _binary: "/usr/bin/claude")
+    monkeypatch.setattr(
+        cli_harness, "_run_probe",
+        lambda _binary, args, **_kwargs: (
+            (0, "2.1.197 (Claude Code)") if args == ("--version",) else
+            (0, '{"loggedIn": true, "authMethod": "claude_ai", '
+                f'"email": "{private}"}}')
+        ),
+    )
+
+    found = cli_harness.detect(CLAUDE)
+    assert found["authenticated"] is True
+    assert found["version"] == "2.1.197"
+    assert found["auth_method"] == "claude_ai"
+    assert found["auth_detail"] == "Signed in with the Claude Code CLI."
+    assert private not in str(found)
+
+
+def test_claude_detection_fails_closed_on_malformed_private_status(monkeypatch):
+    from boss_engine.services import cli_harness
+
+    private = '"loggedIn": true private-oauth-material-must-not-appear'
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(cli_harness.shutil, "which", lambda _binary: "/usr/bin/claude")
+    monkeypatch.setattr(cli_harness, "_run_probe", lambda _binary, args, **_kwargs: (
+        (0, "2.1.197 (Claude Code)") if args == ("--version",) else (0, private)
+    ))
+
+    found = cli_harness.detect(CLAUDE)
+    assert found["authenticated"] is False
+    assert found["auth_method"] == "unknown"
+    assert private not in str(found)
+
+
+def test_claude_detection_does_not_echo_unrecognized_status_or_version(monkeypatch):
+    from boss_engine.services import cli_harness
+
+    private = "private-oauth-material-must-not-appear"
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(cli_harness.shutil, "which", lambda _binary: "/usr/bin/claude")
+    monkeypatch.setattr(cli_harness, "_run_probe", lambda _binary, args, **_kwargs: (
+        (0, f"warning {private} 2.1.197") if args == ("--version",) else
+        (0, '{"loggedIn": true, "authMethod": "' + private + '"}')
+    ))
+
+    found = cli_harness.detect(CLAUDE)
+    assert found["version"] is None
+    assert found["authenticated"] is False
+    assert found["auth_method"] == "unknown"
+    assert private not in str(found)
 
 
 def test_proving_the_connection_cannot_touch_a_file():

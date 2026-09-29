@@ -294,7 +294,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         auth_check_args=("auth", "status"),
         auth_ok_pattern=r'"loggedIn":\s*true',
         auth_fail_pattern=r'"loggedIn":\s*false',
-        signin_hint="claude setup-token",
+        signin_hint="claude auth login",
         install_hint="npm install -g @anthropic-ai/claude-code",
         token_env="CLAUDE_CODE_OAUTH_TOKEN",
         # No token_login_args: the variable is the login. See the field's own note.
@@ -629,7 +629,11 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
         return result
     code, out = _run_probe(found, spec.version_args)
     if code == 0 and out:
-        result["version"] = out.splitlines()[0][:120]
+        if spec.name == "claude_code":
+            version = _re.fullmatch(r"\s*(\d+\.\d+\.\d+)\s*\(Claude Code\)\s*", out)
+            result["version"] = version.group(1) if version else None
+        else:
+            result["version"] = out.splitlines()[0][:120]
     if not spec.auth_check_args:
         # No login of its own — installed is the whole check.
         result["authenticated"] = None
@@ -666,13 +670,34 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
     # though we could not create PATH aliases…" — and reporting that as `auth_detail` hands the
     # operator a sentence about symlinks when they are debugging a login. The troubleshooting
     # tables in the setup doc are keyed on this field, so it has to be the status.
-    detail = _auth_detail(spec, out)
-    result["auth_detail"] = detail or None
-    # The denial is checked first and wins outright: "Not logged in" contains "logged in", so
-    # a positive-only test reports a signed-out CLI as ready.
-    denied = bool(spec.auth_fail_pattern) and bool(_re.search(spec.auth_fail_pattern, out or ""))
-    signed_in = (code == 0 and not denied and bool(spec.auth_ok_pattern)
-                 and bool(_re.search(spec.auth_ok_pattern, out or "")))
+    if spec.name == "claude_code":
+        # The CLI's JSON may contain account details. Parse only the two status fields we
+        # need; never return raw stdout/stderr (including malformed output) to an API caller
+        # or persist it in an entitlement note.
+        try:
+            status = json.loads(out)
+        except (TypeError, ValueError):
+            status = {}
+        if not isinstance(status, dict):
+            status = {}
+        method = status.get("authMethod")
+        method = (method if isinstance(method, str) and method in
+                  {"claude_ai", "oauth", "oauth_token", "api_key"} else "unknown")
+        signed_in = code == 0 and status.get("loggedIn") is True and method != "unknown"
+        result["auth_method"] = method
+        result["auth_detail"] = (
+            "Signed in with the Claude Code CLI." if signed_in else
+            "Not signed in." if status.get("loggedIn") is False else
+            "Claude Code authentication status unavailable."
+        )
+    else:
+        detail = _auth_detail(spec, out)
+        result["auth_detail"] = detail or None
+        # The denial is checked first and wins outright: "Not logged in" contains "logged in",
+        # so a positive-only test reports a signed-out CLI as ready.
+        denied = bool(spec.auth_fail_pattern) and bool(_re.search(spec.auth_fail_pattern, out or ""))
+        signed_in = (code == 0 and not denied and bool(spec.auth_ok_pattern)
+                     and bool(_re.search(spec.auth_ok_pattern, out or "")))
     result["authenticated"] = signed_in
     result["ready"] = signed_in
     if not signed_in:

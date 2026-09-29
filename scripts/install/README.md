@@ -117,23 +117,37 @@ provider's official CLI **on the VM**, under the account you intend to use:
 
 ```bash
 codex login --device-auth
-claude login
 grok login --device-auth
 ```
 
 `--discover-subscriptions` only checks status; it sends no credentials. For
-Claude or Codex, an explicit `--connect-claude` or `--connect-codex` stores the
-official CLI credential through BOSS's credential endpoint and records the
-connection. Community does not run a live proof turn during setup; model use
-remains unverified until a governed job succeeds. For Claude, run `claude setup-token`
-in a VM terminal so its official prompts remain visible; the installer accepts the
-token through a hidden terminal prompt or `CLAUDE_CODE_OAUTH_TOKEN` environment
-variable. Codex uses its CLI auth JSON, read only from the current VM user's
-private file. BOSS never prints either credential. A database-backed install asks you to add
-`--accept-database-fallback` before a subscription credential can be stored in
-Postgres; the `--secret-store infisical` option provisions a dedicated store.
-See [model connections](../../docs/community/MODEL_CONNECTIONS.md) for the supported paths
-and limits of each provider.
+Claude Code has a separate **CLI-owned local login**: sign in through the
+official CLI as the `boss` user inside the API container, then tell BOSS to
+record that connection. The API and worker share the same private Claude
+config volume, including `.claude.json`, across container recreates:
+
+```bash
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  exec -u boss api claude auth login
+./install.sh --dir "$PWD" --yes --skip-model-key --connect-claude-local
+```
+
+The login happens in Anthropic's browser/device flow. BOSS reads the official
+CLI's sanitized `auth status` result and records connection metadata; this path
+does not send OAuth bytes to a BOSS endpoint or database. It refuses to record
+a local subscription if `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or a
+previously stored setup token could make the status misleading. Community does
+not run a live proof turn during setup, so model use remains unverified until a
+governed job succeeds. The existing `--connect-claude` token-import path is
+still present pending provider/owner disposition and must not be treated as
+cleared for public release.
+
+The separate `--connect-codex` path imports the VM user's CLI auth JSON into
+BOSS's secret backend. A database-backed install asks for
+`--accept-database-fallback` before that credential can be stored in Postgres;
+`--secret-store infisical` provisions a dedicated store. See
+[model connections](../../docs/community/MODEL_CONNECTIONS.md) for each path's
+limits.
 
 Grok's device session is tied to the Unix account and home that runs BOSS.
 A login under the SSH admin account does not authenticate the containers.
@@ -433,8 +447,11 @@ into an older source revision may require a migration-aware recovery plan.
 Run these commands during a maintenance window and confirm `/health`, the
 project list, and an artifact before reopening the console.
 
-The artifact restore overlays the archive. Files created after the backup
-remain unless removed separately; review the current volume first. A remote archive
+The artifact restore overlays its archive. Files created after the backup
+remain unless removed separately; review the current volume first. BOSS does
+not archive the Claude CLI's session. A normal upgrade or safe uninstall keeps
+its named volume; after an explicit volume purge or moving to another machine,
+run `claude auth login` inside the API container again. A remote archive
 install uses `.boss-shipped-commit` rather than Git; recover it by shipping
 that commit from the operator machine with `remote.sh --ref COMMIT install`,
 then restore the database and artifacts from the private host backup.

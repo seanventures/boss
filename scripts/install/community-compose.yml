@@ -120,6 +120,9 @@ services:
       # reports "not signed in" while the operator is looking at the credential they just set.
       CODEX_AUTH_JSON: ${CODEX_AUTH_JSON:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Claude Code owns its browser/device login in this private, shared directory.
+      # CLAUDE_CONFIG_DIR keeps both CLI state and .claude.json inside the volume.
+      CLAUDE_CONFIG_DIR: /home/boss/.claude
       # Where BOSS keeps secrets. Without these forwarded, bootstrap writes them into .env and
       # the container never sees them — the store is configured and unreachable at once.
       BOSS_INFISICAL_URL: ${BOSS_INFISICAL_URL:-}
@@ -172,6 +175,7 @@ services:
       # second finds a dead token. Sharing the directory gives them one credential and one
       # refresh chain. It also survives `up --build`, which a container-local file does not.
       - boss_community_cli_home:/home/boss/.codex
+      - boss_community_claude_home:/home/boss/.claude
       # Device login is local to the Unix user. Share the owner-only Grok home with the
       # worker so API setup and governed jobs see the same renewable session.
       - boss_community_grok_home:/home/boss/.grok
@@ -227,6 +231,7 @@ services:
       # reports "not signed in" while the operator is looking at the credential they just set.
       CODEX_AUTH_JSON: ${CODEX_AUTH_JSON:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CLAUDE_CONFIG_DIR: /home/boss/.claude
       # Where BOSS keeps secrets. Without these forwarded, bootstrap writes them into .env and
       # the container never sees them — the store is configured and unreachable at once.
       BOSS_INFISICAL_URL: ${BOSS_INFISICAL_URL:-}
@@ -274,6 +279,7 @@ services:
       # second finds a dead token. Sharing the directory gives them one credential and one
       # refresh chain. It also survives `up --build`, which a container-local file does not.
       - boss_community_cli_home:/home/boss/.codex
+      - boss_community_claude_home:/home/boss/.claude
       - boss_community_grok_home:/home/boss/.grok
 
   web:
@@ -310,6 +316,7 @@ services:
 
 volumes:
   boss_community_cli_home:
+  boss_community_claude_home:
   boss_community_grok_home:
   boss_community_infisical_redis:
   boss_community_pg:

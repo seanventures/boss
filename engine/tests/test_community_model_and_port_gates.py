@@ -77,6 +77,43 @@ def test_explicit_no_proof_keeps_safe_subscription_registration(monkeypatch):
     assert result["proof"] == {"ok": True, "skipped": True}
 
 
+def test_claude_cli_owned_login_records_metadata_without_credential_or_model(monkeypatch):
+    from boss_engine.services import cli_harness, entitlements
+
+    records = []
+    monkeypatch.setattr(cli_harness, "detect", lambda _spec: {
+        "installed": True, "authenticated": True, "version": "2.1.197",
+        "auth_detail": "Signed in with the Claude Code CLI.", "auth_method": "claude_ai",
+    })
+    monkeypatch.setattr(cli_harness.GenericCliCodeAgent, "ensure_authorised",
+                        lambda *_args: pytest.fail("local login must not restore a token"))
+    monkeypatch.setattr(setup_service, "prove_coding_agent",
+                        lambda *_args, **_kwargs: pytest.fail("no unmetered model turn"))
+
+    class _Broker:
+        def __init__(self, _settings):
+            pass
+
+        def upsert_source(self, _connection, payload, *, actor):
+            records.append((payload, actor))
+
+    monkeypatch.setattr(entitlements, "EntitlementBrokerService", _Broker)
+    result = setup_service.connect_coding_agent(
+        None, _Settings("community"), "project-a", "claude_code",
+        actor="ceo", prove=False,
+    )
+
+    assert result["connected"] is True
+    assert result["entitlement_recorded"] is True
+    assert result["proof"] == {"ok": True, "skipped": True}
+    payload, actor = records[0]
+    assert actor == "ceo"
+    assert payload["source_id"] == "anthropic_claude_code"
+    assert payload["auth_method"] == "official_cli_oauth"
+    assert "credential_secret_ref_id" not in payload
+    assert "token" not in payload
+
+
 @pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
 def test_host_port_discovery_stops_before_db_or_network(edition, monkeypatch):
     def no_probe(*_args, **_kwargs):

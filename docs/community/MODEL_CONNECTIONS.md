@@ -23,7 +23,8 @@ uses it; a green setup step is not a successful model response.
 | xAI Grok API | Choose **xAI Grok API** in the setup screen and enter its key and model, or set `XAI_API_KEY` on the VM | This is an API-key path, separate from a Grok Build subscription. The connection is unverified until a governed job succeeds. |
 | OpenAI-compatible API | Choose **Anything OpenAI-compatible** and provide a reachable base URL, model, and credential | Local Ollama needs a container-reachable address; the setup form currently requires a nonempty key, even for a local server that does not authenticate. |
 | Codex ChatGPT subscription | Optionally install the official CLI, sign in on this VM, then rerun with `--connect-codex` | Explicit import stores the CLI auth file in BOSS's selected secret backend and records the connection without a live proof turn. It remains unverified. |
-| Claude Code subscription | Optionally install the official CLI, obtain its setup token on this VM, then rerun with `--connect-claude` | Explicit import stores the token and records the connection without a live proof turn. It remains unverified. |
+| Claude Code subscription, local CLI login | Run `claude auth login` as `boss` inside the API container, then rerun the installer with `--connect-claude-local` | Claude Code owns its private session in the shared API/worker config volume. BOSS records status without receiving OAuth bytes. The first governed job still needs to verify model use. |
+| Claude Code subscription, legacy token import | Obtain a setup token on the VM, then rerun with `--connect-claude` | The existing BOSS-held token route remains pending provider/owner disposition and does not clear the public release gate. |
 | Grok Build subscription | Sign in as `boss` inside the API container; see [Grok CLI](GROK_CLI.md) | A host login does not reach BOSS. Community currently pauses the live proof required to record this CLI through setup. |
 
 The Gemini and xAI setup entries use their providers' documented OpenAI-compatible
@@ -42,6 +43,23 @@ cd ~/boss
 ```
 
 Sign in through each provider's own CLI on the VM before requesting an import.
+For the local Claude path, use the CLI **inside** the API container, under the
+same `boss` account that runs the API and worker:
+
+```bash
+docker compose -f scripts/install/community-compose.yml --env-file .env \
+  exec -u boss api claude auth login
+./install.sh --dir "$PWD" --yes --skip-model-key --connect-claude-local
+```
+
+`GET /v1/setup/coding-agents?project_id=boss-dogfood` reads the installed
+CLI's sanitized status and the connection BOSS recorded. This is a local status
+check, not a model call. The CLI config directory is a named volume shared by
+the API and worker; safe uninstall and upgrades retain it. BOSS backups exclude
+the Claude CLI session. An explicit data purge removes the volume, and a move to
+another machine requires another provider-owned login. This local path does not
+ask for or submit a Claude token.
+
 For the default database secret backend, explicit
 `--accept-database-fallback` is required to store a subscription credential in
 Postgres. Choose `--secret-store infisical` during installation if you want a
