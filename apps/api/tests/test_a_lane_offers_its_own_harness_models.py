@@ -62,3 +62,45 @@ def test_changing_a_lanes_engine_clears_a_model_chosen_for_the_old_one(client):
     assert _knob(client, "code_agent_strong_model")["source"] == "deployment default"
     client.put("/v1/settings/code_agent_strong_engine",
                json={"project_id": PROJECT_ID, "actor": "ceo", "value": None})
+
+
+def test_switch_does_not_reveal_an_incompatible_deployment_model(client, monkeypatch):
+    from apps.api.app import main as api_main
+
+    monkeypatch.setattr(api_main.settings, "code_agent_strong_model", "opus")
+    moved = client.put("/v1/settings/code_agent_strong_engine",
+                       json={"project_id": PROJECT_ID, "actor": "ceo", "value": "codex"})
+    assert moved.status_code == 200, moved.text
+
+    model = _knob(client, "code_agent_strong_model")
+    assert model["value"] == ""
+    assert model["default"] == ""
+    assert model["source"] == "engine default"
+
+    cleared = client.put("/v1/settings/code_agent_strong_model",
+                         json={"project_id": PROJECT_ID, "actor": "ceo", "value": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["value"] == ""
+    assert cleared.json()["source"] == "engine default"
+
+
+def test_compatible_project_model_remains_selected_and_wrong_alias_is_refused(client):
+    selected = client.put("/v1/settings/code_agent_strong_engine",
+                          json={"project_id": PROJECT_ID, "actor": "ceo", "value": "codex"})
+    assert selected.status_code == 200, selected.text
+
+    wrong = client.put("/v1/settings/code_agent_strong_model",
+                       json={"project_id": PROJECT_ID, "actor": "ceo", "value": "opus"})
+    assert wrong.status_code == 422, wrong.text
+    assert _knob(client, "code_agent_strong_model")["source"] == "deployment default"
+
+    chosen = client.put("/v1/settings/code_agent_strong_model",
+                        json={"project_id": PROJECT_ID, "actor": "ceo",
+                              "value": "gpt-6-codex-preview"})
+    assert chosen.status_code == 200, chosen.text
+    repeat = client.put("/v1/settings/code_agent_strong_engine",
+                        json={"project_id": PROJECT_ID, "actor": "ceo", "value": "codex"})
+    assert repeat.status_code == 200, repeat.text
+    model = _knob(client, "code_agent_strong_model")
+    assert model["value"] == "gpt-6-codex-preview"
+    assert model["source"] == "project"

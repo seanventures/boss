@@ -19942,6 +19942,16 @@ def get_project_settings(project_id: str) -> dict:
         for key, spec in ps.KNOBS.items():
             default = getattr(settings, spec["attr"], None)
             value = chosen.get(key, default)
+            source = "project" if key in chosen else "deployment default"
+            if key in ps.MODEL_FOR_ENGINE.values():
+                harness = ps.harness_for_model_knob(spec, effective)
+                if not ps.model_is_compatible_with_harness(default, harness):
+                    default = ""
+                # The run uses the layered value, which may have suppressed a model inherited
+                # from the old engine. Show that value rather than the stale deployment alias.
+                value = getattr(effective, spec["attr"], default)
+                if value != chosen.get(key, getattr(settings, spec["attr"], None)):
+                    source = "engine default"
             knobs.append({
                 "key": key, "label": spec["label"], "help": spec["help"],
                 "kind": spec["kind"], "min": spec.get("min"), "max": spec.get("max"),
@@ -19961,7 +19971,7 @@ def get_project_settings(project_id: str) -> dict:
                     if spec["kind"] == "choice" else False),
                 "value": value,
                 "default": default,
-                "source": "project" if key in chosen else "deployment default",
+                "source": source,
             })
     return {"project_id": project_id, "knobs": knobs,
             # So the console can say WHY the list is short, and what to do about it, instead
@@ -19979,6 +19989,9 @@ def put_project_setting(key: str, payload: ProjectSettingBody) -> dict:
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     actor = str(payload.get("actor") or current_api_principal.get() or "executive_console")
+    spec = ps.KNOBS.get(key)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"'{key}' is not a setting BOSS knows about.")
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "providerops_manage")
         if payload.get("value") in (None, ""):
@@ -19986,12 +19999,22 @@ def put_project_setting(key: str, payload: ProjectSettingBody) -> dict:
             paired = ps.MODEL_FOR_ENGINE.get(key)
             if paired:
                 ps.clear_one(connection, project_id, paired)
-            return {"key": key, "value": getattr(settings, ps.KNOBS.get(key, {}).get("attr", ""),
-                                                 None),
-                    "source": "deployment default"}
+            effective = ps.applied(connection, project_id, settings)
+            value = getattr(effective, spec["attr"], None)
+            source = ("deployment default" if value == getattr(settings, spec["attr"], None)
+                      else "engine default")
+            return {"key": key, "value": value, "source": source}
         try:
             before = ps.get_all(connection, project_id).get(key)
             value = ps.set_one(connection, project_id, key, payload.get("value"), actor)
+            if key in ps.MODEL_FOR_ENGINE.values():
+                effective = ps.applied(connection, project_id, settings)
+                harness = ps.harness_for_model_knob(spec, effective)
+                if not ps.model_is_compatible_with_harness(value, harness):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{spec['label']}: '{value}' is not a model for {harness}.",
+                    )
         except ps.UnknownKnob as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:

@@ -12,9 +12,12 @@ invents a value: a knob nobody has touched reads exactly as it did before this e
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 #: The knobs the console may set, with the settings attribute each one overrides and the
 #: bounds a value has to fall inside. An unlisted key is refused rather than stored: a settings
@@ -241,6 +244,39 @@ def model_choice_is_open(spec: dict[str, Any], harness: str) -> bool:
         return True
 
 
+def model_is_compatible_with_harness(model: Any, harness: str) -> bool:
+    """Keep a known model for its harness; open harnesses also accept new model names.
+
+    Claude aliases are specific to Claude Code. An open harness may accept a new name that
+    BOSS has not catalogued yet, but it must not inherit one of those known Claude aliases.
+    """
+    name = str(model or "").strip().lower()
+    if not name:
+        return True
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        active = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
+        if active is not None and name in active.models:
+            return True
+        if active is not None and active.models_exhaustive:
+            return False
+        if active is None:
+            # Native/provider harnesses are in the coding registry rather than the CLI model
+            # registry. Their model ids are open text, but the harness itself must exist.
+            from .harness_registry import get_harness
+
+            get_harness(harness)
+        closed_names = {
+            known for candidate in BUILTIN_CLI_HARNESSES.values()
+            if candidate.models_exhaustive for known in candidate.models
+        }
+        return name not in closed_names
+    except Exception:  # noqa: BLE001 — an unknown pairing must not reach a model call
+        logger.exception("Could not verify model and harness compatibility")
+        return False
+
+
 def harness_for_model_knob(spec: dict[str, Any], settings: Any) -> str:
     """Which harness a model knob's list should come from.
 
@@ -419,26 +455,33 @@ def applied(connection, project_id: Optional[str], settings: Any) -> Any:
     different functions — and the reads that got missed would be the ones that quietly kept
     using the deployment default while the console showed the operator's choice.
 
-    Never raises, and returns the original object when there is nothing to layer: a settings
-    table that is unreachable must not stop work.
+    A settings lookup failure falls back to deployment values. The compatibility check still
+    runs: even a deployment-wide Codex/Claude-model mismatch must not reach a model call.
     """
-    if not project_id:
-        return settings
-    try:
-        chosen = get_all(connection, project_id)
-    except Exception:  # noqa: BLE001 — the environment is a complete answer on its own
-        return settings
+    chosen = {}
+    if project_id:
+        try:
+            chosen = get_all(connection, project_id)
+        except Exception:  # noqa: BLE001 — a DB outage must not expose an unsafe model pair
+            logger.exception("Could not load project settings; using deployment settings")
     overrides = {}
     for key, value in chosen.items():
         spec = KNOBS.get(key)
         if spec and value not in (None, ""):
             overrides[spec["attr"]] = value
-    if not overrides:
-        return settings
-    try:
-        return settings.model_copy(update=overrides)
-    except Exception:  # noqa: BLE001
-        return settings
+    layered = settings.model_copy(update=overrides) if overrides else settings
+    compatible = {}
+    for model_key in MODEL_FOR_ENGINE.values():
+        spec = KNOBS[model_key]
+        model_attr = spec["attr"]
+        model = getattr(layered, model_attr, "")
+        harness = harness_for_model_knob(spec, layered)
+        if model and not model_is_compatible_with_harness(model, harness):
+            # A project engine override can expose a deployment model chosen for the old
+            # engine even after its project model was cleared. Never send that pairing to
+            # a run. An explicit compatible project choice remains untouched.
+            compatible[model_attr] = ""
+    return layered.model_copy(update=compatible) if compatible else layered
 
 
 def effective(connection, project_id: Optional[str], settings: Any, key: str) -> Any:

@@ -210,7 +210,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "e087e583973080d72758b17e2635c94c086c9c9a7fdfcab34e87c179bf10967e"
+    "sha256": "158909ac599d79026518cdbe6ef097d9340cfb932e50f39f639cca26d087de7f"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -265,7 +265,7 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "4d0a9af8e772173282e45f4dd995021bbfa171c8f00021eeabf04e8e57db029d",
-    "output_sha256": "6bf84281db29b04679cb942cca37ff39eb47b0726fed67f10154c8074f6a9d0a"
+    "source_sha256": "ffee2b64658fd26a3436151ddb8e43955ce1568582634e3ae93f84957bc9629b",
+    "output_sha256": "0084b02e7ae5707863b6e42a740e324774f0af7d401de18f308d302e3b2c4b2a"
   }
 }

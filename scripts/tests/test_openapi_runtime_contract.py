@@ -95,7 +95,8 @@ def test_private_schema_names_every_operation_uniquely():
 
 
 def test_private_request_inputs_match_mounted_enterprise_routes():
-    static = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())["paths"]
+    private_document = yaml.safe_load((ROOT / "api/openapi.yaml").read_text())
+    static = private_document["paths"]
     mounted = _mounted_enterprise_schema()["paths"]
     methods = {"get", "post", "put", "patch", "delete", "head", "options"}
     mounted_ops = {
@@ -166,9 +167,16 @@ def test_private_request_inputs_match_mounted_enterprise_routes():
 
     assert static_ops[("post", "/v1/workflows")]["requestBody"]["required"] is True
     assert static_ops[("get", "/v1/workflows")]["parameters"]
-    assert "desired_workers" in static_ops[("post", "/v1/elastic/capacity")][
-        "requestBody"
-    ]["content"]["application/json"]["schema"]["properties"]
+    # The request uses a component reference in both published contracts. Resolve the
+    # reference before checking its fields instead of assuming an inline schema.
+    for document in (private_document,
+                     yaml.safe_load((ROOT / "api/openapi.community.yaml").read_text())):
+        schema_ref = document["paths"]["/v1/elastic/capacity"]["post"]["requestBody"][
+            "content"]["application/json"]["schema"]["$ref"]
+        assert schema_ref.startswith("#/components/schemas/")
+        schema = document["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]
+        assert "desired_workers" in schema["properties"]
+        assert "desired_workers" in schema["required"]
     assert "requestBody" not in static_ops[("post", "/v1/reliability/meta-eval")]
 
 
