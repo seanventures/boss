@@ -906,10 +906,19 @@ function ConnectedModels(
 ) {
   const [roles, setRoles] = useState<Array<{ key: string; label: string; value: string }>>([]);
   const [connected, setConnected] = useState<string[]>([]);
+  const [jev, setJev] = useState<DecisionStatus | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
+      // Jev does not build code, so its saved-key state is absent from connected_engines.
+      // Show that state here without implying decision calls are enabled during BOSS-451.
+      try {
+        const r = await fetch(
+          `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (r.ok && alive) setJev((await r.json()) as DecisionStatus);
+      } catch { /* the rest of the table stands on its own */ }
       try {
         const r = await fetch(`/api/settings?project_id=${encodeURIComponent(projectId)}`,
                               { cache: "no-store" });
@@ -941,6 +950,16 @@ function ConnectedModels(
       jobs: roles.filter((r) => r.value === engine).map((r) => r.label),
     };
   });
+  if (jev?.typesafe_key) {
+    rows.push({
+      engine: "typesafe",
+      label: "TypeSafe Jev",
+      kind: jev.execution_available ? "API key · decisions" : "saved key · paused",
+      verified: jev.execution_available,
+      at: "",
+      jobs: jev.effective_backend === "typesafe" ? ["Workflow decisions"] : ["Paused"],
+    });
+  }
   if (!rows.length) return null;
 
   // A TABLE, BECAUSE THESE ARE ROWS WITH THE SAME FIELDS. As a flex list the roles column was
@@ -949,12 +968,12 @@ function ConnectedModels(
   // lined up with each other. Columns make the comparison the eye is actually trying to do.
   return (
     <div className="setup-models" data-testid="setup-connected-models">
-      <span className="setup-models-head">Connected models</span>
+      <span className="setup-models-head">Models on this install</span>
       <table className="setup-models-table">
         <thead>
           <tr>
             <th scope="col">Model</th>
-            <th scope="col">Connected</th>
+            <th scope="col">Connection</th>
             <th scope="col">Roles it holds</th>
           </tr>
         </thead>
@@ -963,7 +982,7 @@ function ConnectedModels(
             <tr key={row.engine}>
               <th scope="row">
                 <span className="setup-dot" aria-hidden
-                      style={row.kind === "API key" && !row.verified
+                      style={row.kind === "saved key · paused" || (row.kind === "API key" && !row.verified)
                         ? { background: "var(--amber)" } : undefined} />
                 {row.label}
               </th>
