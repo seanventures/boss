@@ -59,6 +59,7 @@
     "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
+    "mkdocs.community.yml",
     "examples/",
     "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
@@ -220,12 +221,12 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "c43d670f29336d503da41a8617644f4ce12695fb7ca5447ebbc07911216910ac"
+    "sha256": "9a90c2ebab309d08b4e8b32fa4b9d85796f4832632154ccf1e4379f9f0921116"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
     "destination": "CONTRIBUTING.md",
-    "sha256": "60156f28d86e77a8f9cd4009c2cf3ed3cb387186242aa54753d71c5b08208077"
+    "sha256": "746cdd021bb648c9d04643a708d6ebf0039e619d400ed7385ea45c6d036df613"
   },
   "makefile_export_rewrite": {
     "source": "Makefile.community",

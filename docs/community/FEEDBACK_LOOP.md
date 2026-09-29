@@ -1,19 +1,31 @@
-# Community feedback
+# How a report becomes a change
 
-The GitHub issue is the public record for a Community bug, setup problem, or feature request. Use the bug, installation, or feature form in `.github/ISSUE_TEMPLATE/` when the repository becomes public. For a suspected vulnerability, do not open an issue; email **boss@sean.net** privately as described in `SECURITY.md` in the source checkout.
+A GitHub issue is the public record for a bug, a setup problem, or a feature request. When this repository is public, use the bug, installation, or feature form under `.github/ISSUE_TEMPLATE/`. The repository has not been published yet.
 
-## How a report becomes a change
+If you think you found a vulnerability, do not open a public issue. Email **boss@sean.net**. [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md) says what to include. Do not put credentials in that email.
 
-1. **Report.** Describe the observed result, expected result, steps, and version. Remove credentials and private data. The issue stays open while a maintainer investigates.
-2. **Triage.** Maintainers reproduce bugs, ask for missing detail, and link duplicates. When the signed GitHub App integration is configured, BOSS posts one receipt-backed first response and creates a hold-default decision. Bug and installation reports go to maintainer review. A complete feature request may create a draft plan; that plan has no authority to start work.
-3. **Decide.** A maintainer records the outcome on the issue: accepted with scope, needs more information, duplicate, deferred, or declined with a reason. BOSS's internal decision and Plane issue are operational records; internal IDs are not required from contributors.
-4. **Build and verify.** An accepted change gets a linked PR. The PR names its tests and any policy, budget, receipt, or migration effects. The GitHub agent may comment on a PR, but it cannot merge one.
-5. **Close the loop.** Before closing the issue, a maintainer links the shipped PR or release, says how to verify the result, and invites a follow-up if the original problem remains. Reopen or file a regression if the evidence does not match the report.
+You do not need an internal ticket id. Write what you were doing, what you expected, and what happened.
 
-The GitHub App is optional. Without it, maintainers perform the same steps manually. An operator who enables it must configure a signed webhook and review the App's permissions before allowing automated replies.
+## The path
 
-## What to expect
+1. **You report it.** Include the version or commit, the install method, and the edition. Remove credentials and private data. The issue stays open while someone looks at it.
+2. **Someone reproduces it.** Maintainers try the steps, ask for a missing detail, or link a duplicate. Bug and installation reports wait for a person. A complete feature request may get a draft plan. That plan cannot start work, spend money, or change a repository.
+3. **A person decides.** The issue gets an outcome: accepted, with the scope; needs more information; duplicate; deferred; or declined, with a reason.
+4. **An accepted change is a pull request.** The request names the tests and any budget, receipt, or database change. A bot may comment. It cannot merge.
+5. **The issue stays open until the result is linked.** Before closing it, a maintainer links the change that shipped and says how to check it. If that does not match what you reported, say so or file a regression.
 
-- Opening an issue does not authorize model spend, code execution, a provider write, deployment, or merge.
-- A bot reply is an intake acknowledgement, not a resolution or promise to ship.
-- BOSS does not collect usage telemetry from a self-hosted Community install for this loop. Contributors choose what they post in GitHub.
+The signed GitHub App is optional. If a maintainer turns it on, BOSS can post one acknowledgement on the issue and record a decision that waits for a person. That reply is not a fix and not a promise to ship. The maintainer has to configure a signed webhook and review the App's permissions first. Without the App, a person does the same steps.
+
+Opening an issue does not authorize those steps. This loop does not collect usage data from your self-hosted install. You choose what you put in the issue.
+
+## What this does not do
+
+- Opening an issue does not spend money, run code, write to a provider, deploy, or merge.
+- An acknowledgement is not a resolution.
+- A draft plan is not permission to start work.
+
+## Next
+
+- [Contributing](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) if you want to propose the change yourself.
+- [Quickstart](QUICKSTART.md) if you are still trying to get the console up.
+- [Guide index](README.md) for the rest of the docs.

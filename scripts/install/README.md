@@ -1,48 +1,48 @@
 # BOSS Community installer
 
-One-line Community setup for a supported Linux VM.
+Install BOSS Community on a machine you administer. For one path from a checkout to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md). This page is the installer itself: the unpublished command, a local checkout, loopback, the private `.env`, upgrade, and uninstall.
 
-## One-liner
+## Unpublished one-liner
 
-The public Community repository has not been published yet. After publication,
-replace this placeholder with the reviewed release commit's full SHA and run:
+This repository has not been published yet. After a reviewed release commit exists, replace the placeholder with that commit's full 40-character SHA and run:
 
 ```bash
 BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-The HTTP download and Git checkout use the same immutable commit, and the
-installer verifies that commit. If the download fails, the installer does not
-run. Until a reviewed commit exists, the pinned command cannot succeed. Do not
-invent a SHA. From a checkout you already have, `./install.sh --dir /path/to/empty`
-copies that tree. It does not clone the unpublished GitHub URL and it does not
-SSH to a maintainer machine. A checkout that is ahead of `main`, or whose
-history has diverged from it, stays on that source. Pass `--ref` to require a
-different commit; a diverged ref then stops with the checkout unchanged.
+The download and the Git checkout use that same commit, and the installer verifies it. If the download fails, the installer does not run. Until a reviewed commit exists, this command cannot succeed. Do not invent a SHA, and do not point the URL at another host.
 
-The installer binds the API and web to `127.0.0.1` and writes credentials only
-on the machine where it runs. It does not upload `.env`. That file is yours;
-keep it private. Nothing in this guide requires Plane, an ops token, or a
-private registry. `user@your-vm` means a VM you administer.
+## Local checkout
 
-The installer reads prompts from the terminal even when its downloaded file is
-run by `bash`. Paste a model key at the hidden prompt, or press Enter and
-connect one later. It refuses API keys and tokens on the command line: the
-shell would save them in history and process listings. Export
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `BOSS_GITHUB_TOKEN` instead.
+From a checkout you already have:
 
-For unattended automation, pass the key to the installer process through its
-environment and add `--yes` after the final `_` in the pinned command. Or run
-the checkout you already have:
+```bash
+./install.sh --dir "$PWD"
+```
+
+That installs into the checkout. It does not contact a maintainer server, it does not clone the unpublished GitHub URL, and it does not SSH to a maintainer machine. Passing an empty directory as `--dir` fills that directory from this tree instead. A checkout that is ahead of `main`, or whose history has diverged from it, stays on that source. Pass `--ref` to require a different commit. A diverged ref then stops with the checkout unchanged.
+
+## Loopback and the private .env
+
+The installer binds the API and web to `127.0.0.1` and writes credentials only on the machine where it runs. It does not upload `.env`. That file is yours. Keep it private and do not commit it. Nothing in this guide requires Plane, an ops token, or a private registry. `user@your-vm` means a VM you administer, not a shared host and not a machine run by the maintainers.
+
+## Secrets stay off the command line
+
+The installer reads prompts from the terminal even when `bash` runs the downloaded file. Paste a model key at the hidden prompt, or press Enter and connect one later. It refuses API keys and tokens as arguments. The shell would save them in history and process listings. Export `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `BOSS_GITHUB_TOKEN` for the installer process instead.
+
+For a scripted install, pass the key through the environment and add `--yes` after the final `_` in the pinned command. Or, from the checkout you already have:
 
 ```bash
 OPENAI_API_KEY="$OPENAI_API_KEY" ./install.sh --dir "$PWD" --yes
 ```
 
-Or start without a model key and add one to `.env` later:
+To start without a model key, add `--yes --skip-model-key` after the final `_`, or run:
 
-Add `--yes --skip-model-key` after the final `_` in the pinned command, or run
-`./install.sh --dir "$PWD" --yes --skip-model-key` from the checkout.
+```bash
+./install.sh --dir "$PWD" --yes --skip-model-key
+```
+
+Put a key in the private `.env` later if you want one. See [model connections](../../docs/community/MODEL_CONNECTIONS.md).
 
 ## What it does
 
@@ -101,7 +101,7 @@ client-supplied values is unsafe. Keep the Next listener bound to loopback.
 This setting does not replace TLS. The proxy configuration needs a live login
 and CSRF check before public access is enabled.
 
-No BOSS Cloud / Account Connect required.
+A hosted BOSS account is not required. Connect a model you already have only if you want model work.
 
 ### Optional coding subscriptions
 
@@ -131,8 +131,8 @@ codex login --device-auth
 grok login --device-auth
 ```
 
-`--discover-subscriptions` only checks status; it sends no credentials. For
-Claude Code has a separate **CLI-owned local login**: sign in through the
+`--discover-subscriptions` only checks status; it sends no credentials. Claude
+Code has a separate **CLI-owned local login**: sign in through the
 official CLI as the `boss` user inside the API container, then tell BOSS to
 record that connection. The API and worker share the same private Claude
 config volume, including `.claude.json`, across container recreates:
@@ -202,21 +202,15 @@ retain those explicit values.
 - Existing Linux/macOS host: `git`, `curl`, running Docker Engine/Desktop and Compose
 - Existing distro Docker packages are not removed automatically; upgrade those manually
 
-### Sizing — measured, not estimated
-
-These are real figures from a working install, not guesses. The previous "~5GB free disk" was
-wrong by an order of magnitude and would strand a build half-way.
+### Sizing
 
 | | Need | Why |
 |---|---|---|
-| **Disk** | **100 GB** | Images are ~11.5 GB (api 4.1, infisical 3.8, web 1.6, worker 1.5, postgres 0.4). Building them generates tens of GB of layer cache — a real build reached 58 GB before pruning. Every agent run also clones the target repo and may `npm install` Playwright browsers. The installer warns below 80 GB. |
-| **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at ~1.6 GB. The coding agent runs INSIDE the api container, so a build adds a Node process plus whatever the task installs. A 7.6 GB allocation ran a 39-file build successfully; less than 8 GB will swap. |
+| **Disk** | **100 GB** | Images are about 11.5 GB (api 4.1, infisical 3.8, web 1.6, worker 1.5, postgres 0.4). Building them uses tens of GB of layer cache. A run can also clone a repository and install browsers. The installer warns below 80 GB. |
+| **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at about 1.6 GB. Coding work runs inside the API container and adds whatever that task installs. Less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 
-**Do not let it swap.** A host that starts swapping stops scheduling BOSS for minutes at a
-time, and the symptom is a build that takes 85 minutes instead of 20 with nothing in any log
-to explain it. BOSS now detects this itself (`host.stalled` events, and the per-run
-retrospective attributes the lost time), but the cure is capacity, not detection.
+If the host starts swapping, runs stall. BOSS records `host.stalled` on that machine. Add memory or free disk, then retry. Retrying on a swapping host does not fix the stall.
 
 ### Ports
 
@@ -256,15 +250,9 @@ remote access goes through an SSH tunnel or a TLS reverse proxy.
 ./scripts/install/checkup.sh --probe    # also ask a model a question
 ```
 
-`--probe` behaves as `consensus doctor --probe` does — free checks by default, and a real model
-call only when you ask for one, because that call costs money. The name is `checkup` rather than
-`doctor` because several other tools now ship a `doctor` that means something slightly
-different in each; a command whose meaning changes per product is one nobody trusts.
+Without `--probe`, the checks do not call a model. `--probe` asks a model a question and spends money. The command is `checkup`, not `doctor`.
 
-Seven checks, each one a failure that has actually happened here: containers running, the API
-answering, the address compiled into the console, a model connected, **a model that actually
-answers** (`--probe`), the repository pushable, and whether this machine can schedule BOSS at
-all. Exits 0 when BOSS can do its job.
+The checks are: containers running, the API answering, the address compiled into the console, a model connected, a model that answers (`--probe` only), the repository pushable, and whether this machine can schedule work. The script exits 0 when those checks pass. A passing checkup is not a promise that every preview or deploy will succeed.
 
 ```
   ok    containers: 6 running
@@ -278,8 +266,7 @@ all. Exits 0 when BOSS can do its job.
   BOSS is ready.  Mission Control: http://127.0.0.1:3000
 ```
 
-"Connected" and "working" are different claims, and the chat check is the one that separates
-them: a subscription can be connected and out of quota, and only asking it a question finds out.
+A connected subscription can still be out of quota. Only the `--probe` question distinguishes "saved" from "answered."
 
 ### Before the first run
 

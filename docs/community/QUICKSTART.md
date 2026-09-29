@@ -1,164 +1,86 @@
-# BOSS Community quickstart
+# Quickstart
 
-BOSS Community runs on an Ubuntu 22.04/24.04 or Debian 12/13 VM with `sudo`
-access. The installer provisions Docker Engine, Buildx, Compose and other host
-dependencies, starts Postgres, API, worker and Mission Control, seeds a project,
-and checks API health. Model work needs provider credentials you control, through
-an API key or a supported coding subscription. Leaving both unconnected starts
-the control plane and leaves model work visibly unavailable.
+This is one path from a checkout you already have to Mission Control on `127.0.0.1`, then one task. It does not contact a maintainer server.
 
-In Community, the console's **Save key without test** action stores an API key
-securely and marks that model **unverified**. A key supplied through `.env` is
-also shown as unverified. Opening setup does not contact the model provider,
-and saving a key does not send a test request: live checks need a governed
-budget reservation, leased job, and cost receipt. A configured key may still be
-invalid or lack access to the selected model; confirm it through a governed
-model run before relying on it for work.
+## What you need
+
+- A checkout of this repository on the machine where BOSS will run.
+- Ubuntu 22.04 or 24.04, or Debian 12 or 13, with `sudo`. An existing Linux or macOS host also works when `git`, `curl`, and Docker Engine or Docker Desktop with Compose are already installed.
+- Nothing else. A model key is optional. Skipping it still starts the control plane. Model work stays unavailable until you connect one.
+
+This repository has not been published. Do not guess a commit.
 
 ## Install
 
-The Community repository is not public yet. After publication, replace the
-placeholder with the reviewed release commit's full 40-character SHA and run:
+From the checkout:
 
 ```bash
-BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+./install.sh --dir "$PWD"
 ```
 
-The download must succeed before the installer runs; the same exact commit is
-used for the source checkout and verified after clone. For an unattended VM
-without a model key, add `--yes --skip-model-key` after the final `_`. To
-install optional host copies of the official Claude Code, Codex CLI and Grok
-Build binaries, add `--install-coding-clis` there as well.
+The installer binds the API, console, and database to `127.0.0.1`. It writes `.env` in that directory with mode `0600`, does not upload it, and does not print the API key or the console password. No step needs Plane, an ops token, a private registry, or SSH to a machine you do not administer.
 
-If you already have a source tree, run the installer from that directory. This
-does not log you into a maintainer machine:
+If this checkout is ahead of the default branch, or the histories have diverged, the installer keeps this source. It does not rewind the tree. Pass `--ref` only when you mean a different commit. A diverged ref then stops instead of installing the wrong source.
 
-```bash
-cd /path/to/boss
-./install.sh --dir "$PWD" --install-coding-clis
-```
+The installer does not add your user to the Docker group. If Docker on this host requires an administrator, later manual Compose commands need `sudo docker compose`. The installer detects that access for its own commands.
 
-An empty install directory is filled from that tree. It does not clone the
-unpublished GitHub URL, it does not SSH to a maintainer machine, and it does
-not need Plane, an ops token, or a private registry:
+You should see a success card that says BOSS Community is running. It names Mission Control at `http://127.0.0.1:3000`, the seeded project `boss-dogfood`, and the install directory. The API key line says the key is in `.env` and was not printed. `boss-dogfood` is that local project, not a shared server.
 
-```bash
-cd /path/to/boss
-./install.sh --dir "$HOME/boss" --yes --skip-model-key
-```
+Docker Desktop stores images on its own virtual disk. That disk can fill while the host still has free space. If Postgres then fails to initialize, the installer prints the database log, including `No space left on device`. Free space in Docker and run the installer again. A rerun keeps credentials already written. The installer also warns when free disk is under 80 GB. Sizing is in the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
 
-If this checkout is already ahead of the default branch, or that branch has
-diverged, the installer keeps this source. It does not rewind the tree.
-Pass `--ref` when a different commit must be checked out; a diverged ref then
-stops instead of installing the wrong source.
+## Open the console
 
-When that reviewed commit is installed, the default checkout is `~/boss`. The
-installer writes secrets to `~/boss/.env` with mode 0600 and never prints the
-generated API key or console password. The file stays on that machine. The
-installer does not upload it. Keep it private and do not commit it. A rerun
-keeps existing credentials and data. It leaves the operator GitHub owner/repo
-unbound until you configure them; the installer's source repository is not
-your project repository. The API, console, and database listen on `127.0.0.1`.
+On the install machine, open `http://127.0.0.1:3000`.
 
-The installer does not add your user to the root-equivalent Docker group. If
-Docker requires administrator access, use `sudo docker compose` for manual
-commands; the installer detects that access for its own commands.
-
-Docker Desktop keeps images on its own virtual disk. That disk can be full
-while the host still has free space. If Postgres then fails to initialize, the
-installer prints the database log, including `No space left on device`. Grow
-the virtual disk or remove unused images, then run the installer again. A
-rerun keeps the credentials already written.
-
-Installing coding CLIs does not sign in to subscriptions. A laptop login is
-not available on the VM. Codex and Claude have explicit connect steps after
-official VM login; see “Optional coding subscriptions” in `scripts/install/README.md`
-in the source checkout.
-For Grok, run device login as the BOSS service user in the API container:
-
-```bash
-cd ~/boss
-docker compose -f scripts/install/community-compose.yml --env-file .env \
-  exec -u boss api grok login --device-auth
-```
-
-## Open and verify
-
-The API, console and database bind to `127.0.0.1` on the VM you administer.
-From your laptop, open an SSH tunnel to that VM, not to a shared service:
+If BOSS is on another machine, that machine must be a VM you administer. `user@your-vm` means that VM:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Open `http://127.0.0.1:3000` on the laptop. To retrieve the console password
-privately on the VM, run `python3 scripts/install/console_password.py show`
-from the install directory. For a hostname you serve, terminate HTTPS at a
-reverse proxy you control while keeping BOSS bound to loopback; follow
-`scripts/install/README.md` in the source checkout for the proxy and origin
-requirements.
+Open `http://127.0.0.1:3000` on the computer that opened the tunnel. The tunnel reaches the console. It does not deploy an app through BOSS.
 
-Check health and the seeded Community edition on the VM:
+On the install machine, show the console password in a terminal. It is not printed into logs, and it is not the API key:
 
 ```bash
-cd ~/boss
+python3 scripts/install/console_password.py show
+```
+
+You should see a sign-in page for Mission Control. After you sign in, open **Command Center**. On a new install, **Team structure**'s planned layout starts empty. **Agent Studio** already has starter definitions. Installing one does not start work. Sign-in details are in [console access](CONSOLE_AUTH.md).
+
+## Create one task
+
+This checks that the control plane can store work. It does not call a model, send email, or deploy.
+
+From the directory you passed to `--dir`:
+
+```bash
 source ./boss-community.env.sh
 curl -fsS "$BOSS_API_URL/health"
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
   "$BOSS_API_URL/v1/edition?project_id=$BOSS_PROJECT_ID"
-```
-
-Health does not show that the control plane can store work. Create one task
-without a model key, an email account, or a deploy target. The owner key is
-the `ceo` actor. Repeat the same `dedupe_key` and the API rejects the
-duplicate instead of inserting a second task:
-
-```bash
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"project_id\":\"$BOSS_PROJECT_ID\",\"title\":\"Local note\",\"dedupe_key\":\"local-note-1\",\"actor\":\"ceo\"}" \
   "$BOSS_API_URL/v1/tasks"
 ```
 
-If you skipped the model-key prompt, add your own `OPENAI_API_KEY` to the
-private `.env` on the VM and recreate API and worker. Keep the key out of shell
-history and repository files:
+The owner key is the `ceo` actor. You should see each command finish without an error. Health does not print a secret. The edition response is for `BOSS_PROJECT_ID` on this machine. The task response includes the title `Local note`. Run the same task command again. The API rejects that `dedupe_key` instead of creating a second task.
+
+## Optional
+
+Skip all of these on the first path.
+
+- A model you already have: [model connections](MODEL_CONNECTIONS.md). Saving a key does not call the provider.
+- Host copies of Claude Code, Codex CLI, and Grok Build: `./install.sh --dir "$PWD" --install-coding-clis`. That does not sign you in. A Grok subscription you already have is in [Grok CLI](GROK_CLI.md).
+- The [Goldeneye kit](https://github.com/seanventures/boss/blob/main/docs/product/GOLDENEYE_PAAS.md). It is optional software you run locally. It is not access to a server operated by someone else.
+- The [five example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing them starts no work.
+- Upgrade and uninstall: [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md#upgrade--recover).
+
+The published one-liner is not this path. After a reviewed release commit exists, replace the placeholder with that commit's full 40-character SHA. Until then the command stops before any download:
 
 ```bash
-docker compose -f scripts/install/community-compose.yml --env-file .env \
-  up -d --force-recreate api worker
+BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-## Upgrade or remove
-
-From the install checkout, back up and upgrade with:
-
-```bash
-cd ~/boss
-./scripts/install/upgrade.sh --dir "$PWD"
-```
-
-The upgrade backs up private configuration, Postgres and artifacts before it
-changes source or containers. Rerunning the one-line installer also makes a
-recovery backup before it fast-forwards an existing checkout. If the old
-database was stopped, the backup starts its existing container and restores its
-stopped state afterward. It never substitutes a mutable image tag. If the
-container is missing, cannot start, or the backup fails, the source is left
-unchanged. Upgrades keep named volumes and login sessions. To
-stop BOSS and retain `.env`, volumes, images, backups and the checkout:
-
-Older safe uninstalls may already have removed the database container. Follow
-the [legacy recovery procedure](../../scripts/install/README.md#recover-an-older-safe-uninstall)
-before upgrading such an install.
-
-```bash
-./scripts/install/uninstall.sh --dir "$PWD" --dry-run
-./scripts/install/uninstall.sh --dir "$PWD" --yes
-```
-
-Run `./install.sh --dir "$PWD" --yes --skip-model-key` to resume. To remove
-data intentionally, add `--purge-data`; the script backs up first and requires
-the separate `DELETE-BOSS-DATA` confirmation. Purge also removes CLI session
-volumes, so provider sign-in is required after recovery. See
-“Upgrade & recover” in `scripts/install/README.md` in the source checkout for
-exact restore steps and limits.
+Do not invent a SHA. The [guide index](README.md) lists the other pages. Report a problem through [feedback](FEEDBACK_LOOP.md). Report a vulnerability only by email, as [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md) describes.

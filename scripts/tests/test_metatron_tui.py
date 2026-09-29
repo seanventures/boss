@@ -995,6 +995,10 @@ def test_community_snapshot_maps_every_operator_operation():
     assert all(record["addressable"] for record in operator_records)
     assert len({record["operation_id"] for record in records}) == len(records)
     assert all(record["operation_id"] == record["runtime_operation_id"] for record in records)
+    features = (ROOT / "docs/community/FEATURES.md").read_text(encoding="utf-8")
+    terminal = (ROOT / "docs/community/TERMINAL_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
+    assert "993" in features and "986" not in features
+    assert "993" in terminal and "980" in terminal and "986" not in terminal
 
 
 def test_private_snapshot_maps_every_operator_operation_except_inbound_callbacks():

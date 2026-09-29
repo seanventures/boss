@@ -1,0 +1,151 @@
+/* Community manual. Cool chassis, ink, one status-lamp teal.
+   The receipt is the only ornament. */
+
+:root {
+  --boss-ink: #1c2430;
+  --boss-paper: #e4e8ee;
+  --boss-lamp: #0e6b66;
+  --boss-lamp-lit: #1aa89a;
+  --boss-rule: #c5ced8;
+  --boss-plate: #f7f8fa;
+  --boss-mute: #5c6b7a;
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--boss-paper);
+  --md-default-fg-color: var(--boss-ink);
+  --md-typeset-a-color: var(--boss-lamp);
+  --md-code-bg-color: var(--boss-plate);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #141b24;
+  --md-default-fg-color: var(--boss-paper);
+  --md-typeset-a-color: #7dcec6;
+  --md-code-bg-color: #1b242e;
+}
+
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #1c2430;
+  --md-primary-fg-color--light: #314056;
+  --md-primary-fg-color--dark: #121820;
+  --md-primary-bg-color: #f4f6f8;
+  --md-primary-bg-color--light: #ffffff;
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: var(--boss-lamp);
+  --md-accent-fg-color--transparent: #0e6b661a;
+}
+
+.md-header {
+  border-bottom: 3px solid var(--boss-lamp);
+  box-shadow: none;
+}
+
+.md-header__topic:first-child .md-ellipsis {
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+}
+
+.md-nav__item--section > .md-nav__link {
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+[data-md-color-scheme="default"] .md-nav__item--section > .md-nav__link,
+[data-md-color-scheme="default"] .boss-receipt th {
+  color: #3f4d5c;
+}
+
+[data-md-color-scheme="slate"] .md-nav__item--section > .md-nav__link,
+[data-md-color-scheme="slate"] .boss-receipt th {
+  color: #b7c2ce;
+}
+
+.md-typeset {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.md-typeset h1,
+.md-typeset h2 {
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+[data-md-color-scheme="default"] .md-typeset h1 {
+  color: var(--boss-ink);
+}
+
+.md-typeset code,
+.boss-receipt table {
+  font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+}
+
+.md-typeset pre {
+  border-left: 3px solid var(--boss-lamp);
+  border-radius: 6px;
+}
+
+.md-typeset :focus-visible {
+  outline: 2px solid var(--boss-lamp);
+  outline-offset: 2px;
+}
+
+.boss-manual {
+  max-width: 38rem;
+  font-size: 1.15rem;
+  line-height: 1.45;
+  margin: 0.4rem 0 1.4rem;
+}
+
+.boss-receipt {
+  border-left: 3px solid var(--boss-lamp);
+  background: var(--boss-plate);
+  padding: 0.2rem 1rem 0.5rem;
+  margin: 0 0 1.6rem;
+  max-width: 40rem;
+  overflow-x: auto;
+}
+
+.boss-receipt__kicker {
+  font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--boss-lamp);
+  margin: 0.75rem 0 0.15rem;
+}
+
+.boss-receipt table {
+  font-size: 0.82rem;
+  width: 100%;
+  box-shadow: none;
+}
+
+.boss-receipt th {
+  font-weight: 500;
+  color: var(--boss-mute);
+  background: transparent;
+  border-bottom: 1px dashed var(--boss-rule);
+}
+
+[data-md-color-scheme="slate"] .boss-receipt {
+  background: #1b242e;
+}
+
+[data-md-color-scheme="slate"] .boss-receipt__kicker {
+  color: var(--boss-lamp-lit);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-sidebar,
+  .md-top {
+    scroll-behavior: auto;
+  }
+}

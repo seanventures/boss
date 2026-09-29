@@ -304,10 +304,10 @@ can return raw secret material. Customer
 secret-management routes remain
 available through API permission checks with redacted results.
 
-All **532 Community operations with a JSON request body** now expose named
-top-level fields in the mounted OpenAPI schema; the other 454 operations have
+All **537 Community operations with a JSON request body** now expose named
+top-level fields in the mounted OpenAPI schema; the other 456 operations have
 no JSON body. No Community JSON body remains loose at the top level. Of the
-532, **448** use Pydantic field handling and **84** use pass-through fields to
+537, **453** use Pydantic field handling and **84** use pass-through fields to
 preserve existing handler coercion and status codes. The latter fields help MCP
 clients construct requests, but their types are not enforced by Pydantic. Some
 nested payloads remain intentionally flexible. The matrix's

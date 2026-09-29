@@ -2,7 +2,7 @@
 
 This is the Community feature checklist. A status here describes the implementation scope; it is not a public release claim.
 
-**v1 lock:** [V1_FEATURE_LOCK.md](../product/V1_FEATURE_LOCK.md) — Community v1 in / out / Cloud-Enterprise only. ✦ rows stay Cloud/Enterprise (never Community shipped). **Not public GA.**
+**v1 lock:** [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md) — Community v1 in / out / Cloud-Enterprise only. ✦ rows stay Cloud/Enterprise (never Community shipped). **Not public GA.**
 
 **Legend:** ✅ shipped in Community · ◐ partial · ○ planned · ✦ Cloud / Enterprise only
 
@@ -28,7 +28,7 @@ This is the Community feature checklist. A status here describes the implementat
 |---|---|
 | HTTP control-plane API (OpenAPI) | ✅ |
 | CLI | ✅ |
-| MCP server for agent clients | ◐ All 986 mounted Community operations are mapped: 853 use API policy, 38 need separate exact-request human confirmation, 28 remain held for route safety work, and 67 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
+| MCP server for agent clients | ◐ All 993 mounted Community operations are mapped: 860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work, and 67 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
 | Self-hosted Mission Control console | ✅ |
 | API-first clients (`packages/api-client`) | ✅ |
 
