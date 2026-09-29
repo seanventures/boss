@@ -869,10 +869,20 @@ function ConnectedModels(
 ) {
   const [roles, setRoles] = useState<Array<{ key: string; label: string; value: string }>>([]);
   const [connected, setConnected] = useState<string[]>([]);
+  const [jev, setJev] = useState<DecisionStatus | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
+      // THE JEV KEY IS A CONNECTION TOO. `connected_engines` lists what can BUILD, and Jev
+      // cannot, so a saved and working key was missing from this table — and the operator,
+      // reasonably, read that as "not connected".
+      try {
+        const r = await fetch(
+          `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (r.ok && alive) setJev((await r.json()) as DecisionStatus);
+      } catch { /* the rest of the table stands on its own */ }
       try {
         const r = await fetch(`/api/settings?project_id=${encodeURIComponent(projectId)}`,
                               { cache: "no-store" });
@@ -903,6 +913,15 @@ function ConnectedModels(
       jobs: roles.filter((r) => r.value === engine).map((r) => r.label),
     };
   });
+  if (jev?.typesafe_key) {
+    rows.push({
+      engine: "typesafe",
+      label: "TypeSafe Jev",
+      kind: "API key · decisions only",
+      at: "",
+      jobs: jev.effective_backend === "typesafe" ? ["Workflow decisions"] : [],
+    });
+  }
   if (!rows.length) return null;
 
   // A TABLE, BECAUSE THESE ARE ROWS WITH THE SAME FIELDS. As a flex list the roles column was
@@ -999,6 +1018,23 @@ function DecisionKeyForm(
   const [busy, setBusy] = useState(false);
   const [acceptFallback, setAcceptFallback] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // WHETHER A KEY IS ALREADY SAVED, asked rather than assumed. Opened from the provider list
+  // this form had no idea, so it showed an empty box after a successful save — which reads as
+  // "nothing happened".
+  const [saved, setSaved] = useState<boolean | null>(hasKey ?? null);
+  useEffect(() => {
+    if (hasKey !== undefined) { setSaved(hasKey); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (r.ok && alive) setSaved(Boolean((await r.json()).typesafe_key));
+      } catch { /* unknown: say nothing rather than something wrong */ }
+    })();
+    return () => { alive = false; };
+  }, [hasKey, projectId]);
 
   const save = useCallback(async () => {
     if (busy || !key.trim()) return;
@@ -1025,7 +1061,7 @@ function DecisionKeyForm(
                           + `${String(r.data?.latency_ms ?? "?")} ms. Workflow decisions on this `
                           + `project now go to Jev, and to Claude when Jev is unsure.` }
       : { ok: false, text: r.error ?? "could not save the key" });
-    if (r.ok) onSaved?.();
+    if (r.ok) { setSaved(true); onSaved?.(); }
   }, [busy, key, acceptFallback, projectId, actor, onSaved]);
 
   return (
@@ -1036,8 +1072,14 @@ function DecisionKeyForm(
           rel="noreferrer">{keyUrl.replace("https://", "")}</a>.</> : null}
         </p>
       ) : null}
+      {saved ? (
+        <p className="setup-ok" data-testid="setup-decision-connected">
+          Connected — a TypeSafe key is saved. The Workflow decisions row in Who does what
+          says whether Jev is the one deciding.
+        </p>
+      ) : null}
       <label className="setup-field">
-        <span>TypeSafe API key{hasKey ? " — one is already saved; pasting replaces it" : ""}</span>
+        <span>TypeSafe API key{saved ? " — paste a new one only to replace it" : ""}</span>
         <input type="password" value={key} autoComplete="off" spellCheck={false}
                data-testid="setup-decision-key" placeholder="ts_…"
                onChange={(e) => setKey(e.target.value)} />
