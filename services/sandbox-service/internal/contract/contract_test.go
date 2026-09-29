@@ -34,7 +34,7 @@ func TestGoldenSubmitShape(t *testing.T) {
 	if req.TaskID != "crun_s1_contract" {
 		t.Fatalf("task_id=%q", req.TaskID)
 	}
-	if req.Repo.Owner != "paramg" || req.Repo.Name != "boss-sandbox" {
+	if req.Repo.Owner != "example-user" || req.Repo.Name != "boss-sandbox" {
 		t.Fatalf("repo=%+v", req.Repo)
 	}
 	if req.Engine != "claude_code" {
