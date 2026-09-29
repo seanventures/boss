@@ -151,6 +151,34 @@ def test_unreachable_origin_uses_the_local_checkout(tmp_path: Path) -> None:
     assert _git("rev-parse", "HEAD", cwd=install) == head
 
 
+def test_local_hardware_agent_receives_the_seeded_project(tmp_path: Path) -> None:
+    install = tmp_path / "boss"
+    (install / "scripts/install").mkdir(parents=True)
+    for name in ("community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py"):
+        (install / "scripts/install" / name).write_bytes((REPO / "scripts/install" / name).read_bytes())
+    seen = install / "project-seen"
+    agent = install / "scripts/install/node_agent.sh"
+    agent.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" != --local ]; then echo \"expected --local\" >&2; exit 2; fi\n"
+        "if [ -z \"$BOSS_PROJECT_ID\" ]; then echo \"node agent: BOSS_PROJECT_ID is required\" >&2; exit 1; fi\n"
+        "printf '%s\\n' \"$BOSS_PROJECT_ID\" > \"$BOSS_AGENT_SEEN\"\n"
+        "exit 0\n"
+    )
+    agent.chmod(0o755)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(install)], check=True)
+    _commit(install, "local only")
+    _git("remote", "add", "origin", str(tmp_path / "missing.git"), cwd=install)
+    env = _fake_tools(tmp_path)
+    env["BOSS_AGENT_SEEN"] = str(seen)
+
+    result = _install(INSTALLER, install, env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert seen.read_text() == "boss-dogfood\n"
+    assert "Hardware agent did not install" not in result.stdout + result.stderr
+
+
 def test_database_start_failure_prints_the_engine_log(tmp_path: Path) -> None:
     install = tmp_path / "boss"
     (install / "scripts/install").mkdir(parents=True)

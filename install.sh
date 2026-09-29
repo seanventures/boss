@@ -985,7 +985,10 @@ if [[ -z "${_place_project}" ]]; then
 elif [[ ! -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
   ui_warn "scripts/install/node_agent.sh is missing. The local hardware agent is absent, so the local place was not marked ready."
 else
-  if sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+  # The agent refuses to install with an empty project id. The id is the
+  # project this installer just seeded, not a value from the shell environment.
+  if BOSS_PROJECT_ID="${_place_project}" \
+      sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
   else
     ui_warn "Hardware agent did not install. The local machine was not recorded."
