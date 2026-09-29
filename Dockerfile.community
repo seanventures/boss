@@ -50,6 +50,8 @@ RUN python -m playwright install --with-deps chromium \
 # keeps known private paths out of local build contexts.
 COPY apps/__init__.py ./apps/__init__.py
 COPY LICENSE ./LICENSE
+COPY THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md
+COPY third_party/notices ./third_party/notices
 COPY apps/api ./apps/api
 COPY apps/worker ./apps/worker
 COPY api ./api
@@ -114,6 +116,8 @@ RUN npm install --global pnpm@9.15.0 \
     && addgroup --system boss \
     && adduser --system --ingroup boss boss
 COPY --chown=boss:boss LICENSE ./LICENSE
+COPY --chown=boss:boss THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md
+COPY --chown=boss:boss third_party/notices ./third_party/notices
 COPY --from=web-builder --chown=boss:boss /app/package.json ./package.json
 COPY --from=web-builder --chown=boss:boss /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=web-builder --chown=boss:boss /app/pnpm-workspace.yaml ./pnpm-workspace.yaml

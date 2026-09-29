@@ -13,6 +13,11 @@
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "third_party/notices/caniuse-lite-1.0.30001793-LICENSE",
+    "third_party/notices/spdx-exceptions-2.5.0-README.md",
+    "third_party/notices/sharp-libvips-1.2.4-LICENSE",
+    "third_party/notices/sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md",
     "Makefile",
     "ruff.toml",
     "Dockerfile.community",
@@ -180,6 +185,11 @@
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "third_party/notices/caniuse-lite-1.0.30001793-LICENSE",
+    "third_party/notices/spdx-exceptions-2.5.0-README.md",
+    "third_party/notices/sharp-libvips-1.2.4-LICENSE",
+    "third_party/notices/sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md",
     ".github/ISSUE_TEMPLATE/bug.yml",
     ".github/ISSUE_TEMPLATE/install.yml",
     ".github/ISSUE_TEMPLATE/feature.yml",
@@ -267,5 +277,12 @@
     "path": "apps/api/app/main.py",
     "source_sha256": "36448672f03e46f6f37eab0137dea9885b885b28e1f26e4e1c9b60a9cfd4b456",
     "output_sha256": "079f6b01366df16f4d99f0885444142fc6b4e621446556fd2ce97c999139bacf"
+  },
+  "reviewed_notice_sha256": {
+    "THIRD-PARTY-NOTICES.md": "a9722d7d3c861b02eddae4ead71beaf7a1ff88b7d9fbe31c0374d3d23aeb9191",
+    "third_party/notices/caniuse-lite-1.0.30001793-LICENSE": "fd3a263fe19ed8faa9068b43abaebafc02c77897b0c6fc09abc04bb592e5f16e",
+    "third_party/notices/spdx-exceptions-2.5.0-README.md": "554b19eee11d2964e9f7b244e47944c08d52ca75539260a04f3227e6c0144513",
+    "third_party/notices/sharp-libvips-1.2.4-LICENSE": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+    "third_party/notices/sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md": "3f416978dd2448ddab0d413d333c45fb208acdc066c280b95ebcb2f8b9f34ab9"
   }
 }

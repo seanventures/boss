@@ -310,6 +310,25 @@ def validate_manifest(manifest: dict) -> None:
             or not re.fullmatch(r"[0-9a-f]{64}", digest)
         ):
             raise ValueError("exported root LICENSE requires a reviewed SHA-256 pin")
+    notice_paths = {
+        path for path in manifest["include"]
+        if path == "THIRD-PARTY-NOTICES.md" or path.startswith("third_party/notices/")
+    }
+    if notice_paths:
+        pins = manifest.get("reviewed_notice_sha256")
+        if (
+            not isinstance(pins, dict)
+            or set(pins) != notice_paths
+            or not notice_paths.issubset(manifest["required_release"])
+            or any(
+                not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or matching_rule(path, manifest["exclude"])
+                or matching_rule(path, manifest["requires_split"])
+                for path, digest in pins.items()
+            )
+        ):
+            raise ValueError("Community notices require included release paths and reviewed SHA-256 pins")
     shared_services = manifest.get("reviewed_community_service_sha256")
     if shared_services is not None:
         if (
@@ -741,6 +760,10 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             if hashlib.sha256(data).hexdigest() != manifest["reviewed_license_sha256"]:
                 blockers.append({"kind": "reviewed-license-changed", "path": path})
                 continue
+        notice_digest = manifest.get("reviewed_notice_sha256", {}).get(path)
+        if notice_digest and hashlib.sha256(data).hexdigest() != notice_digest:
+            blockers.append({"kind": "reviewed-notice-changed", "path": path})
+            continue
         if mode == "120000":
             target = manifest.get("safe_symlinks", {}).get(path)
             if target is None or data != target.encode():

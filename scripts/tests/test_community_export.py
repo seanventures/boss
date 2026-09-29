@@ -88,6 +88,72 @@ def test_community_license_is_checksum_pinned(tmp_path: Path) -> None:
         raise AssertionError("unreviewed root license was accepted")
 
 
+def test_reviewed_third_party_notices_are_included_and_checksum_pinned(tmp_path: Path) -> None:
+    root = export.ROOT
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    notice_paths = set(manifest["reviewed_notice_sha256"])
+    assert notice_paths == {
+        "THIRD-PARTY-NOTICES.md",
+        "third_party/notices/caniuse-lite-1.0.30001793-LICENSE",
+        "third_party/notices/spdx-exceptions-2.5.0-README.md",
+        "third_party/notices/sharp-libvips-1.2.4-LICENSE",
+        "third_party/notices/sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md",
+    }
+    assert notice_paths.issubset(manifest["include"])
+    assert notice_paths.issubset(manifest["required_release"])
+    assert all(
+        hashlib.sha256((root / path).read_bytes()).hexdigest() == digest
+        for path, digest in manifest["reviewed_notice_sha256"].items()
+    )
+    dockerfile = (root / "Dockerfile.community").read_text()
+    assert "COPY THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md" in dockerfile
+    assert "COPY third_party/notices ./third_party/notices" in dockerfile
+    assert "COPY --chown=boss:boss THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md" in dockerfile
+    assert "COPY --chown=boss:boss third_party/notices ./third_party/notices" in dockerfile
+
+    repo = tmp_path / "source"
+    fixture_paths = notice_paths | {"LICENSE"}
+    for path in fixture_paths:
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((root / path).read_bytes())
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    focused = {
+        "schema_version": 1,
+        "include": sorted(fixture_paths),
+        "exclude": ["other-private-file"],
+        "requires_split": ["unused-private-file"],
+        "required_runtime": ["THIRD-PARTY-NOTICES.md"],
+        "required_release": sorted(fixture_paths),
+        "reviewed_license_sha256": manifest["reviewed_license_sha256"],
+        "reviewed_notice_sha256": manifest["reviewed_notice_sha256"].copy(),
+    }
+    export.validate_manifest(focused)
+    report, candidate = export.analyze(repo, sha, focused)
+    assert report["mechanically_complete"]
+    assert notice_paths.issubset(candidate)
+
+    changed_path = "third_party/notices/spdx-exceptions-2.5.0-README.md"
+    focused["reviewed_notice_sha256"][changed_path] = "0" * 64
+    report, candidate = export.analyze(repo, sha, focused)
+    assert {"kind": "reviewed-notice-changed", "path": changed_path} in report["blockers"]
+    assert changed_path not in candidate
+
+    del focused["reviewed_notice_sha256"]
+    try:
+        export.validate_manifest(focused)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unreviewed third-party notice was accepted")
+
+
 def test_exported_package_metadata_has_a_resolvable_apache_license() -> None:
     root = export.ROOT
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
