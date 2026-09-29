@@ -6,10 +6,10 @@
   "edition": "community",
   "operation_count": 986,
   "counts": {
-    "api_policy_gated": 854,
+    "api_policy_gated": 853,
     "excluded": 67,
     "human_confirmation_gated": 29,
-    "operator_only_unavailable": 36
+    "operator_only_unavailable": 37
   },
   "operations": [
     {
@@ -4212,15 +4212,15 @@
       "alias": "post_v1_console_v2_autonomy_92865d72",
       "domain": "console",
       "summary": "Console V2 Autonomy Set",
-      "mcp_status": "api_policy_gated",
-      "reason": null,
+      "mcp_status": "operator_only_unavailable",
+      "reason": "trusted_operator_confirmation_unavailable",
       "input_schema_quality": "typed_json_body",
       "mounted_input_schema_quality": "typed_json_body",
       "request_body_type_enforcement": "pass_through_documented",
       "curated_input_fields": false,
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
-      "domain_scoped_direct_tool": true,
+      "domain_scoped_direct_tool": false,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },

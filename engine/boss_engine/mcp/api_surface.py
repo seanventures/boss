@@ -79,6 +79,7 @@ _WORKER_TAILS = frozenset({"heartbeat", "complete", "fail", "settle", "release"}
 _OPERATOR_ONLY_EXACT = frozenset({
     "/v1/orgs", "/v1/members", "/v1/roles", "/v1/break-glass/grants",
     "/v1/budget/allocations", "/v1/budget/set_intensity",
+    "/v1/console/v2/autonomy", "/v1/console/v2/autonomy/apply",
     "/v1/enterprise/identity-providers",
 })
 _GOVERNED_EFFECT_ALLOWLIST = frozenset({

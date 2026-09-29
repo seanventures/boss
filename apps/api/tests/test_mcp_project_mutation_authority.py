@@ -16,6 +16,76 @@ def _headers(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
+def test_revoked_ceo_key_cannot_restore_membership_or_change_autonomy(
+    client, engine, monkeypatch,
+):
+    ceo_key = f"revoked-ceo-{uuid4().hex[:10]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", ceo_key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{ceo_key}:ceo")
+    with engine.begin() as connection:
+        # Seeded CEOs also have an org mirror. A project-level revocation must
+        # override that inherited membership and must not trigger re-seeding.
+        assert connection.execute(
+            text("SELECT status FROM org_members WHERE member_id = 'ceo' LIMIT 1")
+        ).scalar_one() == "active"
+        connection.execute(
+            text("UPDATE project_members SET status = 'inactive' "
+                 "WHERE project_id = :project_id AND member_id = 'ceo'"),
+            {"project_id": PROJECT},
+        )
+
+    body = {"project_id": PROJECT, "actor": "ceo", "mode": "full_auto"}
+    assert client.post("/v1/console/v2/autonomy", headers=_headers(ceo_key),
+                       json=body).status_code == 403
+    assert client.post("/v1/console/v2/autonomy/apply", headers=_headers(ceo_key),
+                       json={"project_id": PROJECT}).status_code == 403
+    project_list = client.get("/v1/projects", headers=_headers(ceo_key))
+    assert project_list.status_code == 200
+    assert PROJECT not in {item["id"] for item in project_list.json()["items"]}
+    with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT status FROM project_members "
+                 "WHERE project_id = :project_id AND member_id = 'ceo'"),
+            {"project_id": PROJECT},
+        ).scalar_one() == "inactive"
+        assert "ceo" not in {
+            row["member_id"] for row in api_main.members.list_members(connection, PROJECT)
+        }
+        assert connection.execute(
+            text("SELECT count(*) FROM events WHERE project_id = :project_id "
+                 "AND event_type IN ('autonomy.policy_set', 'autonomy.policy_applied')"),
+            {"project_id": PROJECT},
+        ).scalar_one() == 0
+
+
+def test_permission_removed_from_ceo_is_not_restored_by_authorization(
+    client, engine, monkeypatch,
+):
+    ceo_key = f"limited-ceo-{uuid4().hex[:10]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", ceo_key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{ceo_key}:ceo")
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE project_members SET permissions = permissions - 'decision_resolve' "
+                 "WHERE project_id = :project_id AND member_id = 'ceo'"),
+            {"project_id": PROJECT},
+        )
+
+    assert client.post(
+        "/v1/console/v2/autonomy", headers=_headers(ceo_key),
+        json={"project_id": PROJECT, "mode": "full_auto"},
+    ).status_code == 403
+    with engine.begin() as connection:
+        permissions = connection.execute(
+            text("SELECT permissions FROM project_members "
+                 "WHERE project_id = :project_id AND member_id = 'ceo'"),
+            {"project_id": PROJECT},
+        ).scalar_one()
+    assert "decision_resolve" not in permissions
+
+
 def test_project_metadata_writes_bind_permission_and_record_real_actor(
     client, engine, monkeypatch,
 ):
@@ -94,14 +164,20 @@ def test_project_metadata_writes_bind_permission_and_record_real_actor(
              {k: v for k, v in meeting_body.items() if k != "actor"}),
             ("PUT", "/v1/console/v2/org/{agent_id}", {"agent_id": "qa"}, {},
              {k: v for k, v in org_body.items() if k != "actor"}),
-            ("POST", "/v1/console/v2/autonomy", {}, {},
-             {k: v for k, v in autonomy_body.items() if k != "actor"}),
         ]:
             result = surface.invoke(
                 operation_alias(method, path), project_id=PROJECT,
                 path=path_args, query=query, body=body,
             )
             assert result["status"] == 403, result
+        for path in (
+            "/v1/console/v2/autonomy", "/v1/console/v2/autonomy/apply",
+        ):
+            result = surface.invoke(
+                operation_alias("POST", path), project_id=PROJECT,
+                body={"mode": "full_auto"} if path.endswith("autonomy") else {},
+            )
+            assert result["error"] == "operator_only_unavailable", result
 
     # A project editor may use those safe metadata routes; attribution comes
     # from the authenticated principal, even when the body claims CEO.

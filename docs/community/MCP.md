@@ -194,7 +194,7 @@ operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|
-| Community | 854 | 29 | 36 | 67 |
+| Community | 853 | 29 | 37 | 67 |
 | Paid-only additions | 39 | 0 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
@@ -211,8 +211,9 @@ Project meeting-role edits require `workflow_manage`; planned team-structure
 and agent-role edits require `role_review`. The API records the authenticated
 member as the actor even if a request body names another actor. Changing or
 applying the gate-autonomy policy requires a human CEO member with
-`decision_resolve`; an MCP agent cannot grant itself this authority. The
-standard MCP member does not receive these management permissions by default.
+`decision_resolve`; dedicated MCP principals cannot be CEOs, so those two
+operations are held from MCP. The standard MCP member does not receive these
+management permissions by default.
 
 For the 29 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest

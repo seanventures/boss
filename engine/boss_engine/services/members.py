@@ -11,10 +11,9 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .core import emit_event
 
-# System/default member ids seeded by seed_default_members. Used to self-heal a
-# project that predates a default member or permission: a baseline actor that is
-# denied a permission can be re-seeded to its intended baseline and re-checked
-# before the request is refused (grants only what the defaults specify).
+# System/default member ids installed during explicit project bootstrap.
+# Authorization checks must never re-seed them: doing so can restore a revoked
+# membership or permission while handling the request it was meant to deny.
 DEFAULT_MEMBER_IDS = frozenset({
     "ceo", "cto", "cao", "vp_agents", "release_manager",
     "metatron", "coo", "executive_console", "system",
@@ -23,6 +22,10 @@ DEFAULT_MEMBER_IDS = frozenset({
 
 class ProjectMemberNotFoundError(RuntimeError):
     pass
+
+
+class ProjectMemberInactiveError(ProjectMemberNotFoundError):
+    """An explicit inactive membership must override inherited org access."""
 
 
 class ProjectMemberPermissionError(RuntimeError):
@@ -273,7 +276,6 @@ class MemberDirectoryService:
                     FROM project_members pm
                     WHERE pm.project_id = :project_id
                       AND pm.member_id = om.member_id
-                      AND pm.status = 'active'
                   )
                 ORDER BY om.member_type ASC, om.display_name ASC, om.member_id ASC
                 """
@@ -318,7 +320,11 @@ class MemberDirectoryService:
             ),
             {"project_id": project_id, "member_id": member_id},
         ).mappings().first()
-        if not row or row["status"] != "active":
+        if row and row["status"] != "active":
+            raise ProjectMemberInactiveError(
+                f"Actor '{member_id}' is not an active member of project '{project_id}'."
+            )
+        if not row:
             raise ProjectMemberNotFoundError(
                 f"Actor '{member_id}' is not an active member of project '{project_id}'."
             )
@@ -344,7 +350,11 @@ class MemberDirectoryService:
             ),
             {"org_id": org_id, "member_id": member_id, "project_id": project_id},
         ).mappings().first()
-        if not row or row["status"] != "active":
+        if row and row["status"] != "active":
+            raise ProjectMemberInactiveError(
+                f"Actor '{member_id}' is not an active member of org '{org_id}'."
+            )
+        if not row:
             raise ProjectMemberNotFoundError(
                 f"Actor '{member_id}' is not an active member of org '{org_id}'."
             )
@@ -601,6 +611,8 @@ class MemberDirectoryService:
     ) -> dict[str, Any]:
         try:
             member = self.get_member(connection, project_id, actor)
+        except ProjectMemberInactiveError:
+            raise
         except ProjectMemberNotFoundError:
             member = self._get_org_member_for_project(connection, project_id, actor)
         if permission and permission not in (member.get("permissions") or []):

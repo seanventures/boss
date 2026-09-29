@@ -816,7 +816,6 @@ from .services.model_gateway import (
 )
 from .services.work_orchestration import WorkOrchestrationService
 from .services.members import (
-    DEFAULT_MEMBER_IDS,
     MemberDirectoryService,
     ProjectMemberNotFoundError,
     ProjectMemberPermissionError,
@@ -1540,6 +1539,11 @@ def _require_exclusive_mcp_project(connection, *, principal: str, project_id: st
             SELECT 1 FROM org_members om
             WHERE om.org_id = w.org_id AND om.member_id = :principal
               AND om.status = 'active'
+              AND NOT EXISTS (
+                  SELECT 1 FROM project_members pm_override
+                  WHERE pm_override.project_id = p.id
+                    AND pm_override.member_id = :principal
+              )
         )
     """), {"principal": principal}).scalars())
     if accessible != {project_id} or principal in {"ceo", "system", "executive_console"}:
@@ -1888,21 +1892,9 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
             permission=permission,
         )
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
-        # Self-heal: a project seeded before a default member/permission existed can
-        # leave a baseline system actor (e.g. executive_console) missing an intended
-        # permission. Re-seed the defaults once and retry before denying — this grants
-        # only what the defaults specify, so a genuinely-unauthorized actor is still
-        # refused.
-        if actor in DEFAULT_MEMBER_IDS:
-            try:
-                members.seed_default_members(connection, project_id, actor="bootstrap")
-                members.require_member(
-                    connection, project_id, actor, permission=permission
-                )
-            except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
-                record_policy_denial(project_id, actor, permission, str(error))
-                raise HTTPException(status_code=403, detail=str(error)) from error
-            return
+        # Membership and permission changes are operator decisions. Never seed
+        # defaults during authorization: it can reactivate revoked baseline rows
+        # (including the CEO) and grant back permissions removed by an operator.
         record_policy_denial(project_id, actor, permission, str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
 
@@ -4410,6 +4402,11 @@ def list_orgs():
                            SELECT 1 FROM org_members om
                            WHERE om.org_id = o.id
                              AND om.member_id = :principal AND om.status = 'active'
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM project_members pm_override
+                                 WHERE pm_override.project_id = p.id
+                                   AND pm_override.member_id = :principal
+                             )
                        )
                 )
                 SELECT ap.org_id, ap.org_name, ap.org_created_at AS created_at,
@@ -4506,6 +4503,11 @@ def list_projects() -> ProjectListResponse:
                        SELECT 1 FROM org_members om
                        WHERE om.org_id = o.id
                          AND om.member_id = :principal AND om.status = 'active'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM project_members pm_override
+                             WHERE pm_override.project_id = p.id
+                               AND pm_override.member_id = :principal
+                         )
                    )
                 ORDER BY o.name ASC, w.name ASC, p.name ASC
                 """
