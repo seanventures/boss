@@ -474,6 +474,13 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
     die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
   git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD </dev/null ||
     die "Could not fast-forward; existing checkout left unchanged."
+elif [[ -f "$INSTALL_DIR/.boss-shipped-commit" &&
+        -f "$INSTALL_DIR/scripts/install/community-compose.yml" ]]; then
+  # A TREE remote.sh SHIPPED. `remote.sh install` copies the laptop's commit here, stamps
+  # .boss-shipped-commit (the marker backup.sh already accepts), and then runs this script from
+  # inside it — so refusing a non-Git directory refused the documented remote install on every
+  # fresh host. The shipped tree IS the source; there is nothing to fetch.
+  ui_ok "Using the source remote.sh shipped ($(head -c 12 "$INSTALL_DIR/.boss-shipped-commit"))"
 elif [[ -d "$INSTALL_DIR" ]]; then
   [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
     die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."
