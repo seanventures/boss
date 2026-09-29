@@ -156,7 +156,7 @@ _CONFIRMABLE_EXACT = frozenset({
     ("DELETE", "/v1/console/v2/org/{agent_id}"),
     # Community product routes. Each handler still requires an actor, project
     # scope, and a receipt. Spend, lease, and rollback are enforced there.
-    # Goldeneye routes stay out of this set.
+    # Metal-kit node and package routes stay out of this set.
     ("DELETE", "/v1/channels/{provider}"),
     ("POST", "/v1/code-tasks/{run_id}/deploy"),
     ("POST", "/v1/delivery/deployments/{deployment_run_id}/execute"),
