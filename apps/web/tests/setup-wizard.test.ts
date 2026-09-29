@@ -193,7 +193,7 @@ describe("a connection that was made says so", () => {
     // and no way to see which model does which job. Reported as: three models connected and
     // no way to tell they were connected.
     expect(UI).toContain('data-testid="setup-connected-models"');
-    expect(UI).toContain("Connected models");
+    expect(UI).toContain("Models on this install");
   });
 
   it("each one says what it is and which jobs it holds", () => {
