@@ -60,6 +60,12 @@ The installer does not add your user to the root-equivalent Docker group. If
 Docker requires administrator access, use `sudo docker compose` for manual
 commands; the installer detects that access for its own commands.
 
+Docker Desktop keeps images on its own virtual disk. That disk can be full
+while the host still has free space. If Postgres then fails to initialize, the
+installer prints the database log, including `No space left on device`. Grow
+the virtual disk or remove unused images, then run the installer again. A
+rerun keeps the credentials already written.
+
 Installing coding CLIs does not sign in to subscriptions. A laptop login is
 not available on the VM. Codex and Claude have explicit connect steps after
 official VM login; see “Optional coding subscriptions” in `scripts/install/README.md`
