@@ -83,6 +83,10 @@ No BOSS Cloud / Account Connect required.
 
 ### Optional coding subscriptions
 
+The Community API and worker images already contain pinned Claude Code, Codex
+CLI, and Grok Build binaries. This option installs separate host copies for the
+VM user when you want to inspect or import that user's subscription login.
+
 On the VM, add `--install-coding-clis` to install missing official Claude Code,
 Codex CLI, and Grok Build binaries for the VM user. Existing working binaries are
 left alone; each new binary must pass `--version`. This option also reports which

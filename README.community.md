@@ -18,13 +18,19 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 
 Open `http://127.0.0.1:3000`. The installer prints the install location and a command to display the console password privately. Keep the generated `.env` private and backed up.
 
-To install the official Claude Code, Codex CLI, and Grok Build tools too:
+The API and worker images include the official Claude Code, Codex CLI, and Grok
+Build tools. To install those CLIs for your VM user as well, so you can sign in
+and import a supported subscription:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash -s -- --install-coding-clis
 ```
 
-Authenticate each provider on the VM under the runtime user after installation. An existing laptop subscription does not automatically authenticate the VM. The [model connection guide](docs/community/MODEL_CONNECTIONS.md) shows which paths the installer can configure and which still need setup. The [installer guide](scripts/install/README.md) covers credential import, login checks, ports, and recovery.
+Authenticate each provider in the account and container BOSS uses. An existing
+laptop subscription does not automatically authenticate the VM. The [model
+connection guide](docs/community/MODEL_CONNECTIONS.md) shows the supported
+paths and setup limits. The [installer guide](scripts/install/README.md) covers
+credential import, container login, ports, and recovery.
 
 ## Use BOSS
 
