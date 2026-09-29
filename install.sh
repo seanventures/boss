@@ -2,9 +2,9 @@
 # =============================================================================
 # BOSS Community — one-line installer (OpenClaw-style)
 #
-#   curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
+#   See docs/community/QUICKSTART.md for the reviewed-commit download command.
 #
-# Idiot-proof Community edition: checks the machine, installs deps, prompts for
+# Guided Community setup: checks the machine, installs deps, prompts for
 # keys, starts Postgres + API + worker (+ optional Mission Control), seeds the
 # project, and verifies health. No BOSS Cloud required.
 # =============================================================================
@@ -14,7 +14,6 @@ umask 077
 BOSS_INSTALL_VERSION="1.1.0"
 BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanventures/boss.git}"
 BOSS_REPO_REF="${BOSS_REPO_REF:-main}"
-BOSS_RAW_BASE="${BOSS_RAW_BASE:-https://raw.githubusercontent.com/seanventures/boss/${BOSS_REPO_REF}}"
 
 # ---- UI --------------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -51,6 +50,7 @@ die()      { ui_err "$*"; exit 1; }
 
 # ---- defaults / flags ------------------------------------------------------
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
+BACKUP_DIR=""
 ASSUME_YES=0
 WITH_WEB=1
 WEB_EXPLICIT=0
@@ -103,8 +103,8 @@ usage() {
 BOSS Community installer
 
 Usage:
-  curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash
-  curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash -s -- [options]
+  ./install.sh [options]
+  See docs/community/QUICKSTART.md for the reviewed-commit download command.
 
 Options:
   --dir PATH              Install directory (default: ~/boss)
@@ -118,7 +118,8 @@ Options:
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
   --postgres-port N       Host port for Postgres (default 5432)
-  --ref REF               Git ref to clone (default main)
+  --ref REF               Git ref or full commit SHA to install (default main)
+  --backup-dir PATH       Private recovery backup location for an upgrade
   --skip-model-key        Allow empty model key (API starts; model calls fail closed)
   --no-install-deps       Do not install missing VM packages
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
@@ -143,9 +144,8 @@ Environment overrides:
   BOSS_PUBLIC_URL, BOSS_SECRET_STORE
 
 Examples:
-  curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash
-  curl -fsSL ${BOSS_RAW_BASE}/install.sh | OPENAI_API_KEY="\$OPENAI_API_KEY" bash -s -- --yes
-  curl -fsSL ${BOSS_RAW_BASE}/install.sh | bash -s -- -y --skip-model-key --no-web
+  ./install.sh --dir "\$PWD" --yes --skip-model-key
+  ./install.sh --dir "\$PWD" --ref REVIEWED_COMMIT --backup-dir "\$HOME/boss-backups"
 EOF
 }
 
@@ -170,6 +170,7 @@ while [[ $# -gt 0 ]]; do
     --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
     --postgres-port) PG_PORT="$2"; PG_PORT_EXPLICIT=1; shift 2 ;;
     --ref) BOSS_REPO_REF="$2"; shift 2 ;;
+    --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
     --secret-store)
       SECRET_STORE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"; shift 2
@@ -179,6 +180,10 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+
+if [[ -n "${BOSS_PREUPGRADE_BACKUP_DIR:-}" ]]; then
+  ui_warn 'Ignoring a legacy pre-upgrade backup path; this installer will make its own fresh snapshot before updating source.'
+fi
 
 # Expand ~
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
@@ -511,26 +516,21 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
   if [[ "$_installed_commit" != "$_fetched_commit" && -f "$INSTALL_DIR/.env" ]]; then
     # A pasted install command is also an upgrade command for an existing checkout.
     # Snapshot the old database, artifacts and credentials before switching source:
-    # the new API may migrate the database as soon as it starts. upgrade.sh has
-    # already made this snapshot, so reuse it when its source commit matches.
-    _recovery_backup="${BOSS_PREUPGRADE_BACKUP_DIR:-}"
-    if [[ -n "$_recovery_backup" ]]; then
-      [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
-         -s "$_recovery_backup/artifacts.tar" &&
-         "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
-        die "The supplied pre-upgrade backup does not match the installed commit; source left unchanged."
-    else
-      _backup_helper="$(mktemp)"
-      if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
-        rm -f "$_backup_helper"
-        die "The fetched source has no backup helper; existing checkout left unchanged."
-      fi
-      if ! _recovery_backup="$(bash "$_backup_helper" --dir "$INSTALL_DIR" </dev/null)"; then
-        rm -f "$_backup_helper"
-        die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
-      fi
+    # the new API may migrate the database as soon as it starts. Always create
+    # this run's own snapshot; a prior path could refer to stale data even if
+    # its source commit happens to match.
+    _backup_helper="$(mktemp)"
+    if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
       rm -f "$_backup_helper"
+      die "The fetched source has no backup helper; existing checkout left unchanged."
     fi
+    _backup_args=(--dir "$INSTALL_DIR")
+    [[ -z "$BACKUP_DIR" ]] || _backup_args+=(--backup-dir "$BACKUP_DIR")
+    if ! _recovery_backup="$(bash "$_backup_helper" "${_backup_args[@]}" </dev/null)"; then
+      rm -f "$_backup_helper"
+      die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
+    fi
+    rm -f "$_backup_helper"
     [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
        -s "$_recovery_backup/artifacts.tar" &&
        "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
@@ -543,12 +543,30 @@ elif [[ -d "$INSTALL_DIR" ]]; then
   [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
     die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."
   ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
-    die "Clone failed; existing directory was not removed."
+  if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    git clone --no-checkout "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null &&
+      git -C "$INSTALL_DIR" checkout --detach "$BOSS_REPO_REF" </dev/null ||
+      die "Exact-commit clone failed; existing directory was not removed."
+  else
+    git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
+      die "Clone failed; existing directory was not removed."
+  fi
 else
   ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
-    die "Clone failed; check repo visibility, URL, and ref."
+  if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    git clone --no-checkout "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null &&
+      git -C "$INSTALL_DIR" checkout --detach "$BOSS_REPO_REF" </dev/null ||
+      die "Exact-commit clone failed; check repo visibility, URL, and commit."
+  else
+    git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
+      die "Clone failed; check repo visibility, URL, and ref."
+  fi
+fi
+
+if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  _expected_commit="$(printf '%s' "$BOSS_REPO_REF" | tr '[:upper:]' '[:lower:]')"
+  [[ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" == "$_expected_commit" ]] ||
+    die 'Installed checkout does not match the requested release commit.'
 fi
 
 cd "$INSTALL_DIR"

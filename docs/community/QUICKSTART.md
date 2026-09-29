@@ -17,21 +17,20 @@ model run before relying on it for work.
 
 ## Install
 
-Install from the Community repository:
+The Community repository is not public yet. After publication, replace the
+placeholder with the reviewed release commit's full 40-character SHA and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
+BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-For an unattended VM without a model key, or to add the official Claude Code,
-Codex CLI and Grok Build binaries, pass flags to the piped installer:
+The download must succeed before the installer runs; the same exact commit is
+used for the source checkout and verified after clone. For an unattended VM
+without a model key, add `--yes --skip-model-key` after the final `_`. To
+install optional host copies of the official Claude Code, Codex CLI and Grok
+Build binaries, add `--install-coding-clis` there as well.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
-  bash -s -- --yes --skip-model-key --install-coding-clis
-```
-
-Invited contributors can run the same installer from an authorized checkout:
+Invited contributors can run the installer from an authorized checkout:
 
 ```bash
 cd /path/to/authorized/boss
@@ -107,9 +106,10 @@ cd ~/boss
 The upgrade backs up private configuration, Postgres and artifacts before it
 changes source or containers. Rerunning the one-line installer also makes a
 recovery backup before it fast-forwards an existing checkout. If the old
-database was stopped, the backup starts it temporarily and restores its
-stopped state afterward. If it cannot start or the backup fails, the source
-is left unchanged. Upgrades keep named volumes and login sessions. To
+database was stopped, the backup starts its existing container and restores its
+stopped state afterward. It never substitutes a mutable image tag. If the
+container is missing, cannot start, or the backup fails, the source is left
+unchanged. Upgrades keep named volumes and login sessions. To
 stop BOSS and retain `.env`, volumes, images, backups and the checkout:
 
 ```bash

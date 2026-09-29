@@ -57,25 +57,18 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-FETCHED_BACKUP="$(mktemp)"
 FETCHED_INSTALLER="$(mktemp)"
-trap 'rm -f "$FETCHED_BACKUP" "$FETCHED_INSTALLER"' EXIT
-git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$FETCHED_BACKUP"
+trap 'rm -f "$FETCHED_INSTALLER"' EXIT
 git -C "$INSTALL_DIR" show FETCH_HEAD:install.sh > "$FETCHED_INSTALLER"
-backup_args=(--dir "$INSTALL_DIR")
-[[ -n "$BACKUP_DIR" ]] && backup_args+=(--backup-dir "$BACKUP_DIR")
-BACKUP="$(bash "$FETCHED_BACKUP" "${backup_args[@]}" </dev/null)" || {
-  echo 'Backup failed; source and containers were not changed.' >&2; exit 1;
-}
-printf 'Private recovery backup: %s\n' "$BACKUP"
-
-# The fetched installer performs its own fast-forward and credential-preserving
-# rerun. Execute that version so new installer fixes apply during this upgrade.
-install_args=(--dir "$INSTALL_DIR" --ref "$REF" --yes --skip-model-key)
+# The fetched installer makes this run's fresh backup before changing source.
+# Pin it to the commit we already fetched so a moving branch cannot change
+# between the preflight and the installer's second fetch.
+install_args=(--dir "$INSTALL_DIR" --ref "$NEW_COMMIT" --yes --skip-model-key)
+[[ -n "$BACKUP_DIR" ]] && install_args+=(--backup-dir "$BACKUP_DIR")
 [[ -n "$WEB_MODE" ]] && install_args+=("$WEB_MODE")
-if ! BOSS_PREUPGRADE_BACKUP_DIR="$BACKUP" bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
-  echo "Upgrade failed. Recovery backup: $BACKUP" >&2
+if ! bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
+  echo 'Upgrade failed. The installer reports the recovery backup path above if it created one.' >&2
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2
   exit 1
 fi
-printf 'Upgrade complete: %s → %s\nRecovery backup: %s\n' "$OLD_COMMIT" "$NEW_COMMIT" "$BACKUP"
+printf 'Upgrade complete: %s → %s\n' "$OLD_COMMIT" "$NEW_COMMIT"

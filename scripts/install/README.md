@@ -4,29 +4,34 @@ One-line Community setup for a supported Linux VM.
 
 ## One-liner
 
-From the public Community repository, run:
+The public Community repository has not been published yet. After publication,
+replace this placeholder with the reviewed release commit's full SHA and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
+BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-The installer reads prompts from the terminal even when piped through `curl`. Paste a
-model key at the hidden prompt, or press Enter and connect one later. Do not place API
-keys in shell arguments, which can appear in process listings and shell history.
+The HTTP download and Git checkout use the same immutable commit, and the
+installer verifies that commit. If the download fails, the installer does not
+run. Until publication, use an authorized checkout.
 
-For unattended automation, pass the key to the `bash` process through its environment:
+The installer reads prompts from the terminal even when its downloaded file is
+run by `bash`. Paste a model key at the hidden prompt, or press Enter and
+connect one later. Do not place API keys in shell arguments, which can appear
+in process listings and shell history.
+
+For unattended automation, pass the key to the installer process through its
+environment and add `--yes` after the final `_` in the pinned command. Or run
+the authorized checkout directly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
-  OPENAI_API_KEY="$OPENAI_API_KEY" bash -s -- --yes
+OPENAI_API_KEY="$OPENAI_API_KEY" ./install.sh --dir "$PWD" --yes
 ```
 
 Or start without a model key and add one to `.env` later:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh |
-  bash -s -- --yes --skip-model-key
-```
+Add `--yes --skip-model-key` after the final `_` in the pinned command, or run
+`./install.sh --dir "$PWD" --yes --skip-model-key` from the checkout.
 
 ## What it does
 
@@ -43,10 +48,10 @@ model keys, secret-store encryption key, console login, public URL, port setting
 Mission Control choice, and secret-store choice are retained. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
 Pasting the installer line again also backs up an existing running install
-before switching to a newer source revision. A stopped database is started
-temporarily from the installed checkout and local image for that snapshot,
-then returned to its stopped state. If it cannot start or the backup fails,
-source and configuration stay untouched. The backup path is printed; keep it
+before switching to a newer source revision. A stopped database container is
+started from its existing image ID for that snapshot, then returned to its
+stopped state. If that container is missing, cannot start, or backup fails,
+the source and configuration stay untouched. The backup path is printed; keep it
 private.
 For an older headless install, pass `--no-web` once to record that choice;
 use `--web` to enable it later.
@@ -286,10 +291,10 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 ./scripts/install/upgrade.sh --dir "$PWD" --web             # deliberately enable the console
 ```
 
-A default `~/boss` install can use the one-line upgrade below:
+A default `~/boss` install can run this from its checkout:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/scripts/install/upgrade.sh | bash
+cd ~/boss && ./scripts/install/upgrade.sh --dir "$PWD"
 ```
 
 Upgrades write a private backup under `~/boss-backups/` before changing source or
@@ -367,10 +372,12 @@ scripts/install/remote.sh --host user@your-vm uninstall --yes --purge-data --con
 ./scripts/install/uninstall.sh --dir "$PWD" --purge-data     # backs up, then asks for DELETE-BOSS-DATA
 ```
 
-The default uninstall removes only this Compose stack's containers and network.
-It keeps the source, `.env`, named volumes, images, and backups. Rerunning it
-is safe. `--purge-data` removes this stack's named volumes, including Postgres,
-artifacts and CLI sessions, then deletes `.env` and the generated shell shim.
+The default safe uninstall stops this Compose stack. It keeps the stopped
+containers and their exact image IDs, source, `.env`, named volumes, images,
+and backups so a later upgrade can start the same database image for backup.
+Rerunning it is safe. `--purge-data` removes this stack's named volumes,
+including Postgres, artifacts and CLI sessions, then deletes `.env` and the
+generated shell shim.
 It first requires a successful private backup unless you explicitly add
 `--skip-backup`. `--yes` alone never authorizes a data purge; for scripted
 purge add `--confirm-purge DELETE-BOSS-DATA`. Backups and checkout stay on disk.

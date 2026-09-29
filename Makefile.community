@@ -23,7 +23,7 @@ help:
 	  '  make mcp-setup  Create a dedicated project MCP credential' \
 	  '  make mcp    Start a scoped MCP stdio session for an agent client' \
 	  '  make stop    Stop services and keep data' \
-	  'Install first: curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash'
+	  'Install first: see docs/community/QUICKSTART.md for the reviewed-commit command'
 
 dev: .env docker-ready
 	$(COMPOSE) --profile web up -d --build

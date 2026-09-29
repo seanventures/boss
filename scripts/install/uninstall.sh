@@ -17,8 +17,8 @@ Usage: uninstall.sh [--dir PATH] [--yes] [--dry-run]
                     [--purge-data] [--backup-dir PATH] [--skip-backup]
                     [--confirm-purge DELETE-BOSS-DATA]
 
-Default: remove this Compose stack's containers and network. Keep the checkout,
-private .env, database, artifacts, CLI sessions, images, and backups.
+Default: stop this Compose stack's containers. Keep them, their exact images,
+the checkout, private .env, database, artifacts, CLI sessions, and backups.
 
 --dry-run      show the intended action without changing Docker or files
 --yes          skip the default safe-uninstall prompt
@@ -64,7 +64,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   if [[ "$PURGE_DATA" -eq 1 ]]; then
     echo 'Would back up the running database and artifacts (unless --skip-backup), then remove this Compose stack, its named volumes, .env, and env shim.'
   else
-    echo 'Would remove this Compose stack containers and network; .env, volumes, images, backups, and checkout remain.'
+    echo 'Would stop this Compose stack; containers, .env, volumes, images, backups, and checkout remain.'
   fi
   exit 0
 fi
@@ -111,7 +111,7 @@ if [[ "$PURGE_DATA" -eq 1 ]]; then
   rm -f "$ENV_FILE" "$INSTALL_DIR/boss-community.env.sh"
   echo 'BOSS Community data purged. Source checkout and any backups remain.'
 else
-  "${COMPOSE[@]}" down --remove-orphans </dev/null
-  echo 'BOSS Community stopped. .env, volumes, images, backups, and checkout were kept.'
+  "${COMPOSE[@]}" stop </dev/null
+  echo 'BOSS Community stopped. Containers, .env, volumes, images, backups, and checkout were kept.'
   printf 'Reinstall: cd %s && ./install.sh --dir "%s" --yes --skip-model-key\n' "$INSTALL_DIR" "$INSTALL_DIR"
 fi

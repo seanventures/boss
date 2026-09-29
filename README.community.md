@@ -4,11 +4,18 @@ BOSS is a self-hosted control plane for software work. Give it a goal; review it
 
 ## Install
 
-On a fresh Ubuntu or Debian VM, run:
+The public Community repository has not been published yet. After the reviewed
+release commit is available, replace the placeholder with its full 40-character
+SHA and paste this single command on a fresh Ubuntu or Debian VM:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash
+BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
+
+The downloaded script and checkout use the same immutable commit. A failed
+download stops the command before the installer runs. The installer verifies
+the checkout commit. Until publication, use an authorized checkout and run
+`./install.sh --dir "$PWD"` there.
 
 The installer sets up Docker and the Community services, creates local credentials, seeds a project, and checks that the API and console start. It binds both to `127.0.0.1`. From another computer, use an SSH tunnel:
 
@@ -22,9 +29,8 @@ The API and worker images include the official Claude Code, Codex CLI, and Grok
 Build tools. To install those CLIs for your VM user as well, so you can sign in
 and import a supported subscription:
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/seanventures/boss/main/install.sh | bash -s -- --install-coding-clis
-```
+Add `--install-coding-clis` after the final `_` in the pinned command, or run
+`./install.sh --dir "$PWD" --install-coding-clis` from the checkout.
 
 Authenticate each provider in the account and container BOSS uses. An existing
 laptop subscription does not automatically authenticate the VM. The [model

@@ -58,6 +58,12 @@ fi
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
 RUNNING="$("${COMPOSE[@]}" ps --status running --services)"
 was_running() { [[ $'\n'"$RUNNING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
+EXISTING="$("${COMPOSE[@]}" ps --all --services)"
+was_created() { [[ $'\n'"$EXISTING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
+if ! was_running db && ! was_created db; then
+  echo 'The installed Postgres container is missing. Start the reviewed installed version before backing up; no database image was pulled or substituted.' >&2
+  exit 1
+fi
 if was_running db; then
   "${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss </dev/null >/dev/null || {
     echo 'BOSS Postgres is running but not ready; backup cannot continue.' >&2; exit 1;
@@ -114,9 +120,9 @@ fi
 if ! was_running db; then
   echo 'Starting the existing BOSS database temporarily for a recovery backup...' >&2
   DB_STARTED_FOR_BACKUP=1
-  # Use the installed checkout and image only; a backup must not pull or run
-  # unreviewed source before the old state is safely captured.
-  "${COMPOSE[@]}" up -d --no-deps --pull never db </dev/null >&2
+  # Compose start uses the stopped container's original image ID. `up` can
+  # recreate it from a mutable image tag even when pulling is disabled.
+  "${COMPOSE[@]}" start db </dev/null >&2
   ready=0
   for attempt in {1..60}; do
     if "${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss </dev/null >/dev/null 2>&1; then
@@ -131,7 +137,7 @@ fi
 if [[ "$("${COMPOSE[@]}" exec -T db psql -U boss -d boss -Atc "SELECT 1 FROM pg_database WHERE datname='infisical'" </dev/null)" == 1 ]]; then
   "${COMPOSE[@]}" exec -T db pg_dump -U boss -d infisical -Fc </dev/null > "$BACKUP/infisical.dump"
 fi
-"${COMPOSE[@]}" run --rm --no-deps -T --entrypoint tar api \
+"${COMPOSE[@]}" run --rm --no-deps --pull never -T --entrypoint tar api \
   -C /var/lib/boss/artifacts -cf - . </dev/null > "$BACKUP/artifacts.tar"
 [[ -s "$BACKUP/boss.dump" && -s "$BACKUP/artifacts.tar" ]] || {
   echo 'Database or artifact archive was empty; refusing this backup.' >&2; exit 1;
