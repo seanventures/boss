@@ -8,7 +8,7 @@ permissions, budget, approval, and audit rules for each request.
 |---|---|---|---|
 | HTTP API | `/openapi.json` and `/v1/meta/api-catalog` | HTTP method and `/v1/` path | Use a project-bound API key; see [terminal and API access](TERMINAL_API.md). |
 | Metatron terminal | `/projects`, `/ops * --page N`, `/describe ID`, `/coverage` | `/op ID {"path":{},"query":{},"body":{}}` | `make metatron` |
-| API-backed MCP | `api_find_operations`, `api_describe_operation` | `api_read_operation`, `api_write_operation` | `make mcp-setup`, then `make mcp`; see [MCP access](MCP.md). |
+| API-backed MCP | `api_find_operations`, `api_describe_operation` | `api_read_operation`, `api_write_operation`; sensitive actions use `api_request_confirmation` | `make mcp-setup`, then `make mcp`; see [MCP access](MCP.md). |
 
 The terminal operation ID and MCP alias both come from the HTTP method and
 path. Search in either interface, inspect the requested fields, then submit
@@ -36,12 +36,12 @@ project when it starts; its dedicated key must see exactly that project. Read
 the returned task and event history to verify the result. Other operations may
 require a reservation, decision, or separate approval before they can proceed.
 
-The [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) maps all 982
-mounted Community HTTP operations; 969 `/v1/` operator operations are
+The [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) maps all 986
+mounted Community HTTP operations; 973 `/v1/` operator operations are
 addressable by `/op`. The [MCP operation matrix](mcp-api-capability-matrix.json)
-accounts for all 982: 853 are eligible for API policy checks, 75 sensitive
-operator actions remain unavailable through MCP pending a trusted human
-confirmation path, and 54 protocol or internal routes are excluded. The API
+accounts for all 986: 854 are eligible for API policy checks, 37 sensitive
+actions require separate human approval of an exact request, 28 remain held
+for route-specific safety gaps, and 67 protocol or internal routes are excluded. The API
 and terminal can submit operator requests, but existing server checks can
 deny or hold an action. A mapped operation does not imply that an edition
 enables the feature or that a particular credential is authorized.

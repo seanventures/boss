@@ -426,6 +426,10 @@ class AgentService:
             ),
             {"id": thread_id, "ref": ref},
         )
+        emit_event(
+            connection, project_id, "agent.thread_archived", actor,
+            "agent_thread", thread_id, {"previous_external_ref": ref},
+        )
         return {"ok": True, "thread_id": thread_id, "was": ref,
                 "note": "closed and archived — the messages are kept, and the next one starts "
                         "a fresh conversation"}

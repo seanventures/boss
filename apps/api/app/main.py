@@ -18,6 +18,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.routing import APIRoute
+from pydantic import BaseModel, Field
 from starlette.routing import Match
 from sqlalchemy import text
 from uuid import uuid4
@@ -28,6 +29,13 @@ from boss_engine.services.coordination_read_model import (
     CoordinationSnapshot,
     build_coordination_snapshot,
 )
+from boss_engine.mcp.api_surface import (
+    confirmation_eligible as mcp_confirmation_eligible,
+    exclusion_reason as mcp_exclusion_reason,
+    needs_operator_confirmation as mcp_needs_operator_confirmation,
+    operation_alias as mcp_operation_alias,
+)
+from boss_engine.services import mcp_confirmation
 
 from .bootstrap import seed
 from .bootstrap_ports import build_ports
@@ -1507,6 +1515,37 @@ def requested_get_project_id(request: Request) -> Optional[str]:
     return None
 
 
+def _matched_mcp_operation(method: str, path: str) -> tuple[str, str] | None:
+    """Resolve a mounted route before a model can propose or consume a gate."""
+    scope = {"type": "http", "path": path, "root_path": "", "method": method}
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or method not in route.methods:
+            continue
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return mcp_operation_alias(method, route.path), route.path
+    return None
+
+
+def _require_exclusive_mcp_project(connection, *, principal: str, project_id: str) -> None:
+    """Make ID-only target routes safe by rejecting multi-project MCP keys."""
+    accessible = set(connection.execute(text("""
+        SELECT p.id FROM projects p
+        JOIN workspaces w ON w.id = p.workspace_id
+        WHERE EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.member_id = :principal
+              AND pm.status = 'active'
+        ) OR EXISTS (
+            SELECT 1 FROM org_members om
+            WHERE om.org_id = w.org_id AND om.member_id = :principal
+              AND om.status = 'active'
+        )
+    """), {"principal": principal}).scalars())
+    if accessible != {project_id} or principal in {"ceo", "system", "executive_console"}:
+        raise HTTPException(status_code=403, detail="exclusive_mcp_project_required")
+
+
 @app.middleware("http")
 async def require_transport_auth_for_v1(request: Request, call_next):
     auth_required = (
@@ -1561,6 +1600,12 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "channels"
         and _parts[4] == "callback"
     )
+    if not auth_required and any(
+        request.headers.get(name) for name in (
+            "X-BOSS-MCP-Operation", "X-BOSS-MCP-Confirmation", "X-BOSS-MCP-Project"
+        )
+    ):
+        return JSONResponse(status_code=403, content={"detail": "mcp_auth_required"})
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
@@ -1658,6 +1703,67 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                 return JSONResponse(
                     status_code=error.status_code, content={"detail": error.detail}
                 )
+        mcp_operation = request.headers.get("X-BOSS-MCP-Operation")
+        confirmation_id = request.headers.get("X-BOSS-MCP-Confirmation")
+        confirmed_project = request.headers.get("X-BOSS-MCP-Project")
+        if confirmation_id and not mcp_operation:
+            return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_without_operation"})
+        if mcp_operation:
+            matched = _matched_mcp_operation(request.method, request.url.path)
+            if matched is None or matched[0] != mcp_operation:
+                return JSONResponse(status_code=409, content={"detail": "mcp_operation_mismatch"})
+            eligible = mcp_confirmation_eligible(request.method, matched[1])
+            if mcp_needs_operator_confirmation(request.method, matched[1]) and not eligible:
+                return JSONResponse(status_code=409, content={"detail": "mcp_operation_held"})
+            if eligible and (not confirmation_id or not confirmed_project):
+                return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_required"})
+            if confirmation_id and not eligible:
+                return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_not_supported"})
+            if confirmation_id:
+                raw_body = await request.body()
+                if len(raw_body) > mcp_confirmation.MAX_REQUEST_BYTES:
+                    return JSONResponse(status_code=413, content={"detail": "mcp_request_too_large"})
+                try:
+                    body = json.loads(raw_body) if raw_body else None
+                except (ValueError, UnicodeDecodeError):
+                    return JSONResponse(status_code=400, content={"detail": "invalid_mcp_json_body"})
+                if body is not None and not isinstance(body, dict):
+                    return JSONResponse(status_code=400, content={"detail": "invalid_mcp_json_body"})
+                query_items = list(request.query_params.multi_items())
+                if len({key for key, _ in query_items}) != len(query_items):
+                    return JSONResponse(status_code=400, content={"detail": "duplicate_mcp_query_parameter"})
+                try:
+                    with begin(engine) as connection:
+                        _require_exclusive_mcp_project(
+                            connection, principal=principal, project_id=confirmed_project,
+                        )
+                        mcp_confirmation.consume_request(
+                            connection, project_id=confirmed_project,
+                            confirmation_id=confirmation_id, requester=principal,
+                            operation=mcp_operation, method=request.method,
+                            path=request.url.path, query=dict(query_items), body=body,
+                        )
+                except HTTPException as error:
+                    return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+                except mcp_confirmation.ConfirmationError as error:
+                    return JSONResponse(status_code=409, content={"detail": error.code})
+                try:
+                    response = await call_next(request)
+                except Exception:
+                    with begin(engine) as connection:
+                        mcp_confirmation.record_outcome(
+                            connection, project_id=confirmed_project,
+                            confirmation_id=confirmation_id, requester=principal,
+                            status_code=500,
+                        )
+                    raise
+                with begin(engine) as connection:
+                    mcp_confirmation.record_outcome(
+                        connection, project_id=confirmed_project,
+                        confirmation_id=confirmation_id, requester=principal,
+                        status_code=response.status_code,
+                    )
+                return response
         return await call_next(request)
     finally:
         current_api_principal.reset(principal_token)
@@ -2915,6 +3021,104 @@ def auth_session() -> AuthSessionResponse:
         oidc_enabled=settings.oidc_enabled,
         message=message,
     )
+
+
+class McpConfirmationRequest(BaseModel):
+    project_id: str
+    operation: str
+    method: str
+    path: str
+    query: dict[str, str] = Field(default_factory=dict)
+    body: dict[str, Any] | None = None
+
+
+class McpConfirmationApproval(BaseModel):
+    project_id: str
+    reviewed_digest: str
+
+
+def _require_human_mcp_reviewer(connection, project_id: str) -> str:
+    principal = current_api_principal.get()
+    if not current_transport_authenticated.get() or not principal:
+        raise HTTPException(status_code=403, detail="Authenticated human reviewer required.")
+    try:
+        reviewer = members.require_member(
+            connection, project_id, principal,
+            permission="decision_resolve", role_keys_any=["ceo"],
+        )
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    if reviewer.get("member_type") != "human":
+        raise HTTPException(status_code=403, detail="Human CEO member required.")
+    return principal
+
+
+@app.post("/v1/mcp-confirmations", status_code=201)
+def request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
+    """Ask a separate human to approve one exact MCP request; no effect runs."""
+    principal = current_api_principal.get()
+    if not current_transport_authenticated.get() or current_auth_method.get() != "api_key" or not principal:
+        raise HTTPException(status_code=403, detail="Bound MCP API key required.")
+    if payload.method not in {"POST", "DELETE"} or len(payload.path) > 2048 or "?" in payload.path:
+        raise HTTPException(status_code=422, detail="Unsupported confirmation request.")
+    matched = _matched_mcp_operation(payload.method, payload.path)
+    if (matched is None or matched[0] != payload.operation
+            or mcp_exclusion_reason(payload.method, matched[1])
+            or not mcp_confirmation_eligible(payload.method, matched[1])):
+        raise HTTPException(status_code=422, detail="Operation is not confirmation eligible.")
+    try:
+        with begin(engine) as connection:
+            _require_exclusive_mcp_project(
+                connection, principal=principal, project_id=payload.project_id,
+            )
+            members.require_member(connection, payload.project_id, principal)
+            return mcp_confirmation.create_request(
+                connection, project_id=payload.project_id,
+                requested_by=principal, operation=payload.operation,
+                method=payload.method, path=payload.path,
+                query=payload.query, body=payload.body,
+            )
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except mcp_confirmation.ConfirmationError as error:
+        raise HTTPException(status_code=422, detail=error.code) from error
+
+
+@app.get("/v1/mcp-confirmations")
+def list_mcp_confirmations(project_id: str, limit: int = 30) -> dict:
+    with begin(engine) as connection:
+        _require_human_mcp_reviewer(connection, project_id)
+        return {"items": mcp_confirmation.list_requests(
+            connection, project_id=project_id, limit=limit,
+        )}
+
+
+@app.get("/v1/mcp-confirmations/{confirmation_id}")
+def get_mcp_confirmation(confirmation_id: str, project_id: str) -> dict:
+    with begin(engine) as connection:
+        _require_human_mcp_reviewer(connection, project_id)
+        try:
+            return mcp_confirmation.get_request(
+                connection, project_id=project_id, confirmation_id=confirmation_id,
+            )
+        except mcp_confirmation.ConfirmationError as error:
+            raise HTTPException(status_code=404, detail=error.code) from error
+
+
+@app.post("/v1/mcp-confirmations/{confirmation_id}/approve")
+def approve_mcp_confirmation(
+    confirmation_id: str, payload: McpConfirmationApproval,
+) -> dict:
+    with begin(engine) as connection:
+        approver = _require_human_mcp_reviewer(connection, payload.project_id)
+        try:
+            return mcp_confirmation.approve_request(
+                connection, project_id=payload.project_id,
+                confirmation_id=confirmation_id, approver=approver,
+                reviewed_digest=payload.reviewed_digest,
+            )
+        except mcp_confirmation.ConfirmationError as error:
+            raise HTTPException(status_code=409, detail=error.code) from error
 
 
 @app.get("/saml/v2/{project_id}/metadata", response_class=Response)

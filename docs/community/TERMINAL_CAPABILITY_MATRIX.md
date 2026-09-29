@@ -21,22 +21,22 @@ declared and omitted; an explicit value is preserved for API authorization.
 from OpenAPI. Both invocation paths use the same API key, project scope, and
 server enforcement as direct HTTP clients.
 
-The BOSS-416 static Community contract contains **982** HTTP operations:
-**969** operator `/v1/` operations, each with a unique stable operation ID and
+The static Community contract contains **986** HTTP operations:
+**973** operator `/v1/` operations, each with a unique stable operation ID and
 a JSON/path/query shape addressable by `/op`; **13** health, SAML, and SCIM
 protocol routes remain outside the authenticated `/v1/` operator command.
 In the published Community repository, this contract is `api/openapi.yaml`;
 private source keeps the same Community snapshot at
 `api/openapi.community.yaml`.
-The static private contract has **1,023** operations: **1,010** `/v1/`
-operations, of which **1,008** are `/op` addressable. The two remaining `/v1/`
+The static private contract has **1,027** operations: **1,014** `/v1/`
+operations, of which **1,012** are `/op` addressable. The two remaining `/v1/`
 routes are inbound webhook receivers that require request-signature headers
-and are not operator actions. All **1,023** static private operations have a
+and are not operator actions. All **1,027** static private operations have a
 unique `operationId`. That private contract is `api/openapi.yaml` only in the
 private source repository. The TUI's stable method-and-path alias remains
 available even if a live server uses a different runtime ID.
 
-| API catalog domain | Community `/v1/` operations in the BOSS-416 snapshot | Examples discoverable with `/ops` |
+| API catalog domain | Community `/v1/` operations in the current snapshot | Examples discoverable with `/ops` |
 | --- | ---: | --- |
 | Delivery | 228 | Workflow runs, code tasks, deployments and previews |
 | Operations | 184 | Health, incidents, reliability and fleet controls |
@@ -50,21 +50,21 @@ available even if a live server uses a different runtime ID.
 | Delivery CI/CD | 23 | Pipeline and release controls |
 | Cloud | 20 | Edition status and configured cloud connections |
 | Meta | 19 | Capability catalog and API coverage |
-| Auth | 18 | Sessions, members and API keys |
+| Auth | 22 | Sessions, members, API keys and MCP confirmations |
 | Console | 17 | Executive console and coordination read models |
 | Workspace | 12 | Organizations, projects and departments |
 | Goldeneye | 11 | Goldeneye service integration |
 | Setup | 9 | Bootstrap and first-run setup |
 | Identity | 5 | Identity provider catalog and configuration |
-| **Total** | **969** | All mounted `/v1/` operations are searchable by method/path/summary |
+| **Total** | **973** | All mounted `/v1/` operations are searchable by method/path/summary |
 
 The table classifies the static Community contract with the BOSS-416 API
 catalog taxonomy. Live domain counts may differ by image and edition; `/ops`
 and `/coverage --json` read the running API. No Community snapshot operation
 falls into the catalog's “Other” domain.
 
-All 530 Community JSON request bodies expose named top-level fields for
-`/describe`; 452 operations have no JSON body. Eighty-four bodies document
+All 532 Community JSON request bodies expose named top-level fields for
+`/describe`; 454 operations have no JSON body. Eighty-four bodies document
 fields while preserving the handlers' existing pass-through input behavior, so
 their field types are guidance rather than a new validation promise. Nested
 extension objects can still be flexible. The API returns the final validation
@@ -91,7 +91,7 @@ through their status, receipt, and event endpoints.
 
 ## Verification and limits
 
-- `scripts/tests/test_metatron_tui.py` checks all 982 Community snapshot
+- `scripts/tests/test_metatron_tui.py` checks all 986 Community snapshot
   operations and verifies every `/v1/` operation has a unique, addressable
   terminal alias. It checks project discovery/selection, paged operation
   search, typed-body project defaults, parameter validation, duplicate FastAPI

@@ -340,7 +340,7 @@ def test_global_loose_body_is_not_given_an_unrequested_project_or_actor():
     }])["error"] == "invalid_json_body"
 
 
-def test_destructive_and_approval_routes_are_discoverable_but_never_dispatched():
+def test_held_and_confirmable_routes_never_dispatch_without_approval():
     schema = {"paths": {
         "/v1/activity/retention/prune": {"post": {}},
         "/v1/deployment-hosts/{host_id}/key": {"post": {}},
@@ -357,7 +357,9 @@ def test_destructive_and_approval_routes_are_discoverable_but_never_dispatched()
         alias = operation_alias("POST", path)
         described = surface.describe(alias)
         assert described["ok"] is True
-        assert described["availability"] in {"operator_only_unavailable", "excluded"}
+        assert described["availability"] in {
+            "operator_only_unavailable", "excluded", "confirmation_required",
+        }
         result = surface.invoke(alias, project_id="alpha")
         assert result["ok"] is False
     assert seen == []
@@ -456,7 +458,7 @@ def test_domain_selection_advertises_concrete_typed_tools_without_full_catalog_f
     surface, seen = _surface()
     ctx = type("Context", (), {"durable_workspace_configured": True})()
     compact = MCPServer(ctx, project_id="alpha", registry=ToolRegistry(), api_surface=surface)
-    assert len(compact._tools()) == 4
+    assert len(compact._tools()) == 5
     domain = MCPServer(ctx, project_id="alpha", registry=ToolRegistry(),
                        api_surface=surface, api_domains={"core"})
     tools = {tool["name"]: tool for tool in domain._tools()}
@@ -591,7 +593,7 @@ def test_multi_project_principal_cannot_dispatch_even_an_id_only_route():
     server = MCPServer(ctx, project_id="alpha", registry=ToolRegistry(), api_surface=surface)
     assert {tool["name"] for tool in server._tools()} == {
         "api_find_operations", "api_describe_operation", "api_read_operation",
-        "api_write_operation",
+        "api_write_operation", "api_request_confirmation",
     }
     other = ApiSurface.connect("http://127.0.0.1:8000", api_key="explicit", client=client,
                                project_id="gamma")
@@ -661,6 +663,74 @@ def test_ambient_owner_principal_cannot_authorize_api_bridge():
                                  project_id="alpha")
     op = surface.operations[operation_alias("GET", "/v1/tasks")]
     assert surface.availability(op) == "dedicated_mcp_principal_required"
+
+
+def test_sensitive_mcp_request_needs_exact_separate_confirmation():
+    schema = {"paths": {
+        "/v1/decisions/{decision_id}/reject": {"post": {
+            "parameters": [{"name": "decision_id", "in": "path", "required": True,
+                            "schema": {"type": "string"}}],
+            "requestBody": {"required": True, "content": {"application/json": {
+                "schema": {"type": "object", "properties": {
+                    "actor": {"type": "string"}, "note": {"type": "string"},
+                }},
+            }}},
+        }},
+        "/v1/goldeneye/apps/deploy": {"post": {"summary": "Deploy directly"}},
+    }}
+    seen = []
+
+    def send(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/mcp-confirmations":
+            return httpx.Response(201, json={"id": "mcpconf_" + "a" * 20,
+                                             "status": "pending"})
+        return httpx.Response(200, json={"status": "rejected"})
+
+    client = httpx.Client(base_url="http://127.0.0.1:8000",
+                          transport=httpx.MockTransport(send))
+    surface = ApiSurface(schema, client=client, principal="mcp-member",
+                         pinned_project_id="alpha")
+    alias = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
+    held = operation_alias("POST", "/v1/goldeneye/apps/deploy")
+    assert surface.describe(alias)["availability"] == "confirmation_required"
+    assert "confirmation_id" in surface.describe(alias)["inputSchema"]["properties"]
+    assert surface.invoke(alias, project_id="alpha", path={"decision_id": "d1"},
+                          body={"note": "reviewed"})["error"] == "confirmation_required"
+    assert surface.invoke(held, project_id="alpha")["error"] == "operator_only_unavailable"
+    assert seen == []
+
+    proposed = surface.invoke(alias, project_id="alpha", path={"decision_id": "d1"},
+                              body={"note": "reviewed"}, propose_confirmation=True)
+    assert proposed["ok"] and proposed["status"] == 201
+    proposal = json.loads(seen[-1].content)
+    assert proposal == {
+        "project_id": "alpha", "operation": alias, "method": "POST",
+        "path": "/v1/decisions/d1/reject", "query": {},
+        "body": {"note": "reviewed", "actor": "mcp-member"},
+    }
+    assert surface.invoke(alias, project_id="alpha", path={"decision_id": "d1"},
+                          body={"note": "reviewed"},
+                          confirmation_id="mcpconf_" + "a" * 20)["ok"]
+    assert seen[-1].headers["X-BOSS-MCP-Confirmation"] == "mcpconf_" + "a" * 20
+    assert seen[-1].headers["X-BOSS-MCP-Project"] == "alpha"
+    assert seen[-1].headers["X-BOSS-MCP-Operation"] == alias
+    assert json.loads(seen[-1].content) == proposal["body"]
+
+    server = MCPServer(
+        type("Context", (), {"durable_workspace_configured": False})(),
+        project_id="alpha", registry=ToolRegistry(), api_surface=surface,
+    )
+    reply = server.handle({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "api_write_operation", "arguments": {
+            "operation": alias, "path": {"decision_id": "d1"},
+            "body": {"note": "reviewed"},
+            "confirmation_id": "mcpconf_" + "a" * 20,
+        }},
+    })
+    assert reply["result"]["isError"] is False
+    assert seen[-1].headers["X-BOSS-MCP-Confirmation"] == "mcpconf_" + "a" * 20
 
 
 def test_malformed_auth_and_project_responses_fail_closed_without_raw_payload():

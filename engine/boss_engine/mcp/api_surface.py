@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
@@ -52,6 +52,7 @@ def _secret_route(path: str, path_args: dict) -> bool:
 _EXCLUDED_PREFIXES = (
     ("/v1/worker/", "worker_lease_protocol"),
     ("/v1/webhooks/", "external_webhook_ingress"),
+    ("/v1/mcp-confirmations", "human_confirmation_protocol"),
 )
 _EXCLUDED_EXACT = {
     "/v1/workers/register": "worker_registration_protocol",
@@ -60,6 +61,15 @@ _EXCLUDED_EXACT = {
     "/v1/a2a/poll": "delivery_worker_protocol",
     "/v1/kms/keys/{key_entry_id}/lease": "secret_lease_may_reveal_raw_material",
     "/v1/kms/leases/{lease_id}/resolve": "secret_resolution_returns_raw_material",
+    "/v1/github/community/jobs/{job_id}/execute": "github_worker_lease_protocol",
+    "/v1/github/code-sync-runs/{sync_run_id}/apply": "github_worker_lease_protocol",
+    "/v1/github/resolution-plans/{plan_id}/apply": "github_worker_lease_protocol",
+    "/v1/github/merge-authorizations/{authorization_id}/apply": "github_worker_lease_protocol",
+    "/v1/github/reconciliation-runs/{run_id}/execute": "github_worker_lease_protocol",
+    "/v1/docs/update/execute": "docs_worker_lease_protocol",
+    "/v1/orchestration/next-move/execute": "orchestration_worker_lease_protocol",
+    "/v1/work-orchestration/tracker-sync/execute": "tracker_worker_lease_protocol",
+    "/v1/activity/retention/prune": "activity_worker_protocol",
 }
 _EXCLUDED_FRAGMENTS = (
     ("/steps/claim", "workflow_worker_protocol"),
@@ -80,6 +90,8 @@ _GOVERNED_EFFECT_ALLOWLIST = frozenset({
     # Only a paused run can roll back, and executed new-version steps block it.
     # The API requires workflow_manage and records the migration event.
     ("POST", "/v1/workflow-runs/{run_id}/migrations/rollback"),
+    # Despite its name, this endpoint only renders a standards text block.
+    ("POST", "/v1/platform-standards/apply"),
 })
 _OPERATOR_ONLY_PATTERNS = (
     r"^/v1/decisions/\{[^/]+\}/(approve|reject|revise|delegate|execute)$",
@@ -97,6 +109,50 @@ _HIGH_RISK_ACTION_TAILS = frozenset({
     "delete", "remove", "merge", "rollback", "revert", "execute", "deploy",
     "promote", "apply", "destroy", "wipe", "reject", "delegate", "revise",
     "redeploy", "auto-deploy", "provision", "bootstrap", "rotate", "adopt-key", "install-key", "grant",
+})
+_CONFIRMABLE_APPROVAL_PATTERNS = (
+    r"^/v1/decisions/\{decision_id\}/(approve|reject|revise|delegate|execute)$",
+    r"^/v1/changesets/\{changeset_id\}/approve$",
+    r"^/v1/previews/\{preview_id\}/approve$",
+    r"^/v1/github/merge-authorizations/\{authorization_id\}/authorize$",
+    r"^/v1/github/resolution-plans/\{plan_id\}/approve$",
+)
+_CONFIRMABLE_EXACT = frozenset({
+    # Project-scoped authority changes; the API still checks each permission.
+    ("POST", "/v1/members"),
+    ("POST", "/v1/break-glass/grants"),
+    ("POST", "/v1/break-glass/grants/{grant_id}/revoke"),
+    ("POST", "/v1/budget/allocations"),
+    ("POST", "/v1/budget/set_intensity"),
+    ("POST", "/v1/agent-modules/{module_id}/rollback"),
+    ("POST", "/v1/agent/threads/{thread_id}/clear"),
+    # These lifecycle transitions change local metadata or SecretRefs; they
+    # do not reveal raw credentials or call a provider from this endpoint.
+    ("POST", "/v1/github/connections/{connection_id}/revoke"),
+    ("POST", "/v1/providers/{provider_account_id}/revoke"),
+    ("POST", "/v1/providers/{provider_account_id}/rotate"),
+    ("POST", "/v1/kms/keys/{key_entry_id}/grant"),
+    ("DELETE", "/v1/kms/keys/{key_entry_id}/grants/{grantee_agent}"),
+    ("POST", "/v1/kms/leases/{lease_id}/revoke"),
+    # Both delivery endpoints plan a ChangeSet; execution remains governed.
+    ("POST", "/v1/delivery/deploy"),
+    ("POST", "/v1/delivery/deployments/{deployment_run_id}/redeploy"),
+    # This queues an already-authorized merge. The worker rechecks current
+    # head, reviews, checks, branch policy, and lease before provider write.
+    ("POST", "/v1/github/merge-authorizations/{authorization_id}/enqueue"),
+    # Local configuration and reversible/archived project records.
+    ("DELETE", "/v1/event-subscriptions/{subscription_id}"),
+    ("DELETE", "/v1/webhook-endpoints/{endpoint_id}"),
+    ("DELETE", "/v1/mcp/servers/{server_id}"),
+    ("DELETE", "/v1/role-skills"),
+    ("DELETE", "/v1/skill-definitions/{skill_key}"),
+    ("DELETE", "/v1/secret-refs/{secret_ref_id}"),
+    ("DELETE", "/v1/resource-topology/edges/{edge_id}"),
+    ("DELETE", "/v1/delivery-workflows/schedules/{schedule_id}"),
+    ("DELETE", "/v1/delivery-workflows/custom-steps/{step_key}"),
+    ("DELETE", "/v1/delivery-workflows/runs/{run_id}"),
+    ("DELETE", "/v1/delivery-workflows/{definition_id}"),
+    ("DELETE", "/v1/deployment-targets/{target_id}"),
 })
 
 
@@ -158,6 +214,15 @@ def needs_operator_confirmation(method: str, path: str) -> bool:
     if path.rsplit("/", 1)[-1].lower() in _HIGH_RISK_ACTION_TAILS:
         return True
     return any(re.match(pattern, path) for pattern in _OPERATOR_ONLY_PATTERNS)
+
+
+def confirmation_eligible(method: str, path: str) -> bool:
+    """Permit reviewed project-scoped transitions with an auditable API effect."""
+    return (method, path) in _CONFIRMABLE_EXACT or (
+        method == "POST" and any(
+            re.match(pattern, path) for pattern in _CONFIRMABLE_APPROVAL_PATTERNS
+        )
+    )
 
 
 def _schema_fields(operation: dict, location: str) -> tuple[dict, list[str]]:
@@ -328,6 +393,8 @@ class ApiSurface:
         if read_only and operation.write:
             return "read_only"
         if operation.operator_confirmation:
+            if confirmation_eligible(operation.method, operation.path):
+                return "confirmation_required"
             return "operator_only_unavailable"
         return "callable"
 
@@ -358,9 +425,11 @@ class ApiSurface:
             "domain": op.domain, "summary": op.summary,
             "availability": self.availability(op, read_only=read_only),
             "reason": op.excluded_reason or (
-                "trusted_operator_confirmation_unavailable" if op.operator_confirmation else None
+                "fresh_human_confirmation_required" if confirmation_eligible(op.method, op.path)
+                else "trusted_operator_confirmation_unavailable" if op.operator_confirmation else None
             ),
-            "approval": "operator_only" if op.operator_confirmation else "api_policy",
+            "approval": "fresh_human_confirmation" if confirmation_eligible(op.method, op.path)
+                        else "operator_only" if op.operator_confirmation else "api_policy",
             "input_schema_quality": self.input_schema_quality(op),
             "mounted_input_schema_quality": self.mounted_input_schema_quality(op),
         }
@@ -403,6 +472,11 @@ class ApiSurface:
             "path": _object_schema(path_fields, path_required),
             "query": _object_schema(query_fields, query_required),
         }
+        if confirmation_eligible(op.method, op.path):
+            props["confirmation_id"] = {
+                "type": "string",
+                "description": "Single-use approval issued after separate human review",
+            }
         required = ["operation"]
         if path_required:
             required.append("path")
@@ -439,6 +513,7 @@ class ApiSurface:
     def invoke(
         self, alias: str, *, project_id: str, path: dict | None = None,
         query: dict | None = None, body: Any = None, read_only: bool = False,
+        confirmation_id: str | None = None, propose_confirmation: bool = False,
     ) -> dict:
         if self.pinned_project_id is not None and project_id != self.pinned_project_id:
             return {"ok": False, "error": "project_is_session_bound"}
@@ -446,10 +521,19 @@ class ApiSurface:
         if op is None:
             return {"ok": False, "error": "unknown_operation"}
         availability = self.availability(op, read_only=read_only)
-        if availability != "callable":
+        if availability == "confirmation_required" and not (confirmation_id or propose_confirmation):
+            return {"ok": False, "error": "confirmation_required", "operation": alias,
+                    "reason": "Use api_request_confirmation, then obtain separate human approval."}
+        if availability not in {"callable", "confirmation_required"}:
             return {"ok": False, "error": availability,
                     "reason": self.describe_brief(op, read_only=read_only)["reason"],
                     "operation": alias}
+        if propose_confirmation and availability != "confirmation_required":
+            return {"ok": False, "error": "confirmation_not_supported", "operation": alias}
+        if confirmation_id and (availability != "confirmation_required"
+                                or not isinstance(confirmation_id, str)
+                                or not re.fullmatch(r"mcpconf_[a-f0-9]{20}", confirmation_id)):
+            return {"ok": False, "error": "invalid_confirmation_id", "operation": alias}
         if self.revalidate_scope:
             assert self.client is not None and self.principal is not None
             try:
@@ -507,12 +591,26 @@ class ApiSurface:
             return {"ok": False, "error": "invalid_json_body"}
         if (op.definition.get("requestBody") or {}).get("required") and body is None:
             return {"ok": False, "error": "missing_body"}
+        headers = {"X-BOSS-MCP-Operation": alias}
+        if confirmation_id:
+            headers.update({
+                "X-BOSS-MCP-Confirmation": confirmation_id,
+                "X-BOSS-MCP-Project": project_id,
+            })
         try:
-            response = self.client.request(
-                op.method, rendered_path, params=query_args,
-                json=body if body is not None else None,
-                headers={"X-BOSS-MCP-Operation": alias},
-            )
+            if propose_confirmation:
+                response = self.client.post("/v1/mcp-confirmations", json={
+                    "project_id": project_id, "operation": alias,
+                    "method": op.method, "path": unquote(rendered_path),
+                    "query": dict(httpx.QueryParams(query_args).multi_items()),
+                    "body": body,
+                })
+            else:
+                response = self.client.request(
+                    op.method, rendered_path, params=query_args,
+                    json=body if body is not None else None,
+                    headers=headers,
+                )
         except httpx.HTTPError as exc:
             return {"ok": False, "error": "api_transport_error", "detail": type(exc).__name__}
         if len(response.content) > _RESPONSE_LIMIT:
@@ -688,6 +786,7 @@ def register_api_tools(
         "operation": {"type": "string", "description": "Stable alias from api_find_operations"},
         "path": {"type": "object"}, "query": {"type": "object"},
         "body": {"description": "JSON request body; see api_describe_operation"},
+        "confirmation_id": {"type": "string", "description": "Single-use approval from a separate human reviewer"},
     }, ["operation"])
     def call_read(ctx, *, project_id, actor, args):
         op = surface.operations.get(args.get("operation"))
@@ -695,14 +794,24 @@ def register_api_tools(
             return {"ok": False, "error": "read_operation_required"}
         return surface.invoke(op.alias, project_id=project_id,
                               path=args.get("path"), query=args.get("query"),
-                              body=args.get("body"), read_only=read_only)
+                              body=args.get("body"), read_only=read_only,
+                              confirmation_id=args.get("confirmation_id"))
+    def request_confirmation(ctx, *, project_id, actor, args):
+        op = surface.operations.get(args.get("operation"))
+        if op is None or not confirmation_eligible(op.method, op.path):
+            return {"ok": False, "error": "confirmation_not_supported"}
+        return surface.invoke(op.alias, project_id=project_id,
+                              path=args.get("path"), query=args.get("query"),
+                              body=args.get("body"), read_only=read_only,
+                              propose_confirmation=True)
     def call_write(ctx, *, project_id, actor, args):
         op = surface.operations.get(args.get("operation"))
         if op is None or not op.write:
             return {"ok": False, "error": "write_operation_required"}
         return surface.invoke(op.alias, project_id=project_id,
                               path=args.get("path"), query=args.get("query"),
-                              body=args.get("body"), read_only=read_only)
+                              body=args.get("body"), read_only=read_only,
+                              confirmation_id=args.get("confirmation_id"))
     registry.register(ToolSpec(
         "api_read_operation", "Read one schema-allowlisted BOSS API operation using the session project and explicitly bound API principal.",
         call_schema, guarded(call_read), kind="read",
@@ -712,25 +821,36 @@ def register_api_tools(
         call_schema, guarded(call_write), kind="write", reversibility="costs_money",
         requires_durable_workspace=False,
     ))
+    if not read_only:
+        registry.register(ToolSpec(
+            "api_request_confirmation",
+            "Propose one exact sensitive API request for a separate human CEO to review; this does not execute the action.",
+            call_schema, guarded(request_confirmation), kind="write",
+            reversibility="safe", requires_durable_workspace=False,
+        ))
     for op in surface.operations.values():
         if not domains or (op.domain not in domains and "all" not in domains):
             continue
-        if surface.availability(op, read_only=read_only) != "callable":
+        if surface.availability(op, read_only=read_only) not in {"callable", "confirmation_required"}:
             continue
         schema = surface.describe(op.alias, read_only=read_only)["inputSchema"]
         schema["properties"].pop("operation", None)
         schema["required"] = [field for field in schema["required"] if field != "operation"]
+        if confirmation_eligible(op.method, op.path):
+            schema["properties"]["confirmation_id"] = {"type": "string"}
 
         def handler(ctx, *, project_id, actor, args, alias=op.alias):
             return surface.invoke(
                 alias, project_id=project_id,
                 path=args.get("path"), query=args.get("query"), body=args.get("body"),
-                read_only=read_only,
+                read_only=read_only, confirmation_id=args.get("confirmation_id"),
             )
 
         registry.register(ToolSpec(
             name=op.alias,
-            description=f"{op.method} {op.path}: {op.summary}. API policy applies.",
+            description=f"{op.method} {op.path}: {op.summary}. "
+                        + ("Fresh human confirmation required. " if confirmation_eligible(op.method, op.path) else "")
+                        + "API policy applies.",
             parameters=schema,
             handler=guarded(handler),
             kind="write" if op.write else "read",

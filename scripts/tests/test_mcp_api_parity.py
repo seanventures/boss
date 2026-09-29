@@ -51,6 +51,9 @@ def test_mcp_capability_matrix_matches_both_live_openapi_compositions():
         elif row["mcp_status"] == "operator_only_unavailable":
             assert row["reason"] == "trusted_operator_confirmation_unavailable"
             assert not row["domain_scoped_direct_tool"]
+        elif row["mcp_status"] == "human_confirmation_gated":
+            assert row["reason"] == "fresh_human_confirmation_required"
+            assert row["domain_scoped_direct_tool"]
         else:
             assert row["typed_input_schema"] == (
                 row["input_schema_quality"] != "loose_json_body"
@@ -100,7 +103,7 @@ def test_community_curated_request_fields_are_audited_and_never_paid_only():
                 assert "$ref" in documented, key
 
 
-def test_operator_boundary_allows_only_audited_soft_archive_and_state_rollback():
+def test_operator_boundary_preserves_human_and_api_policy_gates():
     community = json.loads(COMMUNITY_MATRIX.read_text())
     rows = {(row["method"], row["path"]): row for row in community["operations"]}
     allowed = {
@@ -113,9 +116,20 @@ def test_operator_boundary_allows_only_audited_soft_archive_and_state_rollback()
         assert row["typed_input_schema"] is True
     for key in {
         ("POST", "/v1/decisions/{decision_id}/approve"),
-        ("POST", "/v1/delivery/deploy"),
         ("POST", "/v1/members"),
     }:
-        assert rows[key]["mcp_status"] == "operator_only_unavailable"
+        assert rows[key]["mcp_status"] == "human_confirmation_gated"
+    assert rows[("POST", "/v1/delivery/deploy")]["mcp_status"] == (
+        "human_confirmation_gated"
+    )
+    assert rows[("POST", "/v1/goldeneye/apps/deploy")]["mcp_status"] == (
+        "operator_only_unavailable"
+    )
+    assert rows[("POST", "/v1/activity/retention/prune")]["mcp_status"] == "excluded"
+    assert rows[("POST", "/v1/platform-standards/apply")]["mcp_status"] == (
+        "api_policy_gated"
+    )
+    assert sum(row["mcp_status"] == "human_confirmation_gated"
+               for row in community["operations"]) == 37
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 75
+               for row in community["operations"]) == 28

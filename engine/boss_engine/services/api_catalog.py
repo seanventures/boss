@@ -304,6 +304,7 @@ RESOURCE_DOMAINS = {
     "openai": "models",
     "compliance": "governance",
     "marketplace": "cloud",
+    "mcp-confirmations": "auth",
 }
 
 

@@ -1,46 +1,46 @@
 # BOSS-429 MCP operator boundary audit
 
-Source: mounted Community operations at integration commit `c218f77e` before this review. Every one of the 77 operations previously marked `operator_only_unavailable` is listed below. Two project-pinnable internal actions are now callable through the API policy path; 75 remain unavailable without a trusted human confirmation channel or a separate API fix.
+Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 986-operation mounted Community surface. Two were already ordinary API-policy actions. Of the other 75, 37 now require exact-request human confirmation, 28 remain held for route safety work, nine are excluded worker protocols, and one is a safe API-policy text-rendering action. Every action's current MCP disposition appears below.
 
-| Operation | Disposition and evidence |
+| Operation | Current disposition |
 |---|---|
 | `DELETE /v1/channels/{provider}` | Hold: removes configuration, delivery, or graph state |
 | `DELETE /v1/console/v2/org/{agent_id}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/delivery-workflows/custom-steps/{step_key}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/delivery-workflows/runs/{run_id}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/delivery-workflows/schedules/{schedule_id}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/delivery-workflows/{definition_id}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/deployment-targets/{target_id}` | Hold: direct deploy, host, or provider effect |
-| `DELETE /v1/event-subscriptions/{subscription_id}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/kms/keys/{key_entry_id}/grants/{grantee_agent}` | Hold: credentials, key grants, or integration revocation |
-| `DELETE /v1/mcp/servers/{server_id}` | Hold: removes configuration, delivery, or graph state |
+| `DELETE /v1/delivery-workflows/custom-steps/{step_key}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/delivery-workflows/runs/{run_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/delivery-workflows/schedules/{schedule_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/delivery-workflows/{definition_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/deployment-targets/{target_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/event-subscriptions/{subscription_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/kms/keys/{key_entry_id}/grants/{grantee_agent}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/mcp/servers/{server_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `DELETE /v1/meeting-roles/{role_key}` | Hold: removes configuration, delivery, or graph state |
 | `DELETE /v1/preview-sandboxes/{preview_id}` | Hold: direct deploy, host, or provider effect |
-| `DELETE /v1/resource-topology/edges/{edge_id}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/role-skills` | Hold: changes agent or policy capability authority |
+| `DELETE /v1/resource-topology/edges/{edge_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/role-skills` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `DELETE /v1/sandboxes/{sandbox_id}` | Hold: direct deploy, host, or provider effect |
-| `DELETE /v1/secret-refs/{secret_ref_id}` | Hold: credentials, key grants, or integration revocation |
-| `DELETE /v1/skill-definitions/{skill_key}` | Hold: changes agent or policy capability authority |
+| `DELETE /v1/secret-refs/{secret_ref_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `DELETE /v1/skill-definitions/{skill_key}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `DELETE /v1/tasks/{task_id}` | Allow: project-scoped soft archive with task_create and task.archived event |
-| `DELETE /v1/webhook-endpoints/{endpoint_id}` | Hold: removes configuration, delivery, or graph state |
-| `POST /v1/activity/retention/prune` | Hold: worker-only retention deletion of diagnostic rows |
-| `POST /v1/agent-modules/{module_id}/rollback` | Hold: module rollback changes active role/capability authority |
-| `POST /v1/agent/threads/{thread_id}/clear` | Hold: thread archives messages without an audit event |
-| `POST /v1/break-glass/grants` | Hold: break-glass or member authority |
-| `POST /v1/break-glass/grants/{grant_id}/revoke` | Hold: break-glass or member authority |
-| `POST /v1/budget/allocations` | Hold: budget or autonomy authority |
-| `POST /v1/budget/set_intensity` | Hold: budget or autonomy authority |
-| `POST /v1/changesets/{changeset_id}/approve` | Hold: human approval or decision authority |
+| `DELETE /v1/webhook-endpoints/{endpoint_id}` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/activity/retention/prune` | Excluded: internal/leased worker protocol; never an operator action |
+| `POST /v1/agent-modules/{module_id}/rollback` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/agent/threads/{thread_id}/clear` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/break-glass/grants` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/break-glass/grants/{grant_id}/revoke` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/budget/allocations` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/budget/set_intensity` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/changesets/{changeset_id}/approve` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `POST /v1/code-tasks/{run_id}/deploy` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/console/v2/autonomy/apply` | Hold: budget or autonomy authority |
-| `POST /v1/decisions/{decision_id}/approve` | Hold: human approval or decision authority |
-| `POST /v1/decisions/{decision_id}/delegate` | Hold: human approval or decision authority |
-| `POST /v1/decisions/{decision_id}/execute` | Hold: human approval or decision authority |
-| `POST /v1/decisions/{decision_id}/reject` | Hold: human approval or decision authority |
-| `POST /v1/decisions/{decision_id}/revise` | Hold: human approval or decision authority |
-| `POST /v1/delivery/deploy` | Hold: direct deploy, host, or provider effect |
+| `POST /v1/decisions/{decision_id}/approve` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/decisions/{decision_id}/delegate` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/decisions/{decision_id}/execute` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/decisions/{decision_id}/reject` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/decisions/{decision_id}/revise` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/delivery/deploy` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `POST /v1/delivery/deployments/{deployment_run_id}/execute` | Hold: direct deploy, host, or provider effect |
-| `POST /v1/delivery/deployments/{deployment_run_id}/redeploy` | Hold: direct deploy, host, or provider effect |
+| `POST /v1/delivery/deployments/{deployment_run_id}/redeploy` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `POST /v1/deployment-hosts/{host_id}/adopt-key` | Hold: credentials, key grants, or integration revocation |
 | `POST /v1/deployment-hosts/{host_id}/install-key` | Hold: credentials, key grants, or integration revocation |
 | `POST /v1/deployment-hosts/{host_id}/key` | Hold: credentials, key grants, or integration revocation |
@@ -53,41 +53,45 @@ Source: mounted Community operations at integration commit `c218f77e` before thi
 | `POST /v1/deployment-targets/{target_id}/teardown` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/deployments/{deployment_run_id}/promote` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/discoveries/{run_id}/promote` | Hold: ID-only route lacks MCP session project binding |
-| `POST /v1/docs/update/execute` | Hold: GitHub mutation or privileged job action |
+| `POST /v1/docs/update/execute` | Excluded: internal/leased worker protocol; never an operator action |
 | `POST /v1/enterprise/identity-providers` | Hold: changes agent or policy capability authority |
-| `POST /v1/github/code-sync-runs/{sync_run_id}/apply` | Hold: GitHub mutation or privileged job action |
-| `POST /v1/github/community/jobs/{job_id}/execute` | Hold: GitHub mutation or privileged job action |
-| `POST /v1/github/connections/{connection_id}/revoke` | Hold: credentials, key grants, or integration revocation |
-| `POST /v1/github/merge-authorizations/{authorization_id}/apply` | Hold: GitHub mutation or privileged job action |
-| `POST /v1/github/merge-authorizations/{authorization_id}/authorize` | Hold: human approval or decision authority |
-| `POST /v1/github/merge-authorizations/{authorization_id}/enqueue` | Hold: GitHub mutation or privileged job action |
-| `POST /v1/github/reconciliation-runs/{run_id}/execute` | Hold: leased worker protocol, not operator invocation |
-| `POST /v1/github/resolution-plans/{plan_id}/apply` | Hold: GitHub mutation or privileged job action |
-| `POST /v1/github/resolution-plans/{plan_id}/approve` | Hold: human approval or decision authority |
+| `POST /v1/github/code-sync-runs/{sync_run_id}/apply` | Excluded: internal/leased worker protocol; never an operator action |
+| `POST /v1/github/community/jobs/{job_id}/execute` | Excluded: internal/leased worker protocol; never an operator action |
+| `POST /v1/github/connections/{connection_id}/revoke` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/github/merge-authorizations/{authorization_id}/apply` | Excluded: internal/leased worker protocol; never an operator action |
+| `POST /v1/github/merge-authorizations/{authorization_id}/authorize` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/github/merge-authorizations/{authorization_id}/enqueue` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/github/reconciliation-runs/{run_id}/execute` | Excluded: internal/leased worker protocol; never an operator action |
+| `POST /v1/github/resolution-plans/{plan_id}/apply` | Excluded: internal/leased worker protocol; never an operator action |
+| `POST /v1/github/resolution-plans/{plan_id}/approve` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `POST /v1/goldeneye/apps/deploy` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/goldeneye/apps/{name}/rollback` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/improvement-programs/trials/{trial_id}/promote` | Hold: ID-only route lacks MCP session project binding |
-| `POST /v1/kms/keys/{key_entry_id}/grant` | Hold: credentials, key grants, or integration revocation |
-| `POST /v1/kms/leases/{lease_id}/revoke` | Hold: credentials, key grants, or integration revocation |
-| `POST /v1/members` | Hold: break-glass or member authority |
+| `POST /v1/kms/keys/{key_entry_id}/grant` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/kms/leases/{lease_id}/revoke` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/members` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `POST /v1/observability/stack/deploy` | Hold: direct deploy, host, or provider effect |
-| `POST /v1/orchestration/next-move/execute` | Hold: leased worker protocol, not operator invocation |
+| `POST /v1/orchestration/next-move/execute` | Excluded: internal/leased worker protocol; never an operator action |
 | `POST /v1/orgs` | Hold: break-glass or member authority |
-| `POST /v1/platform-standards/apply` | Hold: changes agent or policy capability authority |
-| `POST /v1/previews/{preview_id}/approve` | Hold: human approval or decision authority |
-| `POST /v1/providers/{provider_account_id}/revoke` | Hold: credentials, key grants, or integration revocation |
-| `POST /v1/providers/{provider_account_id}/rotate` | Hold: credentials, key grants, or integration revocation |
+| `POST /v1/platform-standards/apply` | API policy: renders a standards text block; no external effect |
+| `POST /v1/previews/{preview_id}/approve` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/providers/{provider_account_id}/revoke` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
+| `POST /v1/providers/{provider_account_id}/rotate` | Confirmable: separate human digest approval; existing project API policy and audit still apply |
 | `POST /v1/roles` | Hold: changes agent or policy capability authority |
-| `POST /v1/work-orchestration/tracker-sync/execute` | Hold: leased worker protocol, not operator invocation |
+| `POST /v1/work-orchestration/tracker-sync/execute` | Excluded: internal/leased worker protocol; never an operator action |
 | `POST /v1/worker-autoscaling/apply` | Hold: budget or autonomy authority |
 | `POST /v1/workflow-runs/{run_id}/migrations/rollback` | Allow: paused-run rollback refuses executed steps; workflow_manage and event |
 
-## Gate evidence for the two callable actions
+## Confirmation boundary
 
-- `DELETE /v1/tasks/{task_id}` is a soft archive. The API requires `project_id` and `actor`, checks `task_create`, updates only the matching project task, retains child rows, and emits `task.archived`. Existing `test_archive_task_requires_authorized_actor` checks a denied stranger and the persisted event.
-- `POST /v1/workflow-runs/{run_id}/migrations/rollback` requires `project_id` and `actor`, checks `workflow_manage`, locks and verifies the project run, requires a paused run and active completed migration, refuses rollback if any new-version step executed, and emits `workflow.migration_rolled_back`. Existing workflow runtime tests exercise the rollback state transition.
-- `ApiSurface.connect` accepts a bound principal only if `GET /v1/projects` returns exactly the selected project. Every invocation rechecks that project set and the API-key principal, so a long-lived MCP process fails closed after a membership or key-binding change.
+The API accepts a proposal only from an authenticated, dedicated API-key principal whose active project access is exactly the requested project. It rejects stock `ceo`, `system`, and `executive_console` principals. A separate active human CEO with `decision_resolve` must approve the exact SHA-256 request digest. The gate binds project, principal, alias, method, target, query, and JSON body; it expires after five minutes and is consumed once in the database before dispatch. Four audit events distinguish request, approval, consumption, and API result. The persisted preview contains only method, target, field counts, and a fixed set of field names; free-form query/body values, including `note`, are not stored. The human must review the full request through a trusted operator workflow before approving the digest. An approved digest never grants the MCP principal a missing API permission.
 
-## Remaining work
+## Held route families
 
-Discovery and improvement-trial promotion are otherwise governed, but their ID-only routes do not accept a project selector that MCP can pin; they remain unavailable. Agent-thread clearing retains history but lacks an audit event. Worker-only protocol endpoints should eventually be classified as excluded rather than operator actions. The other holds need their existing human approval, credential, provider, or deletion controls.
+- Direct host, deployment, provider, and Goldeneye effects lack a consistently enforced ChangeSet, budget reservation, resource receipt, or rollback path. Some deployment endpoints currently return `409` or suppress a host teardown error; confirmation alone would not make them safe.
+- Host key installation/adoption can carry raw credential material. The current review summary intentionally does not persist arbitrary body text, so these actions lack a sound human review channel.
+- Global organization, role, identity-provider, autonomy, and worker-autoscaling actions do not fit a project-scoped MCP principal. Several deletion endpoints lack an API-side project actor check.
+- Discovery and trial promotion use ID-only routes whose target project cannot be pinned at the MCP boundary.
+- The nine worker routes are now `excluded`, rather than operator actions: GitHub execution/apply and reconciliation, docs update, orchestration next move, tracker sync, and retention prune. Their lease and authorization protocol belongs to workers.
+
+The separate [Community matrix](../community/mcp-api-capability-matrix.json) lists every mounted operation and its current status. Exact availability still depends on the live edition, member grants, and API policy.

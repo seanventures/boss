@@ -104,6 +104,7 @@ def clean_tables(engine):
         # is not what a fresh seed produces. Confinement is the property that matters; the
         # shape of the reset is not worth destabilising the suite for.
         for tbl in [
+            "mcp_confirmations",
             "metatron_watch_ticks",
             "metatron_memories",
             "metatron_goals",

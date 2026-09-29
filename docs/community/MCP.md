@@ -134,8 +134,9 @@ python -m boss_engine --project boss-dogfood serve-mcp \
   --api-url http://127.0.0.1:8000
 ```
 
-This advertises four additional tools: `api_find_operations`,
-`api_describe_operation`, `api_read_operation`, and `api_write_operation`.
+Write mode advertises five additional tools: `api_find_operations`,
+`api_describe_operation`, `api_read_operation`, `api_write_operation`, and
+`api_request_confirmation`. Read-only mode omits both write tools.
 Discovery works without an API credential in a manually started catalog-only
 session; invocation remains unavailable
 until a separately configured, dedicated API credential is supplied as
@@ -188,13 +189,13 @@ The operation inventory is generated from each edition's mounted
 operation IDs are duplicated on a few multi-method routes. Run
 `python scripts/audit_mcp_api_parity.py --check` to verify
 [`mcp-api-capability-matrix.json`](mcp-api-capability-matrix.json). At this
-revision it accounts for all **982 Community** and **1,023 Enterprise**
+revision it accounts for all **986 Community** and **1,027 Enterprise**
 operations:
 
-| Mounted edition | API policy eligible | Operator-only unavailable | Excluded from MCP |
-|---|---:|---:|---:|
-| Community | 853 | 75 | 54 |
-| Paid-only additions | 39 | 2 | 0 |
+| Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
+|---|---:|---:|---:|---:|
+| Community | 854 | 37 | 28 | 67 |
+| Paid-only additions | 39 | 0 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
 submit it with a verified scoped principal. It does not promise that the
@@ -204,23 +205,49 @@ ChangeSet is callable because the API checks approval, active budget
 reservation, and resource receipts. Workflow mapping updates are callable
 through `workflow_manage`. A task can be soft-archived with `task_create` and
 an audit event; a paused workflow migration can be rolled back only before
-its new steps execute, with `workflow_manage` and an audit event. The
-**75 Community and two paid-only operator
-actions are unavailable through MCP today**: there is no trusted per-action
-human confirmation channel. They include decision approvals, member and
-budget authority changes, deploy/apply actions, destructive deletes, and host
-key installation. They return `operator_only_unavailable` without dispatch.
+its new steps execute, with `workflow_manage` and an audit event.
 
-The 54 excluded Community routes are internal worker and lease protocols,
+For the 37 confirmation-gated actions, MCP calls `api_request_confirmation`
+with the exact intended operation, path, query, and body. BOSS stores a digest
+of the complete request, its method and target, and a limited review summary;
+it never stores the raw body. A **separate human CEO member** reviews the
+request through a trusted operator workflow and approves its digest through
+the terminal or API. The human credential must not be available to the MCP
+client. Approval expires in five minutes and is consumed atomically by one
+matching request. Existing API permissions, budget, ChangeSet, receipt, and
+route policies still apply. Request, approval, consumption, and HTTP result
+are distinct audit events.
+
+The human can find the pending request with `/ops mcp-confirmations` and
+`/op` on the GET confirmation operation, then approve it with `/op` on the
+POST approve operation, passing `project_id` and `reviewed_digest`. Direct API
+equivalents are `GET /v1/mcp-confirmations?project_id=...` and
+`POST /v1/mcp-confirmations/{id}/approve`. The MCP client then calls
+`api_write_operation` with **identical** path, query, and body plus the returned
+`confirmation_id`. The stored summary omits free-form body/query values, so
+the human must review the full proposed request in their trusted operator
+workflow before approving its digest. The confirmation endpoints are excluded
+from MCP tool dispatch: the client cannot approve itself. The reviewer must
+be an active `member_type=human` CEO with `decision_resolve` permission.
+
+The 28 held Community and two paid-only actions return
+`operator_only_unavailable`. They include direct host/provider effects without
+a governed ChangeSet/receipt path, host key material, global or ID-only routes
+without a sound project boundary, and routes lacking API-side actor checks.
+See the [operator boundary audit](../operations/BOSS-429_MCP_OPERATOR_BOUNDARY_AUDIT.md)
+for per-operation disposition.
+
+The 67 excluded Community routes are internal worker and lease protocols,
 webhook and identity callbacks, preview reverse proxies, the bootstrap seed,
-and KMS lease/resolve routes that can return raw secret material. Customer
+the four confirmation protocol endpoints, and KMS lease/resolve routes that
+can return raw secret material. Customer
 secret-management routes remain
 available through API permission checks with redacted results.
 
-All **530 Community operations with a JSON request body** now expose named
-top-level fields in the mounted OpenAPI schema; the other 452 operations have
+All **532 Community operations with a JSON request body** now expose named
+top-level fields in the mounted OpenAPI schema; the other 454 operations have
 no JSON body. No Community JSON body remains loose at the top level. Of the
-530, **446** use Pydantic field handling and **84** use pass-through fields to
+532, **448** use Pydantic field handling and **84** use pass-through fields to
 preserve existing handler coercion and status codes. The latter fields help MCP
 clients construct requests, but their types are not enforced by Pydantic. Some
 nested payloads remain intentionally flexible. The matrix's

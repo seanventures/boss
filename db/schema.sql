@@ -2758,6 +2758,28 @@ ALTER TABLE events
   ALTER COLUMN created_at SET DEFAULT clock_timestamp();
 CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
 
+-- A human approves one exact, short-lived MCP HTTP request. No submitted body
+-- or credential material is stored: only a digest and redacted review preview.
+CREATE TABLE IF NOT EXISTS mcp_confirmations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  requested_by TEXT NOT NULL,
+  operation_alias TEXT NOT NULL,
+  method TEXT NOT NULL,
+  request_path TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  preview JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'consumed', 'expired')),
+  approved_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  approved_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_confirmations_project_pending
+  ON mcp_confirmations(project_id, status, expires_at, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS event_subscriptions (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

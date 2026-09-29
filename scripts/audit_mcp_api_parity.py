@@ -26,7 +26,7 @@ def mounted_rows(edition: str) -> list[dict]:
     sys.path[:0] = [str(ROOT / "apps/api"), str(ROOT / "engine")]
     from app.main import app
     from app.request_bodies import OpenRequestBody
-    from boss_engine.mcp.api_surface import ApiSurface
+    from boss_engine.mcp.api_surface import ApiSurface, confirmation_eligible
     from fastapi.routing import APIRoute
     from pydantic import SkipValidation
 
@@ -67,6 +67,8 @@ def mounted_rows(edition: str) -> list[dict]:
         mounted_quality = surface.mounted_input_schema_quality(op)
         if op.excluded_reason:
             status = "excluded"
+        elif confirmation_eligible(op.method, op.path):
+            status = "human_confirmation_gated"
         elif op.operator_confirmation:
             status = "operator_only_unavailable"
         else:
@@ -79,6 +81,7 @@ def mounted_rows(edition: str) -> list[dict]:
             "summary": op.summary,
             "mcp_status": status,
             "reason": op.excluded_reason or (
+                "fresh_human_confirmation_required" if status == "human_confirmation_gated" else
                 "trusted_operator_confirmation_unavailable" if op.operator_confirmation else None
             ),
             "input_schema_quality": schema_quality,
@@ -89,7 +92,9 @@ def mounted_rows(edition: str) -> list[dict]:
             "curated_input_fields": schema_quality == "curated_json_body",
             "typed_input_schema": status != "excluded" and schema_quality != "loose_json_body",
             "runtime_validated_input_schema": status != "excluded" and mounted_quality != "loose_json_body",
-            "domain_scoped_direct_tool": status == "api_policy_gated",
+            "domain_scoped_direct_tool": status in {
+                "api_policy_gated", "human_confirmation_gated",
+            },
             "requires_explicit_bound_api_credential": status != "excluded",
             "read_only_available": status == "api_policy_gated" and not op.write,
         })
