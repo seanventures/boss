@@ -238,12 +238,16 @@ function RoleCell(
     origin?: string },
 ) {
   if (!knob) return <td className="role-cell role-na">—</td>;
-  const inherited = knob.default !== null && knob.default !== "" ? ` (${knob.default})` : "";
+  // WHAT AN EMPTY PICKER REALLY FALLS BACK TO. "same as implementer (claude_cli)" beside an
+  // implementer of claude_code contradicted itself: when the deployment sets a value, empty
+  // means THAT value, not the implementer's.
+  const fallback = knob.default !== null && knob.default !== ""
+    ? `deployment default (${knob.default})` : empty;
   const control = knob.open_choices ? (
     <>
       <input className="input" list={`role-${knob.key}-options`} aria-label={knob.label}
              key={`${knob.key}:${String(knob.value ?? "")}`}
-             placeholder={`${empty}${inherited}`} defaultValue={String(knob.value ?? "")}
+             placeholder={fallback} defaultValue={String(knob.value ?? "")}
              disabled={busy} data-testid={`knob-${knob.key}`}
              onBlur={(e) => {
                if (String(knob.value ?? "") !== e.target.value) onSave(knob.key, e.target.value);
@@ -259,7 +263,7 @@ function RoleCell(
             onChange={(e) => {
               if (String(knob.value ?? "") !== e.target.value) onSave(knob.key, e.target.value);
             }}>
-      <option value="">{empty}{inherited}</option>
+      <option value="">{fallback}</option>
       {(knob.choices ?? []).filter(Boolean).map((c) => <option key={c} value={c}>{c}</option>)}
     </select>
   );
@@ -314,7 +318,12 @@ export function RoleTable({ projectId, actor }: { projectId: string; actor: stri
       });
       const body = await r.json();
       const label = knobs?.find((k) => k.key === key)?.label ?? key;
-      setNote(r.ok ? `Saved — ${label}: ${body.value ?? "inherited"}. Applies on the next run.`
+      const clearedLabel = body.cleared
+        ? knobs?.find((k) => k.key === body.cleared)?.label ?? body.cleared : null;
+      setNote(r.ok ? `Saved — ${label}: ${body.value || "inherited"}.`
+                     + (clearedLabel ? ` ${clearedLabel} was cleared, because it was chosen for `
+                                       + `the previous engine — pick one for this engine.` : "")
+                     + " Applies on the next run."
                    : (body.error ?? body.detail ?? "Could not save."));
       await load();
     } catch (e) {
@@ -343,7 +352,14 @@ export function RoleTable({ projectId, actor }: { projectId: string; actor: stri
         <tbody>
           {ROLE_ROWS.map((row) => {
             const engine = row.engine ? byKey.get(row.engine) : undefined;
-            const model = row.model ? byKey.get(row.model) : undefined;
+            // THE CHAT ROW'S MODEL FOLLOWS ITS ENGINE. claude_cli_model is the Claude CLI's model;
+            // with chat on codex that picker offered Claude models for a Codex conversation.
+            const chatEngine = String(engine?.value || engine?.default || "");
+            const modelKey = row.engine === "chat_llm_engine"
+              ? (chatEngine.startsWith("codex") ? "codex_cli_model"
+                 : chatEngine.startsWith("claude") ? "claude_cli_model" : null)
+              : row.model;
+            const model = modelKey ? byKey.get(modelKey) : undefined;
             if (!engine && !model) return null;
             const decisions = row.engine === "decision_backend";
             return (
@@ -361,7 +377,7 @@ export function RoleTable({ projectId, actor }: { projectId: string; actor: stri
                   ? <RoleCell knob={engine} empty={row.emptyEngine} busy={busy === row.engine}
                               onSave={(k, v) => void save(k, v)} />
                   : <td className="role-cell role-na">codex</td>}
-                <RoleCell knob={model} empty={row.emptyModel} busy={busy === row.model}
+                <RoleCell knob={model} empty={row.emptyModel} busy={busy === modelKey}
                           onSave={(k, v) => void save(k, v)}
                           origin={decisions
                             ? (engine?.value === "typesafe"
