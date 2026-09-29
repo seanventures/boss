@@ -112,6 +112,10 @@ container is missing, cannot start, or the backup fails, the source is left
 unchanged. Upgrades keep named volumes and login sessions. To
 stop BOSS and retain `.env`, volumes, images, backups and the checkout:
 
+Older safe uninstalls may already have removed the database container. Follow
+the [legacy recovery procedure](../../scripts/install/README.md#recover-an-older-safe-uninstall)
+before upgrading such an install.
+
 ```bash
 ./scripts/install/uninstall.sh --dir "$PWD" --dry-run
 ./scripts/install/uninstall.sh --dir "$PWD" --yes

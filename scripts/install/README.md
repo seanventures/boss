@@ -305,6 +305,70 @@ does not contain Codex/Grok CLI sessions; their named volumes are retained
 during upgrade, and a data-purge recovery requires provider sign-in again.
 Keep the backup outside the checkout and protect it like `.env`.
 
+### Recover an older safe uninstall
+
+Older versions of safe uninstall used `docker compose down`. That removed the
+database container but kept its named data volume. The current backup refuses
+to guess which mutable `postgres:16-alpine` image should reopen that data. If
+`backup.sh` reports a missing Postgres container, use this recovery path before
+upgrading. Do not run the new installer or `compose up` against that volume yet.
+
+First identify a **local, reviewed Postgres 16 image ID** from the host's
+deployment records or cached image inventory. Prefer the image ID the old
+container used. If that ID is unavailable, select a compatible cached
+Postgres 16 image only after retaining an offline copy of the volume; this is
+a recovery decision, not an automatic tag update. The commands below make that
+copy before starting Postgres, then create only the database container from
+the explicit immutable image ID. Replace the image-ID placeholder; if you
+cannot identify a reviewed local image, stop and get a recovery review.
+
+```bash
+cd ~/boss
+docker volume inspect boss-community_boss_community_pg
+docker image ls --no-trunc postgres
+DB_IMAGE_ID=sha256:REPLACE_WITH_REVIEWED_LOCAL_POSTGRES_16_IMAGE_ID
+(
+  set -euo pipefail
+  [[ "$DB_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+  docker image inspect "$DB_IMAGE_ID" >/dev/null
+  docker run --rm --pull never --entrypoint postgres "$DB_IMAGE_ID" --version | grep -E 'PostgreSQL\) 16\.'
+  umask 077
+  mkdir -p "$HOME/boss-backups"
+  OFFLINE_DB_BACKUP="$HOME/boss-backups/legacy-pg-offline-$(date -u +%Y%m%dT%H%M%SZ).tar"
+  docker run --rm --pull never \
+    --mount type=volume,source=boss-community_boss_community_pg,target=/data,readonly \
+    --entrypoint tar "$DB_IMAGE_ID" -C /data -cf - . > "$OFFLINE_DB_BACKUP"
+  test -s "$OFFLINE_DB_BACKUP"
+  echo "Offline database volume copy: $OFFLINE_DB_BACKUP"
+  OVERRIDE="$(mktemp)"
+  cleanup() {
+    docker compose -f scripts/install/community-compose.yml -f "$OVERRIDE" --env-file .env stop db >/dev/null 2>&1 || true
+    rm -f "$OVERRIDE"
+  }
+  trap cleanup EXIT
+  printf 'services:\n  db:\n    image: %s\n' "$DB_IMAGE_ID" > "$OVERRIDE"
+  docker compose -f scripts/install/community-compose.yml -f "$OVERRIDE" --env-file .env \
+    up -d --no-deps --no-build --pull never db
+  ready=0
+  for attempt in {1..60}; do
+    if docker compose -f scripts/install/community-compose.yml -f "$OVERRIDE" --env-file .env \
+      exec -T db pg_isready -U boss -d boss >/dev/null 2>&1; then ready=1; break; fi
+    sleep 2
+  done
+  test "$ready" -eq 1
+)
+./scripts/install/backup.sh --dir "$PWD"
+./scripts/install/upgrade.sh --dir "$PWD"
+```
+
+The subshell leaves the recovered database container **stopped**. The first
+command after it verifies a logical backup from that container; the upgrade
+then takes its own fresh backup before changing source. Both print private
+backup paths. If the local `boss-community-api:local` image is missing, backup
+also stops before any build or pull; restore the reviewed image first. For a
+host where Docker requires administrator access, run the Docker commands
+through your host's approved `sudo` policy.
+
 If a build fails, the backup path is printed. Inspect Compose logs and retry
 `upgrade.sh` once the cause is fixed. A database migration may already have
 run, so the script deliberately does not reset source or database behind your
@@ -386,8 +450,12 @@ Stop:
 
 ```bash
 cd ~/boss
-docker compose -f scripts/install/community-compose.yml --env-file .env down
+./scripts/install/uninstall.sh --dir "$PWD" --yes
 ```
+
+Manual `docker compose down` removes the stopped container needed for a later
+no-recreation backup. Use the recovery procedure above if an older uninstall
+already did that.
 
 ## Flags
 

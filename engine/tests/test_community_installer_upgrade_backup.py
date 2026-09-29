@@ -83,6 +83,7 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
     docker.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ $1 == info ]]; then exit 0; fi\n"
+        "if [[ $1 == image && $2 == inspect ]]; then exit 0; fi\n"
         "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
         "printf '%s\\n' \"$*\" >> \"$BOSS_TEST_DOCKER_TRACE\"\n"
         "exit 86\n"
@@ -120,9 +121,11 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "if [[ $1 == info ]]; then exit 0; fi\n"
+        "if [[ $1 == image && $2 == inspect ]]; then [[ ${BOSS_TEST_API_IMAGE_MISSING:-0} != 1 ]]; exit; fi\n"
         "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
         "args=$*\n"
         "case \"$args\" in\n"
+        "  *' config --format json') echo '{\"services\":{\"api\":{\"image\":\"fixture-api:local\"}}}' ;;\n"
         "  *' ps --status running --services')\n"
         "    [[ $(cat \"$BOSS_TEST_DB_STATE\") != running ]] || echo db\n"
         "    [[ -z ${BOSS_TEST_WORKER_STATE:-} || $(cat \"$BOSS_TEST_WORKER_STATE\") != running ]] || echo worker ;;\n"
@@ -303,6 +306,25 @@ def test_backup_preserves_running_database_and_worker_state(install_pair):
     assert (Path(result.stdout.strip()) / "source-commit").read_text().strip() == old
 
 
+def test_missing_api_image_does_not_pause_running_writers(install_pair):
+    installed, _, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    worker_state = tmp / "worker-state"
+    worker_state.write_text("running\n")
+    env["BOSS_TEST_WORKER_STATE"] = str(worker_state)
+    env["BOSS_TEST_API_IMAGE_MISSING"] = "1"
+
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+
+    assert result.returncode != 0
+    assert "backup will not build or pull it" in result.stderr
+    assert (tmp / "db-state").read_text().strip() == "running"
+    assert worker_state.read_text().strip() == "running"
+    assert not (tmp / "docker-trace").exists()
+
+
 def test_missing_database_container_fails_before_source_change(install_pair):
     installed, old, _, env, tmp = install_pair
     _publish_real_backup_helper(tmp)
@@ -406,6 +428,10 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
     compose_path = installed / "scripts/install/community-compose.yml"
     compose_path.parent.mkdir(parents=True)
     project = "bossbackup" + uuid.uuid4().hex[:12]
+    api_image = f"{project}api:fixture"
+    (installed / "Dockerfile.fixture-api").write_text(
+        "FROM postgres:16-alpine\nRUN echo build-was-run >/build-was-run\n"
+    )
     compose_path.write_text(
         f"name: {project}\n"
         "services:\n"
@@ -418,7 +444,10 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
         "    volumes:\n"
         "      - pg:/var/lib/postgresql/data\n"
         "  api:\n"
-        "    image: postgres:16-alpine\n"
+        "    build:\n"
+        "      context: ../..\n"
+        "      dockerfile: Dockerfile.fixture-api\n"
+        f"    image: {api_image}\n"
         "    volumes:\n"
         "      - artifacts:/var/lib/boss/artifacts\n"
         "volumes:\n"
@@ -433,6 +462,7 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
     _git("commit", "-m", "installed version", cwd=installed)
     compose = ("docker", "compose", "-f", compose_path, "--env-file", installed / ".env")
     try:
+        assert _run("docker", "image", "tag", "postgres:16-alpine", api_image).returncode == 0
         result = _run(*compose, "up", "-d", "--no-deps", "--pull", "never", "db")
         assert result.returncode == 0, result.stderr
         for _ in range(30):
@@ -458,17 +488,56 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
         assert _run("docker", "inspect", "--format", "{{.Image}}", container_id).stdout.strip() == image_id
         assert _run("docker", "inspect", "--format", "{{.State.Status}}", container_id).stdout.strip() == "exited"
 
-        # The artifact helper must not pull a missing API image. Its failure
-        # still returns the temporarily started DB to the original state.
-        compose_path.write_text(compose_path.read_text().replace(
-            "    image: postgres:16-alpine", "    image: postgres:missing-artifact-fixture", 1,
-        ))
+        # A real API service has both build and image. Removing the local image
+        # must fail backup without silently building or pulling a replacement.
+        assert _run("docker", "image", "rm", api_image).returncode == 0
         failed = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
                       "--backup-dir", tmp_path / "backups", cwd=REPO)
         assert failed.returncode != 0
-        assert "Backup incomplete" in failed.stderr
+        assert "backup will not build or pull it" in failed.stderr
         assert _run("docker", "inspect", "--format", "{{.State.Status}}", container_id).stdout.strip() == "exited"
         assert _run("docker", "inspect", "--format", "{{.Image}}", container_id).stdout.strip() == image_id
-        assert _run("docker", "image", "inspect", "postgres:missing-artifact-fixture").returncode != 0
+        assert _run("docker", "image", "inspect", api_image).returncode != 0
+
+        # Legacy safe uninstall used `down`, removing the DB container while
+        # leaving the volume. Preserve an offline copy, then recreate only DB
+        # from an explicitly selected, already-cached immutable image ID.
+        assert _run(*compose, "down").returncode == 0
+        absent = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                      "--backup-dir", tmp_path / "backups", cwd=REPO)
+        assert absent.returncode != 0
+        assert "installed Postgres container is missing" in absent.stderr
+        volume = f"{project}_pg"
+        assert _run("docker", "volume", "inspect", volume).returncode == 0
+        offline = tmp_path / "offline-pg.tar"
+        with offline.open("wb") as archive:
+            archived = subprocess.run(
+                ["docker", "run", "--rm", "--pull", "never", "--mount",
+                 f"type=volume,source={volume},target=/data,readonly", "--entrypoint", "tar",
+                 image_id, "-C", "/data", "-cf", "-", "."],
+                stdout=archive, stderr=subprocess.PIPE, timeout=60, check=False,
+            )
+        assert archived.returncode == 0, archived.stderr.decode(errors="replace")
+        assert offline.stat().st_size > 0
+        override = tmp_path / "reviewed-db-image.yml"
+        override.write_text(f"services:\n  db:\n    image: {image_id}\n")
+        recovery = ("docker", "compose", "-f", compose_path, "-f", override,
+                    "--env-file", installed / ".env")
+        assert _run(*recovery, "up", "-d", "--no-deps", "--no-build", "--pull", "never", "db").returncode == 0
+        for _ in range(30):
+            if _run(*recovery, "exec", "-T", "db", "pg_isready", "-U", "boss", "-d", "boss").returncode == 0:
+                break
+            subprocess.run(["sleep", "1"], check=False)
+        else:
+            pytest.fail("recovered Postgres did not become ready")
+        assert _run(*recovery, "stop", "db").returncode == 0
+        assert _run("docker", "image", "tag", "postgres:16-alpine", api_image).returncode == 0
+        restored = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                        "--backup-dir", tmp_path / "backups", cwd=REPO)
+        assert restored.returncode == 0, restored.stderr
+        recovered_id = _run(*compose, "ps", "--all", "-q", "db").stdout.strip()
+        assert _run("docker", "inspect", "--format", "{{.Image}}", recovered_id).stdout.strip() == image_id
+        assert _run("docker", "inspect", "--format", "{{.State.Status}}", recovered_id).stdout.strip() == "exited"
     finally:
         _run(*compose, "down", "--volumes", "--remove-orphans")
+        _run("docker", "image", "rm", api_image)

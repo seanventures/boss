@@ -61,7 +61,19 @@ was_running() { [[ $'\n'"$RUNNING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
 EXISTING="$("${COMPOSE[@]}" ps --all --services)"
 was_created() { [[ $'\n'"$EXISTING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
 if ! was_running db && ! was_created db; then
-  echo 'The installed Postgres container is missing. Start the reviewed installed version before backing up; no database image was pulled or substituted.' >&2
+  echo 'The installed Postgres container is missing. See scripts/install/README.md, "Recover an older safe uninstall", before retrying; no database image was pulled or substituted.' >&2
+  exit 1
+fi
+# Compose run may build a service that has both `build:` and `image:` when its
+# tagged image is missing, even with `--pull never`. Refuse that before pausing
+# writers or starting a stopped database.
+if ! API_IMAGE="$("${COMPOSE[@]}" config --format json | python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["api"]["image"])')" ||
+   [[ -z "$API_IMAGE" ]]; then
+  echo 'Could not resolve the installed API image for the artifact backup.' >&2
+  exit 1
+fi
+if ! "${DOCKER[@]}" image inspect "$API_IMAGE" >/dev/null 2>&1; then
+  echo "The installed API image $API_IMAGE is unavailable locally; backup will not build or pull it. Restore the reviewed local image before retrying." >&2
   exit 1
 fi
 if was_running db; then
