@@ -115,6 +115,11 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/aws",
         ],
     },
+    "hardware": {
+        "title": "Hardware places",
+        "description": "The local machine, connected machines, the hardware agent, and provider proposals.",
+        "prefixes": ["/v1/hardware"],
+    },
     "goldeneye": {
         "title": "Goldeneye bare-metal PaaS",
         "description": "Nodes, modules/packages, app deploys, fleet status.",
