@@ -83,6 +83,7 @@ python3 examples/setup_all.py
 | `--dry-run` | Say what would happen and change nothing. Worth doing first |
 | `--only a,b` | A subset — `--only video-workflow,sales-signal` |
 | `--schedule TZ` | Also schedule the newsletter for Monday 08:00, e.g. `--schedule Europe/London` |
+| `--newsletter-sectors` / `--newsletter-to` | Required with `--schedule`: topics and recipient stored on each recurring run |
 | `--no-agents` | Leave steps unassigned, so each runs as the workflow itself |
 | `--project` / `--actor` | Which project, and who is doing it |
 
@@ -93,6 +94,20 @@ drift from the first.
 a work tracker, three need email — so you end up with the ones you can actually run, plus a
 list of what was skipped and why. Everything is safe to re-run: already-installed examples are
 reused, not duplicated.
+
+To schedule the newsletter while installing the examples, provide its run inputs up front:
+
+```bash
+python3 examples/setup_all.py --schedule Europe/London \
+  --newsletter-sectors "energy, healthcare" --newsletter-to reader@example.com
+```
+
+The scheduled run prepares a newsletter on Monday. Email delivery still waits for your approval.
+The schedule inputs cannot be edited after creation; remove the schedule and recreate it if
+the topics or recipient change.
+The console's generic **Schedule** button currently asks only for a time zone. For workflows
+with required inputs, use the example script or the API until that button can collect and store
+the run inputs.
 
 ---
 
@@ -135,7 +150,8 @@ list you can read rather than a step you have to trust.
 ### [weekly-newsletter](weekly-newsletter/) — research, written up, in your inbox
 
 Name the sectors you care about. BOSS researches them into a cited dossier, writes a
-newsletter, and emails it after you have read it. `--schedule` makes it arrive on Monday.
+newsletter, and emails it after you have approved the send step. `--schedule` starts the
+research every Monday.
 
 **Steps:** gather → write → send (stops for you)
 **Skills:** the `research` capability, `model.generate_text`, `email.send_real_guarded`

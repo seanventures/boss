@@ -1,7 +1,7 @@
 # Weekly newsletter
 
-**Name the things you care about. Get a researched, cited newsletter in your inbox on Monday —
-after you have read it.**
+**Name the things you care about. BOSS prepares a researched, cited newsletter every Monday
+and waits for your approval before emailing it.**
 
 ---
 
@@ -12,7 +12,8 @@ competitor is doing — and you do not want to spend Monday morning doing it. Re
 not the work; *knowing what happened* is.
 
 So this does the reading. BOSS researches the sectors you named, writes them up as a
-newsletter, and emails it. With `--schedule` it does that every Monday without anyone asking.
+newsletter, and emails it after approval. With `--schedule` it starts the research every Monday
+without anyone asking.
 
 ### What happens
 
@@ -67,9 +68,10 @@ success with nothing sent.
 # Build it
 python3 examples/weekly-newsletter/setup.py --api http://127.0.0.1:8000
 
-# Build it AND have it arrive every Monday at 08:00 in your zone
+# Build it AND prepare a draft every Monday at 08:00 in your zone
 python3 examples/weekly-newsletter/setup.py --api http://127.0.0.1:8000 \
-    --schedule Europe/London
+    --schedule Europe/London --sectors "energy, healthcare" \
+    --to reader@example.com
 ```
 
 `--schedule` takes an **IANA zone name** — `Europe/London`, `America/New_York`,
@@ -79,8 +81,10 @@ python3 examples/weekly-newsletter/setup.py --api http://127.0.0.1:8000 \
 schedule and computes in it, so the newsletter holds its hour across daylight-saving changes
 instead of drifting by an hour twice a year.
 
-> **After scheduling, set `to` on the schedule** — the script cannot guess your address, and
-> the send step will refuse without it. Delivery → **Yours** → the card → the schedule line.
+`--schedule` requires both `--sectors` and `--to` before it changes anything. They become the
+inputs for each Monday run. The console can pause or remove a schedule, but cannot edit those
+inputs yet. To change the topics or recipient, remove the schedule from Delivery → **Yours**
+and run this command again. The send step still waits for your approval.
 
 Start with `--dry-run`. Re-running is safe.
 
@@ -120,12 +124,13 @@ That `context` wiring is the interesting one: a step passes whole **values** and
 
 ### 5. Schedule it
 
-Delivery → **Yours** → the card → **Schedule**. It asks which time zone; it does not take your
-browser's, because a report arriving at 3am because nobody said which zone was meant is worth
-one question.
+Use the setup command above with `--schedule`, `--sectors` and `--to`. The console's generic
+**Schedule** button currently asks only for a time zone and cannot store the required newsletter
+inputs, so it is not a complete scheduling path for this workflow. The same schedule can be
+created through `POST /v1/delivery-workflows/schedules` with those values in `input`.
 
-Pause, resume and remove are on the same line. Resuming recomputes the next run, so a schedule
-paused for a month does not fire the moment you bring it back.
+Pause, resume and remove are on the schedule line in Delivery → **Yours**. Resuming recomputes
+the next run, so a schedule paused for a month does not fire the moment you bring it back.
 
 ---
 
@@ -148,7 +153,7 @@ paused for a month does not fire the moment you bring it back.
 | *"BOSS_EMAIL_REAL_SEND_ALLOWED is false"* | Sending is off by default. Deliberate |
 | A section says there was little to report | The research found little. Sparse rather than padded is the design |
 | The schedule fired and failed | The card shows the last error. Five consecutive failures disables it |
-| Nothing arrived on Monday | Check `to` is set **on the schedule**, not just on a manual run |
+| Nothing arrived on Monday | Check the run and its approval request; scheduling starts the work but never approves the send |
 
 ---
 

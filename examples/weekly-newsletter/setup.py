@@ -13,11 +13,12 @@ WHAT IT BUILDS
 evidence. It is a built-in capability step rather than one of your own — which is worth seeing,
 because a workflow can mix both.
 
-WITH --schedule IT ALSO ARRIVES ON ITS OWN. Monday 08:00 in a time zone you name, which is the
-difference between a demo and something you receive.
+WITH --schedule IT PREPARES A DRAFT EVERY MONDAY. The send step still waits for a person.
 """
 import sys
+from email.utils import parseaddr
 from pathlib import Path
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -57,8 +58,22 @@ def main() -> None:
     p.add_argument("--schedule", metavar="TZ", nargs="?", const="UTC",
                    help="also schedule it for Monday 08:00 in this IANA zone "
                         "(e.g. --schedule Europe/London; bare --schedule means UTC)")
+    p.add_argument("--sectors", default="", metavar="TOPICS",
+                   help="topics to research on every scheduled run")
+    p.add_argument("--to", default="", metavar="EMAIL",
+                   help="recipient for the approved newsletter on scheduled runs")
     args = p.parse_args()
+    args.sectors = args.sectors.strip()
+    args.to = args.to.strip()
+    if args.schedule and (not args.sectors or not args.to):
+        die("--schedule needs both --sectors and --to. The recurring run stores these "
+            "inputs when it is created; they cannot be filled in afterward.")
+    if args.schedule:
+        display_name, address = parseaddr(args.to)
+        if display_name or address != args.to or "@" not in address:
+            die("--to must be one email address, such as reader@example.com.")
     api = connect(args, NAME)
+    existing_schedule = find_schedule(api, args) if args.schedule else None
     enable_skills(api, [s["skill_id"] for s in STEPS], args)
     # AND THE AGENTS MUST HOLD THEM. Enabling puts a skill in the project's catalogue; the
     # runtime checks `role_skills` before letting an agent call one, and a role spec's
@@ -72,7 +87,11 @@ def main() -> None:
     if args.dry_run:
         print(f"  WORKFLOW\n    would create {NAME!r}")
         if args.schedule:
-            print(f"    would schedule it Monday 08:00 {args.schedule}")
+            if existing_schedule:
+                print("    schedule already exists with these inputs")
+            else:
+                print(f"    would schedule it Monday 08:00 {args.schedule}, researching "
+                      f"{args.sectors!r} for {args.to}")
         print()
         return
 
@@ -116,7 +135,10 @@ def main() -> None:
     })
 
     if args.schedule:
-        schedule(api, args)
+        if existing_schedule:
+            print("  SCHEDULE\n    unchanged — the existing schedule keeps its enabled state.\n")
+        else:
+            schedule(api, args)
 
     print(f"""  Done.
 
@@ -131,6 +153,32 @@ def main() -> None:
   The send step stops and waits. Read it first — that is the point of a newsletter
   you did not write.
 """)
+
+
+def find_schedule(api, args) -> dict | None:
+    """A rerun must never duplicate the schedule or silently keep stale run inputs."""
+    query = urlencode({"project_id": api.project, "actor": api.actor})
+    code, body = api("GET", f"/v1/delivery-workflows/schedules?{query}")
+    if code >= 400:
+        die(f"could not read this project's schedules: {body.get('detail') or body}")
+    name = f"{NAME} — Monday"
+    existing = next((item for item in body.get("schedules", [])
+                     if item.get("name") == name), None)
+    if existing is None:
+        return None
+    inputs = existing.get("input") or {}
+    same = (existing.get("workflow_key") == NAME.lower().replace(" ", "_")
+            and existing.get("cadence") == "weekly"
+            and existing.get("weekday") == 0
+            and existing.get("hour") == 8
+            and existing.get("minute") == 0
+            and existing.get("timezone") == args.schedule
+            and inputs.get("sectors") == args.sectors
+            and inputs.get("to") == args.to)
+    if not same:
+        die("a Monday newsletter schedule already exists with different inputs or timing. "
+            "Remove it in Delivery → Yours, then run this setup again.")
+    return existing
 
 
 def schedule(api, args) -> None:
@@ -148,20 +196,17 @@ def schedule(api, args) -> None:
         "cadence": "weekly", "weekday": 0, "hour": 8, "minute": 0,
         "timezone": args.schedule,
         "input": {
-            "sectors": "world news, technology, business",
+            "sectors": args.sectors,
             "brief": HOUSE_BRIEF,
-            "to": "",          # filled in by the operator; the send step will refuse without it
+            "to": args.to,
             "subject": "Your weekly newsletter",
         },
     })
-    if code == 400 and "already" in str(body.get("detail", "")).lower():
-        print(f"    already scheduled — {body.get('detail')}")
-        return
     if code >= 400:
         die(f"could not schedule it: {body.get('detail') or body}")
     print(f"    {body.get('describes')}")
     print(f"    next run {body.get('next_run_at')}")
-    print("    NOTE: set `to` on the schedule before Monday, or the send step will refuse.")
+    print("    The send step waits for your approval before email delivery.")
     print()
 
 

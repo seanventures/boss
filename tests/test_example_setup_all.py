@@ -40,3 +40,31 @@ def test_setup_all_passes_api_key_to_children_without_argv(monkeypatch: pytest.M
     assert "--key" not in command
     assert "test-only-secret" not in command
     assert env["BOSS_API_KEY"] == "test-only-secret"
+
+
+def test_setup_all_forwards_newsletter_schedule_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    path = Path(__file__).resolve().parents[1] / "examples" / "setup_all.py"
+    spec = importlib.util.spec_from_file_location("boss_examples_setup_all_schedule", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="published version 1\n")
+
+    monkeypatch.setenv("BOSS_API_KEY", "test-only-secret")
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["setup_all.py", "--only", "weekly-newsletter",
+                                   "--schedule", "UTC", "--newsletter-sectors", "energy",
+                                   "--newsletter-to", "reader@example.test"])
+    with pytest.raises(SystemExit) as exited:
+        module.main()
+
+    assert exited.value.code == 0
+    assert len(commands) == 1
+    command = commands[0]
+    assert command[command.index("--sectors") + 1] == "energy"
+    assert command[command.index("--to") + 1] == "reader@example.test"

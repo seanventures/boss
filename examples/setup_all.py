@@ -16,6 +16,7 @@ import argparse
 import os
 import subprocess
 import sys
+from email.utils import parseaddr
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -50,6 +51,10 @@ def main() -> None:
                         help="comma-separated subset, e.g. --only video-workflow,sales-signal")
     parser.add_argument("--schedule", metavar="TZ", nargs="?", const="UTC",
                         help="also schedule the newsletter for Monday 08:00 in this IANA zone")
+    parser.add_argument("--newsletter-sectors", default="", metavar="TOPICS",
+                        help="topics for every scheduled newsletter run")
+    parser.add_argument("--newsletter-to", default="", metavar="EMAIL",
+                        help="recipient for approved scheduled newsletters")
     args = parser.parse_args()
 
     if not args.key:
@@ -68,6 +73,17 @@ def main() -> None:
               f"{', '.join(name for name, _, _ in EXAMPLES)}\n", file=sys.stderr)
         raise SystemExit(1)
     chosen = [e for e in EXAMPLES if not wanted or e[0] in wanted]
+    if args.schedule and any(name == "weekly-newsletter" for name, _, _ in chosen):
+        if not args.newsletter_sectors.strip() or not args.newsletter_to.strip():
+            print("\n  ERROR  --schedule needs --newsletter-sectors and --newsletter-to. "
+                  "The recurring run stores these inputs when it is created.\n",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        display_name, address = parseaddr(args.newsletter_to.strip())
+        if display_name or address != args.newsletter_to.strip() or "@" not in address:
+            print("\n  ERROR  --newsletter-to must be one email address, such as "
+                  "reader@example.com.\n", file=sys.stderr)
+            raise SystemExit(1)
 
     action = "Checking" if args.dry_run else "Installing"
     print(f"\n  {action} {len(chosen)} example{'' if len(chosen) == 1 else 's'} "
@@ -89,7 +105,9 @@ def main() -> None:
         if args.dry_run:
             command.append("--dry-run")
         if args.schedule and name == "weekly-newsletter":
-            command += ["--schedule", args.schedule]
+            command += ["--schedule", args.schedule,
+                        "--sectors", args.newsletter_sectors.strip(),
+                        "--to", args.newsletter_to.strip()]
 
         # A setup key belongs in the child environment, never in argv where a process
         # listing on a shared machine can expose it while a slow API call runs.
