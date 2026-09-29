@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from functools import lru_cache
+from functools import lru_cache, wraps
 import asyncio
 import json
 import logging
@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 from starlette.routing import Match
 from sqlalchemy import text
 from uuid import uuid4
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import InterfaceError, OperationalError, ProgrammingError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from boss_engine.ports import configure_engine_ports
 from boss_engine.services.coordination_read_model import (
@@ -9505,7 +9506,43 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
             "next": "Deploy it once from here; after that a merged change ships by itself."}
 
 
+_CODE_TASK_DEPLOYMENT_READ_SLOTS = 4
+_code_task_deployment_read_slots = threading.BoundedSemaphore(
+    _CODE_TASK_DEPLOYMENT_READ_SLOTS
+)
+
+
+def _admit_code_task_deployment_read(endpoint):
+    """Bound this read before it checks out a DB connection.
+
+    The Factory can ask for many cards at once. A full per-process queue must
+    return a retryable response promptly instead of waiting at the pool's
+    default 30-second checkout ceiling. Other routes retain their own budget.
+    """
+    @wraps(endpoint)
+    def admitted(*args, **kwargs):
+        if not _code_task_deployment_read_slots.acquire(blocking=False):
+            raise HTTPException(
+                status_code=503,
+                detail="Deployment reads are busy; retry shortly.",
+                headers={"Retry-After": "1"},
+            )
+        try:
+            try:
+                return endpoint(*args, **kwargs)
+            except (InterfaceError, OperationalError, PoolTimeoutError) as error:
+                LOGGER.warning("Code task deployment read could not reach Postgres", exc_info=True)
+                raise HTTPException(
+                    status_code=503, detail="Postgres is not reachable."
+                ) from error
+        finally:
+            _code_task_deployment_read_slots.release()
+
+    return admitted
+
+
 @app.get("/v1/code-tasks/{run_id}/deployments")
+@_admit_code_task_deployment_read
 def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                                        app_name: Optional[str] = None):
     """What this code task actually SHIPPED, if anything.
@@ -9519,8 +9556,6 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
     Powers the deployment line on the app card, so shipping can be watched from where the
     change was approved instead of on the CI/CD screen.
     """
-    if not database_is_reachable(engine):
-        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         run_project = require_code_task_reader(connection, run_id)
         rows = connection.execute(
