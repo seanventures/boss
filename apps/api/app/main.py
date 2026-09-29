@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match
 from sqlalchemy import text
 from uuid import uuid4
@@ -9513,14 +9514,14 @@ _code_task_deployment_read_slots = threading.BoundedSemaphore(
 
 
 def _admit_code_task_deployment_read(endpoint):
-    """Bound this read before it checks out a DB connection.
+    """Bound this read before FastAPI queues its synchronous DB work.
 
     The Factory can ask for many cards at once. A full per-process queue must
-    return a retryable response promptly instead of waiting at the pool's
-    default 30-second checkout ceiling. Other routes retain their own budget.
+    return a retryable response promptly instead of waiting for a worker thread
+    or the pool's default 30-second checkout ceiling.
     """
     @wraps(endpoint)
-    def admitted(*args, **kwargs):
+    async def admitted(*args, **kwargs):
         if not _code_task_deployment_read_slots.acquire(blocking=False):
             raise HTTPException(
                 status_code=503,
@@ -9529,7 +9530,7 @@ def _admit_code_task_deployment_read(endpoint):
             )
         try:
             try:
-                return endpoint(*args, **kwargs)
+                return await run_in_threadpool(endpoint, *args, **kwargs)
             except (InterfaceError, OperationalError, PoolTimeoutError) as error:
                 LOGGER.warning("Code task deployment read could not reach Postgres", exc_info=True)
                 raise HTTPException(

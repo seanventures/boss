@@ -3,7 +3,8 @@
 `GET /v1/code-tasks/{run_id}/deployments` admits at most four concurrent reads
 per API process. A request above that limit receives HTTP 503 with
 `Retry-After: 1` and `detail: "Deployment reads are busy; retry shortly."`
-without checking out a database connection. An admitted request keeps the
+before entering the shared synchronous worker pool or checking out a database
+connection. An admitted request keeps the
 existing project-member check, project-scoped joins, and response body.
 
 The endpoint no longer performs a separate database reachability query before
@@ -19,6 +20,6 @@ traceback. An admitted request can still wait on unrelated database users or
 on a slow query. The web batch bound in PR #284 handles the Factory caller;
 this limit also covers direct API callers.
 
-Focused database-backed tests cover concurrent overload and recovery,
-cross-project denial, a connection failure, and the unchanged response
-shape. No live service was changed by this patch.
+Focused tests cover admission before worker-pool dispatch, database-backed
+concurrent overload and recovery, cross-project denial, connection failure,
+and the unchanged response shape. No live service was changed by this patch.

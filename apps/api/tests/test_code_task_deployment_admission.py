@@ -1,6 +1,8 @@
 """Direct deployments reads stay bounded and scoped during Factory fan-out."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import inspect
 from threading import Event, Lock
 from time import monotonic
 from uuid import uuid4
@@ -20,6 +22,60 @@ def _insert_run(connection, run_id: str, project_id: str) -> None:
              "VALUES (:id, :project_id, 'Deployment admission test')"),
         {"id": run_id, "project_id": project_id},
     )
+
+
+def test_admission_happens_before_threadpool_dispatch(client, monkeypatch):
+    route = next(
+        route for route in api_main.app.routes
+        if isinstance(route, api_main.APIRoute)
+        and route.path == "/v1/code-tasks/{run_id}/deployments"
+    )
+    # FastAPI must call the coroutine directly; a synchronous wrapper would
+    # queue in the shared worker pool before its semaphore could reject work.
+    assert inspect.iscoroutinefunction(route.endpoint)
+
+    entered = Event()
+    release = Event()
+    lock = Lock()
+    calls = 0
+
+    async def parked_dispatch(_endpoint, *args, **kwargs):
+        nonlocal calls
+        with lock:
+            calls += 1
+            if calls == api_main._CODE_TASK_DEPLOYMENT_READ_SLOTS:
+                entered.set()
+        deadline = monotonic() + 10
+        while not release.is_set():
+            if monotonic() >= deadline:
+                raise AssertionError("test did not release the parked worker calls")
+            await asyncio.sleep(0.01)
+        return {"run_id": kwargs["run_id"], "deployments": [],
+                "linked_host": None, "linked_target_id": None}
+
+    monkeypatch.setattr(api_main, "run_in_threadpool", parked_dispatch)
+    path = "/v1/code-tasks/admission-before-pool/deployments"
+    with ThreadPoolExecutor(max_workers=api_main._CODE_TASK_DEPLOYMENT_READ_SLOTS) as pool:
+        futures = [pool.submit(client.get, path) for _ in range(
+            api_main._CODE_TASK_DEPLOYMENT_READ_SLOTS
+        )]
+        try:
+            assert entered.wait(timeout=5), "worker dispatch was not filled"
+            start = monotonic()
+            overloaded = client.get(path)
+            assert monotonic() - start < 1
+            assert overloaded.status_code == 503
+            assert overloaded.headers["retry-after"] == "1"
+            with lock:
+                assert calls == api_main._CODE_TASK_DEPLOYMENT_READ_SLOTS
+        finally:
+            release.set()
+        for future in futures:
+            assert future.result(timeout=5).status_code == 200
+    recovered = client.get(path)
+    assert recovered.status_code == 200
+    with lock:
+        assert calls == api_main._CODE_TASK_DEPLOYMENT_READ_SLOTS + 1
 
 
 def test_concurrent_direct_reads_return_fast_503_and_recover(
