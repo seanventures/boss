@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0-rc1 - 2026-09-29
+
+Community release candidate on `ai/codex/boss-293-community-integrate`. Package version `1.0.0-rc.1`. This is not a public GA. `v0.14.0` is unchanged. Container images were not rebuilt.
+
+### Changed
+
+- Delivery schedules refuse missing required inputs and can be edited in place.
+- Claude setup-token import is disabled. CLI-owned `claude auth login` remains.
+- Community export of `46c10ca9` was mechanically clean and is not approved for publication.
+
 ## v0.14.0 - 2026-08-15
 
 Operator + AI SRE cut after v0.13.0. `v0.2.1` already exists in history;

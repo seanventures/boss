@@ -1,21 +1,15 @@
 # BOSS Community release notes — review draft
 
-**Status:** Internal draft for a Community release candidate. This is not a
-public GA. Do not publish, tag, announce, or mark BOSS-293 done.
-`PUBLIC_FLIP_CHECKLIST.md` is not signed off, and the release owner has not
-approved this candidate.
-**Written against:** `46c10ca957e8d4f01403c0ff6c6c290be44ae156` (`46c10ca9`)
-on `ai/codex/boss-293-community-integrate`. Later commits may land on that
-branch after this note. This documentation commit does not retarget the
-candidate, and these notes do not follow later commits until they are rewritten.
-**Versions, unchanged:** root, engine, API client, and web stay `0.14.0`.
-`create-boss` stays `0.1.0`. This draft does not bump them.
-**Recommended tag, do not create:** `v0.15.0-rc.1`.
-`git tag` already has `v0.14.0` at
-`d8069168cc85a88f4551edc8ff4c7361ebc19519`. Do not reuse or move it. No
-`v0.15.0` or `v0.15.0-rc.1` tag exists. `v0.15.0` would read as a shipped GA.
-`v0.15.0-rc.1` only names this candidate, and only after a release owner
-accepts the open gates below. This draft does not create the tag.
+**Status:** Local release candidate named `v1.0-rc1`. This is not a public GA.
+Do not publish, push, announce, or mark BOSS-293 done.
+`PUBLIC_FLIP_CHECKLIST.md` is not signed off.
+**Release name:** `v1.0-rc1`, an annotated local tag on the commit that records
+this name. It is not pushed.
+**Package version:** `1.0.0-rc.1` on root, web, API client, engine, and the Helm
+chart. `create-boss` stays `0.1.0`. Helm and Kubernetes image tags stay
+`0.14.0` because those images were not rebuilt or pushed.
+`v0.14.0` still peels to `d8069168cc85a88f4551edc8ff4c7361ebc19519`. Do not
+move it.
 
 The previous draft called `0db60f6c8318c37cf846409363c1755f81f99bda` the last
 qualified source. That claim is retired. `0db60f6c` is an ancestor of this

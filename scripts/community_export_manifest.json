@@ -240,7 +240,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "8b7d0dfcd83079a1ea459676aa41faa4e779dea190aa171dc034850b5948f107"
+    "sha256": "996906aa1bc302b50fd570101789862485f6974f4cd3c503e030f4c40f057f1a"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
