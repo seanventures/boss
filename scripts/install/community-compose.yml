@@ -111,6 +111,10 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
       # Subscription credentials, so an operator who puts one in .env actually gets it.
       # Without these the value sits in .env, compose never passes it in, and the container
       # reports "not signed in" while the operator is looking at the credential they just set.
@@ -214,6 +218,10 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
       # Subscription credentials, so an operator who puts one in .env actually gets it.
       # Without these the value sits in .env, compose never passes it in, and the container
       # reports "not signed in" while the operator is looking at the credential they just set.

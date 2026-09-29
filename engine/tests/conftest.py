@@ -23,7 +23,8 @@ CREATE_ENTITLEMENT_SOURCES = (
     "CREATE TABLE entitlement_sources ("
     " project_id TEXT, source_id TEXT, provider TEXT, connection_status TEXT,"
     " credential_secret_ref_id TEXT, updated_at TIMESTAMP,"
-    " cost_mode TEXT, limit_shape TEXT, observed_capacity TEXT)"
+    " cost_mode TEXT, limit_shape TEXT, observed_capacity TEXT,"
+    " supported_models TEXT, connection_metadata TEXT)"
 )
 
 CREATE_PROJECT_SETTINGS = (

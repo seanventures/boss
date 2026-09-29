@@ -92,7 +92,7 @@ options:
                        swap gets it OOM-killed — which would take a working install down to
                        fix something in the engine.
   --all-services       update: rebuild every service
-  --provider NAME      model: openrouter | openai | anthropic | custom
+  --provider NAME      model: openrouter | openai | anthropic | gemini | xai | custom
   --api-key KEY        model: provider key (visible in process listings; prefer hidden prompt)
                        Omit to enter it at a hidden prompt or pipe one line on stdin.
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
@@ -486,7 +486,7 @@ cmd_smoke() {
 #
 # The server can already reach its own API and already holds its own key. So it does the work.
 cmd_model() {
-  [[ -n "$PROVIDER" ]] || die "--provider is required (openrouter | openai | anthropic | custom)"
+  [[ -n "$PROVIDER" ]] || die "--provider is required (openrouter | openai | anthropic | gemini | xai | custom)"
   if [[ -z "$MODEL_API_KEY" ]]; then
     if [[ -t 0 && -r /dev/tty ]]; then
       read -r -s -p 'Provider API key (hidden): ' MODEL_API_KEY </dev/tty || true

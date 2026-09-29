@@ -19,11 +19,20 @@ uses it; a green setup step is not a successful model response.
 | OpenAI API | Hidden installer prompt, `OPENAI_API_KEY`, or the setup screen | The key is saved without a live test. |
 | Anthropic API | `ANTHROPIC_API_KEY` through the installer environment, or the setup screen | Environment-only Anthropic setup is not counted by the setup checklist; use the setup screen to see a project connection. |
 | OpenRouter API | Add OpenRouter on the setup screen with its own key and model | The installer does not prompt for this key; the saved model is unverified. |
+| Google Gemini API | Choose **Google Gemini API** in the setup screen and enter its key and model, or set `GOOGLE_API_KEY` on the VM | BOSS uses Google's OpenAI-compatible chat endpoint. Provider-specific tools may need a separate adapter; the connection is unverified until a governed job succeeds. |
+| xAI Grok API | Choose **xAI Grok API** in the setup screen and enter its key and model, or set `XAI_API_KEY` on the VM | This is an API-key path, separate from a Grok Build subscription. The connection is unverified until a governed job succeeds. |
 | OpenAI-compatible API | Choose **Anything OpenAI-compatible** and provide a reachable base URL, model, and credential | Local Ollama needs a container-reachable address; the setup form currently requires a nonempty key, even for a local server that does not authenticate. |
 | Codex ChatGPT subscription | Optionally install the official CLI, sign in on this VM, then rerun with `--connect-codex` | Explicit import stores the CLI auth file in BOSS's selected secret backend and records the connection without a live proof turn. It remains unverified. |
 | Claude Code subscription | Optionally install the official CLI, obtain its setup token on this VM, then rerun with `--connect-claude` | Explicit import stores the token and records the connection without a live proof turn. It remains unverified. |
 | Grok Build subscription | Sign in as `boss` inside the API container; see [Grok CLI](GROK_CLI.md) | A host login does not reach BOSS. Community currently pauses the live proof required to record this CLI through setup. |
-| Gemini or Grok API key | No guided Community installer or setup-screen path yet | Their configuration fields are not forwarded by the Community Compose file. Do not assume adding a key to `.env` connects them. |
+
+The Gemini and xAI setup entries use their providers' documented OpenAI-compatible
+chat endpoints. BOSS does not infer that every provider-specific feature works
+through that compatibility layer. The setup screen stores each key in the
+selected secret backend; the corresponding environment variables are optional
+for operators who manage `.env` directly. See the providers'
+[Gemini compatibility guide](https://ai.google.dev/gemini-api/docs/openai)
+and [xAI API reference](https://docs.x.ai/developers/rest-api-reference/inference).
 
 The official CLI install option installs binaries, not subscriptions:
 

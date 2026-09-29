@@ -196,6 +196,8 @@ class Settings(BaseSettings):
         "openrouter": ("openrouter_api_key", "openrouter_base_url"),
         "groq": ("groq_api_key", "groq_base_url"),
         "deepseek": ("deepseek_api_key", "deepseek_base_url"),
+        "gemini": ("google_api_key", "gemini_base_url"),
+        "xai": ("xai_api_key", "xai_base_url"),
         "ollama": ("ollama_api_key", "ollama_base_url"),
         "vllm": ("vllm_api_key", "vllm_base_url"),
     }
@@ -447,6 +449,13 @@ class Settings(BaseSettings):
     deepseek_base_url: str = Field(
         default="https://api.deepseek.com/v1", alias="DEEPSEEK_BASE_URL"
     )
+    # Google and xAI expose OpenAI-compatible chat endpoints. Their own keys and
+    # URLs stay separate from OPENAI_* so a selected lane cannot bill another provider.
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta/openai/",
+        alias="GEMINI_BASE_URL",
+    )
+    xai_base_url: str = Field(default="https://api.x.ai/v1", alias="XAI_BASE_URL")
     # Local / self-hosted OpenAI-compatible lanes (the OSS community wedge — no
     # cloud key required). ollama: the OpenAI client insists on a non-empty api
     # key, and Ollama ignores it, so a placeholder default keeps `ollama` a

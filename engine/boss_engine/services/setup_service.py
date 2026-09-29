@@ -57,6 +57,23 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "key_url": "https://console.anthropic.com/settings/keys",
         "kind": "api_key",
     },
+    "gemini": {
+        "label": "Google Gemini API",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "api": "openai",
+        "example_model": "gemini-3.8-flash",
+        "key_url": "https://aistudio.google.com/app/apikey",
+        "kind": "api_key",
+        "note": "Uses Google's OpenAI-compatible chat endpoint; provider-specific tools may differ.",
+    },
+    "xai": {
+        "label": "xAI Grok API",
+        "base_url": "https://api.x.ai/v1",
+        "api": "openai",
+        "example_model": "grok-4.7",
+        "key_url": "https://console.x.ai/team/default/api-keys",
+        "kind": "api_key",
+    },
     "custom": {
         "label": "Anything OpenAI-compatible",
         "base_url": "",
@@ -274,7 +291,7 @@ def connected_engines(
     # openai and "anything OpenAI-compatible" are both the engine-owned native agent.
     by_api_provider = {"openai": "native", "custom": "native", "anthropic": "claude_code",
                        "openrouter": "openrouter", "groq": "groq", "deepseek": "deepseek",
-                       "azure": "azure"}
+                       "gemini": "gemini", "xai": "xai", "azure": "azure"}
 
     found: dict[str, dict[str, Any]] = {}
 
@@ -323,7 +340,8 @@ def connected_engines(
     env_lanes = [("native", "openai_api_key"), ("claude_code", "claude_code_oauth_token"),
                  ("claude_code", "anthropic_api_key"), ("azure", "azure_openai_key"),
                  ("openrouter", "openrouter_api_key"), ("groq", "groq_api_key"),
-                 ("deepseek", "deepseek_api_key"), ("vllm", "vllm_base_url"),
+                 ("deepseek", "deepseek_api_key"), ("gemini", "google_api_key"),
+                 ("xai", "xai_api_key"), ("vllm", "vllm_base_url"),
                  ("ollama", "ollama_base_url")]
     for engine, attr in env_lanes:
         if _set_deliberately(settings, attr):

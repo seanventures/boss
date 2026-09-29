@@ -26,6 +26,8 @@ import logging
 import time
 from typing import Callable, Optional, Protocol
 
+from sqlalchemy import text
+
 from ..config import Settings
 from ..schemas import FileChange
 from .verification_target import run_until_failure
@@ -1502,6 +1504,8 @@ _PROVIDER_LANES: dict[str, tuple[str, str]] = {
     "openrouter": ("openrouter_api_key", "openrouter_base_url"),
     "groq": ("groq_api_key", "groq_base_url"),
     "deepseek": ("deepseek_api_key", "deepseek_base_url"),
+    "gemini": ("google_api_key", "gemini_base_url"),
+    "xai": ("xai_api_key", "xai_base_url"),
     # Local / self-hosted lanes (OSS): same mechanics, no cloud credential.
     # ollama defaults to the local daemon; vllm requires VLLM_BASE_URL.
     "ollama": ("ollama_api_key", "ollama_base_url"),
@@ -1731,16 +1735,31 @@ def _bind_lane_credentials(
         )
         return settings.model_copy(update={"azure_openai_key": key})
     if lane in _PROVIDER_LANES:
-        key_field, _url_field = _PROVIDER_LANES[lane]
+        key_field, url_field = _PROVIDER_LANES[lane]
+        selected = _project_api_model_binding(connection, settings, project_id, lane)
+        if selected is not None:
+            key, model, base_url = selected
+            updates = {key_field: key}
+            if model:
+                updates["openai_model"] = model
+            if base_url:
+                updates[url_field] = base_url
+            return settings.model_copy(update=updates)
         key = resolve_project_credential(
-            connection,
-            settings,
-            project_id=project_id,
-            provider=provider_of(lane),
-            env_fallback_attr=key_field,
+            connection, settings, project_id=project_id,
+            provider=provider_of(lane), env_fallback_attr=key_field,
         )
         return settings.model_copy(update={key_field: key})
     if lane in ("native", "openai"):
+        selected = _project_api_model_binding(connection, settings, project_id, "native")
+        if selected is not None:
+            key, model, base_url = selected
+            updates = {"openai_api_key": key}
+            if model:
+                updates["openai_model"] = model
+            if base_url:
+                updates["openai_base_url"] = base_url
+            return settings.model_copy(update=updates)
         key = resolve_project_credential(
             connection,
             settings,
@@ -1750,6 +1769,43 @@ def _bind_lane_credentials(
         )
         return settings.model_copy(update={"openai_api_key": key})
     return settings
+
+
+def _project_api_model_binding(
+    connection, settings: Settings, project_id: str, lane: str,
+) -> tuple[str, str, str] | None:
+    """Use one saved source's key, model, and URL as a single project binding.
+
+    Reading the key by provider but the model from process defaults made a
+    successful setup choose, for example, an xAI key with an OpenAI model ID.
+    A custom endpoint could similarly be offered as `native` yet never run.
+    """
+    from .secret_backends import resolve_secret_ref
+
+    sources = ("setup-openai", "setup-custom") if lane == "native" else (
+        f"setup-{lane}", f"setup-{lane}"
+    )
+    row = connection.execute(text(
+        "SELECT credential_secret_ref_id, supported_models, connection_metadata "
+        "FROM entitlement_sources WHERE project_id=:project_id "
+        "AND source_id IN (:source_a, :source_b) "
+        "AND credential_secret_ref_id IS NOT NULL "
+        "ORDER BY updated_at DESC NULLS LAST, source_id LIMIT 1"
+    ), {"project_id": project_id, "source_a": sources[0], "source_b": sources[1]}).mappings().first()
+    if row is None:
+        return None
+
+    def object_value(value, expected):
+        if isinstance(value, str):
+            value = json.loads(value)
+        return value if isinstance(value, expected) else expected()
+
+    models = object_value(row["supported_models"], list)
+    metadata = object_value(row["connection_metadata"], dict)
+    model = next((item.strip() for item in models if isinstance(item, str) and item.strip()), "")
+    base_url = metadata.get("base_url")
+    return (resolve_secret_ref(connection, row["credential_secret_ref_id"], settings),
+            model, base_url.strip() if isinstance(base_url, str) else "")
 
 
 def _build_azure_agent(settings: Settings) -> CodeAgent:
