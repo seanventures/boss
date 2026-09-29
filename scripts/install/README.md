@@ -138,9 +138,9 @@ does not send OAuth bytes to a BOSS endpoint or database. It refuses to record
 a local subscription if `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or a
 previously stored setup token could make the status misleading. Community does
 not run a live proof turn during setup, so model use remains unverified until a
-governed job succeeds. `--connect-claude` and the other Claude setup-token
-import commands are disabled. No provider or counsel clearance for copying a
-Claude session token is recorded in this repository.
+governed job succeeds. `--connect-claude` imports a setup token the operator
+supplies and stores it only in the local secret store. It does not call a model.
+A missing token fails before anything is stored.
 
 The separate `--connect-codex` path imports the VM user's CLI auth JSON into
 BOSS's secret backend. A database-backed install asks for
@@ -157,10 +157,12 @@ run the device login as `boss` **inside the API container**:
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env \
   exec -u boss api grok login --device-auth
+./install.sh --dir "$PWD" --yes --skip-model-key --connect-grok-local
 ```
 
-The installer does not copy or parse `~/.grok/auth.json`. Once the Grok
-harness is available and its BOSS readiness proof passes, set
+The installer does not copy or parse `~/.grok/auth.json`, and `--connect-grok-local`
+does not call the model. If that login is missing, setup stops and records nothing.
+Once the Grok harness is available and its BOSS readiness proof passes, set
 `BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker.
 This selects Grok for governed coding work; it does not select the console's
 chat model. A host CLI being installed does not by itself mean the BOSS

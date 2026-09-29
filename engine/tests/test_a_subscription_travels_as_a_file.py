@@ -310,18 +310,6 @@ def test_an_operator_set_variable_still_wins(monkeypatch) -> None:
     assert json.loads(agent._resolve_secret("CODEX_AUTH_JSON")) == CREDENTIAL
 
 
-def test_storing_refuses_a_claude_session_token() -> None:
-    """The setup-token import has no recorded counsel clearance, so it cannot be stored."""
-    from boss_engine.services.setup_service import SetupError, store_coding_agent_credential
-
-    token = "sk-ant-oat01-session-token-material"
-    with pytest.raises(SetupError) as exc:
-        store_coding_agent_credential(None, Settings(), "p", "claude_code", token, actor="t")
-    assert "disabled" in str(exc.value)
-    assert "clearance" in str(exc.value)
-    assert token not in str(exc.value)
-
-
 def test_storing_refuses_a_provider_that_cannot_travel() -> None:
     """Cursor has no credential that works off its own machine; accepting one would lie."""
     from boss_engine.services.setup_service import SetupError, store_coding_agent_credential

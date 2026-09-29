@@ -76,19 +76,52 @@ def test_a_corrupt_file_does_not_quote_its_contents_back(mod, tmp_path) -> None:
     assert "super-secret-value" not in str(exc.value)
 
 
-def test_claude_setup_token_import_cannot_run(mod, monkeypatch) -> None:
-    """Provider claude_code must stop before stdin, a file, or the secret store."""
-    monkeypatch.setattr(mod, "read_piped_token", lambda stream: pytest.fail("token was read"))
+def test_a_missing_claude_setup_token_fails_before_it_is_stored(mod, monkeypatch) -> None:
+    monkeypatch.setattr(mod.sys, "stdin", __import__("io").StringIO("\n"))
     monkeypatch.setattr(mod, "send_to_boss", lambda *args, **kwargs: pytest.fail("credential sent"))
     monkeypatch.setattr(mod, "write_env_file", lambda *args, **kwargs: pytest.fail("env written"))
 
-    with pytest.raises(SystemExit) as exc:
-        mod.main(["claude_code", "--stdin", "--dry-run"])
+    with pytest.raises(SystemExit, match="nothing on standard input") as exc:
+        mod.main(["claude_code", "--stdin", "--boss-api", "http://127.0.0.1:9",
+                  "--boss-api-key", "k"])
 
-    message = str(exc.value)
-    assert "disabled" in message
-    assert "clearance" in message
-    assert "did not read or store" in message
+    assert "test-claude-token" not in str(exc.value)
+
+
+def test_claude_setup_token_import_goes_to_boss_and_is_not_printed(mod, monkeypatch, capsys) -> None:
+    token = "test-claude-token"
+    sent = {}
+
+    def fake(api, api_key, project_id, provider, credential, actor="ceo", timeout=30,
+             accept_database_fallback=False):
+        sent.update(provider=provider, credential=credential, accepted=accept_database_fallback)
+        return {"ok": True, "backend": "local_vault"}
+
+    monkeypatch.setattr(mod.sys, "stdin", __import__("io").StringIO(token + "\n"))
+    monkeypatch.setattr(mod, "send_to_boss", fake)
+    monkeypatch.setattr(mod, "write_env_file", lambda *args, **kwargs: pytest.fail("env written"))
+    monkeypatch.setattr(mod, "store", lambda *args, **kwargs: pytest.fail("external store"))
+
+    assert mod.main(["claude_code", "--stdin", "--boss-api", "http://127.0.0.1:9",
+                     "--boss-api-key", "k", "--accept-database-fallback"]) == 0
+
+    assert sent == {"provider": "claude_code", "credential": token, "accepted": False}
+    printed = capsys.readouterr()
+    assert token not in printed.out + printed.err
+    assert "local_vault" in printed.out
+
+
+def test_claude_setup_token_refuses_an_env_file(mod, monkeypatch, tmp_path) -> None:
+    token = "test-claude-token"
+    target = tmp_path / ".env"
+    monkeypatch.setattr(mod.sys, "stdin", __import__("io").StringIO(token + "\n"))
+    monkeypatch.setattr(mod, "write_env_file", lambda *args, **kwargs: pytest.fail("env written"))
+
+    with pytest.raises(SystemExit, match="Nothing was stored") as exc:
+        mod.main(["claude_code", "--stdin", "--write-env", str(target)])
+
+    assert token not in str(exc.value)
+    assert not target.exists()
 
 
 def test_codex_sends_the_whole_file_not_one_field(mod, tmp_path, capsys) -> None:

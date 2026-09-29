@@ -4,12 +4,14 @@
 The installer and worker run in different containers/accounts. Host login discovery is
 informational. An operator can sign Claude Code in directly as the container's boss user,
 then record that local CLI connection without passing OAuth material through this script.
-The older Claude setup-token import is disabled: no provider or counsel clearance
-is recorded for copying that session into BOSS.
+An explicit --connect-claude imports a setup token the operator supplies and stores it
+only in the local secret store. Codex auth-file import and Grok's CLI login stay separate.
+None of these setup actions call a model.
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import shutil
@@ -74,11 +76,31 @@ def codex_credential() -> str:
 
 
 def claude_credential() -> str:
-    raise RuntimeError(
-        "Claude setup-token import is disabled. No provider or counsel clearance is "
-        "recorded for copying a Claude session token into BOSS. Use --connect-claude-local "
-        "after claude auth login as the boss user inside the API container."
-    )
+    """Operator-supplied setup token. Never print it. Empty input is an error."""
+    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if token:
+        return token
+    if not shutil.which("claude"):
+        raise RuntimeError(
+            "No Claude setup token was provided, and the Claude CLI is missing. "
+            "Set CLAUDE_CODE_OAUTH_TOKEN or install the CLI with --install-coding-clis. "
+            "Nothing was stored."
+        )
+    print("Run `claude setup-token` in another terminal, then paste its token here.")
+    print("The official CLI handles browser/device prompts; BOSS never displays the token.")
+    try:
+        with open("/dev/tty", "r"):
+            pass
+        token = getpass.getpass("Claude setup token (hidden): ").strip()
+    except (EOFError, OSError) as exc:
+        raise RuntimeError(
+            "No Claude setup token was provided and no terminal is available. "
+            "Set CLAUDE_CODE_OAUTH_TOKEN for this command. Nothing was stored."
+        ) from exc
+    if len(token) < 16 or any(char.isspace() for char in token) or \
+            token.startswith(("http://", "https://", "<")):
+        raise RuntimeError("No usable Claude setup token was entered. Nothing was stored.")
+    return token
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
@@ -134,34 +156,64 @@ def claude_local_session_ready(api_url: str, api_key: str) -> None:
                            "container. Run the provider's login as the boss user there first")
 
 
+def grok_local_session_ready(api_url: str, api_key: str) -> None:
+    """Read sanitized container-side Grok status. Do not open auth.json or call a model."""
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/v1/setup/coding-agents?project_id=boss-dogfood",
+        headers={"x-boss-api-key": api_key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"BOSS Grok status refused: HTTP {exc.code}") from None
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("BOSS Grok status could not be read") from exc
+    agents = body.get("agents") if isinstance(body, dict) else None
+    grok = next((row for row in agents if isinstance(row, dict)
+                 and row.get("name") == "grok"), None) if isinstance(agents, list) else None
+    if not grok or grok.get("installed") is not True:
+        raise RuntimeError(
+            "Grok is not installed in the BOSS API container. Nothing was recorded. "
+            "Install it, then run grok login --device-auth as the boss user."
+        )
+    if grok.get("authenticated") is not True:
+        raise RuntimeError(
+            "Grok is not signed in inside the BOSS API container. "
+            "Run grok login --device-auth as the boss user, then rerun with "
+            "--connect-grok-local. Nothing was recorded."
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--connect-codex", action="store_true")
     parser.add_argument("--connect-claude", action="store_true")
     parser.add_argument("--connect-claude-local", action="store_true")
+    parser.add_argument("--connect-grok-local", action="store_true")
     parser.add_argument("--accept-database-fallback", action="store_true")
     args = parser.parse_args()
-    if args.connect_claude:
-        raise RuntimeError(
-            "Claude setup-token import is disabled. No provider or counsel clearance is "
-            "recorded for copying a Claude session token into BOSS. Use "
-            "--connect-claude-local after claude auth login as the boss user inside the "
-            "API container."
-        )
     if args.connect_claude and args.connect_claude_local:
         raise RuntimeError("Choose one Claude connection path for this run")
     # A container-owned login has nothing to do with this VM user's CLI home. In
     # particular, do not ask the host Claude CLI to read its own session for it.
-    found = ({} if args.connect_claude_local and not args.connect_codex else discover())
-    if not (args.connect_codex or args.connect_claude or args.connect_claude_local):
+    local_only = ((args.connect_claude_local or args.connect_grok_local)
+                  and not args.connect_codex and not args.connect_claude)
+    found = {} if local_only else discover()
+    if not (args.connect_codex or args.connect_claude or args.connect_claude_local
+            or args.connect_grok_local):
         print("To authenticate Codex on a headless VM: codex login --device-auth")
+        print("Then import that CLI auth file with --connect-codex.")
         print("For Grok: docker compose -f scripts/install/community-compose.yml "
               "--env-file .env exec -u boss api grok login --device-auth")
+        print("Then rerun the installer with --connect-grok-local. "
+              "BOSS does not copy auth.json and does not call the model.")
         print("For Claude local login: run `claude auth login` as boss inside the API container")
-        print("Then rerun the installer with --connect-claude-local; no token is copied")
-        print("To import a Codex CLI auth file, use --connect-codex.")
-        print("Claude setup-token import is disabled; use --connect-claude-local.")
+        print("Then rerun the installer with --connect-claude-local; no token is copied "
+              "and no model call is made.")
+        print("To import a Claude setup token you supply, rerun with --connect-claude. "
+              "It is stored only in the local secret store.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:
@@ -169,6 +221,9 @@ def main() -> int:
     if args.connect_claude_local:
         claude_local_session_ready(args.api_url, api_key)
         connect(args.api_url, api_key, "claude_code")
+    if args.connect_grok_local:
+        grok_local_session_ready(args.api_url, api_key)
+        connect(args.api_url, api_key, "grok")
     for provider, wanted in (("codex", args.connect_codex),
                              ("claude_code", args.connect_claude)):
         if not wanted:
@@ -176,8 +231,14 @@ def main() -> int:
         if provider == "codex" and not found["codex"]:
             raise RuntimeError("Codex ChatGPT login was not detected on this VM")
         credential = codex_credential() if provider == "codex" else claude_credential()
-        send_to_boss(args.api_url, api_key, "boss-dogfood", provider, credential,
-                     accept_database_fallback=args.accept_database_fallback)
+        fallback = False if provider == "claude_code" else args.accept_database_fallback
+        result = send_to_boss(args.api_url, api_key, "boss-dogfood", provider, credential,
+                              accept_database_fallback=fallback)
+        if provider == "claude_code" and result.get("backend") != "local_vault":
+            raise RuntimeError(
+                "BOSS did not store the Claude setup token in the local secret store. "
+                "Nothing else was accepted."
+            )
         print(f"  {provider}: credential stored by BOSS (value never displayed)")
         connect(args.api_url, api_key, provider)
     return 0

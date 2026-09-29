@@ -259,8 +259,30 @@ def test_connect_refuses_grok_without_the_worker_session(
             None, SimpleNamespace(boss_edition="enterprise"), "project", "grok")
 
 
-def test_grok_entitlement_cannot_skip_the_live_proof() -> None:
-    with pytest.raises(setup_service.SetupError, match="requires a live read-only proof"):
+def test_grok_operator_record_does_not_start_a_model_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI-owned Grok login is recorded from local status. A missing login is an error."""
+    proofs = []
+    monkeypatch.setattr(cli_harness, "detect", lambda *_a, **_k: {
+        "installed": True, "authenticated": True, "version": "grok 1.0.40",
+        "auth_detail": "Available models", "ready": True,
+    })
+    monkeypatch.setattr(setup_service, "prove_coding_agent",
+                        lambda *_a, **_k: proofs.append("model") or {"ok": True})
+    monkeypatch.setattr("boss_engine.services.entitlements.EntitlementBrokerService",
+                        lambda _settings: SimpleNamespace(upsert_source=(
+                            lambda _conn, payload, **_kw: None)))
+
+    recorded = setup_service.connect_coding_agent(
+        None, SimpleNamespace(boss_edition="community"), "project", "grok", prove=False)
+
+    assert recorded["proof"] == {"ok": True, "skipped": True}
+    assert proofs == []
+
+    monkeypatch.setattr(cli_harness, "detect", lambda *_a, **_k: {
+        "installed": True, "authenticated": False,
+        "next_step": "sign in with: grok login --device-auth",
+    })
+    with pytest.raises(setup_service.SetupError, match="device-auth"):
         setup_service.connect_coding_agent(
-            None, SimpleNamespace(boss_edition="enterprise"), "project", "grok",
-            prove=False)
+            None, SimpleNamespace(boss_edition="community"), "project", "grok", prove=False)
+    assert proofs == []

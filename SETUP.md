@@ -509,17 +509,18 @@ in its database — add `--accept-database-fallback` to say yes deliberately.
 
 ### Claude Code
 
-Claude setup-token import is disabled. No provider or counsel clearance for copying a
-Claude session token into BOSS is recorded in this repository. Counsel reference
-`01049940` covers first-party Apache licensing only and does not clear this path.
+Two operator paths. Neither calls a model during setup. A human still has to complete
+the provider login on a machine that has the account.
 
-Do not run `claude setup-token` into the installer, `remote.sh subscription --provider
-claude_code`, `store_subscription_token.py claude_code`, or the console paste box. Those
-commands refuse before they read or store a token.
+**Setup token.** Run `claude setup-token` and give that value to `--connect-claude`,
+`store_subscription_token.py claude_code --stdin`, `remote.sh subscription --provider
+claude_code`, or the setup screen. BOSS stores it only in the local secret store. A
+missing token is an error and nothing is stored. Do not commit the token. Backups blank
+`CLAUDE_CODE_OAUTH_TOKEN` and discard an archive that still contains it.
 
-The supported path is the CLI-owned login: run `claude auth login` as the `boss` user
-inside the API container, then rerun the installer with `--connect-claude-local`. BOSS
-records status and does not receive OAuth bytes. See
+**CLI-owned login.** Run `claude auth login` as the `boss` user inside the API
+container, then rerun the installer with `--connect-claude-local`. BOSS records status
+and does not receive OAuth bytes. See
 [model connections](docs/community/MODEL_CONNECTIONS.md).
 
 ---
@@ -631,7 +632,8 @@ knowing before you are looking at a failure.
 
 | | On a server |
 |---|---|
-| Claude Code | Setup-token import is disabled. Use `claude auth login` as `boss` inside the API container, then `--connect-claude-local`. |
+| Claude Code | `claude setup-token` into `--connect-claude` (local secret store only), or `claude auth login` as `boss` inside the API container, then `--connect-claude-local`. |
+| Grok | `grok login --device-auth` as `boss` inside the API container, then `--connect-grok-local`. BOSS does not copy `auth.json`. |
 | Codex | `docker exec -it <api-container> codex login --device-auth` and follow the URL. The container gets its own session, because one ChatGPT session cannot serve two machines. |
 
 **Nothing needs to be in the environment.** Credentials go through the console into this

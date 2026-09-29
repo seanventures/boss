@@ -701,20 +701,12 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
     result["authenticated"] = signed_in
     result["ready"] = signed_in
     if not signed_in:
-        if spec.name == "claude_code":
-            # Do not send operators to `claude setup-token`. That import is disabled.
-            result["next_step"] = (
-                "sign in with claude auth login as the boss user inside the API "
-                "container, then rerun the installer with --connect-claude-local. "
-                "Claude setup-token import is disabled."
-            )
-        else:
-            # A token already set and still not signed in means the token is the thing to fix,
-            # not the browser login — different problem, different command.
-            result["next_step"] = (
-                f"set {credential} on this install ({spec.token_hint})"
-                if credential and not result["token_present"] and not _is_interactive_host()
-                else f"sign in with: {spec.signin_hint}")
+        # A token already set and still not signed in means the token is the thing to fix,
+        # not the browser login — different problem, different command.
+        result["next_step"] = (
+            f"set {credential} on this install ({spec.token_hint})"
+            if credential and not result["token_present"] and not _is_interactive_host()
+            else f"sign in with: {spec.signin_hint}")
     return result
 
 

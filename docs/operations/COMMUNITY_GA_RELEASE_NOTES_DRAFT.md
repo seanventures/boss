@@ -45,8 +45,8 @@ work. It is an integration candidate for review, not a publication.
 The previous qualified note was source `0db60f6c`. This candidate already
 contains the following as ancestors:
 
-- Claude setup-token import is disabled (`97379d13`). CLI-owned
-  `claude auth login` plus `--connect-claude-local` remains.
+- Operator Claude setup-token import is restored and stores only in the local secret store. CLI-owned
+  `claude auth login` plus `--connect-claude-local`, Codex auth-file import, and `grok login --device-auth` plus `--connect-grok-local` remain. None of those setup actions call a model. A human still completes the live login.
 - Delivery schedules refuse missing required inputs and can be edited in
   place (`71adbf9a`).
 - Agent catalog proof tests (`e63439e9`): 34 definitions, 12 workflow

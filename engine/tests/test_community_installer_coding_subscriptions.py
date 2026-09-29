@@ -20,7 +20,7 @@ class _Response(io.BytesIO):
         self.close()
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude_code"])
+@pytest.mark.parametrize("provider", ["codex", "claude_code", "grok"])
 def test_community_cli_connection_skips_live_proof_and_reports_unverified(
         monkeypatch, capsys, provider):
     sent = []

@@ -110,7 +110,7 @@ def test_remote_model_error_with_provider_field_is_not_success(tmp_path: Path) -
     assert "stored" not in result.stdout
 
 
-def test_remote_claude_setup_token_import_cannot_run(tmp_path: Path) -> None:
+def test_remote_claude_setup_token_missing_fails_before_contact(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     ssh_log = tmp_path / "ssh.log"
@@ -121,14 +121,13 @@ def test_remote_claude_setup_token_import_cannot_run(tmp_path: Path) -> None:
         "echo STORE:should-not-run\n"
     )
     fake.chmod(0o700)
-    token = "sk-ant-oat01-session-token-material-not-for-import"
     result = subprocess.run(
         [
             "bash", str(ROOT / "scripts/install/remote.sh"),
             "--host", "example.invalid", "subscription", "--provider", "claude_code",
             "--accept-database-fallback",
         ],
-        input=token + "\n",
+        input="\n",
         env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
         capture_output=True,
         text=True,
@@ -136,9 +135,8 @@ def test_remote_claude_setup_token_import_cannot_run(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode != 0
-    assert "disabled" in result.stderr
-    assert "clearance" in result.stderr
-    assert token not in result.stdout + result.stderr
+    assert "empty" in result.stderr
+    assert "test-claude-token" not in result.stdout + result.stderr
     assert not ssh_log.exists()
 
 

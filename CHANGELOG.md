@@ -7,7 +7,7 @@ Community release candidate on `ai/codex/boss-293-community-integrate`. Package 
 ### Changed
 
 - Delivery schedules refuse missing required inputs and can be edited in place.
-- Claude setup-token import is disabled. CLI-owned `claude auth login` remains.
+- Operator Claude setup-token import stores only in the local secret store. CLI-owned Claude, Codex, and Grok logins remain and do not start a model call.
 - Community export of `46c10ca9` was mechanically clean and is not approved for publication.
 
 ## v0.14.0 - 2026-08-15

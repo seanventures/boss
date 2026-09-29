@@ -7,8 +7,8 @@ on their laptop, the pipeline runs in a container.
 
 WHAT TRAVELS depends on the CLI, and the spec decides — this script is never told:
 
-  * claude-code's setup-token import is disabled. This command refuses provider
-    claude_code before it reads stdin or a file. No counsel clearance is recorded.
+  * claude-code mints a headless token (`claude setup-token`), so the TOKEN travels.
+    The operator supplies it. BOSS stores it only in the local secret store.
   * codex has no such thing. `codex login --with-access-token` rejects every field its auth
     file holds, because it wants an agent identity JWT and a consumer ChatGPT plan never mints
     one; setting CODEX_ACCESS_TOKEN makes `codex login status` error outright. Restoring the
@@ -122,7 +122,7 @@ def read_piped_token(stream) -> str:
             "    claude setup-token | python3 scripts/store_subscription_token.py "
             "claude_code --stdin")
     candidate = max(text.split(), key=len)
-    if len(candidate) < 20:
+    if len(candidate) < 16:
         # Long enough to be a credential, short enough to be a sentence: say which, without
         # echoing it. A store that cannot tell a credential from a placeholder needs a caller
         # that can, and that is the whole reason this script exists.
@@ -269,15 +269,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="find the credential and report its size; send nothing")
     args = parser.parse_args(argv)
-    if args.provider == "claude_code":
-        raise SystemExit(
-            "Claude setup-token import is disabled. No provider or counsel clearance is "
-            "recorded for copying a Claude session token into BOSS. Sign in with "
-            "claude auth login as the boss user inside the API container, then use "
-            "the installer --connect-claude-local path. This command did not read or "
-            "store a token."
-        )
-
     spec = tokenable[args.provider]
     source_file = args.auth_file or spec.token_source_file
     auth_file = Path(os.path.expanduser(source_file)) if source_file else None
@@ -309,6 +300,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     # checked here too rather than trusted to never happen again.
     if token.startswith("<") and token.endswith(">"):
         raise SystemExit(f"{origin} contains the placeholder {token!r}, not a credential")
+    if args.provider == "claude_code" and (args.write_env or args.store_url):
+        raise SystemExit(
+            "Claude setup-token import stores only in the local secret store. "
+            "Refusing to write the token to an env file or another store. "
+            "Pass --boss-api instead. Nothing was stored."
+        )
+    if args.provider == "claude_code":
+        args.accept_database_fallback = False
 
     if args.write_env:
         destination = f"{args.write_env} (env file)"
@@ -356,6 +355,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     result = send_to_boss(args.boss_api, args.boss_api_key, args.project_id,
                           args.provider, token, actor=args.actor,
                           accept_database_fallback=args.accept_database_fallback)
+    if args.provider == "claude_code" and result.get("backend") != "local_vault":
+        raise SystemExit(
+            "BOSS did not put the Claude setup token in the local secret store "
+            f"(backend={result.get('backend')!r}). Nothing else was accepted."
+        )
     print(f"stored {key} ({len(token)} chars) — {what} from {origin}")
     backend = result.get("backend", "configured")
     print(f"destination: {args.boss_api} — BOSS put it in its {backend} store. "

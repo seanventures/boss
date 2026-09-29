@@ -462,7 +462,7 @@ def test_remote_successful_update_migrates_legacy_worker_key(tmp_path: Path) -> 
     assert not tmp_path.joinpath("remote-boss.prev").exists()
 
 
-def test_connect_claude_import_cannot_run(tmp_path: Path) -> None:
+def test_connect_claude_without_a_token_fails_before_install(tmp_path: Path) -> None:
     log = tmp_path / "docker.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -470,14 +470,16 @@ def test_connect_claude_import_cannot_run(tmp_path: Path) -> None:
     docker.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\nexit 0\n")
     docker.chmod(0o755)
     env = os.environ.copy()
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     result = subprocess.run(
         ["bash", str(INSTALLER), "--connect-claude", "--yes", "--dir", str(tmp_path / "boss")],
         env=env, text=True, capture_output=True, timeout=15, check=False,
     )
     assert result.returncode != 0
-    assert "disabled" in result.stderr
-    assert "clearance" in result.stderr
+    assert "No Claude setup token was provided" in result.stderr
+    assert "Nothing was stored" in result.stderr
+    assert "test-claude-token" not in result.stdout + result.stderr
     assert not log.exists()
     assert not (tmp_path / "boss").exists()
 

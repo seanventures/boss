@@ -536,18 +536,8 @@ def store_coding_agent_credential(
     """
     from .cli_harness import SUBSCRIPTION_SECRET_SCOPE, load_specs
     from .core import emit_event
-    from .secret_backends import default_secret_backend
+    from .secret_backends import SecretUnavailable, backend_for, default_secret_backend
     from .secrets_service import put_secret
-
-    # The Claude setup-token import copies a provider session into BOSS. Repo
-    # counsel reference 01049940 covers first-party Apache licensing only.
-    # No provider or counsel clearance for this import was found, so it cannot run.
-    if provider == "claude_code":
-        raise SetupError(
-            "Claude setup-token import is disabled. No provider or counsel clearance "
-            "is recorded for copying a Claude session token into BOSS. Use the "
-            "CLI-owned login inside the API container (--connect-claude-local)."
-        )
 
     spec = load_specs(settings).get(provider)
     if spec is None:
@@ -568,13 +558,27 @@ def store_coding_agent_credential(
             # Malformed is all that is safe to say; the text is a live credential.
             raise SetupError(f"the {provider} credential is not valid JSON.") from None
 
-    backend = default_secret_backend(settings)
+    # A Claude setup token is an operator-supplied session. It stays in the local
+    # secret store. Postgres would put it in the next backup dump, so there is no
+    # database fallback for this provider.
+    if provider == "claude_code":
+        try:
+            backend_for("local_vault", settings)
+        except SecretUnavailable as exc:
+            raise SetupError(
+                "Claude setup-token import stores only in the local secret store, "
+                "and that store is not available on this install. The token was not "
+                f"stored. {exc}"
+            ) from None
+        backend = "local_vault"
+    else:
+        backend = default_secret_backend(settings)
     # ASK BEFORE FALLING BACK TO POSTGRES. `default_secret_backend` takes the best store the
     # installation has and quietly drops to `database` when it has none — which is right for
     # not blocking a first run, and wrong as a silent default for a live subscription
     # credential. The operator gets told once, in the words of this module's own comment: the
     # database is not a good place for a token.
-    if backend == "database" and not accept_database_fallback:
+    if provider != "claude_code" and backend == "database" and not accept_database_fallback:
         raise SecretFallbackNotAccepted(
             backend,
             "this installation has no secret store configured, so the credential would go "
@@ -682,13 +686,8 @@ def connect_coding_agent(
         raise SetupError(
             f"no CLI coding agent called {provider!r}. Known: "
             f"{', '.join(sorted(load_specs(settings)))}.")
-    if spec.require_local_session_file and not prove:
-        if not coding_agent_live_proof_available(settings):
-            raise SetupError(
-                f"{provider} requires a live CLI proof before connection; that proof is "
-                "paused in Community until budget, lease, and receipt tracking is in place."
-            )
-        raise SetupError(f"{provider} requires a live read-only proof turn before connecting.")
+    # prove=false records a CLI-owned local session. It must not start a model turn.
+    # A signed-out CLI still fails below.
     found = detect(spec)
     if not found["installed"]:
         raise SetupError(

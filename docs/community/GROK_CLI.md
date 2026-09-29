@@ -35,10 +35,13 @@ the diagnostic never displays config values. BOSS also strips `XAI_API_KEY` from
 process. See [xAI authentication precedence](https://docs.x.ai/build/enterprise#authentication)
 and [configuration scopes](https://docs.x.ai/build/settings#scopes).
 
-Use `GET /v1/setup/coding-agents` to see `grok` detection and the next step. Use the setup
-screen or `POST /v1/setup/coding-agents/connect` with `{"project_id":"...","provider":"grok"}`
-to make one read-only proof turn and record the entitlement. Do not set `prove: false` for
-qualification. Set `BOSS_CODE_AGENT_ENGINE=grok` for code work after the connection succeeds.
+Use `GET /v1/setup/coding-agents` to see `grok` detection and the next step. After
+`grok login --device-auth` as `boss` inside the API container, rerun the installer with
+`--connect-grok-local`, or `POST /v1/setup/coding-agents/connect` with
+`{"project_id":"...","provider":"grok","prove":false}`. That records the CLI-owned
+login and does not start a model call. A missing login is an error. A later governed
+job is what checks that the subscription can answer. Set `BOSS_CODE_AGENT_ENGINE=grok`
+for code work after the connection succeeds.
 `BOSS_PROVIDER_LOCK=grok` is not supported for chat; there is no Grok subscription chat
 adapter in this change.
 
