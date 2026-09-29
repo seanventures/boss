@@ -9467,6 +9467,10 @@ def submit_code_task_feedback_endpoint(run_id: str, payload: CodeTaskFeedbackBod
             severity=str(payload.get("severity") or "normal"),
             selected_element=str(payload.get("selected_element") or ""),
             screenshot_url=str(payload.get("screenshot_url") or ""),
+            # THE WORKFLOW PICKED ON THE FORM. The console has sent it since the picker was
+            # added and this endpoint dropped it, so every change ran inline whatever was
+            # chosen — the picker had never worked.
+            workflow_version_id=str(payload.get("workflow_version_id") or ""),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

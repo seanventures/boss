@@ -3155,8 +3155,14 @@ export type FeedbackActionResult = {
     fix_note: string;
     profile: string;
     repair_retries: number;
+    /** "inline" runs in the factory with no workflow run; "workflow" starts the one named. */
+    path?: "inline" | "workflow";
+    workflow_name?: string;
   };
   run_id?: string;
+  path?: "inline" | "workflow";
+  workflow_name?: string;
+  workflow_run_id?: string | null;
   error?: string;
 };
 

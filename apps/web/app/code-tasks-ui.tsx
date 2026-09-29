@@ -324,15 +324,40 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
   );
 }
 
-function ConfirmFeedback({ threadId }: { threadId: string }) {
+function ConfirmFeedback({ threadId, workflowName }: { threadId: string; workflowName?: string }) {
   const [state, action, pending] = useActionState(confirmCodeTaskFeedbackAction, null);
   return (
-    <form action={action} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <form action={action} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <input type="hidden" name="thread_id" value={threadId} />
       <SubmitButton className="cap-btn primary" disabled={pending}>
-        {pending ? "Dispatching…" : "Confirm & dispatch governed iteration"}
+        {pending ? "Dispatching…"
+                 : workflowName ? `Confirm & start the ${workflowName} workflow`
+                                : "Confirm & run inline"}
       </SubmitButton>
-      {state?.run_id ? <span className="detail" style={{ color: "#3fb950" }}>Queued {state.run_id}</span> : null}
+      {state?.run_id ? (
+        <span className="detail" style={{ color: "#3fb950" }} data-testid="ct-dispatched">
+          {state.path === "workflow" && state.workflow_run_id ? (
+            <>Started the {state.workflow_name} workflow — <a
+                href={`?area=delivery_workflows&wfr=${encodeURIComponent(state.workflow_run_id)}`}
+                onClick={(e) => {
+                  // The same navigation Build uses: keep the org and project in the URL and
+                  // let the console switch areas without a full reload.
+                  e.preventDefault();
+                  const url = new URL(window.location.href);
+                  url.searchParams.set("area", "delivery_workflows");
+                  url.searchParams.set("wfr", String(state.workflow_run_id));
+                  window.history.pushState({}, "", url.toString());
+                  window.dispatchEvent(new PopStateEvent("popstate"));
+                  window.dispatchEvent(new CustomEvent("boss:navigate"));
+                }}>
+                open it under Workflows</a> (build {state.run_id})</>
+          ) : state.path === "workflow" ? (
+            <>Queued {state.run_id}, but no workflow run was recorded for it — check Workflows.</>
+          ) : (
+            <>Running inline in the factory as {state.run_id}</>
+          )}
+        </span>
+      ) : null}
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>{state.error}</span> : null}
     </form>
   );
@@ -462,7 +487,10 @@ function FeedbackControls({ runId, status, anchor = "", projectId }: {
             Workflow
             <select className="mr-select" name="workflow_version_id"
                     data-testid="ct-iterate-workflow" defaultValue="">
-              <option value="">Follow the inner pipeline only</option>
+              {/* INLINE IS THE DEFAULT, AND SAYS WHAT IT MEANS. "Follow the inner pipeline only"
+                  read as a flavour of workflow; it is the absence of one — the change runs
+                  straight in the factory and nothing appears under Workflows. */}
+              <option value="">Inline change — no workflow run</option>
               {workflows.filter((w) => w.active_version_id).map((w) => (
                 <option key={w.id} value={w.active_version_id as string}>
                   {w.name}{w.is_catalogue ? " (standard)" : ""}
@@ -487,8 +515,22 @@ function FeedbackControls({ runId, status, anchor = "", projectId }: {
       {state?.proposal ? (
         <div className="ct-proposal">
           <span className="cap-badge tone-blue">{state.proposal.classification.replace("_", " ")}</span>
+          {/* WHICH PATH, BEFORE ANYTHING RUNS. The confirm button said "governed iteration"
+              either way, so an inline change looked like a workflow until it had run. */}
+          <p className="ct-proposal-path" data-testid="ct-proposal-path"
+             data-path={state.proposal.path ?? "inline"}>
+            {state.proposal.path === "workflow"
+              ? <>Runs as the <b>{state.proposal.workflow_name}</b> workflow — it will appear
+                  under Workflows.</>
+              : <>Runs as an <b>inline change</b> in the factory — no workflow run. Pick a
+                  workflow above to run it through one instead.</>}
+          </p>
           <pre>{state.proposal.fix_note}</pre>
-          {state.thread_id ? <ConfirmFeedback threadId={state.thread_id} /> : null}
+          {state.thread_id ? (
+            <ConfirmFeedback threadId={state.thread_id}
+                             workflowName={state.proposal.path === "workflow"
+                               ? state.proposal.workflow_name : undefined} />
+          ) : null}
         </div>
       ) : null}
       {state?.error ? <p className="ct-iterate-note" data-tone="bad">{state.error}</p> : null}

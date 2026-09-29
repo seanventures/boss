@@ -114,6 +114,18 @@ def submit_feedback(
             return {"thread_id": thread["id"], "status": "awaiting_clarification",
                     "question": question, "dispatched": False}
 
+        # WHICH PATH, NAMED — or refused. An id that names no workflow in this project used to
+        # fall back to running inline without a word, under a proposal that looked like a
+        # workflow had been chosen.
+        chosen_workflow = None
+        if workflow_version_id.strip():
+            from .workflows import workflow_by_version
+
+            chosen_workflow = workflow_by_version(
+                connection, run["project_id"], workflow_version_id.strip())
+            if chosen_workflow is None:
+                raise ValueError("that workflow is not in this project — pick another, or "
+                                 "leave it on Inline change")
         lowered = message.lower()
         classification = (
             "full_rerun" if any(marker in lowered for marker in _FULL_RERUN_MARKERS)
@@ -131,8 +143,11 @@ def submit_feedback(
             # THE PATH THE OPERATOR CHOSE FOR THIS CHANGE. Carried on the proposal because the
             # choice is made when the change is described and acted on when it is confirmed —
             # two requests, and nothing else survives between them.
-            **({"workflow_version_id": workflow_version_id.strip()}
-               if workflow_version_id.strip() else {}),
+            **({"workflow_version_id": workflow_version_id.strip(),
+                "workflow_name": chosen_workflow["name"]}
+               if chosen_workflow else {}),
+            # Said on the proposal so the confirm step can state it before anything runs.
+            "path": "workflow" if chosen_workflow else "inline",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         _add_message(connection, thread["id"], role="agent", kind="proposal",
@@ -200,7 +215,20 @@ def confirm_feedback(
                    {"source_run_id": proposal["source_run_id"],
                     "resulting_run_id": result["run_id"],
                     "classification": proposal["classification"]})
-    return {"thread_id": thread_id, "status": "dispatched", "dispatched": True, **result}
+    # THE WORKFLOW RUN IT STARTED, so the console can link to it instead of leaving the
+    # operator to find it — or to discover there is none.
+    workflow_run_id = None
+    if proposal.get("workflow_version_id"):
+        with begin(engine) as connection:
+            workflow_run_id = connection.execute(text(
+                "SELECT finalize_ctx->>'workflow_run_id' FROM code_task_runs WHERE id=:id"
+            ), {"id": result["run_id"]}).scalar()
+    return {"thread_id": thread_id, "status": "dispatched", "dispatched": True, **result,
+            "path": proposal.get("path") or ("workflow" if proposal.get("workflow_version_id")
+                                             else "inline"),
+            **({"workflow_name": proposal.get("workflow_name"),
+                "workflow_run_id": workflow_run_id} if proposal.get("workflow_version_id")
+               else {})}
 
 
 def get_feedback_thread(engine, run_id: str) -> dict:
