@@ -9,6 +9,7 @@ from boss_engine.services.benchmark_apps import (
     tuning_proposal_inputs,
     tuning_recommendation,
 )
+from apps.api.app.request_bodies import BenchmarkAppLaunchBody
 
 
 def test_benchmark_catalog_covers_distinct_cross_layer_risks():
@@ -312,7 +313,7 @@ def test_launch_endpoint_routes_a_benchmark_into_the_governed_code_task(monkeypa
     # explicitly rather than relying on a default that changed.
     result = api_main.start_qa_benchmark_app_endpoint(
         "bugbox",
-        {"project_id": "boss-dogfood", "actor": "executive_console", "route": "direct"},
+        BenchmarkAppLaunchBody(project_id="boss-dogfood", actor="executive_console", route="direct"),
     )
 
     assert result == {
@@ -353,12 +354,12 @@ def test_official_launch_honors_engine_and_stamps_official_on_direct_path(monkey
 
     result = api_main.start_qa_benchmark_app_endpoint(
         "hookwatch",
-        {
+        BenchmarkAppLaunchBody.model_validate({
             "project_id": "boss-dogfood",
             "actor": "executive_console",
             "official": True,
             "engine": "openai",
-        },
+        }),
     )
 
     assert result["status"] == "queued"

@@ -261,6 +261,7 @@ _MAY_NAME_THE_PLATFORM = {
     "services/api_catalog.py",         # catalogues that integration's API surface
     "services/agent_kms.py",           # speaks that integration's ops-agent secret protocol
     "services/console_v2.py",          # matches BOSS's own run titles, which contain the word
+    "mcp/curated_request_bodies.json", # names public Goldeneye adapter routes in API schemas
 }
 
 

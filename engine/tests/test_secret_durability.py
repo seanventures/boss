@@ -8,7 +8,6 @@ pointed at material that no longer existed and host verification failed with
 """
 
 import base64
-import os
 
 import pytest
 
@@ -46,7 +45,8 @@ def _engine():
     return engine
 
 
-def test_backend_for_resolves_database_aliases():
+def test_backend_for_resolves_database_aliases(monkeypatch):
+    monkeypatch.setenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", "true")
     for alias in ("database", "db", "postgres"):
         assert backend_for(alias, FakeSettings()).kind == "database"
 

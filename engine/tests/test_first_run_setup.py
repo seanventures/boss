@@ -45,11 +45,13 @@ def test_a_pasted_token_is_written_through_not_stored_in_a_column():
     assert "slug" in source
 
 
-def test_the_wizard_picks_a_secret_store_that_works_here():
+def test_the_wizard_picks_a_secret_store_that_works_here(monkeypatch):
     """A first-time user has not configured a vault — that is the whole point — and a wizard
     that cannot complete on the installation it exists to serve is worse than none."""
     from boss_engine.config import get_settings
     from boss_engine.services.secret_backends import default_secret_backend
+
+    monkeypatch.setenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", "true")
 
     assert default_secret_backend(get_settings()) in {
         "platform_secret_store", "vault", "local_vault", "database"}

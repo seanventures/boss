@@ -43,7 +43,7 @@ def test_and_each_one_maps_to_a_storage_backend(kind):
 
 
 @pytest.mark.parametrize("kind", WRITABLE_KINDS)
-def test_and_every_one_is_a_backend_the_resolver_recognises(kind):
+def test_and_every_one_is_a_backend_the_resolver_recognises(kind, monkeypatch):
     """The pair has to agree: a reference that validates and then cannot be read is worse than
     a refusal, because it fails later and somewhere else.
 
@@ -54,6 +54,10 @@ def test_and_every_one_is_a_backend_the_resolver_recognises(kind):
     """
     from boss_engine.services.secret_backends import SecretUnavailable
 
+    # Backend registration does not require this host's default Postgres to be
+    # running. The real database persistence path has its own tests.
+    monkeypatch.setenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", "true")
+
     try:
         assert backend_for(kind, get_settings()) is not None
     except SecretUnavailable as unavailable:
@@ -61,9 +65,10 @@ def test_and_every_one_is_a_backend_the_resolver_recognises(kind):
             f"{kind!r} can be recorded as a credential_ref but nothing can read it")
 
 
-def test_the_backend_this_install_would_choose_is_one_it_accepts():
+def test_the_backend_this_install_would_choose_is_one_it_accepts(monkeypatch):
     """THE BUG, stated as the invariant it broke. Whatever `default_secret_backend` picks is
     what the wizard writes through, so it must be a kind a reference can be recorded for."""
+    monkeypatch.setenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", "true")
     chosen = default_secret_backend(get_settings())
 
     assert chosen in SecretRefService.ALLOWED_REF_KINDS, (

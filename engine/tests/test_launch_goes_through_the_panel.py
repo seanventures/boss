@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from boss_engine.config import Settings
+from apps.api.app.request_bodies import BenchmarkAppLaunchBody
 
 
 class _Recorder:
@@ -74,7 +75,7 @@ def test_launch_convenes_the_panel_by_default(endpoint, monkeypatch):
     )
 
     result = endpoint.start_qa_benchmark_app_endpoint(
-        "bugbox", {"project_id": "boss-dogfood", "actor": "executive_console"}
+        "bugbox", BenchmarkAppLaunchBody(project_id="boss-dogfood", actor="executive_console")
     )
 
     assert result["status"] == "meeting_convened"
@@ -96,7 +97,7 @@ def test_the_direct_route_remains_available_for_comparison(endpoint, monkeypatch
 
     result = endpoint.start_qa_benchmark_app_endpoint(
         "bugbox",
-        {"project_id": "boss-dogfood", "actor": "executive_console", "route": "direct"},
+        BenchmarkAppLaunchBody(project_id="boss-dogfood", actor="executive_console", route="direct"),
     )
     assert result["status"] == "queued"
     assert result["run_id"] == "crun_direct"

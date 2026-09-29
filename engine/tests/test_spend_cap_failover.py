@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from apps.api.app.request_bodies import BenchmarkAppLaunchBody
 
 from boss_engine.services.spend_cap_failover import (
     OFFICIAL_ENGINES,
@@ -320,13 +321,13 @@ def test_official_post_engine_openai_reaches_start_code_task(benchmark_endpoint,
     monkeypatch.setattr("apps.api.app.services.code_task_service.start_code_task", _start)
     result = benchmark_endpoint.start_qa_benchmark_app_endpoint(
         "bugbox",
-        {
+        BenchmarkAppLaunchBody.model_validate({
             "project_id": "boss-dogfood",
             "actor": "executive_console",
             "route": "direct",
             "engine": "openai",
             "official": True,
-        },
+        }),
     )
     assert result["status"] == "queued"
     assert result["run_id"] == "crun_openai"
@@ -337,11 +338,11 @@ def test_unknown_engine_is_422(benchmark_endpoint):
     with pytest.raises(HTTPException) as exc:
         benchmark_endpoint.start_qa_benchmark_app_endpoint(
             "bugbox",
-            {
+            BenchmarkAppLaunchBody.model_validate({
                 "project_id": "boss-dogfood",
                 "route": "direct",
                 "engine": "not_a_real_engine",
-            },
+            }),
         )
     assert exc.value.status_code == 422
     assert "unknown engine" in str(exc.value.detail).lower()
@@ -357,13 +358,13 @@ def test_simulated_official_post_never_spends(benchmark_endpoint, monkeypatch):
     monkeypatch.setattr("apps.api.app.services.code_task_service.start_code_task", _start)
     result = benchmark_endpoint.start_qa_benchmark_app_endpoint(
         "hookwatch",
-        {
+        BenchmarkAppLaunchBody.model_validate({
             "project_id": "boss-dogfood",
             "actor": "executive_console",
             "simulated": True,
             "engine": "openai",
             "official": True,
-        },
+        }),
     )
     assert result["status"] == "simulated"
     assert result["passed"] is False

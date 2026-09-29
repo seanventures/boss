@@ -265,6 +265,8 @@ def test_it_is_tried_first_but_skipped_when_absent(monkeypatch) -> None:
     """
     from boss_engine.services.secret_backends import _BACKEND_PREFERENCE, default_secret_backend
 
+    monkeypatch.setenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", "true")
+
     assert _BACKEND_PREFERENCE[0] == "infisical"
 
     assert default_secret_backend(_settings_without_infisical()) != "infisical"
