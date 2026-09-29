@@ -12,6 +12,13 @@ set -euo pipefail
 umask 077
 
 BOSS_INSTALL_VERSION="1.1.0"
+# An explicit URL still clones that remote (tests and the published one-liner).
+# Unset means: if this script is already inside a BOSS checkout, install that
+# tree. Do not require the unpublished GitHub repository.
+REPO_URL_EXPLICIT=0
+if [[ -n "${BOSS_REPO_URL:-}" ]]; then
+  REPO_URL_EXPLICIT=1
+fi
 BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanventures/boss.git}"
 BOSS_REPO_REF="${BOSS_REPO_REF:-main}"
 
@@ -361,16 +368,6 @@ fi
 ui_ok "Docker Compose: $("${COMPOSE[@]}" version 2>/dev/null | head -1)"
 install_coding_clis
 
-# Image builds need much more room than the old 3 GB check implied.
-if need_cmd df; then
-  FREE_KB="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
-  if [[ -n "${FREE_KB:-}" && "$FREE_KB" -lt 80000000 ]]; then
-    ui_warn "Less than 80 GB free under $HOME. Allow about 100 GB for images, build cache and agent work."
-  else
-    ui_ok "Disk space looks OK"
-  fi
-fi
-
 # Port checks (best-effort)
 port_in_use() {
   local p="$1"
@@ -396,6 +393,22 @@ if [[ "$ASSUME_YES" -eq 0 ]]; then
   INSTALL_DIR="${REPLY/#\~/$HOME}"
 fi
 ui_ok "Install dir: $INSTALL_DIR"
+
+# Measure the filesystem that will hold the checkout, not $HOME. A small home
+# directory and a large install volume are a normal laptop layout; warning
+# about the wrong disk stops people who actually have room.
+if need_cmd df; then
+  _disk_path="$INSTALL_DIR"
+  if [[ ! -e "$_disk_path" ]]; then
+    _disk_path="$(dirname "$_disk_path")"
+  fi
+  FREE_KB="$(df -Pk "$_disk_path" 2>/dev/null | awk 'NR==2{print $4}')"
+  if [[ -n "${FREE_KB:-}" && "$FREE_KB" -lt 80000000 ]]; then
+    ui_warn "Less than 80 GB free on $_disk_path. Allow about 100 GB for images, build cache and agent work."
+  else
+    ui_ok "Disk space looks OK"
+  fi
+fi
 
 # A noninteractive reinstall or upgrade must retain the service profile chosen on the
 # first run. Without this marker, `upgrade.sh --yes` silently added the web build to a
@@ -508,6 +521,70 @@ fi
 BOSS_CONSOLE_PASSWORD="$(openssl rand -hex 24)"
 BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
 
+# The directory that contains this installer, when it is already a BOSS checkout.
+# A downloaded one-liner lives in a temp file and returns nothing here.
+local_installer_tree() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "$script_dir/scripts/install/community-compose.yml" ]] &&
+     { [[ -d "$script_dir/.git" ]] || [[ -f "$script_dir/.git" ]]; }; then
+    printf '%s\n' "$script_dir"
+    return 0
+  fi
+  return 1
+}
+
+# Copy the checkout this script lives in. --no-local avoids hardlinks, which
+# fail when the empty directory is on another volume than the source tree.
+copy_local_checkout() {
+  local src="$1" dest="$2" head
+  head="$(git -C "$src" rev-parse HEAD)"
+  ui_info "Copying this checkout ($head) into $dest"
+  if [[ -e "$dest" ]]; then
+    [[ -d "$dest" && -z "$(ls -A "$dest")" ]] ||
+      die "$dest is not empty and is not a Git checkout. Choose --dir; nothing was removed."
+    rmdir "$dest" || die "Could not use empty directory $dest."
+  fi
+  mkdir -p "$(dirname "$dest")"
+  if ! git clone --no-local --no-checkout "$src" "$dest" </dev/null; then
+    die "Could not copy this checkout into $dest."
+  fi
+  if ! git -C "$dest" checkout --detach "$head" </dev/null; then
+    die "Could not check out $head in $dest."
+  fi
+}
+
+clone_remote_source() {
+  local dest="$1" empty_existing="$2"
+  ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $dest"
+  if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    if git clone --no-checkout "$BOSS_REPO_URL" "$dest" </dev/null &&
+       git -C "$dest" checkout --detach "$BOSS_REPO_REF" </dev/null; then
+      return 0
+    fi
+    if [[ "$empty_existing" -eq 1 ]]; then
+      die "Exact-commit clone failed; existing directory was not removed."
+    fi
+    die "Exact-commit clone failed; check repo visibility, URL, and commit."
+  fi
+  if git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$dest" </dev/null; then
+    return 0
+  fi
+  if [[ "$empty_existing" -eq 1 ]]; then
+    die "Clone failed; existing directory was not removed."
+  fi
+  die "Clone failed; check repo visibility, URL, and ref."
+}
+
+place_fresh_source() {
+  local dest="$1" empty_existing="$2" src=""
+  if [[ "$REPO_URL_EXPLICIT" -eq 0 ]] && src="$(local_installer_tree)"; then
+    copy_local_checkout "$src" "$dest"
+    return 0
+  fi
+  clone_remote_source "$dest" "$empty_existing"
+}
+
 # ---- fetch source ----------------------------------------------------------
 ui_step "Fetching BOSS Community source"
 
@@ -521,61 +598,68 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
   if [[ -n "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no)" ]]; then
     die "$INSTALL_DIR has tracked local changes. Commit or move them before updating BOSS."
   fi
-  ui_info "Updating existing checkout at $INSTALL_DIR to $BOSS_REPO_REF"
-  git -C "$INSTALL_DIR" fetch origin "$BOSS_REPO_REF" </dev/null ||
-    die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
+  ui_info "Checking checkout at $INSTALL_DIR against $BOSS_REPO_REF"
   _installed_commit="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
-  _fetched_commit="$(git -C "$INSTALL_DIR" rev-parse FETCH_HEAD)"
-  git -C "$INSTALL_DIR" merge-base --is-ancestor "$_installed_commit" "$_fetched_commit" ||
-    die "The requested ref cannot fast-forward this install; existing checkout left unchanged."
-  if [[ "$_installed_commit" != "$_fetched_commit" && -f "$INSTALL_DIR/.env" ]]; then
-    # A pasted install command is also an upgrade command for an existing checkout.
-    # Snapshot the old database, artifacts and credentials before switching source:
-    # the new API may migrate the database as soon as it starts. Always create
-    # this run's own snapshot; a prior path could refer to stale data even if
-    # its source commit happens to match.
-    _backup_helper="$(mktemp)"
-    if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
-      rm -f "$_backup_helper"
-      die "The fetched source has no backup helper; existing checkout left unchanged."
-    fi
-    _backup_args=(--dir "$INSTALL_DIR")
-    [[ -z "$BACKUP_DIR" ]] || _backup_args+=(--backup-dir "$BACKUP_DIR")
-    if ! _recovery_backup="$(bash "$_backup_helper" "${_backup_args[@]}" </dev/null)"; then
-      rm -f "$_backup_helper"
-      die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
-    fi
-    rm -f "$_backup_helper"
-    [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
-       -s "$_recovery_backup/artifacts.tar" &&
-       "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
-      die "Recovery backup is incomplete or for another source commit; existing checkout left unchanged."
-    ui_ok "Private recovery backup: $_recovery_backup"
+  _fetch_ok=0
+  if git -C "$INSTALL_DIR" fetch origin "$BOSS_REPO_REF" </dev/null; then
+    _fetch_ok=1
   fi
-  git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD </dev/null ||
-    die "Could not fast-forward; recovery backup: ${_recovery_backup:-not needed}."
+  if [[ "$_fetch_ok" -eq 1 ]]; then
+    _fetched_commit="$(git -C "$INSTALL_DIR" rev-parse FETCH_HEAD)"
+    if [[ "$_installed_commit" == "$_fetched_commit" ]]; then
+      ui_info "Checkout already matches $BOSS_REPO_REF"
+    elif git -C "$INSTALL_DIR" merge-base --is-ancestor "$_installed_commit" "$_fetched_commit"; then
+      if [[ -f "$INSTALL_DIR/.env" ]]; then
+        # A pasted install command is also an upgrade command for an existing checkout.
+        # Snapshot the old database, artifacts and credentials before switching source:
+        # the new API may migrate the database as soon as it starts. Always create
+        # this run's own snapshot; a prior path could refer to stale data even if
+        # its source commit happens to match.
+        _backup_helper="$(mktemp)"
+        if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
+          rm -f "$_backup_helper"
+          die "The fetched source has no backup helper; existing checkout left unchanged."
+        fi
+        _backup_args=(--dir "$INSTALL_DIR")
+        [[ -z "$BACKUP_DIR" ]] || _backup_args+=(--backup-dir "$BACKUP_DIR")
+        if ! _recovery_backup="$(bash "$_backup_helper" "${_backup_args[@]}" </dev/null)"; then
+          rm -f "$_backup_helper"
+          die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
+        fi
+        rm -f "$_backup_helper"
+        [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
+           -s "$_recovery_backup/artifacts.tar" &&
+           "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
+          die "Recovery backup is incomplete or for another source commit; existing checkout left unchanged."
+        ui_ok "Private recovery backup: $_recovery_backup"
+      fi
+      git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD </dev/null ||
+        die "Could not fast-forward; recovery backup: ${_recovery_backup:-not needed}."
+    elif git -C "$INSTALL_DIR" merge-base --is-ancestor "$_fetched_commit" "$_installed_commit"; then
+      ui_info "This checkout is already ahead of $BOSS_REPO_REF; source left unchanged."
+    else
+      die "The requested ref cannot fast-forward this install; existing checkout left unchanged."
+    fi
+  else
+    _local_ref=""
+    if git -C "$INSTALL_DIR" rev-parse --verify --quiet "${BOSS_REPO_REF}^{commit}" >/dev/null; then
+      _local_ref="$(git -C "$INSTALL_DIR" rev-parse "${BOSS_REPO_REF}^{commit}")"
+    fi
+    if [[ -n "$_local_ref" ]] && {
+         [[ "$_installed_commit" == "$_local_ref" ]] ||
+         git -C "$INSTALL_DIR" merge-base --is-ancestor "$_local_ref" "$_installed_commit";
+       }; then
+      ui_warn "Could not fetch $BOSS_REPO_REF; using the local checkout at $_installed_commit."
+    else
+      die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
+    fi
+  fi
 elif [[ -d "$INSTALL_DIR" ]]; then
   [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
     die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."
-  ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    git clone --no-checkout "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null &&
-      git -C "$INSTALL_DIR" checkout --detach "$BOSS_REPO_REF" </dev/null ||
-      die "Exact-commit clone failed; existing directory was not removed."
-  else
-    git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
-      die "Clone failed; existing directory was not removed."
-  fi
+  place_fresh_source "$INSTALL_DIR" 1
 else
-  ui_info "Cloning $BOSS_REPO_URL ($BOSS_REPO_REF) → $INSTALL_DIR"
-  if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    git clone --no-checkout "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null &&
-      git -C "$INSTALL_DIR" checkout --detach "$BOSS_REPO_REF" </dev/null ||
-      die "Exact-commit clone failed; check repo visibility, URL, and commit."
-  else
-    git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$INSTALL_DIR" </dev/null ||
-      die "Clone failed; check repo visibility, URL, and ref."
-  fi
+  place_fresh_source "$INSTALL_DIR" 0
 fi
 
 if [[ "$BOSS_REPO_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then

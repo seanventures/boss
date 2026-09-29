@@ -37,6 +37,17 @@ cd /path/to/authorized/boss
 ./install.sh --dir "$PWD" --install-coding-clis
 ```
 
+An empty install directory is filled from that checkout. It does not clone the
+unpublished GitHub URL and it does not need a private host:
+
+```bash
+cd /path/to/boss
+./install.sh --dir "$HOME/boss" --yes --skip-model-key
+```
+
+If this checkout is already ahead of the default branch, the installer keeps
+that source. It does not rewind the tree to an older `main`.
+
 On a fresh public install, the default checkout is `~/boss`. The installer
 writes secrets to `~/boss/.env` with mode 0600 and never prints the generated
 API key or console password. A rerun keeps existing credentials and data. It
@@ -83,6 +94,18 @@ source ./boss-community.env.sh
 curl -fsS "$BOSS_API_URL/health"
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
   "$BOSS_API_URL/v1/edition?project_id=$BOSS_PROJECT_ID"
+```
+
+Health does not show that the control plane can store work. Create one task
+without a model key, an email account, or a deploy target. The owner key is
+the `ceo` actor. Repeat the same `dedupe_key` and the API rejects the
+duplicate instead of inserting a second task:
+
+```bash
+curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"project_id\":\"$BOSS_PROJECT_ID\",\"title\":\"Local note\",\"dedupe_key\":\"local-note-1\",\"actor\":\"ceo\"}" \
+  "$BOSS_API_URL/v1/tasks"
 ```
 
 If you skipped the model-key prompt, add your own `OPENAI_API_KEY` to the

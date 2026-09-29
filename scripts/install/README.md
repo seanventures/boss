@@ -13,7 +13,10 @@ BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $
 
 The HTTP download and Git checkout use the same immutable commit, and the
 installer verifies that commit. If the download fails, the installer does not
-run. Until publication, use an authorized checkout.
+run. Until publication, use an authorized checkout. From that checkout,
+`./install.sh --dir /path/to/empty` copies the tree you already have. It does
+not clone the unpublished GitHub URL. A checkout that is already ahead of
+`main` stays there; the installer does not rewind it.
 
 The installer reads prompts from the terminal even when its downloaded file is
 run by `bash`. Paste a model key at the hidden prompt, or press Enter and
