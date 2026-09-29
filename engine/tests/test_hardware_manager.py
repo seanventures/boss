@@ -196,18 +196,22 @@ def test_installer_hook_records_installed_agent_and_calls_node_agent(engine, mon
 
     monkeypatch.setattr(hook.subprocess, "run", fake_run)
     missing = tmp_path / "node_agent.sh"
-    assert hook.local_agent_state(missing) == "installed"
-    assert called["argv"] == ["sh", str(missing), "--local"]
+    assert hook.local_agent_state(missing) == "absent"
+    assert "argv" not in called
 
     present = tmp_path / "node_agent_fail.sh"
     present.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     monkeypatch.undo()
     assert hook.local_agent_state(present) == "absent"
+    ok = tmp_path / "node_agent_ok.sh"
+    ok.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    assert hook.local_agent_state(ok) == "installed"
 
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "scripts/install/node_agent.sh" in installer
     assert "--local" in installer
-    assert "recording the local hardware agent as installed" in installer
+    assert "recording the local hardware agent as installed" not in installer
+    assert "not marked ready" in installer
 
     with engine.begin() as connection:
         connection.execute(text("SET search_path TO hw_kernel"))
@@ -239,3 +243,41 @@ def test_installer_hook_records_installed_agent_and_calls_node_agent(engine, mon
         connection.execute(text("SET search_path TO hw_kernel"))
         connection.execute(text("DELETE FROM hardware_places WHERE project_id = 'proj_hook'"))
         connection.execute(text("DELETE FROM projects WHERE id = 'proj_hook'"))
+
+
+def test_missing_node_agent_does_not_mark_the_local_place_ready(engine, monkeypatch, tmp_path):
+    hook = _hook()
+    missing = tmp_path / "node_agent.sh"
+    assert hook.local_agent_state(missing) == "absent"
+    monkeypatch.setattr(hook, "NODE_AGENT", missing)
+    monkeypatch.delenv("BOSS_PLACE_AGENT_STATE", raising=False)
+    monkeypatch.delenv("BOSS_PLACE_PROJECT_ID", raising=False)
+    monkeypatch.delenv("BOSS_DEFAULT_PROJECT_ID", raising=False)
+    with engine.begin() as connection:
+        connection.execute(text("SET search_path TO hw_kernel"))
+        connection.execute(text(
+            "INSERT INTO projects (id) VALUES ('proj_missing') ON CONFLICT (id) DO NOTHING"
+        ))
+    rc = hook.main([
+        "--project-id", "proj_missing",
+        "--database-url", HOOK_URL,
+        "--hostname", "community-host",
+        "--arch", "arm64",
+        "--os-name", "Linux",
+        "--actor", "community-installer",
+    ])
+    assert rc == 1
+    with engine.connect() as connection:
+        connection.execute(text("SET search_path TO hw_kernel"))
+        count = connection.execute(text(
+            "SELECT count(*) FROM hardware_places WHERE project_id = 'proj_missing'"
+        )).scalar()
+        ready = connection.execute(text(
+            "SELECT count(*) FROM hardware_places "
+            "WHERE project_id = 'proj_missing' AND status = 'ready'"
+        )).scalar()
+    assert count == 0
+    assert ready == 0
+    with engine.begin() as connection:
+        connection.execute(text("SET search_path TO hw_kernel"))
+        connection.execute(text("DELETE FROM projects WHERE id = 'proj_missing'"))

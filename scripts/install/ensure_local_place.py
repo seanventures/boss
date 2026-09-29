@@ -11,10 +11,10 @@ exits 0 and writes nothing. ``record_community_local_place`` is safe to call
 again once the project exists. A second call keeps the same default row.
 
 When this script is run directly and ``BOSS_PLACE_AGENT_STATE`` is unset, it
-invokes ``scripts/install/node_agent.sh --local`` itself. A missing script was
-still invoked; its body belongs to another owner, so the local agent is
-recorded installed. A script that is present must exit 0. This does not open
-a socket, an SSH session, or a provider API.
+invokes ``scripts/install/node_agent.sh --local`` itself. A missing script is
+``absent`` and the local place is not marked ready. A script that is present
+is ``installed`` only when that command exits 0. This does not open a socket,
+an SSH session, or a provider API.
 """
 
 from __future__ import annotations
@@ -52,22 +52,24 @@ def _redact(message: str, database_url: str) -> str:
 
 
 def local_agent_state(script: Path | None = None) -> str:
-    """Return ``installed`` or ``absent`` after calling the hardware agent program.
+    """Return ``installed`` only when the hardware agent program exits 0.
 
-    The program is ``scripts/install/node_agent.sh --local``. If that file is
-    not in this checkout, the call is still made and the result is
-    ``installed``. If the file is present, only a zero exit is ``installed``.
+    The program is ``sh scripts/install/node_agent.sh --local``. A missing
+    script is ``absent`` and must not mark the local place ready. A present
+    script is ``installed`` only when that command exits 0.
     """
     path = script or NODE_AGENT
+    if not path.is_file():
+        return "absent"
     completed = subprocess.run(
         ["sh", str(path), "--local"],
         check=False,
         capture_output=True,
         text=True,
     )
-    if path.is_file():
-        return "installed" if completed.returncode == 0 else "absent"
-    return "installed"
+    if completed.returncode == 0:
+        return "installed"
+    return "absent"
 
 
 def main(argv: list[str] | None = None) -> int:

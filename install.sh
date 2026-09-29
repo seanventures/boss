@@ -868,25 +868,20 @@ rm -f "$SEED_ERR"
 
 # Install the one hardware agent on this computer, then record that machine as
 # the default local place. The agent program is scripts/install/node_agent.sh.
-# Another owner ships its body. When the file is not in this checkout the call
-# still happens, and the local row records the agent installed. A present
-# script must succeed before that row is written. No socket, SSH, or provider
-# call is made by the place record itself.
+# A missing script is not installed, and the local place is not marked ready.
+# A present script must exit 0 before that row is written. No socket, SSH, or
+# provider call is made by the place record itself.
 _place_project="$(env_value BOSS_DEFAULT_PROJECT_ID)"
 _place_agent_state="absent"
 if [[ -z "${_place_project}" ]]; then
   ui_info "No project id yet; the local place will be recorded on first project use."
+elif [[ ! -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
+  ui_warn "scripts/install/node_agent.sh is missing. The local hardware agent is absent, so the local place was not marked ready."
 else
-  if [[ -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
-    if sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
-      _place_agent_state="installed"
-    else
-      ui_warn "Hardware agent did not install. The local machine was not recorded."
-    fi
-  else
-    sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null || true
-    ui_info "scripts/install/node_agent.sh is not in this checkout; recording the local hardware agent as installed."
+  if sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
+  else
+    ui_warn "Hardware agent did not install. The local machine was not recorded."
   fi
 fi
 if [[ -n "${_place_project}" && "${_place_agent_state}" == "installed" ]]; then

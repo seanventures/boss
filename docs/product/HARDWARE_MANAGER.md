@@ -34,7 +34,7 @@ Rules enforced by the table and the service:
 
 ## Agent
 
-The agent program is `scripts/install/node_agent.sh --local` for the installer machine. The same program is what a later machine runs; this kernel does not ship a second agent. The script body is owned elsewhere. If `scripts/install/node_agent.sh` is not in this checkout, the installer still calls that path and records the local agent installed. If the file is present, it must exit 0 before the local row is written.
+The agent program is `scripts/install/node_agent.sh --local` for the installer machine. The same program is what a later machine runs; this kernel does not ship a second agent. The script body is owned elsewhere. If `scripts/install/node_agent.sh` is missing, the agent stays `absent` and the local place is not marked ready. If the file is present, it is installed only when `sh scripts/install/node_agent.sh --local` exits 0.
 
 `register_agent_place` is another machine, not another agent. It is not the default, and `agent_state` stays `absent` until `enroll_place_agent`. A provider row is an account and can exist before any machine does. A machine created from that account is additional hardware and gets this same agent.
 
@@ -73,7 +73,7 @@ After the community seed succeeds, `install.sh` reads `BOSS_DEFAULT_PROJECT_ID` 
 
 That is the path this tree implements. The hook does not invent a project. If the env file has no project id, or the `projects` row is not there yet, the script exits 0 and writes nothing. Call `record_community_local_place` again once the project exists; a later call updates hostname, architecture, and OS on the same default row and leaves the agent installed.
 
-If the agent script exists and fails, the installer does not write a local row. A failure to record the place is printed and does not abort an otherwise healthy install.
+If the agent script is missing or exits non-zero, the installer does not write a ready local row. A failure to record the place is printed and does not abort an otherwise healthy install.
 
 ## Out of scope
 
