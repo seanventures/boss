@@ -1,6 +1,6 @@
 # BOSS-429 MCP operator boundary audit
 
-Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 986-operation mounted Community surface. Two were already ordinary API-policy actions. Of the other 75, 28 now require exact-request human confirmation, 37 remain held for route safety work, nine are excluded worker protocols, and one is a safe API-policy text-rendering action. Every action's current MCP disposition appears below.
+Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 986-operation mounted Community surface. Two were already ordinary API-policy actions. Of the other 75, 35 now require exact-request human confirmation, 30 remain held for route safety work, nine are excluded worker protocols, and one is a safe API-policy text-rendering action. Every action's current MCP disposition appears below.
 
 | Operation | Current disposition |
 |---|---|
@@ -30,14 +30,14 @@ Source: the 77 previously held Community actions at integration commit `c218f77e
 | `POST /v1/break-glass/grants/{grant_id}/revoke` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/budget/allocations` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/budget/set_intensity` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
-| `POST /v1/changesets/{changeset_id}/approve` | Hold: domain record would attribute human decision or approval to the MCP agent |
+| `POST /v1/changesets/{changeset_id}/approve` | Confirmable: human reviewer is the domain actor; MCP member also needs `providerops_manage` |
 | `POST /v1/code-tasks/{run_id}/deploy` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/console/v2/autonomy/apply` | Hold: budget or autonomy authority |
 | `POST /v1/decisions/{decision_id}/approve` | Hold: domain record would attribute human decision or approval to the MCP agent |
-| `POST /v1/decisions/{decision_id}/delegate` | Hold: domain record would attribute human decision or approval to the MCP agent |
-| `POST /v1/decisions/{decision_id}/execute` | Hold: domain record would attribute human decision or approval to the MCP agent |
-| `POST /v1/decisions/{decision_id}/reject` | Hold: domain record would attribute human decision or approval to the MCP agent |
-| `POST /v1/decisions/{decision_id}/revise` | Hold: domain record would attribute human decision or approval to the MCP agent |
+| `POST /v1/decisions/{decision_id}/delegate` | Confirmable: human reviewer is the domain actor; MCP member also needs `decision_resolve` |
+| `POST /v1/decisions/{decision_id}/execute` | Confirmable: human reviewer is the domain actor; MCP member also needs `decision_resolve` |
+| `POST /v1/decisions/{decision_id}/reject` | Confirmable: human reviewer is the domain actor; MCP member also needs `decision_resolve` |
+| `POST /v1/decisions/{decision_id}/revise` | Confirmable: human reviewer is the domain actor; MCP member also needs `decision_resolve` |
 | `POST /v1/delivery/deploy` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/delivery/deployments/{deployment_run_id}/execute` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/delivery/deployments/{deployment_run_id}/redeploy` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
@@ -59,11 +59,11 @@ Source: the 77 previously held Community actions at integration commit `c218f77e
 | `POST /v1/github/community/jobs/{job_id}/execute` | Excluded: internal/leased worker protocol; never an operator action |
 | `POST /v1/github/connections/{connection_id}/revoke` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/github/merge-authorizations/{authorization_id}/apply` | Excluded: internal/leased worker protocol; never an operator action |
-| `POST /v1/github/merge-authorizations/{authorization_id}/authorize` | Hold: domain requires an independent authorizer; MCP requester cannot authorize its own merge |
+| `POST /v1/github/merge-authorizations/{authorization_id}/authorize` | Confirmable: independent human reviewer is the domain actor; MCP member also needs `github_manage` |
 | `POST /v1/github/merge-authorizations/{authorization_id}/enqueue` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/github/reconciliation-runs/{run_id}/execute` | Excluded: internal/leased worker protocol; never an operator action |
 | `POST /v1/github/resolution-plans/{plan_id}/apply` | Excluded: internal/leased worker protocol; never an operator action |
-| `POST /v1/github/resolution-plans/{plan_id}/approve` | Hold: domain record would attribute human decision or approval to the MCP agent |
+| `POST /v1/github/resolution-plans/{plan_id}/approve` | Confirmable: independent human reviewer is the domain actor; MCP member also needs `github_manage` |
 | `POST /v1/goldeneye/apps/deploy` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/goldeneye/apps/{name}/rollback` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/improvement-programs/trials/{trial_id}/promote` | Hold: ID-only route lacks MCP session project binding |
@@ -84,7 +84,7 @@ Source: the 77 previously held Community actions at integration commit `c218f77e
 
 ## Confirmation boundary
 
-The API accepts a proposal only from an authenticated, dedicated API-key principal whose active project access is exactly the requested project. It rejects stock `ceo`, `system`, and `executive_console` principals. A separate active human CEO with `decision_resolve` must submit the full independently reviewed request and its SHA-256 digest; the API recomputes the digest and compares it with the original proposal before approval. The gate binds project, principal, alias, method, target, query, and JSON body; it expires after five minutes and is consumed once in the database before dispatch. Four audit events distinguish request, approval, consumption, and API result. The persisted preview contains only method, target, field counts, and a fixed set of field names; free-form query/body values, including `note`, are not stored. The human review submission is not persisted. An approved digest never grants the MCP principal a missing API permission.
+The API accepts a proposal only from an authenticated, dedicated API-key principal whose active project access is exactly the requested project. It rejects stock `ceo`, `system`, and `executive_console` principals. A separate active human CEO with `decision_resolve` must submit the full independently reviewed request and its SHA-256 digest; the API recomputes the digest and compares it with the original proposal before approval. The gate binds project, principal, alias, method, target, query, and JSON body; it expires after five minutes and is consumed once in the database before dispatch. Four audit events distinguish request, approval, consumption, and API result. The persisted preview contains only method, target, field counts, a fixed set of field names, and `effect_actor: approving_human` for the seven human-attributed routes; free-form query/body values, including `note`, are not stored. The human review submission is not persisted. An approved digest never grants the MCP principal a missing API permission. The seven human-attributed routes check the MCP member's own permission at proposal and consumption, check the human reviewer again at consumption, and leave the domain's independent-review and role policy in force.
 
 ## Held route families
 
@@ -92,7 +92,7 @@ The API accepts a proposal only from an authenticated, dedicated API-key princip
 - Host key installation/adoption can carry raw credential material. The current review summary intentionally does not persist arbitrary body text, so these actions lack a sound human review channel.
 - Global organization, role, identity-provider, autonomy, and worker-autoscaling actions do not fit a project-scoped MCP principal. Several deletion endpoints lack an API-side project actor check.
 - Discovery and trial promotion use ID-only routes whose target project cannot be pinned at the MCP boundary.
-- Nine decision/approval routes remain held until the domain service can verify and record the attested human reviewer without weakening the MCP principal's own permissions.
+- Decision approval and preview approval remain held because their follow-on handlers can execute an agent tool or queue merge/deployment work; exact human attribution alone does not qualify those effects for MCP.
 - The nine worker routes are now `excluded`, rather than operator actions: GitHub execution/apply and reconciliation, docs update, orchestration next move, tracker sync, and retention prune. Their lease and authorization protocol belongs to workers.
 
 The separate [Community matrix](../community/mcp-api-capability-matrix.json) lists every mounted operation and its current status. Exact availability still depends on the live edition, member grants, and API policy.

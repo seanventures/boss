@@ -151,6 +151,17 @@ _CONFIRMABLE_EXACT = frozenset({
     ("DELETE", "/v1/delivery-workflows/{definition_id}"),
     ("DELETE", "/v1/deployment-targets/{target_id}"),
 })
+_HUMAN_ATTRIBUTED_CONFIRMATIONS = {
+    # These handlers persist the actor of a human decision. The API may use the
+    # separate reviewer as that actor only after consuming an exact confirmation.
+    ("POST", "/v1/decisions/{decision_id}/reject"): "decision_resolve",
+    ("POST", "/v1/decisions/{decision_id}/revise"): "decision_resolve",
+    ("POST", "/v1/decisions/{decision_id}/delegate"): "decision_resolve",
+    ("POST", "/v1/decisions/{decision_id}/execute"): "decision_resolve",
+    ("POST", "/v1/changesets/{changeset_id}/approve"): "providerops_manage",
+    ("POST", "/v1/github/merge-authorizations/{authorization_id}/authorize"): "github_manage",
+    ("POST", "/v1/github/resolution-plans/{plan_id}/approve"): "github_manage",
+}
 
 
 def operation_alias(method: str, path: str) -> str:
@@ -215,7 +226,13 @@ def needs_operator_confirmation(method: str, path: str) -> bool:
 
 def confirmation_eligible(method: str, path: str) -> bool:
     """Permit reviewed project-scoped transitions with an auditable API effect."""
-    return (method, path) in _CONFIRMABLE_EXACT
+    return ((method, path) in _CONFIRMABLE_EXACT
+            or (method, path) in _HUMAN_ATTRIBUTED_CONFIRMATIONS)
+
+
+def human_attributed_permission(method: str, path: str) -> str | None:
+    """The MCP principal's own grant required in addition to human review."""
+    return _HUMAN_ATTRIBUTED_CONFIRMATIONS.get((method, path))
 
 
 def _schema_fields(operation: dict, location: str) -> tuple[dict, list[str]]:

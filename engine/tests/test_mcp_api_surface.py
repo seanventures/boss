@@ -697,13 +697,13 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
                          pinned_project_id="alpha")
     alias = operation_alias("POST", "/v1/members")
     held = operation_alias("POST", "/v1/goldeneye/apps/deploy")
-    held_decision = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
+    reviewed_decision = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
     assert surface.describe(alias)["availability"] == "confirmation_required"
     assert "confirmation_id" in surface.describe(alias)["inputSchema"]["properties"]
     assert surface.invoke(alias, project_id="alpha",
                           body={"note": "reviewed"})["error"] == "confirmation_required"
     assert surface.invoke(held, project_id="alpha")["error"] == "operator_only_unavailable"
-    assert surface.invoke(held_decision, project_id="alpha")["error"] == "operator_only_unavailable"
+    assert surface.invoke(reviewed_decision, project_id="alpha")["error"] == "confirmation_required"
     assert seen == []
 
     proposed = surface.invoke(alias, project_id="alpha", body={"note": "reviewed"},

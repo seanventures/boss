@@ -32,6 +32,7 @@ from boss_engine.services.coordination_read_model import (
 from boss_engine.mcp.api_surface import (
     confirmation_eligible as mcp_confirmation_eligible,
     exclusion_reason as mcp_exclusion_reason,
+    human_attributed_permission as mcp_human_attributed_permission,
     needs_operator_confirmation as mcp_needs_operator_confirmation,
     operation_alias as mcp_operation_alias,
 )
@@ -1041,6 +1042,10 @@ current_auth_method: ContextVar[Optional[str]] = ContextVar(
     "current_auth_method",
     default=None,
 )
+current_mcp_human_attribution: ContextVar[Optional[tuple[str, str, str]]] = ContextVar(
+    "current_mcp_human_attribution",
+    default=None,
+)
 
 
 # --- In-process rate limiter for high-cost paths (per .ai/security-review.md) ---
@@ -1736,38 +1741,59 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                 query_items = list(request.query_params.multi_items())
                 if len({key for key, _ in query_items}) != len(query_items):
                     return JSONResponse(status_code=400, content={"detail": "duplicate_mcp_query_parameter"})
+                attributed_permission = mcp_human_attributed_permission(
+                    request.method, matched[1],
+                )
                 try:
                     with begin(engine) as connection:
                         _require_exclusive_mcp_project(
                             connection, principal=principal, project_id=confirmed_project,
                         )
-                        mcp_confirmation.consume_request(
+                        if attributed_permission:
+                            members.require_member(
+                                connection, confirmed_project, principal,
+                                permission=attributed_permission,
+                            )
+                        approved_by = mcp_confirmation.consume_request(
                             connection, project_id=confirmed_project,
                             confirmation_id=confirmation_id, requester=principal,
                             operation=mcp_operation, method=request.method,
                             path=request.url.path, query=dict(query_items), body=body,
                         )
+                        _require_human_mcp_member(
+                            connection, confirmed_project, approved_by,
+                        )
                 except HTTPException as error:
                     return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+                except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+                    return JSONResponse(status_code=403, content={"detail": str(error)})
                 except mcp_confirmation.ConfirmationError as error:
                     return JSONResponse(status_code=409, content={"detail": error.code})
+                reviewer_token = current_mcp_human_attribution.set(
+                    (confirmed_project, approved_by, principal)
+                    if attributed_permission
+                    else None
+                )
                 try:
-                    response = await call_next(request)
-                except Exception:
+                    try:
+                        response = await call_next(request)
+                    except Exception:
+                        with begin(engine) as connection:
+                            mcp_confirmation.record_outcome(
+                                connection, project_id=confirmed_project,
+                                confirmation_id=confirmation_id, requester=principal,
+                                status_code=500,
+                            )
+                        raise
                     with begin(engine) as connection:
                         mcp_confirmation.record_outcome(
                             connection, project_id=confirmed_project,
                             confirmation_id=confirmation_id, requester=principal,
-                            status_code=500,
+                            status_code=response.status_code,
                         )
-                    raise
-                with begin(engine) as connection:
-                    mcp_confirmation.record_outcome(
-                        connection, project_id=confirmed_project,
-                        confirmation_id=confirmation_id, requester=principal,
-                        status_code=response.status_code,
-                    )
-                return response
+                    return response
+                finally:
+                    current_mcp_human_attribution.reset(reviewer_token)
         return await call_next(request)
     finally:
         current_api_principal.reset(principal_token)
@@ -1856,6 +1882,11 @@ def require_authenticated_actor_binding(
             )
         return
     if principal == actor:
+        return
+    approved_human = current_mcp_human_attribution.get()
+    if (approved_human == (project_id, actor, principal)
+            and current_transport_authenticated.get()
+            and current_auth_method.get() == "api_key"):
         return
     # Bounded delegation: allow the authenticated principal to act as a member whose
     # role_keys explicitly include the principal — e.g. the console's system actor
@@ -3060,10 +3091,7 @@ class McpConfirmationApproval(BaseModel):
     reviewed_request: McpConfirmationRequest
 
 
-def _require_human_mcp_reviewer(connection, project_id: str) -> str:
-    principal = current_api_principal.get()
-    if not current_transport_authenticated.get() or not principal:
-        raise HTTPException(status_code=403, detail="Authenticated human reviewer required.")
+def _require_human_mcp_member(connection, project_id: str, principal: str) -> None:
     try:
         reviewer = members.require_member(
             connection, project_id, principal,
@@ -3073,7 +3101,30 @@ def _require_human_mcp_reviewer(connection, project_id: str) -> str:
         raise HTTPException(status_code=403, detail=str(error)) from error
     if reviewer.get("member_type") != "human":
         raise HTTPException(status_code=403, detail="Human CEO member required.")
+
+
+def _require_human_mcp_reviewer(connection, project_id: str) -> str:
+    principal = current_api_principal.get()
+    if not current_transport_authenticated.get() or not principal:
+        raise HTTPException(status_code=403, detail="Authenticated human reviewer required.")
+    _require_human_mcp_member(connection, project_id, principal)
     return principal
+
+
+def _mcp_reviewed_actor(claimed_actor: str) -> str:
+    """Use the approving human only for the exact confirmed request in flight."""
+    review = current_mcp_human_attribution.get()
+    if not review:
+        return claimed_actor
+    if claimed_actor != current_api_principal.get():
+        raise HTTPException(status_code=409, detail="mcp_actor_mismatch")
+    return review[1]
+
+
+def _decision_action_actor(claimed_actor: str) -> str:
+    if current_mcp_human_attribution.get():
+        return _mcp_reviewed_actor(claimed_actor)
+    return current_api_principal.get() or claimed_actor
 
 
 @app.post("/v1/mcp-confirmations", status_code=201)
@@ -3089,17 +3140,24 @@ def request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
             or mcp_exclusion_reason(payload.method, matched[1])
             or not mcp_confirmation_eligible(payload.method, matched[1])):
         raise HTTPException(status_code=422, detail="Operation is not confirmation eligible.")
+    permission = mcp_human_attributed_permission(payload.method, matched[1])
+    if permission and (not isinstance(payload.body, dict)
+                       or payload.body.get("actor") != principal):
+        raise HTTPException(status_code=422, detail="mcp_actor_mismatch")
     try:
         with begin(engine) as connection:
             _require_exclusive_mcp_project(
                 connection, principal=principal, project_id=payload.project_id,
             )
-            members.require_member(connection, payload.project_id, principal)
+            members.require_member(
+                connection, payload.project_id, principal, permission=permission,
+            )
             return mcp_confirmation.create_request(
                 connection, project_id=payload.project_id,
                 requested_by=principal, operation=payload.operation,
                 method=payload.method, path=payload.path,
                 query=payload.query, body=payload.body,
+                human_attributed=bool(permission),
             )
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
@@ -16830,6 +16888,7 @@ def approve_github_resolution_plan(
     plan_id: str,
     payload: GitHubResolutionPlanApproveRequest,
 ) -> GitHubResolutionPlanSummary:
+    payload.actor = _mcp_reviewed_actor(payload.actor)
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -17001,6 +17060,7 @@ def authorize_github_merge(
     authorization_id: str,
     payload: GitHubMergeAuthorizationApproveRequest,
 ) -> GitHubMergeAuthorizationSummary:
+    payload.actor = _mcp_reviewed_actor(payload.actor)
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -17822,6 +17882,7 @@ def approve_changeset(
     changeset_id: str,
     payload: ChangeSetApproveRequest,
 ) -> ChangeSetSummary:
+    payload.actor = _mcp_reviewed_actor(payload.actor)
     with begin(engine) as connection:
         project_id = project_id_for_changeset(connection, changeset_id)
         required_roles = resource_plane.required_approvers_for_changeset(
@@ -20609,9 +20670,9 @@ def reject_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
-        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
-        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
-        payload.actor = current_api_principal.get() or payload.actor
+        # Ordinary keys use their bound principal; exact MCP confirmations use
+        # the independently authenticated human reviewer.
+        payload.actor = _decision_action_actor(payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -20637,9 +20698,9 @@ def revise_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
-        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
-        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
-        payload.actor = current_api_principal.get() or payload.actor
+        # Ordinary keys use their bound principal; exact MCP confirmations use
+        # the independently authenticated human reviewer.
+        payload.actor = _decision_action_actor(payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -20667,9 +20728,9 @@ def delegate_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
-        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
-        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
-        payload.actor = current_api_principal.get() or payload.actor
+        # Ordinary keys use their bound principal; exact MCP confirmations use
+        # the independently authenticated human reviewer.
+        payload.actor = _decision_action_actor(payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -20697,9 +20758,9 @@ def execute_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
-        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
-        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
-        payload.actor = current_api_principal.get() or payload.actor
+        # Ordinary keys use their bound principal; exact MCP confirmations use
+        # the independently authenticated human reviewer.
+        payload.actor = _decision_action_actor(payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(

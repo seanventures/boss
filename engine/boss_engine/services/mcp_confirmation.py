@@ -55,7 +55,7 @@ def request_digest(
 def create_request(
     connection: Any, *, project_id: str, requested_by: str,
     operation: str, method: str, path: str, query: dict[str, Any],
-    body: dict[str, Any] | None,
+    body: dict[str, Any] | None, human_attributed: bool = False,
 ) -> dict[str, Any]:
     digest = request_digest(
         project_id=project_id, operation=operation, method=method,
@@ -72,6 +72,8 @@ def create_request(
         "body_field_count": len(body or {}),
         "body_fields": sorted(_REVIEW_FIELD_NAMES.intersection(body or {})),
     }
+    if human_attributed:
+        preview["effect_actor"] = "approving_human"
     connection.execute(sql("""
         INSERT INTO mcp_confirmations (
             id, project_id, requested_by, operation_alias, method, request_path,
@@ -160,7 +162,7 @@ def consume_request(
     connection: Any, *, project_id: str, confirmation_id: str,
     requester: str, operation: str, method: str, path: str,
     query: dict[str, Any], body: dict[str, Any] | None,
-) -> None:
+) -> str:
     digest = request_digest(
         project_id=project_id, operation=operation, method=method,
         path=path, query=query, body=body,
@@ -181,10 +183,13 @@ def consume_request(
     }).mappings().first()
     if not row:
         raise ConfirmationError("confirmation_missing_expired_or_mismatched")
+    if not row["approved_by"]:
+        raise ConfirmationError("confirmation_missing_human_approver")
     emit_event(connection, project_id, "mcp.confirmation_consumed", requester,
                "mcp_confirmation", confirmation_id,
                {"operation": operation, "request_digest": digest,
                 "approved_by": row["approved_by"]})
+    return str(row["approved_by"])
 
 
 def record_outcome(
