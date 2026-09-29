@@ -6296,10 +6296,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_wakeups_thread
 
 -- Places an app can be installed. The default is the computer where the
 -- community installer ran (`kind = local`). One hardware agent runs on that
--- machine and on every other machine BOSS connects. `agent_state` is `absent`
--- until that agent is installed; a machine cannot be `ready` before then.
--- A provider row is an account, not a machine. Inserting a row does not open
--- a socket, an SSH session, or a provider API. `secret_ref` is a reference only.
+-- machine and on every other machine BOSS connects. `agent_state` stays
+-- `absent` until that agent install finishes, then `installed`. A machine
+-- cannot be `ready` before then. A provider row is an account, not a machine.
+-- Inserting a row does not open a socket, an SSH session, or a provider API.
+-- `secret_ref` is a reference only. Enroll tokens are not stored; only
+-- `hardware_agent_enroll_tokens.token_hash`.
 CREATE TABLE IF NOT EXISTS hardware_places (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -6310,6 +6312,10 @@ CREATE TABLE IF NOT EXISTS hardware_places (
   agent_state TEXT NOT NULL DEFAULT 'absent',
   is_default BOOLEAN NOT NULL DEFAULT false,
   endpoint TEXT,
+  hostname TEXT,
+  arch TEXT,
+  os_name TEXT,
+  dependency_report JSONB NOT NULL DEFAULT '{}'::jsonb,
   labels JSONB NOT NULL DEFAULT '{}'::jsonb,
   secret_ref TEXT,
   created_by TEXT NOT NULL,
@@ -6337,3 +6343,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_hardware_places_one_local
   ON hardware_places (project_id) WHERE kind = 'local';
 CREATE INDEX IF NOT EXISTS idx_hardware_places_project
   ON hardware_places (project_id, kind, status);
+
+CREATE TABLE IF NOT EXISTS hardware_agent_enroll_tokens (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  place_id TEXT NOT NULL REFERENCES hardware_places(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  consumed_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hardware_agent_enroll_tokens_place
+  ON hardware_agent_enroll_tokens (place_id, consumed_at);

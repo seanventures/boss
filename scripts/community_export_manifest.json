@@ -235,7 +235,7 @@
   "schema_export_rewrite": {
     "source": "db/schema.community.sql",
     "destination": "db/schema.sql",
-    "sha256": "523a6b4ce0f0fb8400b05a7183e9d3d3e4f5cabf8eefbddc633f65d87d420b01"
+    "sha256": "0bf79c107c05c36962d867ff597785d00414ed65fb484a0c5a866e4ee674958b"
   },
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
