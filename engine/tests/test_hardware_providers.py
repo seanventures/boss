@@ -22,8 +22,8 @@ from boss_engine.services.hardware_providers import (
 )
 
 
-RAW_SECRET = "AKIAIOSFODNN7EXAMPLE"
-DO_SECRET = "dop_v1_0123456789abcdef"
+RAW_SECRET = "env:AKIA_EXAMPLE_NOT_A_KEY"
+DO_SECRET = "dop_v1_example"
 
 
 class _Mappings:
