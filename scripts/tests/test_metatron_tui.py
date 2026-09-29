@@ -989,9 +989,9 @@ def test_community_snapshot_maps_every_operator_operation():
     contract = community_path if community_path.exists() else ROOT / "api" / "openapi.yaml"
     document = yaml.safe_load(contract.read_text(encoding="utf-8"))
     records = tui.operation_records(document)
-    assert len(records) == 986
+    assert len(records) == 993
     operator_records = [record for record in records if record["path"].startswith("/v1/")]
-    assert len(operator_records) == 973
+    assert len(operator_records) == 980
     assert all(record["addressable"] for record in operator_records)
     assert len({record["operation_id"] for record in records}) == len(records)
     assert all(record["operation_id"] == record["runtime_operation_id"] for record in records)
@@ -1003,9 +1003,9 @@ def test_private_snapshot_maps_every_operator_operation_except_inbound_callbacks
     yaml = pytest.importorskip("yaml")
     document = yaml.safe_load((ROOT / "api" / "openapi.yaml").read_text(encoding="utf-8"))
     records = tui.operation_records(document)
-    assert len(records) == 1027
+    assert len(records) == 1034
     operator_records = [record for record in records if record["path"].startswith("/v1/")]
-    assert len(operator_records) == 1014
+    assert len(operator_records) == 1021
     unaddressable = {(record["method"], record["path"]) for record in operator_records if not record["addressable"]}
     assert unaddressable == {
         ("POST", "/v1/webhooks/github"),
@@ -1043,7 +1043,7 @@ print(json.dumps({'openapi': len(records), 'operator': len(operator)}))
     )
     assert result.returncode == 0, result.stderr
     counts = json.loads(result.stdout)
-    assert counts == {"openapi": 986, "operator": 973}
+    assert counts == {"openapi": 993, "operator": 980}
 
 
 def test_schedule_edit_uses_typed_op_input_and_returns_the_api_result():
