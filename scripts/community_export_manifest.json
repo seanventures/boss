@@ -219,7 +219,7 @@
   "makefile_export_rewrite": {
     "source": "Makefile.community",
     "destination": "Makefile",
-    "sha256": "e16b4c0bd201d1986ca23c6c2127a50d85e13c0f235d6820952c175b5bd6ae58"
+    "sha256": "5af8c61ecc0128818ad414dee9eee0e288a41f4cf32450741a2ffeeaf52e2fdd"
   },
   "schema_export_rewrite": {
     "source": "db/schema.community.sql",
