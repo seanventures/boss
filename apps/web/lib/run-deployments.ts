@@ -22,14 +22,19 @@ export type RunDeployment = {
 };
 
 const batcher = createBatcher<RunDeployment>({
-  url: (ids, names) =>
-    `/api/run-deployments?run_ids=${encodeURIComponent(ids.join(","))}` +
-    `&app_names=${encodeURIComponent(names.join(","))}`,
+  url: (ids, names) => {
+    const query = new URLSearchParams({ run_ids: ids.join(",") });
+    // One parameter per run. Joining names with commas confused an app named "Costs, Q3"
+    // with two apps and paired the next run with the wrong identity.
+    names.forEach((name) => query.append("app_name", name));
+    return `/api/run-deployments?${query.toString()}`;
+  },
   pick: (body, id) => (body as { runs?: Record<string, RunDeployment> })?.runs?.[id],
   // Under the cards' own 4s poll, or polling would stall on a cached answer.
   ttlMs: 2_500,
   // Matches MAX_IDS in app/api/run-deployments/route.ts.
   maxPerRequest: 60,
+  maxConcurrentRequests: 2,
 });
 
 /**

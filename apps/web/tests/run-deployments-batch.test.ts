@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
   __resetRunDeploymentCache,
@@ -42,6 +42,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = realFetch;
   __resetRunDeploymentCache();
+  vi.useRealTimers();
 });
 
 const ids = (url: string) =>
@@ -87,14 +88,12 @@ test("app names ride along positionally with their run ids", async () => {
   // deployment for a different app entirely. A batch must not scramble that pairing.
   respond = () => ({ status: 200, body: { runs: {} } });
   await Promise.all([
-    loadRunDeployment("r1", "Shorty"),
+    loadRunDeployment("r1", "Costs, Q3"),
     loadRunDeployment("r2", "Living Colors"),
   ]);
   const url = new URL(calls[0].url, "http://x");
   expect(ids(calls[0].url)).toEqual(["r1", "r2"]);
-  expect(
-    decodeURIComponent(url.searchParams.get("app_names") ?? "").split(","),
-  ).toEqual(["Shorty", "Living Colors"]);
+  expect(url.searchParams.getAll("app_name")).toEqual(["Costs, Q3", "Living Colors"]);
 });
 
 test("a batch larger than the handler's cap is chunked, never truncated", async () => {
@@ -109,6 +108,48 @@ test("a batch larger than the handler's cap is chunked, never truncated", async 
   expect(calls.length, "130 ids at 60 per request").toBe(3);
   expect(calls.flatMap((c) => ids(c.url)).length).toBe(130);
   expect(results.every((r) => !r.error), "no card may be dropped by chunking").toBe(true);
+});
+
+test("six hundred cards never launch all ten route chunks at once", async () => {
+  let active = 0;
+  let peak = 0;
+  globalThis.fetch = (async (input: unknown) => {
+    calls.push({ url: String(input) });
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    active -= 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        runs: Object.fromEntries(ids(String(input)).map((id) => [id, { deployments: [] }])),
+      }),
+    } as Response;
+  }) as typeof fetch;
+  const results = await Promise.all(
+    Array.from({ length: 600 }, (_, i) => loadRunDeployment(`run-${i}`)),
+  );
+  expect(calls).toHaveLength(10);
+  expect(peak).toBe(2); // At most eight upstream API reads: two routes × four each.
+  expect(results.every((r) => !r.error)).toBe(true);
+});
+
+test("queued route chunks expire explicitly when earlier chunks stall", async () => {
+  vi.useFakeTimers();
+  globalThis.fetch = ((input: unknown) => {
+    calls.push({ url: String(input) });
+    return new Promise<Response>(() => {});
+  }) as typeof fetch;
+  const resultsPromise = Promise.all(
+    Array.from({ length: 180 }, (_, i) => loadRunDeployment(`run-${i}`)),
+  );
+  await vi.advanceTimersByTimeAsync(20_016);
+  const results = await resultsPromise;
+  expect(calls).toHaveLength(2);
+  expect(results).toHaveLength(180);
+  expect(results.every((r) => r.error)).toBe(true);
+  expect(results[179].error).toMatch(/timed out before request/);
 });
 
 // --------------------------------------------------------------------------- //

@@ -76,10 +76,13 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const raw = (url.searchParams.get("run_ids") ?? "").trim();
   const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  // Titles are positional, matching `run_ids`, because the upstream endpoint disambiguates
-  // apps by name — several apps share one repo, and without the name a deploy once reported
-  // success for a different app entirely.
-  const names = (url.searchParams.get("app_names") ?? "").split(",").map((s) => s.trim());
+  // Names are repeated parameters, positional against `run_ids`. A comma is valid in an app
+  // name, so splitting a joined name list can point one run at a different app's deployment.
+  const pairedNames = url.searchParams.getAll("app_name");
+  // Older browser tabs still send the joined form during a rolling console upgrade.
+  const legacyNames = url.searchParams.get("app_names");
+  const names = pairedNames.length > 0 ? pairedNames.map((s) => s.trim())
+    : ids.length === 1 ? [(legacyNames ?? "").trim()] : [];
 
   if (ids.length === 0) {
     return NextResponse.json({ error: "missing run_ids" }, { status: 400 });
@@ -89,6 +92,14 @@ export async function GET(req: Request) {
       { error: `too many run_ids (${ids.length} > ${MAX_IDS}); request them in chunks` },
       { status: 400 },
     );
+  }
+  if (pairedNames.length > 0 && pairedNames.length !== ids.length) {
+    return NextResponse.json({ error: "app_name count must match run_ids" }, { status: 400 });
+  }
+  if (legacyNames !== null && ids.length > 1 && pairedNames.length === 0) {
+    // A joined list cannot distinguish two app names from one name containing a comma.
+    // Fail closed for an older tab rather than pairing a run with another app's deployment.
+    return NextResponse.json({ error: "use one app_name parameter per run" }, { status: 400 });
   }
 
   const deadline = Date.now() + BATCH_BUDGET_MS;

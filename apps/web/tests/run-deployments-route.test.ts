@@ -15,7 +15,7 @@ afterEach(() => {
 function request(ids: string[], names: string[] = []): Request {
   const url = new URL("http://console/api/run-deployments");
   url.searchParams.set("run_ids", ids.join(","));
-  url.searchParams.set("app_names", names.join(","));
+  names.forEach((name) => url.searchParams.append("app_name", name));
   return new Request(url);
 }
 
@@ -110,6 +110,49 @@ describe("deployment lookup batch route", () => {
     const body = await response.json();
     expect(body.runs.denied).toEqual({ error: "HTTP 403" });
     expect(body.runs.ok).toEqual({ deployments: [] });
+  });
+
+  it("keeps a comma inside one app name paired with its run", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: string) => {
+      seen.push(input);
+      return Promise.resolve(Response.json({ deployments: [] }));
+    }));
+    const response = await GET(request(["first", "second"], ["Costs, Q3", "Roadmap"]));
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([
+      "http://boss-api/v1/code-tasks/first/deployments?app_name=Costs%2C%20Q3",
+      "http://boss-api/v1/code-tasks/second/deployments?app_name=Roadmap",
+    ]);
+  });
+
+  it("rejects incomplete positional app names", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await GET(request(["first", "second"], ["Only one"]));
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a comma in a legacy single-run name and refuses ambiguous legacy batches", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: string) => {
+      seen.push(input);
+      return Promise.resolve(Response.json({ deployments: [] }));
+    }));
+    const single = await GET(new Request(
+      "http://console/api/run-deployments?run_ids=first&app_names=Costs%2C%20Q3",
+    ));
+    expect(single.status).toBe(200);
+    expect(seen).toEqual([
+      "http://boss-api/v1/code-tasks/first/deployments?app_name=Costs%2C%20Q3",
+    ]);
+
+    const ambiguous = await GET(new Request(
+      "http://console/api/run-deployments?run_ids=first,second&app_names=Costs%2C%20Q3",
+    ));
+    expect(ambiguous.status).toBe(400);
+    expect(seen).toHaveLength(1);
   });
 
   it("rejects an oversized batch before issuing any API reads", async () => {

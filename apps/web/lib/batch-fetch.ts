@@ -32,6 +32,9 @@ export type BatcherOptions<T extends BatchResult> = {
   ttlMs?: number;
   /** Must match the route handler's own cap; larger batches are chunked, never truncated. */
   maxPerRequest?: number;
+  /** Bound simultaneous chunk requests. A thousand cards must not bypass the route handler's
+   *  own upstream limit by launching many route requests in parallel. */
+  maxConcurrentRequests?: number;
   /** How long to hold the door open for other cards. One frame: long enough for a list to
    *  finish mounting, short enough that the first card is not visibly waiting. */
   windowMs?: number;
@@ -51,30 +54,58 @@ export type Batcher<T extends BatchResult> = {
 export function createBatcher<T extends BatchResult>(opts: BatcherOptions<T>): Batcher<T> {
   const ttlMs = opts.ttlMs ?? 2_500;
   const maxPerRequest = opts.maxPerRequest ?? 60;
+  const maxConcurrentRequests = Math.max(1, opts.maxConcurrentRequests ?? 2);
   const windowMs = opts.windowMs ?? 16;
   const timeoutMs = opts.timeoutMs ?? 20_000;
 
   let queue: Pending<T>[] = [];
+  const chunks: Array<{ batch: Pending<T>[]; deadline: number }> = [];
+  let activeRequests = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const cache = new Map<string, { at: number; promise: Promise<T> }>();
 
-  async function send(batch: Pending<T>[]): Promise<void> {
-    const url = opts.url(batch.map((b) => b.key), batch.map((b) => b.extra));
+  async function send(batch: Pending<T>[], remainingMs: number): Promise<void> {
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const res = await Promise.race([
-        fetch(url, { cache: "no-store" }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`lookup timed out after ${timeoutMs}ms`)), timeoutMs),
-        ),
+      const url = opts.url(batch.map((b) => b.key), batch.map((b) => b.extra));
+      const body = await Promise.race([
+        (async () => {
+          const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            reject(new Error(`lookup timed out after ${timeoutMs}ms`));
+          }, remainingMs);
+        }),
       ]);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json();
       for (const b of batch) {
         b.resolve(opts.pick(body, b.key) ?? ({ error: "no answer for this item" } as T));
       }
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
       for (const b of batch) b.resolve({ error } as T);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+
+  function pump(): void {
+    while (activeRequests < maxConcurrentRequests && chunks.length > 0) {
+      const chunk = chunks.shift()!;
+      const remainingMs = chunk.deadline - Date.now();
+      if (remainingMs <= 0) {
+        for (const b of chunk.batch) b.resolve({ error: "lookup timed out before request" } as T);
+        continue;
+      }
+      activeRequests += 1;
+      void send(chunk.batch, remainingMs).finally(() => {
+        activeRequests -= 1;
+        pump();
+      });
     }
   }
 
@@ -82,9 +113,11 @@ export function createBatcher<T extends BatchResult>(opts: BatcherOptions<T>): B
     const batch = queue;
     queue = [];
     timer = null;
+    const deadline = Date.now() + timeoutMs;
     for (let i = 0; i < batch.length; i += maxPerRequest) {
-      void send(batch.slice(i, i + maxPerRequest));
+      chunks.push({ batch: batch.slice(i, i + maxPerRequest), deadline });
     }
+    pump();
   }
 
   return {
@@ -116,7 +149,12 @@ export function createBatcher<T extends BatchResult>(opts: BatcherOptions<T>): B
 
     reset(): void {
       cache.clear();
+      for (const b of queue) b.resolve({ error: "lookup reset" } as T);
+      for (const chunk of chunks) {
+        for (const b of chunk.batch) b.resolve({ error: "lookup reset" } as T);
+      }
       queue = [];
+      chunks.length = 0;
       if (timer !== null) clearTimeout(timer);
       timer = null;
     },

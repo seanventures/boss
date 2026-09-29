@@ -3356,7 +3356,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       try {
         const r = await fetch(
           `/api/run-deployments?run_ids=${encodeURIComponent(buildRunId)}`
-          + `&app_names=${encodeURIComponent(name)}`, { cache: "no-store" });
+          + `&app_name=${encodeURIComponent(name)}`, { cache: "no-store" });
         if (!r.ok) return;
         const body = await r.json();
         const list = (body?.runs?.[buildRunId]?.deployments ?? []) as Array<{

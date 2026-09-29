@@ -29,7 +29,7 @@ export function fromInteractiveControl(event: React.SyntheticEvent): boolean {
 }
 import { groupRunsIntoApps } from "./app-grouping";
 
-import { useActionState, useCallback, useEffect, useRef, useState } from "react";
+import React, { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { forgetRunDeployment, loadRunDeployment } from "../lib/run-deployments";
@@ -1190,7 +1190,7 @@ async function retireTarget(targetId: string, actor: string): Promise<{ ok: bool
   }
 }
 
-function DeploymentLine({ run, projectId, actor, deployable }: {
+export function DeploymentLine({ run, projectId, actor, deployable }: {
   run: CodeTaskRun; projectId: string; actor: string;
   /** Has this app produced reviewed code? A blocked or still-building task has nothing to
    *  ship, and offering a deployment plan there promises something the pipeline cannot honour. */
@@ -1206,6 +1206,8 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // Whether the binding has been READ yet. Without this, `targetId` is null for the first
   // render and the card would flash "not bound" at every app on load.
   const [loaded, setLoaded] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const lookupSequence = useRef(0);
 
   // A BATCHED ROUTE HANDLER, NOT A PER-CARD SERVER ACTION.
   //
@@ -1218,15 +1220,30 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // Same reasoning as loadHostsOnce above; this is the per-card path that was missed, because
   // one extra call per card looks cheap right up until there are forty cards.
   const load = useCallback(async () => {
-    const d = await loadRunDeployment(run.id, appIdentity(run).name);
-    // `error` means nobody answered, which is NOT the same as "this app has no deployments".
-    // Treating them alike is what once showed a deployed app as never deployed, so a failed
-    // lookup leaves the previous state and `loaded` false rather than asserting absence.
-    if (d.error) return;
-    setDeploys((d.deployments ?? []) as any[]);
-    setLinked(d.linked_host ?? null);
-    setTargetId(d.linked_target_id ?? null);
-    setLoaded(true);
+    const sequence = ++lookupSequence.current;
+    // A refresh can fail after a successful read. Hide actions while it is in flight, and do
+    // not leave the old binding armed if the current answer fails.
+    setLoaded(false);
+    setLookupError(null);
+    try {
+      const d = await loadRunDeployment(run.id, appIdentity(run).name);
+      if (sequence !== lookupSequence.current) return;
+      if (d.error) throw new Error(d.error);
+      setDeploys((d.deployments ?? []) as any[]);
+      setLinked(d.linked_host ?? null);
+      setTargetId(d.linked_target_id ?? null);
+      setLoaded(true);
+    } catch (error) {
+      if (sequence !== lookupSequence.current) return;
+      // `error` means nobody answered, not "this app has no deployments". Clear every stale
+      // field so a failed refresh cannot leave Deploy, Set target, Retry, or Unbind active.
+      setDeploys([]);
+      setLinked(null);
+      setTargetId(null);
+      setPlan(null);
+      setNote(null);
+      setLookupError(String((error as Error)?.message ?? error));
+    }
   }, [run]);
 
   // Polling must see the world as it is now, not the batch window's 2.5s-old answer.
@@ -1235,7 +1252,10 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
     await load();
   }, [run.id, load]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => { lookupSequence.current += 1; };
+  }, [load]);
 
   // AND WHEN THE CHANGE WAS MADE SOMEWHERE ELSE.
   //
@@ -1259,7 +1279,33 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // merged app with no way forward on its own card.
   // Nothing to ship, or still shipping it: the row would be an empty promise on a card that
   // already says BLOCKED or BUILDING two inches above.
+  if (lookupError) {
+    return (
+      <div className="ct-deploy-wrap">
+        <div className="ct-deploy-line" data-testid="app-deployment-unreadable">
+          <span className="cap-badge tone-red">deployment unavailable</span>
+          <span className="detail" role="alert">
+            Could not check deployment ({lookupError}). Retry before changing its target or shipping.
+          </span>
+          <button type="button" className="cap-btn ct-deploy-action"
+                  data-testid="app-deployment-check-retry"
+                  onClick={(event) => { event.stopPropagation(); void reload(); }}>
+            <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}Retry check
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!deployable && !latest) return null;
+  if (!loaded) {
+    return (
+      <div className="ct-deploy-wrap">
+        <div className="ct-deploy-line" data-testid="app-deployment-checking">
+          <span className="detail">Checking deployment…</span>
+        </div>
+      </div>
+    );
+  }
 
   // UNBOUND IS ABOUT THE BINDING, NOT THE HISTORY.
   //
