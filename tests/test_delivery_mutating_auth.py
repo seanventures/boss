@@ -131,4 +131,4 @@ def test_linked_target_lookup_is_project_scoped() -> None:
     """
     src = _fn("deployments_for_code_task_endpoint")
     assert "t.project_id = :p" in src
-    assert "_project_of_run(run_id)" in src
+    assert "require_code_task_reader(connection, run_id)" in src
