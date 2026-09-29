@@ -663,6 +663,12 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
       die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
     fi
   fi
+elif [[ -f "$INSTALL_DIR/.boss-shipped-commit" &&
+        -f "$INSTALL_DIR/scripts/install/community-compose.yml" ]]; then
+  # A tree remote.sh shipped. It copies the commit here, stamps
+  # .boss-shipped-commit, and runs this script from inside that directory.
+  # The shipped tree is the source. There is nothing to fetch.
+  ui_ok "Using the source remote.sh shipped ($(head -c 12 "$INSTALL_DIR/.boss-shipped-commit"))"
 elif [[ -d "$INSTALL_DIR" ]]; then
   [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
     die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."
