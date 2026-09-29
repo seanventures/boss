@@ -738,6 +738,59 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
     assert seen[-1].headers["X-BOSS-MCP-Confirmation"] == "mcpconf_" + "a" * 20
 
 
+def test_project_local_deletions_are_mapped_to_exact_mcp_confirmation():
+    routes = {
+        "/v1/meeting-roles/{role_key}": "role_key",
+        "/v1/console/v2/org/{agent_id}": "agent_id",
+    }
+    schema = {"paths": {
+        route: {"delete": {"parameters": [
+            {"name": key, "in": "path", "required": True,
+             "schema": {"type": "string"}},
+            {"name": "project_id", "in": "query", "required": True,
+             "schema": {"type": "string"}},
+            {"name": "actor", "in": "query", "required": False,
+             "schema": {"type": "string"}},
+        ]}}
+        for route, key in routes.items()
+    }}
+    seen = []
+
+    def send(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/mcp-confirmations":
+            return httpx.Response(201, json={"id": "mcpconf_" + "a" * 20})
+        return httpx.Response(200, json={"cleared": 1})
+
+    client = httpx.Client(base_url="http://127.0.0.1:8000",
+                          transport=httpx.MockTransport(send))
+    surface = ApiSurface(schema, client=client, principal="mcp-member",
+                         pinned_project_id="alpha")
+    for route, key in routes.items():
+        alias = operation_alias("DELETE", route)
+        assert surface.describe(alias)["availability"] == "confirmation_required"
+        assert surface.invoke(alias, project_id="alpha", path={key: "one"})["error"] == (
+            "confirmation_required"
+        )
+        assert surface.invoke(alias, project_id="alpha", path={key: "one"},
+                              propose_confirmation=True)["ok"]
+        proposal = json.loads(seen[-1].content)
+        assert proposal == {
+            "project_id": "alpha", "operation": alias, "method": "DELETE",
+            "path": route.replace("{" + key + "}", "one"),
+            "query": {"project_id": "alpha", "actor": "mcp-member"},
+            "body": None,
+        }
+        assert surface.invoke(alias, project_id="alpha", path={key: "one"},
+                              confirmation_id="mcpconf_" + "a" * 20)["ok"]
+        dispatched = seen[-1]
+        assert dispatched.method == "DELETE"
+        assert dispatched.url.path == proposal["path"]
+        assert dict(dispatched.url.params) == proposal["query"]
+        assert dispatched.headers["X-BOSS-MCP-Operation"] == alias
+        assert dispatched.headers["X-BOSS-MCP-Project"] == "alpha"
+
+
 def test_malformed_auth_and_project_responses_fail_closed_without_raw_payload():
     marker = "FAKE-SECRET-IN-MALFORMED-RESPONSE"
     def make_surface(broken_path: str):

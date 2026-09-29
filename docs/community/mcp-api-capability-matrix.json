@@ -8,8 +8,8 @@
   "counts": {
     "api_policy_gated": 853,
     "excluded": 67,
-    "human_confirmation_gated": 36,
-    "operator_only_unavailable": 30
+    "human_confirmation_gated": 38,
+    "operator_only_unavailable": 28
   },
   "operations": [
     {
@@ -4302,15 +4302,15 @@
       "alias": "delete_v1_console_v2_org_agent_id_92a1a358",
       "domain": "console",
       "summary": "Delete Org Assignment",
-      "mcp_status": "operator_only_unavailable",
-      "reason": "trusted_operator_confirmation_unavailable",
+      "mcp_status": "human_confirmation_gated",
+      "reason": "fresh_human_confirmation_required",
       "input_schema_quality": "parameters_only",
       "mounted_input_schema_quality": "parameters_only",
       "request_body_type_enforcement": "no_json_body",
       "curated_input_fields": false,
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
-      "domain_scoped_direct_tool": false,
+      "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },
@@ -10350,15 +10350,15 @@
       "alias": "delete_v1_meeting_roles_role_key_45fff363",
       "domain": "agents",
       "summary": "Delete Meeting Role Endpoint",
-      "mcp_status": "operator_only_unavailable",
-      "reason": "trusted_operator_confirmation_unavailable",
+      "mcp_status": "human_confirmation_gated",
+      "reason": "fresh_human_confirmation_required",
       "input_schema_quality": "parameters_only",
       "mounted_input_schema_quality": "parameters_only",
       "request_body_type_enforcement": "no_json_body",
       "curated_input_fields": false,
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
-      "domain_scoped_direct_tool": false,
+      "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },

@@ -147,12 +147,14 @@ def test_project_metadata_writes_bind_permission_and_record_real_actor(
                        json=meeting_body).status_code == 403
     assert client.put("/v1/console/v2/org/qa", headers=_headers(mcp_key),
                       json=org_body).status_code == 403
+    # Role registration and autonomy controls are held for nonhuman callers
+    # before the handler can inspect their project permissions.
     assert client.post("/v1/roles", headers=_headers(mcp_key),
-                       json=role_body).status_code == 403
+                       json=role_body).status_code == 409
     assert client.post("/v1/console/v2/autonomy", headers=_headers(mcp_key),
-                       json=autonomy_body).status_code == 403
+                       json=autonomy_body).status_code == 409
     assert client.post("/v1/console/v2/autonomy/apply", headers=_headers(mcp_key),
-                       json={"project_id": PROJECT, "actor": "ceo"}).status_code == 403
+                       json={"project_id": PROJECT, "actor": "ceo"}).status_code == 409
 
     # The same calls through the API-backed MCP bridge retain that authority.
     with TestClient(api_main.app) as mcp_client:
@@ -202,16 +204,29 @@ def test_project_metadata_writes_bind_permission_and_record_real_actor(
         )
         assert result["status"] == 200, result
     assert client.post("/v1/roles", headers=_headers(editor_key),
-                       json=role_body).status_code == 201
+                       json=role_body).status_code == 409
     assert client.patch(f"/v1/meeting-roles/{meeting_key}",
                         headers=_headers(mcp_key),
                         params={"project_id": PROJECT, "enabled": False,
                                 "actor": "ceo"}).status_code == 403
     assert client.delete(f"/v1/meeting-roles/{meeting_key}",
                          headers=_headers(mcp_key),
-                         params={"project_id": PROJECT, "actor": "ceo"}).status_code == 403
+                         params={"project_id": PROJECT, "actor": "ceo"}).status_code == 409
     assert client.delete("/v1/console/v2/org/qa", headers=_headers(mcp_key),
-                         params={"project_id": PROJECT, "actor": "ceo"}).status_code == 403
+                         params={"project_id": PROJECT, "actor": "ceo"}).status_code == 409
+    with engine.begin() as connection:
+        assert connection.execute(text("""
+            SELECT count(*) FROM meeting_roles
+            WHERE project_id = :project_id AND role_key = :role_key
+        """), {"project_id": PROJECT, "role_key": meeting_key}).scalar_one() == 1
+        assert connection.execute(text("""
+            SELECT count(*) FROM org_assignments
+            WHERE project_id = :project_id AND agent_id = 'qa'
+        """), {"project_id": PROJECT}).scalar_one() == 1
+        assert connection.execute(text("""
+            SELECT count(*) FROM roles
+            WHERE project_id = :project_id AND role_key = :role_key
+        """), {"project_id": PROJECT, "role_key": role_key}).scalar_one() == 0
 
     # A principal may not reuse its first project's authority in a sibling.
     assert client.post("/v1/meeting-roles", headers=_headers(editor_key),
@@ -219,20 +234,27 @@ def test_project_metadata_writes_bind_permission_and_record_real_actor(
     assert client.put("/v1/console/v2/org/qa", headers=_headers(editor_key),
                       json={**org_body, "project_id": other_project}).status_code == 403
     assert client.post("/v1/roles", headers=_headers(editor_key),
-                       json={**role_body, "project_id": other_project}).status_code == 403
+                       json={**role_body, "project_id": other_project}).status_code == 409
 
     # The human CEO retains the controls, and every successful write is audited.
     assert client.post("/v1/console/v2/autonomy", headers=_headers(ceo_key),
                        json=autonomy_body).status_code == 200
     assert client.post("/v1/console/v2/autonomy/apply", headers=_headers(ceo_key),
                        json={"project_id": PROJECT, "actor": "ceo"}).status_code == 200
+    assert client.post("/v1/roles", headers=_headers(ceo_key),
+                       json=role_body).status_code == 201
     assert client.patch(f"/v1/meeting-roles/{meeting_key}",
                         headers=_headers(editor_key),
                         params={"project_id": PROJECT, "enabled": False}).status_code == 200
     assert client.delete("/v1/console/v2/org/qa", headers=_headers(editor_key),
-                         params={"project_id": PROJECT}).status_code == 200
+                         params={"project_id": PROJECT}).status_code == 409
     assert client.delete(f"/v1/meeting-roles/{meeting_key}",
                          headers=_headers(editor_key),
+                         params={"project_id": PROJECT}).status_code == 409
+    assert client.delete("/v1/console/v2/org/qa", headers=_headers(ceo_key),
+                         params={"project_id": PROJECT}).status_code == 200
+    assert client.delete(f"/v1/meeting-roles/{meeting_key}",
+                         headers=_headers(ceo_key),
                          params={"project_id": PROJECT}).status_code == 204
     with engine.begin() as connection:
         rows = connection.execute(
@@ -247,10 +269,10 @@ def test_project_metadata_writes_bind_permission_and_record_real_actor(
     assert actors == {
         "meeting_role.upserted": editor,
         "meeting_role.enabled_changed": editor,
-        "meeting_role.deleted": editor,
-        "role.registered": editor,
+        "meeting_role.deleted": "ceo",
+        "role.registered": "ceo",
         "org.assignment_set": editor,
-        "org.assignment_cleared": editor,
+        "org.assignment_cleared": "ceo",
         "autonomy.policy_set": "ceo",
         "autonomy.policy_applied": "ceo",
     }

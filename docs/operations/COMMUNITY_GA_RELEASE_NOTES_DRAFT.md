@@ -21,14 +21,14 @@ needs a new exact export and release qualification before these notes can ship.
   opt-in example workflows. Installing definitions or examples starts no work.
 - Authenticated API, terminal and MCP access to the same Community control
   plane. The terminal addresses all 973 mounted `/v1` operator routes. MCP
-  classifies all 986 mounted HTTP operations: 853 use API policy, 36 require
-  exact human confirmation, 30 remain held for route-specific safety work,
+  classifies all 986 mounted HTTP operations: 853 use API policy, 38 require
+  exact human confirmation, 28 remain held for route-specific safety work,
   and 67 are internal or protocol endpoints.
 
 ## Current limits to state with the release
 
 - A mapped operation can still be denied by project permissions, approval,
-  budget or edition policy. The 30 held MCP routes include direct host or
+  budget or edition policy. The 28 held MCP routes include direct host or
   deployment effects and approval transitions that need verified human actor
   attribution. API and terminal calls retain their own server-side checks.
 - New Community Discovery web research, live investigations, BOSS-initiated

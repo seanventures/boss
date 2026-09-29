@@ -194,7 +194,7 @@ operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|
-| Community | 853 | 36 | 30 | 67 |
+| Community | 853 | 38 | 28 | 67 |
 | Paid-only additions | 39 | 0 | 2 | 0 |
 
 "API policy eligible" means the operation is discoverable and the bridge may
@@ -220,7 +220,7 @@ does this for project and org memberships. Deleting a seeded default member
 row is not a revocation: a later explicit bootstrap can recreate a missing
 default. Bootstrap preserves inactive rows and edited permissions.
 
-For the 36 confirmation-gated actions, MCP calls `api_request_confirmation`
+For the 38 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest
 of the complete request, its method and target, and a limited review summary;
 it never stores the raw body. A **separate human CEO member** reviews the
@@ -236,6 +236,13 @@ are distinct audit events.
 Promotion of a winning improvement trial is among these actions. It creates
 an approval-gated proposal and decision; it does not adopt a new baseline or
 roll out code.
+
+Removing a project meeting role or a declared team-chart assignment also
+requires this exact human confirmation. These routes change only local project
+records; the API still checks `workflow_manage` or `role_review`, respectively,
+and records the MCP member in the corresponding event. The team-chart route's
+`agent_id=*` target clears every declared assignment in that project, so the
+human review must check that exact target as well as the project.
 
 The human can find the pending request with `/ops mcp-confirmations` and
 `/op` on the GET confirmation operation, then approve it with `/op` on the
@@ -278,7 +285,7 @@ as the actor, while the confirmation trail retains the MCP requester. The
 request preview states `effect_actor: approving_human`; the submitted body still
 contains the MCP member's actor ID because it is bound to the MCP session.
 
-The 30 held Community and two paid-only actions return
+The 28 held Community and two paid-only actions return
 `operator_only_unavailable`. They include direct host/provider effects without
 a governed ChangeSet/receipt path, host key material, global or ID-only routes
 without a sound project boundary, and routes lacking API-side actor checks.

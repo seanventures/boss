@@ -150,6 +150,10 @@ _CONFIRMABLE_EXACT = frozenset({
     ("DELETE", "/v1/delivery-workflows/runs/{run_id}"),
     ("DELETE", "/v1/delivery-workflows/{definition_id}"),
     ("DELETE", "/v1/deployment-targets/{target_id}"),
+    # These only remove project-local planning metadata. The API checks
+    # workflow_manage/role_review and records the authenticated actor.
+    ("DELETE", "/v1/meeting-roles/{role_key}"),
+    ("DELETE", "/v1/console/v2/org/{agent_id}"),
 })
 _HUMAN_ATTRIBUTED_CONFIRMATIONS = {
     # These handlers persist the actor of a human decision. The API may use the

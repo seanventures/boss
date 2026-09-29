@@ -1,11 +1,11 @@
 # BOSS-429 MCP operator boundary audit
 
-Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 986-operation mounted Community surface. Two were already ordinary API-policy actions. Of the other 75, 35 now require exact-request human confirmation, 30 remain held for route safety work, nine are excluded worker protocols, and one is a safe API-policy text-rendering action. Every action's current MCP disposition appears below.
+Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 986-operation mounted Community surface. The mounted matrix now has 853 API-policy actions, 38 exact-request human-confirmation actions, 28 held actions, and 67 excluded protocols. Two project-local deletions joined the confirmed set after their API actor, permission, event, exact-request digest, and single-use gates passed focused checks. Every historical action's current MCP disposition appears below; the matrix is authoritative for operations added since that snapshot.
 
 | Operation | Current disposition |
 |---|---|
 | `DELETE /v1/channels/{provider}` | Hold: removes configuration, delivery, or graph state |
-| `DELETE /v1/console/v2/org/{agent_id}` | Hold: removes configuration, delivery, or graph state |
+| `DELETE /v1/console/v2/org/{agent_id}` | Confirmable: removes only a project-local declared chart assignment; `role_review` and `org.assignment_cleared`/`org.structure_cleared` still apply |
 | `DELETE /v1/delivery-workflows/custom-steps/{step_key}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `DELETE /v1/delivery-workflows/runs/{run_id}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `DELETE /v1/delivery-workflows/schedules/{schedule_id}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
@@ -14,7 +14,7 @@ Source: the 77 previously held Community actions at integration commit `c218f77e
 | `DELETE /v1/event-subscriptions/{subscription_id}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `DELETE /v1/kms/keys/{key_entry_id}/grants/{grantee_agent}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `DELETE /v1/mcp/servers/{server_id}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
-| `DELETE /v1/meeting-roles/{role_key}` | Hold: removes configuration, delivery, or graph state |
+| `DELETE /v1/meeting-roles/{role_key}` | Confirmable: removes only a project-local meeting template role; `workflow_manage` and `meeting_role.deleted` still apply |
 | `DELETE /v1/preview-sandboxes/{preview_id}` | Hold: direct deploy, host, or provider effect |
 | `DELETE /v1/resource-topology/edges/{edge_id}` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `DELETE /v1/role-skills` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
@@ -66,7 +66,7 @@ Source: the 77 previously held Community actions at integration commit `c218f77e
 | `POST /v1/github/resolution-plans/{plan_id}/approve` | Confirmable: independent human reviewer is the domain actor; MCP member also needs `github_manage` |
 | `POST /v1/goldeneye/apps/deploy` | Hold: direct deploy, host, or provider effect |
 | `POST /v1/goldeneye/apps/{name}/rollback` | Hold: direct deploy, host, or provider effect |
-| `POST /v1/improvement-programs/trials/{trial_id}/promote` | Hold: ID-only route lacks MCP session project binding |
+| `POST /v1/improvement-programs/trials/{trial_id}/promote` | Confirmable: creates a proposal only; target project is checked against the bound actor's `self_improvement_manage` grant, and rollout retains separate gates |
 | `POST /v1/kms/keys/{key_entry_id}/grant` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/kms/leases/{lease_id}/revoke` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
 | `POST /v1/members` | Confirmable: separate human full-request review and digest approval; project API policy and audit still apply |
@@ -94,9 +94,18 @@ The transport boundary uses FastAPI's route-relative path when an ASGI `root_pat
 
 - Direct host, deployment, provider, and Goldeneye effects lack a consistently enforced ChangeSet, budget reservation, resource receipt, or rollback path. Some deployment endpoints currently return `409` or suppress a host teardown error; confirmation alone would not make them safe.
 - Host key installation/adoption can carry raw credential material. The current review summary intentionally does not persist arbitrary body text, so these actions lack a sound human review channel.
-- Global organization, role, identity-provider, autonomy, and worker-autoscaling actions do not fit a project-scoped MCP principal. Several deletion endpoints lack an API-side project actor check.
-- Discovery and trial promotion use ID-only routes whose target project cannot be pinned at the MCP boundary.
+- Global organization, role, identity-provider, autonomy, and worker-autoscaling actions do not fit a project-scoped MCP principal. Several remaining deletion endpoints lack an API-side project actor check.
+- Discovery promotion still uses an ID-only target and schedules budgeted work; it needs target-project proof and an audited budget/lease path through MCP before enabling.
 - Decision approval and preview approval remain held because their follow-on handlers can execute an agent tool or queue merge/deployment work; exact human attribution alone does not qualify those effects for MCP.
 - The nine worker routes are now `excluded`, rather than operator actions: GitHub execution/apply and reconciliation, docs update, orchestration next move, tracker sync, and retention prune. Their lease and authorization protocol belongs to workers.
+
+## Remaining 28 Community actions
+
+- **Channel revocation (1):** `DELETE /v1/channels/{provider}`. Govern both the remote token revocation and local disconnect with a dedupe key, receipt, partial-failure state, and explicit review of which channel is affected.
+- **Direct deployment and host effects (15):** `POST /v1/code-tasks/{run_id}/deploy`, `POST /v1/delivery/deployments/{deployment_run_id}/execute`, `POST /v1/deployment-hosts/{host_id}/provision`, `POST /v1/deployment-hosts/{host_id}/retire`, `POST /v1/deployment-runs/{deployment_run_id}/rollout/rollback`, `POST /v1/deployment-targets/{target_id}/auto-deploy`, `POST /v1/deployment-targets/{target_id}/bootstrap`, `POST /v1/deployment-targets/{target_id}/purge`, `POST /v1/deployment-targets/{target_id}/teardown`, `POST /v1/deployments/{deployment_run_id}/promote`, `POST /v1/goldeneye/apps/deploy`, `POST /v1/goldeneye/apps/{name}/rollback`, `POST /v1/observability/stack/deploy`, `DELETE /v1/preview-sandboxes/{preview_id}`, and `DELETE /v1/sandboxes/{sandbox_id}`. Require a project-bound ChangeSet, applicable budget reservation and approval, rollback plan, resource receipt, and visible failure state at the actual effect boundary.
+- **Host key material (3):** `POST /v1/deployment-hosts/{host_id}/adopt-key`, `POST /v1/deployment-hosts/{host_id}/install-key`, and `POST /v1/deployment-hosts/{host_id}/key`. Move raw key material into a reviewed SecretRef flow; the MCP confirmation preview intentionally does not store the secret body.
+- **Global authority and spend policy (6):** `POST /v1/console/v2/autonomy`, `POST /v1/console/v2/autonomy/apply`, `POST /v1/enterprise/identity-providers`, `POST /v1/orgs`, `POST /v1/roles`, and `POST /v1/worker-autoscaling/apply`. Define a human, scope-appropriate admin boundary; project MCP membership cannot grant org-wide, role, model-spend, or autoscaling authority.
+- **Approval with follow-on execution (2):** `POST /v1/decisions/{decision_id}/approve` and `POST /v1/previews/{preview_id}/approve`. Prove that approval cannot immediately execute a tool or queue provider work without its own budget, lease, ChangeSet, receipt, and independent human attribution checks.
+- **Budgeted Discovery promotion (1):** `POST /v1/discoveries/{run_id}/promote`. Bind the ID-only target to the MCP session project and qualify the downstream meeting job's reservation, lease, receipt, and retry path.
 
 The separate [Community matrix](../community/mcp-api-capability-matrix.json) lists every mounted operation and its current status. Exact availability still depends on the live edition, member grants, and API policy.

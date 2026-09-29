@@ -116,6 +116,8 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
         assert row["typed_input_schema"] is True
     for key in {
         ("POST", "/v1/members"),
+        ("DELETE", "/v1/meeting-roles/{role_key}"),
+        ("DELETE", "/v1/console/v2/org/{agent_id}"),
         ("POST", "/v1/improvement-programs/trials/{trial_id}/promote"),
         ("POST", "/v1/decisions/{decision_id}/reject"),
         ("POST", "/v1/decisions/{decision_id}/revise"),
@@ -144,6 +146,6 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
         "api_policy_gated"
     )
     assert sum(row["mcp_status"] == "human_confirmation_gated"
-               for row in community["operations"]) == 36
+               for row in community["operations"]) == 38
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 30
+               for row in community["operations"]) == 28
