@@ -110,6 +110,65 @@ def validate(
     return cadence, minute, hour, weekday, tz_name
 
 
+def _as_input(input_data: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """The values a schedule will hand to every unattended run.
+
+    Missing means none. Anything else has to be an object: a list or a string
+    would be stored and then fail, or worse succeed, as something the workflow
+    never declared.
+    """
+    if input_data in (None, ""):
+        return {}
+    if not isinstance(input_data, dict):
+        raise ScheduleError(
+            "input must be an object of the workflow's declared fields.")
+    return input_data
+
+
+def _active_spec(connection: Connection, project_id: str, workflow_key: str) -> dict[str, Any]:
+    """The published spec a schedule will actually run. Refused when there is none."""
+    row = connection.execute(
+        text(
+            """
+            SELECT d.active_version_id, v.spec
+            FROM workflow_definitions d
+            LEFT JOIN workflow_versions v ON v.id = d.active_version_id
+            WHERE d.project_id = :p AND d.workflow_key = :k
+            """
+        ),
+        {"p": project_id, "k": workflow_key},
+    ).mappings().first()
+    if row is None:
+        raise ScheduleError(f"this project has no workflow '{workflow_key}'.")
+    if not row["active_version_id"]:
+        raise ScheduleError(
+            f"'{workflow_key}' has no published version yet, so there is nothing to run.")
+    spec = row["spec"]
+    if isinstance(spec, str):
+        spec = json.loads(spec)
+    return spec if isinstance(spec, dict) else {}
+
+
+def require_schedule_inputs(spec: dict[str, Any], input_data: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Refuse a schedule that would start without the inputs the workflow declared.
+
+    Checked here, not on Monday morning. A schedule runs with nobody at the keyboard, so a
+    missing recipient or topic is not a prompt the operator can answer later — it is a run
+    that fails after the work in front of it has already been spent, or a newsletter with
+    nowhere to go. Name-to-type schemas do not say what is required, and this does not guess.
+    """
+    from .workflows import missing_required_inputs
+
+    data = _as_input(input_data)
+    absent = missing_required_inputs(spec or {}, data)
+    if absent:
+        raise ScheduleError(
+            f"this workflow needs {len(absent)} input(s) it was not given: "
+            f"{', '.join(absent)}. A schedule stores those values and runs them "
+            "unattended, so they have to be saved with the schedule.")
+    return data
+
+
 def describe(cadence: str, minute: int, hour: int, weekday: Optional[int], tz_name: str) -> str:
     """The schedule as a sentence. What the console shows, and what a test can assert on."""
     if cadence == "hourly":
@@ -216,20 +275,10 @@ def create(
 
     # THE WORKFLOW HAS TO EXIST AND BE RUNNABLE. A schedule pointing at nothing fires forever
     # into an error nobody reads, and the check costs one query now against every tick later.
-    runnable = connection.execute(
-        text(
-            """
-            SELECT d.active_version_id FROM workflow_definitions d
-            WHERE d.project_id = :p AND d.workflow_key = :k
-            """
-        ),
-        {"p": project_id, "k": workflow_key},
-    ).mappings().first()
-    if runnable is None:
-        raise ScheduleError(f"this project has no workflow '{workflow_key}'.")
-    if not runnable["active_version_id"]:
-        raise ScheduleError(
-            f"'{workflow_key}' has no published version yet, so there is nothing to run.")
+    # Required inputs are part of that check: storing a schedule that cannot start is the
+    # same failure, just deferred until the worker ticks.
+    spec = _active_spec(connection, project_id, workflow_key)
+    input_data = require_schedule_inputs(spec, input_data)
 
     cadence, minute, hour, weekday, tz_name = validate(
         cadence=cadence, minute=minute, hour=hour, weekday=weekday, tz_name=tz_name)
@@ -258,6 +307,64 @@ def create(
                {"workflow_key": workflow_key, "describes": describe(
                    cadence, minute, hour, weekday, tz_name)})
     return _row(row)
+
+
+def replace_inputs(
+    connection: Connection,
+    *,
+    project_id: str,
+    schedule_id: str,
+    actor: str,
+    input_data: Optional[dict[str, Any]],
+    tz_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Replace the values a schedule will run with. Timing stays unless the zone changes.
+
+    The whole input object is replaced, not merged, so a cleared optional field stays cleared.
+    Required fields are checked against the version that is published now: the next run uses
+    that version, and editing against an older declaration would save a schedule the next
+    Monday cannot start. The audit event records which keys changed, never the values.
+    """
+    row = connection.execute(
+        text("SELECT * FROM workflow_schedules WHERE id=:i AND project_id=:p"),
+        {"i": schedule_id, "p": project_id},
+    ).mappings().first()
+    if row is None:
+        raise ScheduleError(f"no schedule '{schedule_id}'.")
+    spec = _active_spec(connection, project_id, row["workflow_key"])
+    data = require_schedule_inputs(spec, input_data)
+    zone = row["timezone"]
+    due = row["next_run_at"]
+    if tz_name is not None:
+        _, _, _, _, zone = validate(
+            cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
+            weekday=row["weekday"], tz_name=tz_name)
+        # A zone change moves the instant. Recompute only then, and only while the schedule
+        # is running — the same rule as resume, so editing inputs does not make a paused
+        # schedule due, and does not skip the occurrence the operator already had.
+        if zone != row["timezone"] and row["enabled"]:
+            due = next_occurrence(
+                cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
+                weekday=row["weekday"], tz_name=zone)
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_schedules
+            SET input=CAST(:input AS JSONB), timezone=:tz, next_run_at=:due, updated_at=now()
+            WHERE id=:i AND project_id=:p
+            RETURNING *
+            """
+        ),
+        {"input": json.dumps(data), "tz": zone, "due": due,
+         "i": schedule_id, "p": project_id},
+    ).mappings().one()
+    emit_event(
+        connection, project_id, "workflow.schedule_inputs_updated", actor,
+        "workflow_schedule", schedule_id,
+        {"workflow_key": row["workflow_key"],
+         "input_keys": sorted(str(key) for key in data),
+         "timezone": zone})
+    return _row(updated)
 
 
 def list_schedules(connection: Connection, project_id: str) -> list[dict[str, Any]]:

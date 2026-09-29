@@ -103,11 +103,11 @@ python3 examples/setup_all.py --schedule Europe/London \
 ```
 
 The scheduled run prepares a newsletter on Monday. Email delivery still waits for your approval.
-The schedule inputs cannot be edited after creation; remove the schedule and recreate it if
-the topics or recipient change.
-The console's generic **Schedule** button currently asks only for a time zone. For workflows
-with required inputs, use the example script or the API until that button can collect and store
-the run inputs.
+The console **Schedule** button asks for the time zone and for every input the workflow
+declares. Required inputs are saved with the schedule. **edit inputs** on the schedule line
+replaces those values; the API refuses a save that drops a required one. The same edit is
+`POST /v1/delivery-workflows/schedules` with the existing `schedule_id` and a complete `input`
+object. Timing stays as it was unless the time zone changes.
 
 ---
 

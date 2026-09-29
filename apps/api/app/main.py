@@ -21916,10 +21916,49 @@ def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     actor = str(payload.get("actor") or "executive_console").strip()
-    enabled = bool(payload.get("enabled", True))
+    schedule_id = str(payload.get("schedule_id") or "").strip()
     try:
         with begin(engine) as connection:
             require_project_actor(connection, project_id, actor, "workflow_manage")
+            if schedule_id:
+                # Editing what an unattended run will do. `input` has to be present so an
+                # omitted body cannot wipe stored values, and an enabled schedule still
+                # needs permission to execute because the next tick will use the new values.
+                if "input" not in payload:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="input is required when editing a schedule")
+                existing = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_key, enabled FROM workflow_schedules
+                        WHERE id = :schedule_id AND project_id = :project_id
+                        """
+                    ),
+                    {"schedule_id": schedule_id, "project_id": project_id},
+                ).mappings().first()
+                if existing is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"no schedule '{schedule_id}'")
+                claimed = str(payload.get("workflow_key") or "").strip()
+                if claimed and claimed != existing["workflow_key"]:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="schedule_id belongs to a different workflow")
+                if existing["enabled"]:
+                    require_project_actor(
+                        connection, project_id, actor, "workflow_execute")
+                updated = schedules.replace_inputs(
+                    connection,
+                    project_id=project_id,
+                    schedule_id=schedule_id,
+                    actor=actor,
+                    input_data=payload.get("input") or {},
+                    tz_name=(str(payload.get("timezone")).strip()
+                             if "timezone" in payload else None),
+                )
+                return JSONResponse(status_code=200, content=updated)
+            enabled = bool(payload.get("enabled", True))
             if enabled:
                 require_project_actor(connection, project_id, actor, "workflow_execute")
             return schedules.create(

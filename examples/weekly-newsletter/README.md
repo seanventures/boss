@@ -124,10 +124,11 @@ That `context` wiring is the interesting one: a step passes whole **values** and
 
 ### 5. Schedule it
 
-Use the setup command above with `--schedule`, `--sectors` and `--to`. The console's generic
-**Schedule** button currently asks only for a time zone and cannot store the required newsletter
-inputs, so it is not a complete scheduling path for this workflow. The same schedule can be
-created through `POST /v1/delivery-workflows/schedules` with those values in `input`.
+Use the setup command above with `--schedule`, `--sectors` and `--to`, or Delivery → **Yours**
+→ **Schedule**. The button asks for the time zone and for `sectors`, `brief`, `to`, and
+`subject`. Required values are stored on the schedule. **edit inputs** replaces them without
+creating a second Monday run. The API is the same `POST /v1/delivery-workflows/schedules`:
+send `schedule_id` to edit, and omit it to create. A save without the required inputs is refused.
 
 Pause, resume and remove are on the schedule line in Delivery → **Yours**. Resuming recomputes
 the next run, so a schedule paused for a month does not fire the moment you bring it back.

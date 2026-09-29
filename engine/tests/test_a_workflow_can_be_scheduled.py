@@ -130,6 +130,27 @@ def test_fields_that_cannot_apply_are_cleared_rather_than_stored():
     assert weekday is None
 
 
+def test_a_schedule_refuses_declared_inputs_it_was_not_given():
+    """The Monday run has nobody to ask. Missing required inputs are refused now."""
+    spec = {"input_schema": {
+        "type": "object",
+        "required": ["sectors", "to"],
+        "properties": {"sectors": {"type": "string"}, "to": {"type": "string"}},
+    }}
+    with pytest.raises(sched.ScheduleError, match="sectors"):
+        sched.require_schedule_inputs(spec, {})
+    with pytest.raises(sched.ScheduleError, match="to"):
+        sched.require_schedule_inputs(spec, {"sectors": "energy", "to": "  "})
+    stored = sched.require_schedule_inputs(
+        spec, {"sectors": "energy", "to": "reader@example.com", "brief": "short"})
+    assert stored["to"] == "reader@example.com"
+    # A name-to-type declaration does not say what is required. Guessing would refuse
+    # schedules that have always been legal.
+    assert sched.require_schedule_inputs({"input_schema": {"video_url": "string"}}, {}) == {}
+    with pytest.raises(sched.ScheduleError, match="object"):
+        sched.require_schedule_inputs(spec, ["sectors"])  # type: ignore[arg-type]
+
+
 def test_a_schedule_reads_as_a_sentence():
     """What the console shows. A schedule nobody can read is a schedule nobody audits."""
     assert sched.describe("weekly", 0, 8, 0, "Europe/London") == \

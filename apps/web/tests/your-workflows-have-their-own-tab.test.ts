@@ -46,6 +46,19 @@ describe("a workflow of your own can be scheduled", () => {
     // A report arriving at 3am because the browser's zone was used and nobody said so.
     expect(ui).toContain("in which time zone?");
     expect(ui).toContain("resolvedOptions().timeZone");
+    expect(ui).not.toContain("window.prompt");
+  });
+
+  it("stores declared inputs with the schedule and can edit them", () => {
+    // The button used to post a time zone and nothing else, so a workflow that
+    // requires sectors and a recipient could be scheduled without either.
+    expect(ui).toContain("REQUIRED INPUTS ARE STORED WITH THE SCHEDULE");
+    expect(ui).toContain("workflowInputFields(chosen?.input_schema)");
+    expect(ui).toContain("missingRequired(fields, draft.values)");
+    expect(ui).toContain("input: suppliedInputs(fields, draft.values)");
+    expect(ui).toContain("schedule_id: draft.scheduleId");
+    expect(ui).toContain("dw-sched-draft-form");
+    expect(ui).toContain("edit inputs");
   });
 
   it("shows the schedule in the API's own words", () => {
