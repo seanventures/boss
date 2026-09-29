@@ -123,6 +123,42 @@ def test_four_examples_publish_console_inputs_and_stored_default_briefs() -> Non
         thread.join()
 
 
+def test_all_five_publish_valid_specs_and_do_not_start_runs() -> None:
+    """Installing an example publishes a workflow. It does not start one."""
+    import sys
+
+    sys.path.insert(0, str(ROOT / "engine"))
+    from boss_engine.services.workflows import validate_workflow_spec
+
+    names = (
+        "video-workflow",
+        "trend-to-content",
+        "sales-signal",
+        "weekly-newsletter",
+        "meeting-to-tickets",
+    )
+    server, thread = _server()
+    try:
+        for name in names:
+            result = _run(server, ROOT / "examples" / name / "setup.py")
+            assert result.returncode == 0, f"{name}: {result.stdout}\n{result.stderr}"
+        assert len(_Api.specs) == len(names)
+        for spec in _Api.specs:
+            validate_workflow_spec(spec)
+            assert spec["entry_step"]
+            assert spec["steps"]
+        started = [
+            path for method, path in _Api.requests
+            if method != "GET" and (
+                "/runs" in path or "run-capabilities" in path or path.rstrip("/").endswith("/start")
+            )
+        ]
+        assert started == []
+    finally:
+        server.shutdown()
+        thread.join()
+
+
 def test_all_five_dry_runs_make_only_reads() -> None:
     server, thread = _server()
     try:
