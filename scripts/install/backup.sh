@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Back up a running Community install before an upgrade or optional data purge.
+# Back up a running or safely stopped Community install before an upgrade or data purge.
 set -euo pipefail
 umask 077
 
@@ -12,7 +12,9 @@ Usage: backup.sh [--dir INSTALL_DIR] [--backup-dir BACKUP_ROOT]
 
 Creates a private backup of .env, BOSS and optional Infisical Postgres databases,
 and the BOSS artifacts volume. Writers pause during the snapshot and resume on
-success or failure. Prints only the backup directory path on stdout.
+success or failure. If Postgres was stopped, it starts only for the snapshot
+and is stopped again before this command returns. Prints only the backup
+directory path on stdout.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -54,9 +56,13 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
-"${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss </dev/null >/dev/null || {
-  echo 'BOSS Postgres is not ready; backup cannot continue.' >&2; exit 1;
-}
+RUNNING="$("${COMPOSE[@]}" ps --status running --services)"
+was_running() { [[ $'\n'"$RUNNING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
+if was_running db; then
+  "${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss </dev/null >/dev/null || {
+    echo 'BOSS Postgres is running but not ready; backup cannot continue.' >&2; exit 1;
+  }
+fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="$BACKUP_ROOT/boss-$STAMP-$$"
@@ -69,26 +75,29 @@ else
   cp "$INSTALL_DIR/.boss-shipped-commit" "$BACKUP/source-commit"
 fi
 
-RUNNING="$("${COMPOSE[@]}" ps --status running --services)"
-was_running() { [[ $'\n'"$RUNNING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
 PAUSED=()
 for service in worker api web infisical; do
   if was_running "$service"; then PAUSED+=("$service"); fi
 done
+DB_STARTED_FOR_BACKUP=0
 
-resume() {
-  local service
+restore_services() {
+  local service failed=0
+  if [[ "$DB_STARTED_FOR_BACKUP" -eq 1 ]]; then
+    "${COMPOSE[@]}" stop db </dev/null >&2 || failed=1
+  fi
   for service in infisical api worker web; do
-    if [[ " ${PAUSED[*]} " == *" $service "* ]]; then
-      "${COMPOSE[@]}" start "$service" </dev/null >&2 || return 1
+    if [[ " ${PAUSED[*]-} " == *" $service "* ]]; then
+      "${COMPOSE[@]}" start "$service" </dev/null >&2 || failed=1
     fi
   done
+  return "$failed"
 }
 on_exit() {
   local status=$?
   trap - EXIT
-  if ! resume; then
-    echo 'Backup could not restart every service; inspect docker compose ps.' >&2
+  if ! restore_services; then
+    echo 'Backup could not restore the previous service state; inspect docker compose ps.' >&2
     status=1
   fi
   if [[ "$status" -ne 0 ]]; then
@@ -102,6 +111,22 @@ if [[ ${#PAUSED[@]} -gt 0 ]]; then
   echo 'Pausing BOSS writers for a consistent backup...' >&2
   "${COMPOSE[@]}" stop "${PAUSED[@]}" </dev/null >&2
 fi
+if ! was_running db; then
+  echo 'Starting the existing BOSS database temporarily for a recovery backup...' >&2
+  DB_STARTED_FOR_BACKUP=1
+  # Use the installed checkout and image only; a backup must not pull or run
+  # unreviewed source before the old state is safely captured.
+  "${COMPOSE[@]}" up -d --no-deps --pull never db </dev/null >&2
+  ready=0
+  for attempt in {1..60}; do
+    if "${COMPOSE[@]}" exec -T db pg_isready -U boss -d boss </dev/null >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 2
+  done
+  [[ "$ready" -eq 1 ]] || { echo 'BOSS Postgres did not become ready; backup cannot continue.' >&2; exit 1; }
+fi
 "${COMPOSE[@]}" exec -T db pg_dump -U boss -d boss -Fc </dev/null > "$BACKUP/boss.dump"
 if [[ "$("${COMPOSE[@]}" exec -T db psql -U boss -d boss -Atc "SELECT 1 FROM pg_database WHERE datname='infisical'" </dev/null)" == 1 ]]; then
   "${COMPOSE[@]}" exec -T db pg_dump -U boss -d infisical -Fc </dev/null > "$BACKUP/infisical.dump"
@@ -113,7 +138,8 @@ fi
 }
 printf 'source_commit=%s\ncreated_utc=%s\n' \
   "$(cat "$BACKUP/source-commit")" "$STAMP" > "$BACKUP/manifest"
-resume
+restore_services
 PAUSED=()
+DB_STARTED_FOR_BACKUP=0
 trap - EXIT
 printf '%s\n' "$BACKUP"

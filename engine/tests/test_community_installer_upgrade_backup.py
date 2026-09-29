@@ -108,6 +108,56 @@ def _install(installed: Path, env: dict[str, str]) -> subprocess.CompletedProces
     )
 
 
+def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
+    """Simulate the old Compose DB being stopped, including a failing dump."""
+    state = tmp / "db-state"
+    state.write_text("stopped\n")
+    env["BOSS_TEST_DB_STATE"] = str(state)
+    env["BOSS_BACKUP_DIR"] = str(tmp / "backups")
+    (tmp / "bin/docker").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ $1 == info ]]; then exit 0; fi\n"
+        "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
+        "args=$*\n"
+        "case \"$args\" in\n"
+        "  *' ps --status running --services')\n"
+        "    [[ $(cat \"$BOSS_TEST_DB_STATE\") != running ]] || echo db\n"
+        "    [[ -z ${BOSS_TEST_WORKER_STATE:-} || $(cat \"$BOSS_TEST_WORKER_STATE\") != running ]] || echo worker ;;\n"
+        "  *' up -d --no-deps --pull never db')\n"
+        "    echo running > \"$BOSS_TEST_DB_STATE\"; echo up >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
+        "  *' exec -T db pg_isready '*)\n"
+        "    [[ $(cat \"$BOSS_TEST_DB_STATE\") == running ]] ;;\n"
+        "  *' exec -T db pg_dump '*)\n"
+        "    [[ ${BOSS_TEST_DUMP_FAIL:-0} != 1 ]] || exit 19\n"
+        "    printf 'database fixture\\n' ;;\n"
+        "  *' exec -T db psql '*) exit 0 ;;\n"
+        "  *' run --rm --no-deps -T --entrypoint tar api '*)\n"
+        "    printf 'artifact fixture\\n' ;;\n"
+        "  *' stop db')\n"
+        "    echo stopped > \"$BOSS_TEST_DB_STATE\"; echo stop >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
+        "  *' stop worker')\n"
+        "    echo stopped > \"$BOSS_TEST_WORKER_STATE\"; echo stop-worker >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
+        "  *' start worker')\n"
+        "    echo running > \"$BOSS_TEST_WORKER_STATE\"; echo start-worker >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
+        "  *' build') echo build >> \"$BOSS_TEST_DOCKER_TRACE\"; exit 86 ;;\n"
+        "  *) echo \"unexpected Docker command: $args\" >&2; exit 90 ;;\n"
+        "esac\n"
+    )
+
+
+def _publish_real_backup_helper(tmp: Path) -> str:
+    source = tmp / "source"
+    (source / "scripts/install/backup.sh").write_bytes(
+        (REPO / "scripts/install/backup.sh").read_bytes()
+    )
+    _git("add", "scripts/install/backup.sh", cwd=source)
+    _git("commit", "-m", "backup stopped database", cwd=source)
+    new = _git("rev-parse", "HEAD", cwd=source)
+    _git("push", "origin", "main", cwd=source)
+    return new
+
+
 def test_pasted_installer_backs_up_before_switching_source(install_pair):
     installed, old, new, env, tmp = install_pair
     prior_env = (installed / ".env").read_bytes()
@@ -182,3 +232,51 @@ def test_same_revision_rerun_does_not_require_a_running_database(install_pair):
     assert result.returncode == 86, result.stderr + result.stdout
     assert _git("rev-parse", "HEAD", cwd=installed) == new
     assert not (tmp / "backup-trace").exists()
+
+
+@pytest.mark.parametrize("dump_fails", [False, True])
+def test_changed_source_reinstall_restores_stopped_database(install_pair, dump_fails):
+    installed, old, _, env, tmp = install_pair
+    target = _publish_real_backup_helper(tmp)
+    _stopped_database_backend(tmp, env)
+    if dump_fails:
+        env["BOSS_TEST_DUMP_FAIL"] = "1"
+    prior_env = (installed / ".env").read_bytes()
+
+    result = _install(installed, env)
+
+    assert (tmp / "db-state").read_text().strip() == "stopped"
+    steps = (tmp / "docker-trace").read_text().splitlines()
+    assert steps[:2] == ["up", "stop"]
+    if dump_fails:
+        assert result.returncode != 0
+        assert "Recovery backup failed" in result.stderr
+        assert steps == ["up", "stop"]
+        assert _git("rev-parse", "HEAD", cwd=installed) == old
+        assert (installed / ".env").read_bytes() == prior_env
+    else:
+        assert result.returncode == 86, result.stderr + result.stdout
+        assert steps == ["up", "stop", "build"]
+        assert _git("rev-parse", "HEAD", cwd=installed) == target
+        backups = sorted((tmp / "backups").glob("boss-*/source-commit"))
+        assert len(backups) == 1
+        assert backups[0].read_text().strip() == old
+        assert b"BOSS_API_KEY=private-test-fixture\n" in (installed / ".env").read_bytes()
+
+
+def test_backup_preserves_running_database_and_worker_state(install_pair):
+    installed, old, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    worker_state = tmp / "worker-state"
+    worker_state.write_text("running\n")
+    env["BOSS_TEST_WORKER_STATE"] = str(worker_state)
+
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp / "docker-trace").read_text().splitlines() == ["stop-worker", "start-worker"]
+    assert (tmp / "db-state").read_text().strip() == "running"
+    assert worker_state.read_text().strip() == "running"
+    assert (Path(result.stdout.strip()) / "source-commit").read_text().strip() == old

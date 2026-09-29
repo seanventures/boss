@@ -106,9 +106,10 @@ cd ~/boss
 
 The upgrade backs up private configuration, Postgres and artifacts before it
 changes source or containers. Rerunning the one-line installer also makes a
-recovery backup before it fast-forwards an existing checkout. If the existing
-database is stopped or unavailable, the source is left unchanged until a
-backup can complete. Upgrades keep named volumes and login sessions. To
+recovery backup before it fast-forwards an existing checkout. If the old
+database was stopped, the backup starts it temporarily and restores its
+stopped state afterward. If it cannot start or the backup fails, the source
+is left unchanged. Upgrades keep named volumes and login sessions. To
 stop BOSS and retain `.env`, volumes, images, backups and the checkout:
 
 ```bash

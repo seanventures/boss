@@ -43,9 +43,11 @@ model keys, secret-store encryption key, console login, public URL, port setting
 Mission Control choice, and secret-store choice are retained. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
 Pasting the installer line again also backs up an existing running install
-before switching to a newer source revision. If the database is unavailable,
-it leaves source and configuration untouched and tells you to start the
-installed database before retrying. The backup path is printed; keep it private.
+before switching to a newer source revision. A stopped database is started
+temporarily from the installed checkout and local image for that snapshot,
+then returned to its stopped state. If it cannot start or the backup fails,
+source and configuration stay untouched. The backup path is printed; keep it
+private.
 For an older headless install, pass `--no-web` once to record that choice;
 use `--web` to enable it later.
 If you choose Infisical and it cannot be provisioned, the installer reports an
