@@ -83,11 +83,16 @@ and policy result when `/op` invokes an operation.
 | Manage providers | `/ops changesets` | Invoke plan, approve and apply operations | Edition, permission, ChangeSet, reservation and ResourceReceipt gates |
 | Review models | `/ops model-route` | Invoke routing read/simulation operations | Entitlement, data boundary and spend policy |
 
-For each workflow, use `/describe OPERATION_ID` before a write. The terminal
-does not auto-fill write bodies or invent approvals, reservation IDs, dedupe
-keys, lease tokens, or provider credentials. A successful terminal response
+For generic operations, use `/describe OPERATION_ID` before a write. The `/op`
+command does not invent approvals, reservation IDs, dedupe keys, lease tokens,
+or provider credentials. A successful terminal response
 means the API accepted the call; subsequent work and effects must be checked
 through their status, receipt, and event endpoints.
+
+For the common task path, `/tasks [PAGE]`, `/task ID`, and
+`/task create DEDUPE_KEY TITLE` provide direct commands over those same API
+routes. The user supplies a stable dedupe key so retrying a task creation does
+not produce a second task. Other fields remain available through `/op`.
 
 ## Verification and limits
 

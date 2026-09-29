@@ -41,6 +41,7 @@ OPS_PAGE_SIZE = 25
 
 HELP_TEXT = (
     "Slash commands: /watch  /overwatch  /drive [auto|go]  /goals  /projects  /project [ID]  /quit\n"
+    "Work: /tasks [PAGE]  /task ID  /task create DEDUPE_KEY TITLE\n"
     "API commands: /ops [domain or search|*] [--page N]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
     "Fallback: /api METHOD /v1/path [JSON]\n"
     "Type naturally to POST /v1/metatron/session.\n"
@@ -72,10 +73,13 @@ class Command:
     method: str = ""
     path: str = ""
     body: Any = None
+    page: int = 1
+    dedupe_key: str = ""
 
 
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)(?::path)?\}")
+SIMPLE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 
 def valid_v1_path(path: str) -> bool:
@@ -211,6 +215,20 @@ def parse_line(line: str) -> Command:
         return Command(kind="projects")
     if lowered == "/project" or lowered.startswith("/project "):
         return Command(kind="project", message=raw.partition(" ")[2].strip())
+    if lowered == "/tasks" or lowered.startswith("/tasks "):
+        parts = raw.split()
+        if len(parts) > 2 or (len(parts) == 2 and not re.fullmatch(r"[1-9][0-9]{0,5}", parts[1])):
+            return Command(kind="error", message="usage: /tasks [PAGE], with PAGE >= 1")
+        return Command(kind="tasks", page=int(parts[1]) if len(parts) == 2 else 1)
+    if lowered == "/task" or lowered.startswith("/task "):
+        parts = raw.split(None, 3)
+        if len(parts) >= 2 and parts[1].lower() == "create":
+            if len(parts) != 4 or not SIMPLE_ID.fullmatch(parts[2]) or not parts[3].strip():
+                return Command(kind="error", message="usage: /task create DEDUPE_KEY TITLE")
+            return Command(kind="task_create", message=parts[3].strip(), dedupe_key=parts[2])
+        if len(parts) != 2 or not SIMPLE_ID.fullmatch(parts[1]):
+            return Command(kind="error", message="usage: /task ID or /task create DEDUPE_KEY TITLE")
+        return Command(kind="task", message=parts[1])
     if lowered == "/ops" or lowered.startswith("/ops "):
         return Command(kind="ops", message=raw.partition(" ")[2].strip())
     if lowered == "/coverage":
@@ -385,6 +403,39 @@ def format_projects(payload: Mapping[str, Any]) -> str:
         ) if value)
         lines.append(f"{mark} {project.get('id')}: {label}" + (f" ({location})" if location else ""))
     lines.append("Use /project ID to select a project for subsequent commands.")
+    return "\n".join(lines)
+
+
+def format_tasks(payload: Mapping[str, Any], page: int) -> str:
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return json.dumps(payload, indent=2, default=str)
+    lines = [f"Tasks in {payload.get('project_id') or 'selected project'} (page {page}):"]
+    for task in items:
+        if isinstance(task, dict):
+            lines.append(f"  {task.get('id') or '?'}  [{task.get('status') or '?'}]  {task.get('title') or 'Untitled'}")
+    if not items:
+        lines.append("  No tasks on this page.")
+    if len(items) == OPS_PAGE_SIZE:
+        lines.append(f"Next: /tasks {page + 1}")
+    lines.append("Use /task ID for details or /task create DEDUPE_KEY TITLE to add work.")
+    return "\n".join(lines)
+
+
+def format_task(payload: Mapping[str, Any]) -> str:
+    if not payload.get("id"):
+        return json.dumps(payload, indent=2, default=str)
+    lines = [f"Task {payload['id']}: {payload.get('title') or 'Untitled'}"]
+    if payload.get("project_id"):
+        lines.append(f"project: {payload['project_id']}")
+    for field in ("status", "priority", "owner_role_id", "due_at", "latest_job_status"):
+        if payload.get(field) is not None:
+            lines.append(f"{field.replace('_', ' ')}: {payload[field]}")
+    if payload.get("description"):
+        lines.append(str(payload["description"]))
+    if payload.get("has_open_decision"):
+        lines.append("Open decision: yes; use /ops decisions for the decision inbox.")
+    lines.append("For the complete record, use --exec '/task ID' --json.")
     return "\n".join(lines)
 
 
@@ -692,6 +743,28 @@ class MetatronClient:
             return _command_error("the API did not return a project list")
         return {"active_project_id": self.project_id, "items": payload["items"]}
 
+    def tasks(self, page: int) -> Any:
+        query = urlencode({
+            "project_id": self.project_id,
+            "limit": OPS_PAGE_SIZE,
+            "offset": (page - 1) * OPS_PAGE_SIZE,
+        })
+        return self.request("GET", f"/v1/tasks?{query}")
+
+    def task(self, task_id: str) -> Any:
+        payload = self.request("GET", f"/v1/tasks/{quote(task_id, safe='')}")
+        if isinstance(payload, dict) and isinstance(payload.get("project_id"), str) and payload["project_id"] != self.project_id:
+            return _command_error("task is outside the selected project; use /project ID first")
+        return payload
+
+    def create_task(self, title: str, dedupe_key: str) -> Any:
+        return self.request("POST", "/v1/tasks", {
+            "project_id": self.project_id,
+            "actor": self.config.actor,
+            "title": title,
+            "dedupe_key": dedupe_key,
+        })
+
     def project(self, project_id: str) -> dict[str, Any]:
         if project_id:
             if (
@@ -950,6 +1023,12 @@ class MetatronClient:
             payload = self.projects()
         elif command.kind == "project":
             payload = self.project(command.message)
+        elif command.kind == "tasks":
+            payload = self.tasks(command.page)
+        elif command.kind == "task":
+            payload = self.task(command.message)
+        elif command.kind == "task_create":
+            payload = self.create_task(command.message, command.dedupe_key)
         elif command.kind == "ops":
             payload = self.ops(command.message)
         elif command.kind == "describe":
@@ -989,6 +1068,10 @@ class MetatronClient:
             return redact(format_description(payload), self.config.api_key)
         if command.kind == "projects" and isinstance(payload, dict):
             return redact(format_projects(payload), self.config.api_key)
+        if command.kind == "tasks" and isinstance(payload, dict):
+            return redact(format_tasks(payload, command.page), self.config.api_key)
+        if command.kind == "task" and isinstance(payload, dict):
+            return redact(format_task(payload), self.config.api_key)
         if command.kind in {"api", "op", "project"}:
             return redact(json.dumps(payload, indent=2, default=str), self.config.api_key)
         return redact(format_payload(payload), self.config.api_key)

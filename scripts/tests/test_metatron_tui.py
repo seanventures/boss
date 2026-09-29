@@ -171,6 +171,99 @@ def test_parse_slash_commands():
     assert drive.auto is False
 
 
+def test_parse_direct_task_commands_and_reject_unsafe_input():
+    assert tui.parse_line("/tasks").page == 1
+    assert tui.parse_line("/tasks 3").page == 3
+    assert tui.parse_line("/task task-123").message == "task-123"
+    create = tui.parse_line("/task create launch-plan-1 Plan the community launch")
+    assert (create.kind, create.dedupe_key, create.message) == (
+        "task_create", "launch-plan-1", "Plan the community launch"
+    )
+    for line in (
+        "/tasks 0", "/tasks 1 extra", "/task", "/task ../private",
+        "/task task%2Fsecret", "/task create", "/task create bad/key Title",
+        "/task create same-key",
+    ):
+        assert tui.parse_line(line).kind == "error", line
+
+
+def test_direct_task_flow_uses_selected_project_actor_and_api_controls():
+    opener = FakeOpener([
+        (200, {"project_id": "project-two", "items": [
+            {"id": "task-1", "status": "queued", "title": "Plan launch"}
+        ]}),
+        (200, {"id": "task-1", "project_id": "project-two", "status": "queued", "title": "Plan launch"}),
+        (201, {"id": "task-2", "status": "queued", "title": "Ship launch"}),
+        (409, {"detail": "dedupe_key already exists"}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.dispatch(tui.parse_line("/project project-two"))
+    listed = client.handle(tui.parse_line("/tasks"))
+    detail = client.handle(tui.parse_line("/task task-1"))
+    created = client.dispatch(tui.parse_line("/task create launch-2 Ship launch"))
+    duplicate = client.handle(tui.parse_line("/task create launch-2 Ship launch"))
+    assert "task-1  [queued]  Plan launch" in listed
+    assert "/task ID" in listed
+    assert "Task task-1: Plan launch" in detail
+    assert "project: project-two" in detail
+    assert created["id"] == "task-2"
+    assert "HTTP 409" in duplicate
+    assert opener.calls[0]["url"].endswith("/v1/tasks?project_id=project-two&limit=25&offset=0")
+    assert opener.calls[1]["url"].endswith("/v1/tasks/task-1")
+    assert opener.calls[2]["method"] == "POST"
+    assert opener.calls[2]["url"].endswith("/v1/tasks")
+    assert opener.calls[2]["body"] == {
+        "project_id": "project-two", "actor": "ceo", "title": "Ship launch",
+        "dedupe_key": "launch-2",
+    }
+    assert all(call["headers"]["x-boss-api-key"] == SECRET for call in opener.calls)
+
+
+def test_direct_task_pagination_and_server_denial_are_visible():
+    opener = FakeOpener([
+        (200, {"project_id": "boss-dogfood", "items": [
+            {"id": f"task-{i}", "status": "queued", "title": f"Task {i}"}
+            for i in range(25)
+        ]}),
+        (403, {"detail": "task_create denied"}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    listed = client.handle(tui.parse_line("/tasks 2"))
+    denied = client.handle(tui.parse_line("/task create denied-1 Denied task"))
+    assert "Next: /tasks 3" in listed
+    assert opener.calls[0]["url"].endswith("/v1/tasks?project_id=boss-dogfood&limit=25&offset=25")
+    assert "HTTP 403" in denied
+    assert "task_create denied" in denied
+
+
+def test_direct_task_details_do_not_present_another_project_as_selected_work():
+    opener = FakeOpener([(200, {
+        "id": "task-in-other-project", "project_id": "project-two", "title": "Other work"
+    })])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    result = client.dispatch(tui.parse_line("/task task-in-other-project"))
+    assert result["__command_error__"] is True
+    assert "outside the selected project" in result["message"]
+
+
+def test_direct_task_create_works_in_one_shot_json_mode(monkeypatch, capsys):
+    opener = FakeOpener([(201, {
+        "id": "task-4", "project_id": "boss-dogfood", "title": "Ship docs",
+        "dedupe_key": "docs-4",
+    })])
+    monkeypatch.setenv("BOSS_API_URL", "https://boss-api.test")
+    monkeypatch.setenv("BOSS_API_KEY", SECRET)
+    monkeypatch.setenv("BOSS_PROJECT_ID", "boss-dogfood")
+    monkeypatch.setenv("BOSS_ACTOR", "ceo")
+    monkeypatch.setattr(tui, "urlopen", opener)
+    assert tui.main(["--exec", "/task create docs-4 Ship docs", "--json"]) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)["id"] == "task-4"
+    assert output.err == ""
+    assert opener.calls[0]["body"]["dedupe_key"] == "docs-4"
+    assert SECRET not in output.out + output.err
+
+
 def test_api_command_parses_method_path_and_json():
     command = tui.parse_line('/api POST /v1/metatron/watch {"project_id":"boss-dogfood","actor":"ceo"}')
     assert command.kind == "api"

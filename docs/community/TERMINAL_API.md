@@ -12,7 +12,22 @@ configured API key and project; no host Python setup is needed.
 
 Conversational text goes to `/v1/metatron/session`. The built-in commands are
 `/goals`, `/watch`, `/overwatch`, and `/drive [auto|go]`. Use `/projects` to list
-projects returned by the API and `/project ID` to select one. Use `/ops` to see
+projects returned by the API and `/project ID` to select one. For everyday work,
+`/tasks [PAGE]` lists 25 tasks at a time, `/task ID` shows one task, and
+`/task create DEDUPE_KEY TITLE` creates one. Choose a stable dedupe key for a
+logical task and reuse it if a request needs retrying. The terminal sends the
+selected project and configured actor to the task API; the server enforces
+permissions and records the task and audit event. For example:
+
+```text
+metatron> /project boss-dogfood
+metatron> /tasks
+metatron> /task create launch-plan-1 Plan the community launch
+metatron> /task task-123
+metatron> /tasks 2
+```
+
+Use `/ops` to see
 product domains exposed by the running API, `/ops TASK` to search operations,
 or `/ops * --page N` to browse every operation in pages of 25. Domain searches
 also accept `--page N`. Interactive output shows concise rows; one-shot `--json`
