@@ -19933,6 +19933,11 @@ def get_project_settings(project_id: str) -> dict:
     with begin(engine) as connection:
         chosen = ps.get_all(connection, project_id)
         connected = connected_engines(connection, settings, project_id)
+        # THE PROJECT'S OWN CHOICES DECIDE WHICH MODELS A LANE OFFERS. The lists were drawn from
+        # the deployment settings, so choosing codex as the reviewer here still offered Claude's
+        # models beside it — the reviewer's model list follows the reviewer's harness, and that
+        # harness is this project's setting, not the environment's.
+        effective = ps.applied(connection, project_id, settings)
         knobs = []
         for key, spec in ps.KNOBS.items():
             default = getattr(settings, spec["attr"], None)
@@ -19944,7 +19949,7 @@ def get_project_settings(project_id: str) -> dict:
                 # THIS PROJECT has connected — not every harness BOSS can drive. Offering all
                 # eleven on an install with one credential is a dropdown where ten choices
                 # fail at build time and nothing says which.
-                "choices": (ps.offered_choices(connection, settings, project_id, spec, value)
+                "choices": (ps.offered_choices(connection, effective, project_id, spec, value)
                             if spec["kind"] == "choice" else None),
                 # WHETHER THE LIST IS A LIMIT OR A SUGGESTION. `codex --model` takes any name
                 # OpenAI offers, so a closed dropdown would make a model that works
@@ -19952,7 +19957,7 @@ def get_project_settings(project_id: str) -> dict:
                 # set — BOSS resolves them itself — so that picker stays closed.
                 "open_choices": (
                     ps.model_choice_is_open(
-                        spec, ps.harness_for_model_knob(spec, settings))
+                        spec, ps.harness_for_model_knob(spec, effective))
                     if spec["kind"] == "choice" else False),
                 "value": value,
                 "default": default,

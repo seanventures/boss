@@ -221,7 +221,7 @@ const ROLE_ROWS: {
   { role: "Chat, agents, meetings", does: "Answers in the console and speaks in panels.",
     engine: "chat_llm_engine", model: "claude_cli_model",
     emptyEngine: "same as implementer", emptyModel: "engine default" },
-  { role: "Workflow decisions", does: "Picks a branch from fixed options. Jev needs a key.",
+  { role: "Workflow decisions", does: "Picks a branch from fixed options. Jev needs a key, saved in the Model section above.",
     engine: "decision_backend", model: "decision_model",
     emptyEngine: "deployment default", emptyModel: "deployment default" },
   { role: "Codex CLI", does: "The model Codex runs whenever a role uses it.",
@@ -230,15 +230,19 @@ const ROLE_ROWS: {
 ];
 
 function RoleCell(
-  { knob, empty, busy, onSave }:
+  { knob, empty, busy, onSave, origin }:
   { knob: Knob | undefined; empty: string; busy: boolean;
-    onSave: (key: string, value: string) => void },
+    onSave: (key: string, value: string) => void;
+    /** What this value IS, where "inherited" would be wrong — the decisions row's model is
+     *  Claude's second opinion when Jev is unsure, not a value handed down from elsewhere. */
+    origin?: string },
 ) {
   if (!knob) return <td className="role-cell role-na">—</td>;
   const inherited = knob.default !== null && knob.default !== "" ? ` (${knob.default})` : "";
   const control = knob.open_choices ? (
     <>
       <input className="input" list={`role-${knob.key}-options`} aria-label={knob.label}
+             key={`${knob.key}:${String(knob.value ?? "")}`}
              placeholder={`${empty}${inherited}`} defaultValue={String(knob.value ?? "")}
              disabled={busy} data-testid={`knob-${knob.key}`}
              onBlur={(e) => {
@@ -250,6 +254,7 @@ function RoleCell(
     </>
   ) : (
     <select className="input" aria-label={knob.label} defaultValue={String(knob.value ?? "")}
+            key={`${knob.key}:${String(knob.value ?? "")}:${(knob.choices ?? []).join(",")}`}
             disabled={busy} data-testid={`knob-${knob.key}`}
             onChange={(e) => {
               if (String(knob.value ?? "") !== e.target.value) onSave(knob.key, e.target.value);
@@ -262,7 +267,7 @@ function RoleCell(
     <td className="role-cell" title={knob.help}>
       {control}
       <span className="role-origin" data-source={knob.source}>
-        {knob.source === "project" ? "set here" : "inherited"}
+        {origin ?? (knob.source === "project" ? "set here" : "inherited")}
         {knob.source === "project" ? (
           <button type="button" className="role-reset" disabled={busy}
                   data-testid={`knob-reset-${knob.key}`} onClick={() => onSave(knob.key, "")}>
@@ -357,7 +362,12 @@ export function RoleTable({ projectId, actor }: { projectId: string; actor: stri
                               onSave={(k, v) => void save(k, v)} />
                   : <td className="role-cell role-na">codex</td>}
                 <RoleCell knob={model} empty={row.emptyModel} busy={busy === row.model}
-                          onSave={(k, v) => void save(k, v)} />
+                          onSave={(k, v) => void save(k, v)}
+                          origin={decisions
+                            ? (engine?.value === "typesafe"
+                               ? "Claude's second opinion when Jev is unsure"
+                               : "Claude decides")
+                            : undefined} />
               </tr>
             );
           })}
