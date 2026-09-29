@@ -122,6 +122,7 @@ def fake_set_one(connection, project_id, key, value, actor):
     seen.update(project_id=project_id, key=key, value=value, actor=actor)
     return value
 ps.set_one = fake_set_one
+ps.get_all = lambda connection, project_id: {}
 response = client.put('/v1/settings/codex_cli_model', json={
     'project_id': 'p', 'actor': 'ceo', 'value': 'gpt-6-sol',
     'client_extension': {'source': 'tui'},
