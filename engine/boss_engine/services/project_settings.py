@@ -111,7 +111,9 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "Which model the hard-problems lane uses — adversarial review, security and "
                 "consistency checks all run here. Opus is the one worth paying for on review. "
                 "Empty means the engine's own default.",
-        "kind": "choice", "choices": "claude_models",
+        # THE LANE'S OWN HARNESS'S MODELS, not Claude's. This was hard-wired to claude_models,
+        # so pointing the lane at codex still offered opus/sonnet/fable/haiku beside it.
+        "kind": "choice", "choices": "models_for:code_agent_strong_engine",
     },
     "code_agent_low_cost_model": {
         "attr": "code_agent_low_cost_model",
@@ -119,7 +121,7 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "Which model the routine lane uses — implement, write_tests and the design "
                 "stages. Sonnet is the measured default; Haiku is cheaper and weaker. "
                 "Empty means the engine's own default.",
-        "kind": "choice", "choices": "claude_models",
+        "kind": "choice", "choices": "models_for:code_agent_low_cost_engine",
     },
     # WIRED INTO THE ADAPTER FOR A LONG TIME AND REACHABLE FROM NOWHERE. codex_cli_adapter
     # reads settings.codex_cli_model on every call; the console never offered it, so an operator
@@ -169,6 +171,16 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "Which Claude model decides, and gives the second opinion when Jev is unsure.",
         "kind": "choice", "choices": "claude_models",
     },
+}
+
+#: Each lane's engine knob and the model knob that belongs to it. When the engine changes, a model
+#: chosen for the old one is cleared (see PUT /v1/settings) rather than left paired with a
+#: harness that cannot run it.
+MODEL_FOR_ENGINE = {
+    "code_agent_engine": "code_agent_model",
+    "code_review_engine": "code_review_model",
+    "code_agent_strong_engine": "code_agent_strong_model",
+    "code_agent_low_cost_engine": "code_agent_low_cost_model",
 }
 
 #: Engines that can hold a CONVERSATION, as opposed to drive a coding CLI.

@@ -20038,17 +20038,31 @@ def put_project_setting(key: str, payload: dict) -> dict:
     with begin(engine) as connection:
         if payload.get("value") in (None, ""):
             ps.clear_one(connection, project_id, key)
+            paired = ps.MODEL_FOR_ENGINE.get(key)
+            if paired:
+                ps.clear_one(connection, project_id, paired)
             return {"key": key, "value": getattr(settings, ps.KNOBS.get(key, {}).get("attr", ""),
                                                  None),
                     "source": "deployment default"}
         try:
+            before = ps.get_all(connection, project_id).get(key)
             value = ps.set_one(connection, project_id, key, payload.get("value"), actor)
         except ps.UnknownKnob as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
             # The bound, in words: "between 1 and 16" is actionable, "invalid" is not.
             raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"key": key, "value": value, "source": "project"}
+        # A MODEL BELONGS TO THE ENGINE IT WAS CHOSEN FOR. Switching a lane from claude_code to
+        # codex left `opus` set beside it — a pairing that fails at the first escalation, with
+        # the picker still showing it because a current value is never dropped from the list.
+        # So a lane's model is cleared when its engine changes, and the reply says so.
+        cleared = None
+        paired = ps.MODEL_FOR_ENGINE.get(key)
+        if paired and before != value and ps.get_all(connection, project_id).get(paired):
+            ps.clear_one(connection, project_id, paired)
+            cleared = paired
+    return {"key": key, "value": value, "source": "project",
+            **({"cleared": cleared} if cleared else {})}
 
 
 @app.post("/v1/budget/set_intensity")
