@@ -14,7 +14,7 @@ describe("re-running a workflow", () => {
   const adopted = {
     title: "Dependency Freshness Report",
     directive: "Build a dependency freshness report.",
-    repository: "paramg/boss-sandbox",
+    repository: "example-user/boss-sandbox",
     target_id: "deptgt_abc",
     adopt_code_task_run_id: "crun_d9f30e31",
     adopt_meeting_run_id: "mrun_76f07c8b",
@@ -34,7 +34,7 @@ describe("re-running a workflow", () => {
     const next = inputForRerun(adopted);
     expect(next.directive).toBe("Build a dependency freshness report.");
     expect(next.title).toBe("Dependency Freshness Report");
-    expect(next.repository).toBe("paramg/boss-sandbox");
+    expect(next.repository).toBe("example-user/boss-sandbox");
     expect(next.target_id).toBe("deptgt_abc");
   });
 

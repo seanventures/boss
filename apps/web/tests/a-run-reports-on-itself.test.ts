@@ -125,7 +125,7 @@ describe("the panel's plumbing", () => {
 
   it("is collapsed until somebody asks for it", () => {
     // "Even the whole Run report should be collapsed... otherwise it will be lots of text
-    //  which I already received feedback from Sean". It is a lot of text — that is what a
+    //  which already got feedback that it is a lot of text". It is a lot of text — that is what a
     //  report is — so none of it opens uninvited.
     expect(UI).toContain('<details className="rr rr-root"');
     expect(UI).not.toMatch(/className="rr-section" open/);

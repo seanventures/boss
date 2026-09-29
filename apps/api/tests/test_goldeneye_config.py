@@ -6,13 +6,13 @@ from apps.api.app.services.openai_adapter import OpenAIAdapter
 
 
 def test_settings_accepts_goldeneye_injected_env_aliases(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://boss:boss@goldeneye/boss")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://boss:boss@db.example.test")
     monkeypatch.setenv("OPENAI_API_KEY", "goldeneye-llm-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.local.example.test/v1")
     monkeypatch.setenv("OPENAI_MODEL", "llama-3.3-70b-versatile")
     monkeypatch.setenv("SMTP_HOST", "smtp.local.example.test")
     monkeypatch.setenv("SMTP_PORT", "2525")
-    monkeypatch.setenv("MAIL_FROM", "boss@sean.network")
+    monkeypatch.setenv("MAIL_FROM", "boss@example.test")
     monkeypatch.setenv("OIDC_ISSUER", "https://keycloak.local.example.test/realms/boss")
     monkeypatch.setenv("OIDC_CLIENT_ID", "boss")
     monkeypatch.setenv("OIDC_CLIENT_SECRET", "secret-ref")
@@ -24,13 +24,13 @@ def test_settings_accepts_goldeneye_injected_env_aliases(monkeypatch):
 
     settings = Settings(_env_file=None)
 
-    assert settings.database_url == "postgresql+psycopg://boss:boss@goldeneye/boss"
+    assert settings.database_url == "postgresql+psycopg://boss:boss@db.example.test"
     assert settings.openai_api_key == "goldeneye-llm-key"
     assert settings.openai_base_url == "https://llm.local.example.test/v1"
     assert settings.openai_model == "llama-3.3-70b-versatile"
     assert settings.email_smtp_host == "smtp.local.example.test"
     assert settings.email_smtp_port == 2525
-    assert settings.email_from_address == "boss@sean.network"
+    assert settings.email_from_address == "boss@example.test"
     assert settings.oidc_issuer == "https://keycloak.local.example.test/realms/boss"
     assert settings.oidc_audience == "boss"
     assert settings.oidc_client_secret == "secret-ref"
@@ -48,7 +48,7 @@ def test_goldeneye_env_aliases_win_over_blank_boss_compatibility_aliases(monkeyp
     monkeypatch.setenv("BOSS_EMAIL_SMTP_HOST", "")
     monkeypatch.setenv("SMTP_PORT", "2525")
     monkeypatch.setenv("BOSS_EMAIL_SMTP_PORT", "587")
-    monkeypatch.setenv("MAIL_FROM", "boss@sean.network")
+    monkeypatch.setenv("MAIL_FROM", "boss@example.test")
     monkeypatch.setenv("BOSS_EMAIL_FROM_ADDRESS", "")
     monkeypatch.setenv("OIDC_ISSUER", "https://keycloak.local.example.test/realms/boss")
     monkeypatch.setenv("BOSS_OIDC_ISSUER", "")
@@ -60,7 +60,7 @@ def test_goldeneye_env_aliases_win_over_blank_boss_compatibility_aliases(monkeyp
     assert settings.openai_model == "llama-3.3-70b-versatile"
     assert settings.email_smtp_host == "smtp.local.example.test"
     assert settings.email_smtp_port == 2525
-    assert settings.email_from_address == "boss@sean.network"
+    assert settings.email_from_address == "boss@example.test"
     assert settings.oidc_issuer == "https://keycloak.local.example.test/realms/boss"
     assert settings.oidc_audience == "boss"
 

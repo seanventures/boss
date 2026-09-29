@@ -81,7 +81,7 @@ def test_plan_dispatched_enqueues_claimable_next_move_job(engine, client):
 
 def test_next_move_starts_ready_implement_phase_as_code_task(engine, monkeypatch):
     settings = get_settings()
-    monkeypatch.setattr(settings, "target_github_owner", "seanheiney")
+    monkeypatch.setattr(settings, "target_github_owner", "example-org")
     monkeypatch.setattr(settings, "target_github_repo", "boss-sandbox")
     intake = CommandIntakeService(settings)
     service = OrchestratorNextMoveService(settings)
@@ -193,7 +193,7 @@ def test_next_move_fail_closed_without_target_repo(engine, monkeypatch):
 
 def test_next_move_respects_phase_dependencies(engine, monkeypatch):
     settings = get_settings()
-    monkeypatch.setattr(settings, "target_github_owner", "seanheiney")
+    monkeypatch.setattr(settings, "target_github_owner", "example-org")
     monkeypatch.setattr(settings, "target_github_repo", "boss-sandbox")
     intake = CommandIntakeService(settings)
     service = OrchestratorNextMoveService(settings)
@@ -278,7 +278,7 @@ def test_next_move_enqueues_scope_agent_job(engine):
 
 def test_execute_endpoint_wires_worker_boundary(client, engine, monkeypatch):
     settings = get_settings()
-    monkeypatch.setattr(settings, "target_github_owner", "seanheiney")
+    monkeypatch.setattr(settings, "target_github_owner", "example-org")
     monkeypatch.setattr(settings, "target_github_repo", "boss-sandbox")
     # Rebind the app singleton settings used by the route.
     from apps.api.app import main as api_main

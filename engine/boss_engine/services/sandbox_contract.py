@@ -1,6 +1,6 @@
 """#99 — the async Python⇄Go sandbox job contract (spec 10 §4).
 
-The Python engine dispatches a whole coding task to an external **sandbox-service** (Sean's Go
+The Python engine dispatches a whole coding task to an external **sandbox-service** (the Go
 Firecracker service, S1) over HTTP and never blocks a worker on the execution: **submit → poll →
 collect**. That contract was implicit (scattered through ``MicroVMProvider``); this makes it a single,
 **versioned, documented, testable** surface the Go side conforms to. Full JSON reference:

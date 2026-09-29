@@ -97,7 +97,7 @@ REPORT = {
                  "text": "a malformed file takes down the whole list screen"},
             ],
             "has_e2e": False,
-            "pull_request_url": "https://github.com/paramg/boss-sandbox/pull/211",
+            "pull_request_url": "https://github.com/example-user/boss-sandbox/pull/211",
         },
     },
 }

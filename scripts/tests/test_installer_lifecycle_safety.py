@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -212,6 +213,11 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+        rendered = result.stdout + result.stderr
+        assert "kept-owner" not in rendered
+        assert "kept-db" not in rendered
+        assert "kept-console" not in rendered
+        assert "kept-session" not in rendered
         values = dict(
             line.split("=", 1) for line in env_file.read_text().splitlines()
             if "=" in line and not line.startswith("#")
@@ -252,3 +258,57 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
     )
     assert rerun.returncode != 0
     assert "selected secret store cannot be provisioned" in rerun.stderr
+
+
+def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
+    """A stranger's install must not call Sean's network or a private registry."""
+    forbidden = ("sean.network", "tail95d980", "local.sean", "OPS_TOKEN")
+    private_registry = re.compile(r"[\w.-]+\.ts\.net(?::\d+)?", re.IGNORECASE)
+    paths = [ROOT / "install.sh", *sorted((ROOT / "scripts/install").rglob("*"))]
+    offenders: list[str] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        relative = path.relative_to(ROOT).as_posix()
+        offenders.extend(f"{relative}: {needle}" for needle in forbidden if needle in text)
+        if private_registry.search(text):
+            offenders.append(f"{relative}: private registry host")
+    assert offenders == []
+    compose = (ROOT / "scripts/install/community-compose.yml").read_text(encoding="utf-8")
+    published = [
+        line.strip() for line in compose.splitlines()
+        if re.search(r'- "[^"]+:\d+"\s*$', line)
+    ]
+    assert len(published) == 4
+    assert all(line.startswith('- "127.0.0.1:') and "0.0.0.0" not in line for line in published)
+    installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert 'BIND_ADDRESS="127.0.0.1"' in installer
+    assert 'REPLACE_WITH_REVIEWED_40_CHARACTER_SHA' in (
+        ROOT / "scripts/install/README.md"
+    ).read_text(encoding="utf-8")
+    assert './install.sh --dir "$PWD"' in (ROOT / "scripts/install/README.md").read_text(encoding="utf-8")
+    assert ".boss-shipped-commit" in installer
+    remote = (ROOT / "scripts/install/remote.sh").read_text(encoding="utf-8")
+    assert "Bearer $key" not in remote
+    assert "Bearer ${key}" not in remote
+
+
+def test_secret_arguments_are_refused_and_not_echoed() -> None:
+    secret = "history-secret-should-not-echo"
+    install = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--openai-key", secret],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert install.returncode != 0
+    rendered = install.stdout + install.stderr
+    assert secret not in rendered
+    assert "shell history" in rendered
+    remote = subprocess.run(
+        ["bash", str(ROOT / "scripts/install/remote.sh"),
+         "--host", "example.invalid", "model", "--api-key", secret],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert remote.returncode != 0
+    assert secret not in remote.stdout + remote.stderr
+    assert "shell history" in remote.stdout + remote.stderr

@@ -1,5 +1,5 @@
 # Goldeneye site configuration — copy to /etc/goldeneye/site.yaml and edit.
-# No Sean-specific values. Everything the kit needs to parameterise lives here.
+# No operator host, mailbox, or site name is filled in. Everything the kit needs to parameterise lives here.
 
 site:
   name: goldeneye                    # short node / fleet name

@@ -82,7 +82,7 @@ def _path_params(path: str) -> dict[str, str]:
         "domain": "core",
         "provider": "aws",
         "repo": "boss",
-        "owner": "seanheiney",
+        "owner": "example-org",
         "ref": "main",
         "key": "x",
         "skill_id": "list_tasks",

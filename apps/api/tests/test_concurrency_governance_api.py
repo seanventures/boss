@@ -53,7 +53,7 @@ def test_safety_branch_protection_mounted(client):
     v = client.get(
         "/v1/safety/branch-protection",
         params={
-            "owner": "seanheiney",
+            "owner": "example-org",
             "repo": "boss-sandbox",
             "branch": "main",
             "accept_simulated": False,

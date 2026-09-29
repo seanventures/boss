@@ -14,7 +14,7 @@ import pytest
 
 from boss_engine.services.code_task_service import active_same_app, work_fingerprint
 
-BASE = dict(project_id="boss-dogfood", owner="paramg", repo="boss-sandbox",
+BASE = dict(project_id="boss-dogfood", owner="example-user", repo="boss-sandbox",
             base_branch="main")
 BRIEF = "Build Shorty, a small self-hosted URL shortener."
 TITLE = "Shorty — self-hosted URL shortener"

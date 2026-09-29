@@ -81,7 +81,7 @@ def test_dry_run_checklist_covers_required():
 
 def test_verify_no_credentials_fail_closed():
     settings = SimpleNamespace(
-        target_github_owner="seanheiney",
+        target_github_owner="example-org",
         target_github_repo="boss-sandbox",
         github_token=None,
     )
@@ -120,7 +120,7 @@ def test_new_install_has_no_implicit_github_repository():
 
 def test_verify_live_protection_via_injected_request():
     settings = SimpleNamespace(
-        target_github_owner="seanheiney",
+        target_github_owner="example-org",
         target_github_repo="boss-sandbox",
         github_token="fake",
     )
@@ -146,7 +146,7 @@ def test_verify_entitlement_403_fail_closed():
             )
 
     settings = SimpleNamespace(
-        target_github_owner="seanheiney",
+        target_github_owner="example-org",
         target_github_repo="boss-sandbox",
         github_token="fake",
     )
@@ -165,12 +165,12 @@ def test_verify_entitlement_403_fail_closed():
 
 def test_simulated_all_required_enables_live_demo_ready_for_tests():
     settings = SimpleNamespace(
-        target_github_owner="seanheiney",
+        target_github_owner="example-org",
         target_github_repo="boss-sandbox",
         github_token=None,
     )
     record = store_simulated_checklist(
-        owner="seanheiney",
+        owner="example-org",
         repo="boss-sandbox",
         branch="main",
         checks=all_required_true_checks(),
@@ -190,12 +190,12 @@ def test_simulated_all_required_enables_live_demo_ready_for_tests():
 
 def test_partial_simulated_does_not_enable_ready():
     settings = SimpleNamespace(
-        target_github_owner="seanheiney",
+        target_github_owner="example-org",
         target_github_repo="boss-sandbox",
         github_token=None,
     )
     store_simulated_checklist(
-        owner="seanheiney",
+        owner="example-org",
         repo="boss-sandbox",
         branch="main",
         checks={"protected": True},  # incomplete
@@ -227,7 +227,7 @@ def test_api_verify_fail_closed(client, monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     r = client.get(
         "/v1/safety/branch-protection",
-        params={"owner": "seanheiney", "repo": "boss-sandbox", "branch": "main"},
+        params={"owner": "example-org", "repo": "boss-sandbox", "branch": "main"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -240,7 +240,7 @@ def test_api_simulate_all_required(client, monkeypatch):
     r = client.post(
         "/v1/safety/branch-protection/simulate",
         json={
-            "owner": "seanheiney",
+            "owner": "example-org",
             "repo": "boss-sandbox",
             "branch": "main",
             "all_required": True,
@@ -255,7 +255,7 @@ def test_api_simulate_all_required(client, monkeypatch):
 
     verify = client.get(
         "/v1/safety/branch-protection",
-        params={"owner": "seanheiney", "repo": "boss-sandbox"},
+        params={"owner": "example-org", "repo": "boss-sandbox"},
     )
     assert verify.status_code == 200
     assert verify.json()["live_demo_ready"] is True

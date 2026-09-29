@@ -241,6 +241,16 @@ def test_internal_ui_audit_media_is_excluded() -> None:
     )
 
 
+def test_scrubbed_goldeneye_settings_fixture_stays_exportable() -> None:
+    """The settings fixture ships once its mailbox and database host are generic."""
+    path = "apps/api/tests/test_goldeneye_config.py"
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    assert path not in manifest["exclude"]
+    data = (export.ROOT / path).read_bytes()
+    assert b"@db.example.test" in data
+    assert not any(marker in data for marker in export.PRIVATE_MARKERS)
+
+
 def test_public_issue_forms_are_exact_manifest_paths() -> None:
     manifest = json.loads((MODULE_PATH.parent / "community_export_manifest.json").read_text())
     issue_paths = sorted(

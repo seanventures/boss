@@ -11,15 +11,17 @@
 
 ## What it is
 
-**Goldeneye** is a **modular bare-metal PaaS kit** (standalone product path):
-installer, versioned modules, edge proxy, private mesh, registry, deploy CLI,
-ops handshake, and proven backups. It is designed to become its own open-source
-repository; BOSS is an **optional** control plane that registers nodes, plans
-module installs/app deploys, emits receipts, and keeps fleet truth durable.
+**Goldeneye** is a **modular bare-metal PaaS kit** you run on hardware or a VM
+you administer: installer, versioned modules, edge proxy, a mesh you operate,
+a registry you run, deploy CLI, and backups. It is designed to become its own
+open-source repository. BOSS is an **optional** control plane that can register
+nodes, plan module installs and app deploys, emit receipts, and store fleet
+records. The kit does not require BOSS.
 
-It is **not** a managed multi-tenant Cloud fleet. Community/self-hosted editions
-run the kit on **your** metal. Sean’s production host named `goldeneye` is the
-dogfood instance of the kit.
+It is **not** a managed multi-tenant Cloud fleet, and it is **not** access to a
+server operated by the maintainers. There is no shared host to SSH into.
+Community and self-hosted installs run the kit on **your** metal. No step
+requires Plane, an ops token, or a private registry.
 
 ### Community vs platform-only
 
@@ -32,8 +34,8 @@ dogfood instance of the kit.
 | Cloud Easy Connect as the node source | **Platform-only (Cloud)** |
 
 `GET /v1/goldeneye/status` is honest: no registered nodes → `status=not_configured`,
-`host.connected=false`, `metrics=null`. It never invents Sean's dogfood host as
-connected or fabricates fleet metrics. Missing `goldeneye_nodes` is repaired via
+`host.connected=false`, `metrics=null`. It never invents a host as connected
+and it does not fabricate fleet metrics. Missing `goldeneye_nodes` is repaired via
 `ensure_tables` (empty-200), not a 500.
 
 ### Modular units
@@ -67,7 +69,7 @@ Extract plan: `packages/goldeneye/docs/OPEN_SOURCE.md`.
 1. **Tailnet by default, public by exception.** Admin and inter-node traffic stay private; only end-user apps get public hostnames.
 2. **One canonical public A record per node (or fleet apex); everything else CNAMEs.** Hardware/IP moves stay cheap.
 3. **Name things, never hard-code addresses.** Registry, peers, and services resolve by DNS.
-4. **Agents are first-class operators.** The platform is self-describing (ops handshake, secrets API, deploy contract).
+4. **Agents are first-class operators.** Software on your machine can read its own deploy contract. That local handshake is not an ops token from the maintainers.
 5. **Prove it, don’t assert it.** Backups restore-drill; exposure audits; drift detection.
 6. **BOSS hard rules apply.** Every external effect has a `Receipt` + `dedupe_key`. Spendy/real host writes stay policy-gated. Failures are visible.
 
@@ -87,20 +89,22 @@ Extract plan: `packages/goldeneye/docs/OPEN_SOURCE.md`.
 ```
 
 Bootstrap order is fixed; the package manager refuses out-of-order installs
-unless `--force` is set for operators who know the risk.
+unless `--force` is set for operators who know the risk. Plane in the optional
+row is a package you may install on your machine. The BOSS Community installer
+does not require this kit, Plane, an ops token, or a registry you do not run.
 
 ---
 
 ## Kit usage (standalone)
 
-```bash
-# On a fresh Ubuntu 24.04 host (as root), after Tailscale is up:
-curl -fsSL https://raw.githubusercontent.com/your-org/boss/main/packages/goldeneye/install.sh | bash
+The Community GitHub one-liner is not usable until a reviewed commit exists.
+Do not fetch this kit from an unreviewed branch, and do not SSH to a host you
+do not administer. From a checkout you already have, on Ubuntu you control:
 
-# Or from a BOSS checkout:
+```bash
 sudo packages/goldeneye/install.sh --site /etc/goldeneye/site.yaml
 
-# Package manager
+# Package manager, on that same machine
 ge pkg list
 ge pkg install layer1-runtime
 ge pkg install layer2-edge
@@ -108,13 +112,20 @@ ge deploy myapp --image registry.local.example:5000/myapp:abc1234
 ge node status
 ```
 
-Site config parameterizes domains, public IP, tailnet name, operator CIDRs,
-ACME email, and alert sink — nothing Sean-specific is required for a clean
-install.
+`registry.local.example` is a name you configure. The kit can run a registry
+on your machine. It does not log in to a maintainer registry.
+
+Site config parameterizes domains, public IP, your own tailnet name, the CIDRs
+you administer, ACME email, and alert sink. Those values describe your machine.
+Tailscale, if you install it, is your tailnet. It is not a network operated
+for you. The generated site file and any env files stay on that machine.
 
 ---
 
 ## BOSS control plane usage
+
+Example only. `boss-dogfood` is the project id a local install seeds. The
+addresses are documentation values, not a host to contact.
 
 ```http
 POST /v1/goldeneye/nodes
@@ -125,7 +136,7 @@ POST /v1/goldeneye/nodes
   "roles": ["control", "edge", "apps"],
   "public_ip": "203.0.113.10",
   "tailnet_ip": "100.64.0.10",
-  "ssh_host": "node-1.tailnet.ts.net"
+  "ssh_host": "node-1.example"
 }
 
 GET  /v1/goldeneye/packages
@@ -213,15 +224,14 @@ See `packages/goldeneye/catalog.yaml`. Core packages:
 
 ## Done means
 
-- Fresh box can be bootstrapped with the kit installer to a working edge + deploy path
+- A machine you administer can be bootstrapped with the kit installer to a working edge + deploy path
 - BOSS APIs register nodes and plan package installs / app deploys with receipts
 - Tests cover catalog, node register, simulated install/deploy, rollback record
-- Sean dogfood continues on the production goldeneye host; kit stays parameterized
+- A clean install uses only the parameters in your site file and does not call a maintainer host
 
 ---
 
 ## Operator docs
 
 - Kit README: `packages/goldeneye/README.md`
-- BOSS-on-Goldeneye app deploy: `docs/operations/GOLDENEYE_DEPLOYMENT.md`
-- Production skill (dogfood host): `goldeneye-deploy` skill
+- Run the kit from a checkout on your machine. Do not follow a deploy guide that names a host you do not administer.

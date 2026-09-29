@@ -53,7 +53,7 @@ class FakeCtx:
     def __init__(self, row):
         self.connection = FakeConnection(row)
         self.settings = type("S", (), {
-            "target_repo_host": "github", "target_github_owner": "paramg",
+            "target_repo_host": "github", "target_github_owner": "example-user",
             "target_github_repo": "boss-sandbox", "github_token": "",
         })()
 
@@ -82,9 +82,9 @@ class TestFindingTheCodeForARun:
     def test_the_branch_named_after_the_run(self, branches):
         """The ordinary case: a code task commits to boss/code/<its own run id>."""
         branches.add("boss/code/crun_abc")
-        ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
+        ctx = FakeCtx({"spec": {"owner": "example-user", "repo": "boss-sandbox"}})
         repo, ref, err = builtin._source_for_run(ctx, "crun_abc", project_id="project-a")
-        assert (repo, ref, err) == ("paramg/boss-sandbox", "boss/code/crun_abc", None)
+        assert (repo, ref, err) == ("example-user/boss-sandbox", "boss/code/crun_abc", None)
 
     def test_a_follow_up_run_lives_under_the_branch_it_continues(self, branches):
         """THE CASE THAT LOOKS LIKE A BUG.
@@ -95,7 +95,7 @@ class TestFindingTheCodeForARun:
         most likely to be asking about — the ones that were already fixed once.
         """
         branches.add("boss/code/crun_earlier")
-        ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox",
+        ctx = FakeCtx({"spec": {"owner": "example-user", "repo": "boss-sandbox",
                                 "base_branch": "boss/code/crun_earlier"}})
         repo, ref, err = builtin._source_for_run(ctx, "crun_followup", project_id="project-a")
         assert ref == "boss/code/crun_earlier"
@@ -103,9 +103,9 @@ class TestFindingTheCodeForARun:
 
     def test_no_branch_matches_so_the_default_is_read_and_not_an_error(self, branches):
         """A merged app is on the default branch. Degrade to it; do not refuse the question."""
-        ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
+        ctx = FakeCtx({"spec": {"owner": "example-user", "repo": "boss-sandbox"}})
         repo, ref, err = builtin._source_for_run(ctx, "crun_merged", project_id="project-a")
-        assert (repo, ref, err) == ("paramg/boss-sandbox", None, None)
+        assert (repo, ref, err) == ("example-user/boss-sandbox", None, None)
 
     def test_an_unknown_run_says_so(self, branches):
         ctx = FakeCtx(None)
@@ -113,7 +113,7 @@ class TestFindingTheCodeForARun:
         assert err and "crun_nope" in err
 
     def test_a_run_with_no_repository_says_so(self, branches):
-        ctx = FakeCtx({"spec": {"owner": "paramg"}})
+        ctx = FakeCtx({"spec": {"owner": "example-user"}})
         _repo, _ref, err = builtin._source_for_run(ctx, "crun_x", project_id="project-a")
         assert err and "repositor" in err.lower()
 
@@ -122,15 +122,15 @@ class TestWhatTheSourceToolsResolve:
     def test_run_id_wins_over_repo(self, branches):
         """Passing both must not read one repo and cite another."""
         branches.add("boss/code/crun_abc")
-        ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
+        ctx = FakeCtx({"spec": {"owner": "example-user", "repo": "boss-sandbox"}})
         repo, ref, err = builtin._resolve_source(
             ctx, {"run_id": "crun_abc", "repo": "boss"}, project_id="project-a")
-        assert (repo, ref, err) == ("paramg/boss-sandbox", "boss/code/crun_abc", None)
+        assert (repo, ref, err) == ("example-user/boss-sandbox", "boss/code/crun_abc", None)
 
     def test_an_explicit_ref_overrides_the_resolved_branch(self, branches):
         """An operator who names a ref means that ref."""
         branches.add("boss/code/crun_abc")
-        ctx = FakeCtx({"spec": {"owner": "paramg", "repo": "boss-sandbox"}})
+        ctx = FakeCtx({"spec": {"owner": "example-user", "repo": "boss-sandbox"}})
         _repo, ref, _err = builtin._resolve_source(
             ctx, {"run_id": "crun_abc", "ref": "v1.2.0"}, project_id="project-a")
         assert ref == "v1.2.0"

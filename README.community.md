@@ -14,10 +14,14 @@ BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $
 
 The downloaded script and checkout use the same immutable commit. A failed
 download stops the command before the installer runs. The installer verifies
-the checkout commit. Until publication, use an authorized checkout and run
-`./install.sh --dir "$PWD"` there.
+the checkout commit. Until a reviewed commit exists, that command cannot
+succeed. Do not invent a SHA and do not point the URL at another host. Someone
+who already has a checkout can run `./install.sh --dir "$PWD"` on that copy.
+That path does not contact a maintainer server.
 
-The installer sets up Docker and the Community services, creates local credentials, seeds a project, and checks that the API and console start. It binds both to `127.0.0.1`. From another computer, use an SSH tunnel:
+The installer sets up Docker and the Community services, creates local credentials, seeds a project, and checks that the API and console start. It binds the API and console to `127.0.0.1` on the machine where it runs. It does not upload the generated `.env`. That file is yours; keep it private and backed up, and do not commit it. No step requires Plane, an ops token, or a private registry. The optional Goldeneye kit is software you run on your own machine. It is not access to a server operated by someone else. See [Goldeneye](docs/product/GOLDENEYE_PAAS.md).
+
+From another computer you administer, use an SSH tunnel to that machine:
 
 ```sh
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm

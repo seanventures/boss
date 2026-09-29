@@ -144,7 +144,7 @@ def test_view_opens_the_newest_build_not_the_best_labelled_one():
 def test_the_badge_and_the_guard_read_one_rule():
     """They disagreed, and the disagreement was visible to an operator.
 
-    Sean's `reportable` split is right: a name or subject match means related work exists, not
+    The `reportable` split is right: a name or subject match means related work exists, not
     that this benchmark's canary was run here -- its /report 404s. But only the CATALOG applied
     it. The rebuild guard still treated a name match as already-built, so the card offered
     "Launch ApproveIt" and the press was then refused. A guard you can only discover by

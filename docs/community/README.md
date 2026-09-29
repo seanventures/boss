@@ -7,10 +7,21 @@ optional.
 
 ## Start
 
+Install stays on `127.0.0.1` and creates credentials on that machine. The
+generated `.env` is yours, is not uploaded, and should stay private. The GitHub
+one-liner in the root README is not usable until a reviewed commit exists. Leave
+`REPLACE_WITH_REVIEWED_40_CHARACTER_SHA` in place until then. The optional
+Goldeneye metal kit is software you run on your own machine. It is not access
+to someone else's server. No step requires Plane, an ops token, or a private
+registry. The repository has not been published yet.
+
 The root `README.md` has the one-line installer, SSH access, upgrade, and
 uninstall commands. `scripts/install/README.md` covers credentials and
 recovery. See [model connections](MODEL_CONNECTIONS.md) for supported provider
-paths and [Features](FEATURES.md) for the current Community scope.
+paths and [Features](FEATURES.md) for the current Community scope. The
+[Goldeneye kit](../product/GOLDENEYE_PAAS.md) is optional and local. Examples
+that use project id `boss-dogfood` mean the project seeded on your machine,
+not a shared server.
 
 In the console, **Agent work** shows recent activity by role. **Team
 structure** holds a planned role layout and separately shows actual handoffs.
@@ -32,5 +43,5 @@ reporting.
 
 ## License
 
-Apache License 2.0 applies to the published Community source; see root
-`LICENSE`. Third-party components retain their own terms and notices.
+Apache License 2.0 applies to the Community source; see root `LICENSE`.
+Third-party components retain their own terms and notices.

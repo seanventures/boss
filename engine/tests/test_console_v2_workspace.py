@@ -80,11 +80,11 @@ def run(rid, *, title="Shorty — a URL shortener", status="completed", pr=None,
         "title": title,
         "status": status,
         "phase": phase,
-        "spec": {"instructions": "Build it", "owner": "paramg", "repo": "boss-sandbox"},
+        "spec": {"instructions": "Build it", "owner": "example-user", "repo": "boss-sandbox"},
         "state": {"turns": turns},
         "usage": {"cost_usd_micros": cost},
         "finalize_ctx": ctx or None,
-        "pull_request_url": f"https://github.com/paramg/boss-sandbox/pull/{pr}" if pr else None,
+        "pull_request_url": f"https://github.com/example-user/boss-sandbox/pull/{pr}" if pr else None,
         "pull_request_number": pr,
         "error": err,
         "created_at": NOW - timedelta(minutes=age_min),
@@ -246,7 +246,7 @@ def test_an_early_app_has_not_reached_the_later_phases():
 
 
 def test_the_pr_number_is_carried_so_the_link_can_be_built():
-    """A card once linked to github.com/paramg/boss-sandbox/pull/111 for a PR that was not
+    """A card once linked to github.com/example-user/boss-sandbox/pull/111 for a PR that was not
     there. The number and the URL travel together, from the run that owns them."""
     conn = FakeConn([run("crun_1", app_id="app_1", status="completed", pr=111)])
     r = project_workspace(conn, "proj", "app_1")["runs"][0]

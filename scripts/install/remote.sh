@@ -66,7 +66,7 @@ commands:
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
   model        connect an API KEY to the remote install — one command, no tunnel
-  subscription connect a Claude/Codex SUBSCRIPTION token — reads stdin, or --token
+  subscription connect a Claude/Codex SUBSCRIPTION token — pipe one line on stdin
   env          print export lines for BOSS_API / BOSS_API_KEY / PROJECT
   tunnel       forward the host's API and console to this laptop over SSH
   logs         tail a service's logs (--service api|worker|web|db)
@@ -93,19 +93,18 @@ options:
                        fix something in the engine.
   --all-services       update: rebuild every service
   --provider NAME      model: openrouter | openai | anthropic | gemini | xai | custom
-  --api-key KEY        model: provider key (visible in process listings; prefer hidden prompt)
-                       Omit to enter it at a hidden prompt or pipe one line on stdin.
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
   --base-url URL       model: required for a custom OpenAI-compatible provider
   --project ID         model/env: project id (default boss-dogfood)
   --secret-store WHICH install: database (default, 4 containers) or infisical (6 containers,
                        ~400MB more, a real secret store). Both stay on the server
-  --token VALUE        subscription: the token. Omit it and the token is read from stdin,
-                       which keeps it out of your shell history and argv
   --accept-database-fallback
                        subscription: store the credential in Postgres when the install has
                        no secret store. Say yes deliberately; it is a live credential
   --                   everything after this is passed through to install.sh
+
+Model keys and subscription tokens are read from a hidden prompt or stdin.
+Do not pass them as arguments; the shell saves those in history.
 
 examples:
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key install --yes
@@ -124,14 +123,14 @@ CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     install|update|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
-    --token) SUB_TOKEN="${2:-}"; shift 2 ;;
+    --token|--token=*|--api-key|--api-key=*)
+      die "Refusing a secret on the command line. It would be saved in shell history and process listings. Use the hidden prompt or pipe one line on stdin." ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
     --accept-database-fallback) ACCEPT_DB_FALLBACK=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     --skip-backup) SKIP_BACKUP=1; shift ;;
     --confirm-purge) CONFIRM_PURGE="${2:-}"; shift 2 ;;
     --provider) PROVIDER="${2:-}"; shift 2 ;;
-    --api-key) MODEL_API_KEY="${2:-}"; shift 2 ;;
     --model) MODEL_NAME="${2:-}"; shift 2 ;;
     --base-url) MODEL_BASE_URL="${2:-}"; shift 2 ;;
     --project) PROJECT_ID="${2:-}"; shift 2 ;;
@@ -438,19 +437,24 @@ cmd_smoke() {
   # character. A 401 is JSON and contains quotes. So did the 500 that was actually happening:
   # the API could not authenticate to Postgres, and this check called it "API returns project
   # data" three cycles running. Status code, with the key, against a route that touches the DB.
-  local key code
-  key="$(rshq "grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-")"
-  if [[ -z "$key" ]]; then
+  #
+  # The key is read on the host. Copying it into this SSH command would put a generated
+  # credential in the laptop's process list and in the remote shell's command string.
+  local code
+  code="$(rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+    if [ -z \"\$k\" ]; then printf '%s' NOKEY
+    else curl -s -o /dev/null -w '%{http_code}' -m 25 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/projects'
+    fi")"
+  if [[ "$code" == "NOKEY" || -z "$code" ]]; then
     warn "no BOSS_API_KEY in $DIR/.env — cannot test an authenticated route"; fails=1
+  elif [[ "$code" == "200" ]]; then
+    ok "API reaches its database (authenticated /v1/projects 200)"
   else
-    code="$(rshq "curl -s -o /dev/null -w '%{http_code}' -m 25 -H 'Authorization: Bearer $key' http://127.0.0.1:$API_PORT/v1/projects")"
-    if [[ "$code" == "200" ]]; then ok "API reaches its database (authenticated /v1/projects 200)"
-    else
-      warn "authenticated /v1/projects returned $code"
-      rshq "curl -s -m 25 -H 'Authorization: Bearer $key' http://127.0.0.1:$API_PORT/v1/projects | head -c 300" | sed 's/^/      /'
-      printf "\n"
-      fails=1
-    fi
+    warn "authenticated /v1/projects returned $code"
+    rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+      curl -s -m 25 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/projects' | head -c 300" | sed 's/^/      /'
+    printf "\n"
+    fails=1
   fi
 
   local tables
@@ -558,7 +562,7 @@ cmd_subscription() {
   [[ -n "$PROVIDER" ]] || die "--provider is required (claude_code | codex)"
   local token="$SUB_TOKEN"
   if [[ -z "$token" ]]; then
-    [[ ! -t 0 ]] || die "no token: pass --token, or pipe one in (claude setup-token | … subscription --provider claude_code)"
+    [[ ! -t 0 ]] || die "no token: pipe one in (claude setup-token | … subscription --provider claude_code). Do not pass it as an argument; that stores it in shell history."
     token="$(cat)"
   fi
   token="${token//$'\n'/}"

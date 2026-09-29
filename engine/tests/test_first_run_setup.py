@@ -198,7 +198,7 @@ def test_a_subscription_is_redirected_rather_than_offered_a_key_box():
 
 def test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured():
     """Measured on the live deployment: no github_connections row, and it has been opening pull
-    requests against paramg/boss-sandbox for weeks. A wizard that says "not connected" to that
+    requests against example-user/boss-sandbox for weeks. A wizard that says "not connected" to that
     operator has told them a falsehood about their own system."""
     import inspect
 

@@ -14,7 +14,7 @@ from apps.api.app.services.plane_webhooks import PlaneWebhookService
 
 SECRET = "plane-webhook-secret"
 PROJECT_MAP = json.dumps(
-    {"proj-1": {"owner": "paramg", "repo": "boss-sandbox", "project_id": "boss-dogfood"}}
+    {"proj-1": {"owner": "example-user", "repo": "boss-sandbox", "project_id": "boss-dogfood"}}
 )
 
 
@@ -142,7 +142,7 @@ def test_route_accepts_bug_in_watched_project():
     d = _svc().route(_svc().parse(_issue_payload()))
     assert d["decision"] == "accept"
     assert d["label"] == "boss:bug"
-    assert d["owner"] == "paramg" and d["repo"] == "boss-sandbox"
+    assert d["owner"] == "example-user" and d["repo"] == "boss-sandbox"
     assert d["project_id"] == "boss-dogfood"
 
 
@@ -239,7 +239,7 @@ def test_ingest_accepts_signed_bug_and_starts_code_task(monkeypatch):
     assert res["status"] == "accepted" and res["run_id"] == "crun_fake123"
     # mapping carried through to start_code_task
     kw = calls[0]
-    assert kw["owner"] == "paramg" and kw["repo"] == "boss-sandbox"
+    assert kw["owner"] == "example-user" and kw["repo"] == "boss-sandbox"
     assert kw["project_id"] == "boss-dogfood"
     assert kw["finalize_ctx"]["plane_issue_id"] == "issue-abc"
     assert kw["finalize_ctx"]["source"] == "plane"

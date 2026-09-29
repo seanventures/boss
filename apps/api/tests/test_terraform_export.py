@@ -372,7 +372,7 @@ def enable_terraform_export(client, engine, app_name: str = "boss-app") -> str:
         json={
             "project_id": PROJECT_ID,
             "app_name": app_name,
-            "repo": "paramg/boss-app",
+            "repo": "example-user/boss-app",
             "environment": "staging",
             "target_kind": "ssh_host",
             "target_ref": "root@staging-host",

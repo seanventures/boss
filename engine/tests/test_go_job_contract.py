@@ -91,7 +91,7 @@ def test_job_routes_do_not_collide_with_python_jobs_api():
 
 def test_build_enqueue_request_is_versioned_and_has_receipt_fields():
     body = gj.build_enqueue_request(
-        {"owner": "paramg", "repo": "boss-sandbox", "task_id": "crun_9", "engine": "echo"},
+        {"owner": "example-user", "repo": "boss-sandbox", "task_id": "crun_9", "engine": "echo"},
         "tenant-1",
         idempotency_key="idem-1",
         timeout_s=30,

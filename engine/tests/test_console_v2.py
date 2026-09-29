@@ -180,7 +180,7 @@ def orun(run_id, title, *, app_id=None, status="completed", micros=0, created=No
     from datetime import datetime, timezone
     return {
         "id": run_id, "title": title, "status": status, "phase": "done",
-        "spec": {"owner": "paramg", "repo": "boss-sandbox", "instructions": ""},
+        "spec": {"owner": "example-user", "repo": "boss-sandbox", "instructions": ""},
         "state": {}, "usage": {"cost_usd_micros": micros},
         "finalize_ctx": {"app_id": app_id} if app_id else {},
         "pull_request_url": None, "pull_request_number": None,

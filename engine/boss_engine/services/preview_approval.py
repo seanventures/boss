@@ -76,7 +76,7 @@ def _merge_decision_for_run(connection, run_id: str,
 def _app_targets(connection, project_id: str, repo: Optional[str]) -> list[dict[str, Any]]:
     """Where an approval will actually land, so the console can say so before the click.
 
-    Matches BOTH spellings of the repo. `app_previews.repo` holds "paramg/boss-sandbox" while
+    Matches BOTH spellings of the repo. `app_previews.repo` holds "example-user/boss-sandbox" while
     `deployment_targets.repo` holds whatever `settings.target_github_repo` is — which on this
     deployment is the bare "boss-sandbox". Matching one spelling returned no targets, so the
     gate quietly promised to deploy nothing while targets existed. The merge path itself keys

@@ -45,7 +45,7 @@ def _redact_credentials(error: BaseException, limit: int = 300) -> str:
 
     Discarding the reason entirely — which is what this replaced — protects the token and
     costs the operator the one fact they needed. Redacting keeps both: "GitHub has no
-    paramg/boss-sandbox visible to this token" is safe to store and is the whole answer.
+    example-user/boss-sandbox visible to this token" is safe to store and is the whole answer.
     """
     text_value = str(error or "").strip() or error.__class__.__name__
     for pattern in _CREDENTIAL_PATTERNS:
@@ -1671,10 +1671,10 @@ class GitHubConnectionService:
         and the field cannot say which two words of the URL it wanted. Every form below names
         the same repository unambiguously, so all of them are accepted:
 
-            paramg/boss-sandbox
-            https://github.com/paramg/boss-sandbox
-            https://github.com/paramg/boss-sandbox/tree/main/docs
-            git@github.com:paramg/boss-sandbox.git
+            example-user/boss-sandbox
+            https://github.com/example-user/boss-sandbox
+            https://github.com/example-user/boss-sandbox/tree/main/docs
+            git@github.com:example-user/boss-sandbox.git
         """
         text_value = (repository or "").strip()
         # A URL or an SSH remote: take the first two path segments after the host, which is

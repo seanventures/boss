@@ -23,7 +23,7 @@ def test_build_run_request_shape():
     payload = build_run_request(
         TASK, CONFIG, "bake_x", 2,
         {"project_id": "boss-dogfood", "test_commands": ["python3 -m unittest discover -v"],
-         "owner": "paramg", "repo": "boss-sandbox"})
+         "owner": "example-user", "repo": "boss-sandbox"})
     assert payload["project_id"] == "boss-dogfood"
     assert payload["model_config"] == {"default": "native:deepseek-chat"}
     assert payload["profile"] == "strict"
@@ -32,7 +32,7 @@ def test_build_run_request_shape():
     bk = payload["finalize_ctx"]["bakeoff"]
     assert (bk["batch_id"], bk["config"], bk["task_key"], bk["iteration"], bk["expect"]) == \
         ("bake_x", "deepseek_all", "slugify", 2, "pass")
-    assert "#2" in payload["title"] and payload["owner"] == "paramg"
+    assert "#2" in payload["title"] and payload["owner"] == "example-user"
 
 
 def test_build_run_request_carries_repair_retries():

@@ -123,7 +123,7 @@ _ARTIFACT = r"PRD|Product Requirements Document|Spec|Specification|Design|Overvi
 #: being built, and leaving them in is what split one app into several rows on the screen.
 _RUN_BOOKKEEPING = (
     (re.compile(r"\s*[·•]\s*retry\s*\d+\s*$", re.I), ""),
-    # "Re-build of `paramg/boss-sandbox` Simple T — List": where the code goes, not what the
+    # "Re-build of `example-user/boss-sandbox` Simple T — List": where the code goes, not what the
     # product is called.
     (re.compile(r"^\s*re-?build\s+of\s+`?[\w.-]+/[\w.-]+`?\s*", re.I), ""),
     (re.compile(r"^\s*\[?\s*\d+\s*/\s*\d+\s*\]\s*"), ""),

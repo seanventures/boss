@@ -28,13 +28,13 @@ def test_routes():
 
 
 def test_build_submit_request():
-    spec = {"owner": "paramg", "repo": "boss-sandbox", "instructions": "do X",
+    spec = {"owner": "example-user", "repo": "boss-sandbox", "instructions": "do X",
             "acceptance_criteria": ["a"], "test_commands": ["pytest"], "engine": "claude_code",
             "claude_oauth_token": "tok", "openai_api_key": "sk"}
     body = sc.build_submit_request(spec, "tenant-1", task_id="crun_9")
     assert body["contract_version"] == "1.0" and body["task_id"] == "crun_9"
     assert body["tenant_id"] == "tenant-1"
-    assert body["repo"] == {"owner": "paramg", "name": "boss-sandbox",
+    assert body["repo"] == {"owner": "example-user", "name": "boss-sandbox",
                             "base_branch": "main", "work_branch": "boss/code/crun_9"}
     assert body["engine"] == "claude_code"
     # creds map into engine_env by env-var name, never baked elsewhere

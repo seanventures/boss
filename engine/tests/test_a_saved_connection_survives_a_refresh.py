@@ -238,7 +238,7 @@ def test_the_card_reports_the_connected_repository_not_the_environment():
         example-org/boss-sandbox · token …ThOQ — GitHub has no example-org/boss-sandbox
         visible to this token.
 
-    The project was bound to paramg/boss, every build would use it, and the card showed a
+    The project was bound to example-user/boss, every build would use it, and the card showed a
     shipped default failing instead. A screen called "What BOSS is running on" has to name the
     repository BOSS will run on.
     """

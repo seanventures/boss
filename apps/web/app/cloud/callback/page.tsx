@@ -14,7 +14,7 @@ function param(value: string | string[] | undefined): string | undefined {
  *
  * Hosted Account Connect redirects here with code+state after the operator
  * approves. We finish the link on the control plane and send them back to
- * Editions (product surface matching boss.sean.network Community → Cloud).
+ * Editions (product surface matching the public Community → Cloud site).
  */
 export default async function CloudEasyConnectCallback({
   searchParams,

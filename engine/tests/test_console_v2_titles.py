@@ -308,16 +308,16 @@ def test_a_name_that_fits_gains_no_ellipsis():
 # The last two on the live screen
 # --------------------------------------------------------------------------- #
 def test_a_rebuild_directive_names_the_app_not_the_repo():
-    """Live: "Re-build of `paramg/boss-sandbox` Simple T — List". The repo is where the code
+    """Live: "Re-build of `example-user/boss-sandbox` Simple T — List". The repo is where the code
     goes, not what the product is called."""
-    got = _clean_title("Re-build of `paramg/boss-sandbox` Simple T — List")
+    got = _clean_title("Re-build of `example-user/boss-sandbox` Simple T — List")
     assert "boss-sandbox" not in got
     assert "Re-build" not in got
     assert got.startswith("Simple T")
 
 
 def test_a_rebuild_of_a_named_app_keeps_the_name():
-    assert _clean_title("Re-build of `paramg/boss-sandbox` Shorty") == "Shorty"
+    assert _clean_title("Re-build of `example-user/boss-sandbox` Shorty") == "Shorty"
 
 
 def test_the_brief_is_the_last_resort_for_a_name():

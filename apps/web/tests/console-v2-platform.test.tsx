@@ -62,7 +62,7 @@ const infra = (over: Partial<InfraView> = {}): InfraView => ({
 const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
   project_id: "boss-dogfood",
   roles: [{ key: "cto", name: "CTO", autonomy_level: 2, trust_score: 60 }],
-  repos: [{ name: "paramg/boss-sandbox", runs: 40, prs: 12, last_run_at: "2026-08-20T00:00:00Z" }],
+  repos: [{ name: "example-user/boss-sandbox", runs: 40, prs: 12, last_run_at: "2026-08-20T00:00:00Z" }],
   unavailable: [
     { id: "sso", label: "SSO & identity", reason: "This deployment authenticates with an API key." },
     { id: "members", label: "Members & seats", reason: "BOSS models AGENT roles, not human seats." },
@@ -254,7 +254,7 @@ describe("Settings", () => {
 
   it("repos come from what work actually targeted", () => {
     const out = html(settings());
-    expect(out).toContain("paramg/boss-sandbox");
+    expect(out).toContain("example-user/boss-sandbox");
     expect(out).toMatch(/12<\/b> PRs opened/);
   });
 

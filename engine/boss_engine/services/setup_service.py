@@ -1048,7 +1048,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
     # and a key in the API's env — IS set up, and a wizard that says "not connected" to somebody
     # whose BOSS is already opening pull requests has told them a falsehood about their own
     # system. Measured on this very deployment, which has no github_connections row and has been
-    # building against paramg/boss-sandbox for weeks.
+    # building against example-user/boss-sandbox for weeks.
     env_model = bool(str(getattr(settings, "openai_api_key", "") or "").strip())
     env_repo = str(getattr(settings, "target_github_repo", "") or "").strip()
     env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()

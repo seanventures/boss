@@ -4194,7 +4194,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Start open. Scale managed.</h2>
             </div>
             <p className="status-meta">
-              Same product path as boss.sean.network: Community is a full self-hosted
+              Same product path as the public site: Community is a full self-hosted
               engine; BOSS Cloud is the easy button for hosted ops; Enterprise adds
               identity and design-partner controls. Connecting never requires pasting
               Cloud secrets into this console.

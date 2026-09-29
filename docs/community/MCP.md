@@ -45,8 +45,8 @@ other than the selected one. Use a separate principal, key, and MCP process
 for another project; do not add one MCP principal to several projects.
 
 The Community installer already starts Postgres and seeds the default project.
-The legacy engine-only command below remains available for locally trusted
-clients. It uses the engine's local database authority and exposes native
+The legacy engine-only command below remains available for a client on the same
+machine. It uses the engine's local database authority and exposes native
 writes. The `make mcp` API-backed session routes all calls through its
 dedicated project member instead.
 

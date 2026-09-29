@@ -8,7 +8,7 @@ const stripComments = (s: string) =>
 
 describe("v2 design tokens match the artifact", () => {
   // Read from docs/product/console-v2-reference/, not eyeballed. If a token drifts, v2 stops
-  // looking like the thing Sean approved, and nobody notices until it ships.
+  // looking like the approved reference, and nobody notices until it ships.
   const tokens = read("components/v2/tokens.css");
 
   it.each([

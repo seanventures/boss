@@ -30,15 +30,17 @@ without a model key, add `--yes --skip-model-key` after the final `_`. To
 install optional host copies of the official Claude Code, Codex CLI and Grok
 Build binaries, add `--install-coding-clis` there as well.
 
-Invited contributors can run the installer from an authorized checkout:
+If you already have a source tree, run the installer from that directory. This
+does not log you into a maintainer machine:
 
 ```bash
-cd /path/to/authorized/boss
+cd /path/to/boss
 ./install.sh --dir "$PWD" --install-coding-clis
 ```
 
-An empty install directory is filled from that checkout. It does not clone the
-unpublished GitHub URL and it does not need a private host:
+An empty install directory is filled from that tree. It does not clone the
+unpublished GitHub URL, it does not SSH to a maintainer machine, and it does
+not need Plane, an ops token, or a private registry:
 
 ```bash
 cd /path/to/boss
@@ -50,11 +52,13 @@ diverged, the installer keeps this source. It does not rewind the tree.
 Pass `--ref` when a different commit must be checked out; a diverged ref then
 stops instead of installing the wrong source.
 
-On a fresh public install, the default checkout is `~/boss`. The installer
-writes secrets to `~/boss/.env` with mode 0600 and never prints the generated
-API key or console password. A rerun keeps existing credentials and data. It
-leaves the operator GitHub owner/repo unbound until you configure them; the
-installer's source repository is not your project repository.
+When that reviewed commit is installed, the default checkout is `~/boss`. The
+installer writes secrets to `~/boss/.env` with mode 0600 and never prints the
+generated API key or console password. The file stays on that machine. The
+installer does not upload it. Keep it private and do not commit it. A rerun
+keeps existing credentials and data. It leaves the operator GitHub owner/repo
+unbound until you configure them; the installer's source repository is not
+your project repository. The API, console, and database listen on `127.0.0.1`.
 
 The installer does not add your user to the root-equivalent Docker group. If
 Docker requires administrator access, use `sudo docker compose` for manual
@@ -80,8 +84,8 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 
 ## Open and verify
 
-The API, console and database bind to `127.0.0.1` on the VM. From your laptop,
-open an SSH tunnel:
+The API, console and database bind to `127.0.0.1` on the VM you administer.
+From your laptop, open an SSH tunnel to that VM, not to a shared service:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
@@ -89,8 +93,8 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 
 Open `http://127.0.0.1:3000` on the laptop. To retrieve the console password
 privately on the VM, run `python3 scripts/install/console_password.py show`
-from the install directory. For a remote hostname, terminate HTTPS at a trusted
-reverse proxy while keeping BOSS bound to loopback; follow
+from the install directory. For a hostname you serve, terminate HTTPS at a
+reverse proxy you control while keeping BOSS bound to loopback; follow
 `scripts/install/README.md` in the source checkout for the proxy and origin
 requirements.
 

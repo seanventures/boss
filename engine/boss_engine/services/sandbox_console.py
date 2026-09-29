@@ -84,7 +84,7 @@ def _map_host_error(
 
 
 def list_sandboxes(settings: Settings) -> dict:
-    """Report the connected micro-VM execution host. Sean's Firecracker service exposes
+    """Report the connected micro-VM execution host. The Firecracker sandbox-service exposes
     /v1/sandbox/health (VMs are single-tenant, ephemeral & isolated by design — no browse/
     exec API), so we surface the host status as proof the control plane is wired to it.
 
@@ -148,7 +148,7 @@ def list_helpers(settings: Settings) -> dict:
 
 
 # ---- Micro-VM inspection (retained rootfs of a failed/incomplete task) ----------- #
-# Sean's service holds a task's VM rootfs ~2h after it ends. These proxy his
+# The sandbox-service holds a task's VM rootfs ~2h after it ends. These proxy its
 # per-task endpoints so the console can root-cause a failure: browse /work/repo,
 # view logs, and hold the VM longer. `sandbox_id` here is the sandbox-service task id.
 _ROOT = "/work/repo"

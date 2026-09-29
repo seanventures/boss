@@ -13,21 +13,27 @@ BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $
 
 The HTTP download and Git checkout use the same immutable commit, and the
 installer verifies that commit. If the download fails, the installer does not
-run. Until publication, use an authorized checkout. From that checkout,
-`./install.sh --dir /path/to/empty` copies the tree you already have. It does
-not clone the unpublished GitHub URL. A checkout that is ahead of `main`,
-or whose history has diverged from it, stays on that source. Pass `--ref`
-to require a different commit; a diverged ref then stops with the checkout
-unchanged.
+run. Until a reviewed commit exists, the pinned command cannot succeed. Do not
+invent a SHA. From a checkout you already have, `./install.sh --dir /path/to/empty`
+copies that tree. It does not clone the unpublished GitHub URL and it does not
+SSH to a maintainer machine. A checkout that is ahead of `main`, or whose
+history has diverged from it, stays on that source. Pass `--ref` to require a
+different commit; a diverged ref then stops with the checkout unchanged.
+
+The installer binds the API and web to `127.0.0.1` and writes credentials only
+on the machine where it runs. It does not upload `.env`. That file is yours;
+keep it private. Nothing in this guide requires Plane, an ops token, or a
+private registry. `user@your-vm` means a VM you administer.
 
 The installer reads prompts from the terminal even when its downloaded file is
 run by `bash`. Paste a model key at the hidden prompt, or press Enter and
-connect one later. Do not place API keys in shell arguments, which can appear
-in process listings and shell history.
+connect one later. It refuses API keys and tokens on the command line: the
+shell would save them in history and process listings. Export
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `BOSS_GITHUB_TOKEN` instead.
 
 For unattended automation, pass the key to the installer process through its
 environment and add `--yes` after the final `_` in the pinned command. Or run
-the authorized checkout directly:
+the checkout you already have:
 
 ```bash
 OPENAI_API_KEY="$OPENAI_API_KEY" ./install.sh --dir "$PWD" --yes
@@ -464,18 +470,19 @@ from the dump and artifact archive if they appear there. A normal upgrade or saf
 its named volume; after an explicit volume purge or moving to another machine,
 run `claude auth login` inside the API container again. A remote archive
 install uses `.boss-shipped-commit` rather than Git; recover it by shipping
-that commit from the operator machine with `remote.sh --ref COMMIT install`,
-then restore the database and artifacts from the private host backup.
+that commit from your own machine with `remote.sh --ref COMMIT install`,
+then restore the database and artifacts from the backup written on that VM.
 The local `upgrade.sh` requires a Git checkout; for archive installs use
-`remote.sh update` from the operator machine, which now backs up first.
+`remote.sh update` from your machine, which backs up on the VM first.
 For remote installs, the new source is at the install path while the prior
 source remains at `PATH.prev` until installer/recreation succeeds. A failed
 build leaves the old containers running; after diagnosing the failure, you can
 move `PATH.prev` back to `PATH` before retrying. If recreation started, a
-database migration may have run: inspect the private backup and use the
+database migration may have run: inspect the backup on that VM and use the
 database/artifact recovery steps above instead of only moving source. A failed
 source swap itself restores the prior source path. The remote script refuses to
 discard a leftover `PATH.prev` on a later attempt.
+`user@your-vm` in the examples is a machine you administer, not a shared host.
 For example:
 
 ```bash

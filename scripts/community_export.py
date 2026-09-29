@@ -34,7 +34,10 @@ MARKDOWN_LINK_RE = re.compile(r"\]\(([^)]+)\)")
 PRIVATE_MARKERS = (
     b"seanheiney/boss",
     b"seanheiney/goldeneye",
+    b"seanheiney",
+    b"paramg",
     b".sean.network",
+    b"@sean.network",
     b"tail95d980.ts.net",
     b"100.66.255.78",
     b"2.29.2.202",

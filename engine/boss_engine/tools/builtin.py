@@ -1916,7 +1916,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 out["steps_error"] = f"{type(exc).__name__}: {exc}"[:200]
             # THE REASON, not just the verdict. `last_error` is where the redacted message
             # lives, and reading it is the difference between "the check failed" and "GitHub
-            # has no paramg/boss-sandbox visible to this token".
+            # has no example-user/boss-sandbox visible to this token".
             try:
                 out["github_connections"] = [dict(r) for r in c.execute(
                     _text("SELECT id, connection_label, auth_method, status, "

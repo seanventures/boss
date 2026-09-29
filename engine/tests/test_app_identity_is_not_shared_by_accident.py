@@ -25,7 +25,7 @@ PRD_FOLLOW_UP = "Follow-up: deferred review findings — 📄 Product Requiremen
 
 
 def _app_id(title: str) -> str:
-    return stable_app_id("boss-dogfood", "paramg/boss-sandbox", title)
+    return stable_app_id("boss-dogfood", "example-user/boss-sandbox", title)
 
 
 def test_two_different_apps_built_from_a_prd_do_not_share_an_id():

@@ -81,7 +81,7 @@ SCENARIOS = [
 def test_the_operator_is_told_what_exists_and_what_they_can_do(
     status, targets, must_mention, must_offer
 ):
-    out = describe_undeployable(status=status, repo="paramg/boss-sandbox", targets=targets)
+    out = describe_undeployable(status=status, repo="example-user/boss-sandbox", targets=targets)
     for phrase in must_mention:
         assert phrase in out, f"never mentions {phrase!r}:\n{out}"
     assert any(o in out for o in must_offer), f"offers no real next step:\n{out}"

@@ -42,8 +42,8 @@ def seeded(engine):
             "INSERT INTO code_task_runs (id, project_id, title, status, phase, spec, "
             "pull_request_url) VALUES (:i, :p, :t, 'completed', 'done', CAST(:s AS JSONB), :u)"),
             {"i": run_id, "p": PROJECT_ID, "t": "orphan target fixture",
-             "s": json.dumps({"repo": "boss-sandbox", "owner": "paramg"}),
-             "u": "https://github.com/paramg/boss-sandbox/pull/1"})
+             "s": json.dumps({"repo": "boss-sandbox", "owner": "example-user"}),
+             "u": "https://github.com/example-user/boss-sandbox/pull/1"})
         c.execute(text(
             "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, "
             "status) VALUES (:i, :p, :n, '203.0.113.10', 'root', 22, 'verified')"),

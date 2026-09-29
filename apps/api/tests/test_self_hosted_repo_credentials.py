@@ -67,7 +67,7 @@ def app_on_one_repo(monkeypatch):
 
 def test_boss_can_get_a_token_for_its_own_repo(app_on_one_repo):
     """The regression that blocked self-improvement entirely."""
-    assert repo_token(_settings(), "seanheiney", "boss") == "pat-with-push-to-boss"
+    assert repo_token(_settings(), "example-org", "boss") == "pat-with-push-to-boss"
 
 
 def test_covered_repo_still_uses_the_short_lived_installation_token(app_on_one_repo):
@@ -78,7 +78,7 @@ def test_covered_repo_still_uses_the_short_lived_installation_token(app_on_one_r
 def test_no_credentials_at_all_is_still_an_error(app_on_one_repo):
     """Falling back to nothing would turn a config error into a confusing clone failure."""
     with pytest.raises(GitHubAppConfigurationError):
-        repo_token(_settings(BOSS_GITHUB_TOKEN=""), "seanheiney", "boss")
+        repo_token(_settings(BOSS_GITHUB_TOKEN=""), "example-org", "boss")
 
 
 def test_every_credential_call_site_shares_one_decision():
@@ -106,7 +106,7 @@ def test_every_credential_call_site_shares_one_decision():
 
 
 def test_a_token_that_cannot_push_is_not_treated_as_success(app_on_one_repo):
-    """Observed live on paramg/boss-sandbox.
+    """Observed live on example-user/boss-sandbox.
 
     The App *is* installed, so minting succeeds — but the installation was never granted
     `contents:write`, and `installation_token` silently retries with the granted set. The

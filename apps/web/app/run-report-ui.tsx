@@ -209,7 +209,7 @@ export function RunReportPanel(
 
   return (
     /* THE WHOLE REPORT IS COLLAPSED, and the summary line has to earn the click on its own:
-       the app's name, the headline numbers, and whether anything is urgent. Sean's feedback on
+       the app's name, the headline numbers, and whether anything is urgent. Feedback on
        the first version was that it is a lot of text — and it is, which is the point of a
        report and the reason none of it should be open until somebody asks for it. */
     <details className="rr rr-root" data-testid="run-report">

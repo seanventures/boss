@@ -132,7 +132,7 @@ def test_short_values_and_scalars_are_untouched():
     run = {"id": "crun_x", "status": "completed", "title": "Build a todo app",
            "state": {"files_changed": 3, "additions": 120, "url": "http://x/y",
                      "error": None},
-           "spec": {"repo": "boss-sandbox", "owner": "paramg"}}
+           "spec": {"repo": "boss-sandbox", "owner": "example-user"}}
     assert summarise_run_for_list(run) == run
 
 

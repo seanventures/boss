@@ -161,7 +161,7 @@ def test_an_estimated_price_is_flagged():
 
 def test_a_retired_target_is_marked_retired():
     out = infra(FakeConn(targets=[
-        {"id": "t1", "app_name": "Shorty", "repo": "paramg/x", "environment": "staging",
+        {"id": "t1", "app_name": "Shorty", "repo": "example-user/x", "environment": "staging",
          "target_kind": "host", "target_ref": "h1", "status": "retired"},
     ]), "p")
     assert out["targets"][0]["retired"] is True
@@ -204,9 +204,9 @@ def test_roles_are_agent_roles_and_the_screen_says_so():
 def test_repos_come_from_what_code_tasks_actually_target():
     """Not a configured list — the repos work has actually gone to."""
     out = settings(FakeConn(repos=[
-        {"owner": "paramg", "repo": "boss-sandbox", "runs": 40, "prs": 12, "last_run_at": NOW},
+        {"owner": "example-user", "repo": "boss-sandbox", "runs": 40, "prs": 12, "last_run_at": NOW},
     ]), "p")
-    assert out["repos"][0]["name"] == "paramg/boss-sandbox"
+    assert out["repos"][0]["name"] == "example-user/boss-sandbox"
     assert out["repos"][0]["prs"] == 12
 
 

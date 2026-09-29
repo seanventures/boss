@@ -36,7 +36,7 @@ const ws = (over: Partial<Workspace> = {}): Workspace => ({
   project_id: "boss-dogfood",
   title: "Shorty",
   description: "A self-hosted URL shortener",
-  repo: "paramg/boss-sandbox",
+  repo: "example-user/boss-sandbox",
   stage: "SHIPPED",
   status: "DONE",
   pct: 100,
@@ -196,10 +196,10 @@ describe("v2 project workspace", () => {
         runs: [run({
           id: "crun_pr",
           pull_request_number: 111,
-          pull_request_url: "https://github.com/paramg/boss-sandbox/pull/111",
+          pull_request_url: "https://github.com/example-user/boss-sandbox/pull/111",
         })],
       }));
-      expect(out).toContain('href="https://github.com/paramg/boss-sandbox/pull/111"');
+      expect(out).toContain('href="https://github.com/example-user/boss-sandbox/pull/111"');
       expect(out).toContain("#111");
     });
 

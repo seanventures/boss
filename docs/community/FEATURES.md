@@ -54,10 +54,12 @@ clients.
 | Managed multi-tenant model gateway | ✦ Cloud |
 | Hosted skill marketplace | ✦ Cloud |
 
-Optional Plane integration verifies HTTPS certificates by default. For a private
-certificate authority, set `PLANE_TLS_CA_FILE` to a PEM file readable by the
-API and worker. `PLANE_TLS_INSECURE_SKIP_VERIFY=true` is an explicit local-only
-fallback when no trusted CA is available.
+Plane is optional. Installing and running Community does not require Plane, an
+ops token, or a private registry. If you connect a Plane you run, HTTPS
+certificate verification stays on by default. For a certificate authority you
+operate, set `PLANE_TLS_CA_FILE` to a PEM file readable by the API and worker.
+`PLANE_TLS_INSECURE_SKIP_VERIFY=true` is an explicit local-only fallback when
+no CA you trust is available. Do not point it at a host you do not operate.
 
 ## Software Factory
 

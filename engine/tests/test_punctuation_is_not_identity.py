@@ -71,5 +71,5 @@ def test_the_two_names_from_the_incident_are_one_app():
     a, _b, _l = project_name(
         "Build an incident timeline builder.\nWho it is for: an on-call engineer")
     b, _b2, _l2 = project_name("Incident-Timeline Builder")
-    assert stable_app_id("boss-dogfood", "paramg/boss-sandbox", a) == \
-           stable_app_id("boss-dogfood", "paramg/boss-sandbox", b)
+    assert stable_app_id("boss-dogfood", "example-user/boss-sandbox", a) == \
+           stable_app_id("boss-dogfood", "example-user/boss-sandbox", b)

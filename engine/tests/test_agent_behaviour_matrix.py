@@ -433,7 +433,7 @@ def test_the_cannot_deploy_message_states_what_exists_and_what_is_missing():
     that actually reached an operator."""
     from boss_engine.services.shepherd_service import describe_undeployable
     out = describe_undeployable(
-        status="completed", repo="paramg/boss-sandbox",
+        status="completed", repo="example-user/boss-sandbox",
         targets=[{"environment": "staging", "status": "active"}])
     assert "staging" in out                                  # what exists
     assert "no production/live target" in out                # what is missing

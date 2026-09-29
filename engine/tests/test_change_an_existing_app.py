@@ -29,7 +29,7 @@ PARENT = {
     "task_id": "tsk_1",
     "title": "ApproveIt — Expense Approval Workflow",
     "spec": {
-        "owner": "paramg",
+        "owner": "example-user",
         "repo": "boss-sandbox",
         "profile": "balanced",
         "risk_tier": 1,
@@ -87,7 +87,7 @@ def test_it_inherits_where_the_app_lives_and_how_it_is_verified(started):
     cts.start_followup_task(
         None, parent_run_id="crun_child", instructions="add a filter", jobs=None
     )
-    assert (started["owner"], started["repo"]) == ("paramg", "boss-sandbox")
+    assert (started["owner"], started["repo"]) == ("example-user", "boss-sandbox")
     assert started["test_commands"] == ["npm run verify"]
     assert started["profile"] == "balanced"
     assert started["model_config"]["default"]["engine"] == "openai"

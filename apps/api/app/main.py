@@ -7632,7 +7632,7 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
         resources.append({"kind": "publishable_ports",
                           "name": str(payload["publishable_ports"])})
 
-    # Accept either "boss-sandbox" or "paramg/boss-sandbox". An operator copying a repo from
+    # Accept either "boss-sandbox" or "example-user/boss-sandbox". An operator copying a repo from
     # GitHub pastes the second form; rejecting it (or silently mis-cloning) is a trap.
     repo_field = str(payload["repo"]).strip()
     if "/" in repo_field:

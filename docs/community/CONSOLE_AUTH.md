@@ -15,8 +15,11 @@ State-changing browser requests require a matching `Origin`, and `POST
 /api/auth/logout` clears the session. If either console secret is missing or too
 short, protected requests fail with 503.
 
-The installer binds the API and web ports to `127.0.0.1`. Use an SSH tunnel to
-`http://127.0.0.1:3000` or put a TLS reverse proxy in front of that loopback port.
+The installer binds the API and web ports to `127.0.0.1` and creates the console
+secrets in the local `.env`. That file is not uploaded. Use an SSH tunnel to a
+machine you administer, then open `http://127.0.0.1:3000`, or put a TLS reverse
+proxy you control in front of that loopback port.
+
 Remote plain HTTP is rejected, including the login form. For a remote TLS proxy,
 set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://console.example` on the web service (origin
 only, with no trailing slash). The proxy must **overwrite** `Host`,

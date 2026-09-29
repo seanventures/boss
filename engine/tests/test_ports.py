@@ -281,15 +281,31 @@ def _engine_sources():
             continue
 
 
+# scripts/private/public_export_host_denylist.txt is private and must stay out of the Community export.
+_PRIVATE_HOST_DENYLIST = ROOT / "scripts" / "private" / "public_export_host_denylist.txt"
+
+
+def _private_host_denylist() -> tuple[str, ...]:
+    """Names to forbid in engine source. Absent file: skip them and still pass."""
+    if not _PRIVATE_HOST_DENYLIST.is_file():
+        return ()
+    hosts: list[str] = []
+    for line in _PRIVATE_HOST_DENYLIST.read_text(encoding="utf-8").splitlines():
+        host = line.split("#", 1)[0].strip().lower()
+        if host:
+            hosts.append(host)
+    return tuple(hosts)
+
+
 def test_engine_shipped_files_do_not_contain_internal_hostnames():
     """A private hostname must never ship. No exceptions, ever.
 
-    This is the half of the old rule that was unambiguous: `sean.network` is one operator's
-    infrastructure, and an OSS package that names it tells everyone where our boxes are and
-    breaks for anyone else.
+    The names live in a private denylist, not in this file. Private CI still fails if
+    engine source grows one of them. A Community tree has no denylist, skips those
+    names, and passes.
     """
     for rel, source in _engine_sources():
-        for host in ("sean.network", "tail95d980", "local.sean"):
+        for host in _private_host_denylist():
             assert host not in source, f"{rel} ships the hostname {host!r}"
 
 

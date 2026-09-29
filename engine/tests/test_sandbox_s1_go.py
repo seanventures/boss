@@ -73,7 +73,7 @@ def test_golden_submit_fixture_matches_python_contract():
     assert validate_submit_request(body) == []
     built = build_submit_request(
         {
-            "owner": "paramg",
+            "owner": "example-user",
             "repo": "boss-sandbox",
             "instructions": "do X",
             "acceptance_criteria": ["a"],

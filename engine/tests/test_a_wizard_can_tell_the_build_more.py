@@ -54,9 +54,9 @@ class TestAnOptionalInputThatWasNotSupplied:
 
     def test_a_supplied_optional_is_passed_through(self):
         out = _resolve({"repository": {"from_input": "repository"}},
-                       {"input": {"repository": "paramg/boss-sandbox"}},
+                       {"input": {"repository": "example-user/boss-sandbox"}},
                        optional=["repository"])
-        assert out == {"repository": "paramg/boss-sandbox"}
+        assert out == {"repository": "example-user/boss-sandbox"}
 
 
 class TestEveryBuildStepCanAcceptWhatTheWizardCollects:

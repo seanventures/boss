@@ -19,7 +19,7 @@ const FACTS = [
   "[app context] You are talking about ONE app in BOSS.",
   "run_id: crun_abc",
   "app: Shorty",
-  "repo: paramg/boss-sandbox",
+  "repo: example-user/boss-sandbox",
   "branch: boss/code/crun_abc",
   "status: completed (done)",
   "pull_request: https://github.com/x/y/pull/1",

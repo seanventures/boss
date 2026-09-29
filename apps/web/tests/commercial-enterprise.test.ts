@@ -127,7 +127,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
           status: "shipped",
         },
       ],
-      marketing_url: "https://boss.sean.network/#cloud",
+      marketing_url: "https://boss.example.test/#cloud",
       principle: "Community is real.",
       connect_path: { methods: ["browser", "device"] },
     } as never);

@@ -122,9 +122,6 @@ Usage:
 Options:
   --dir PATH              Install directory (default: ~/boss)
   --yes, -y               Non-interactive defaults (use --skip-model-key to start without one)
-  --openai-key KEY        OpenAI (or compatible) API key
-  --anthropic-key KEY     Anthropic API key (optional)
-  --github-token TOKEN    GitHub token for Software Factory (optional)
   --no-web                Skip Mission Control web console
   --web                   Enable Mission Control on an install previously made without it
   --public-url URL        Browser-reachable API URL when using a reverse proxy
@@ -158,6 +155,9 @@ Environment overrides:
   BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT, BOSS_WEB_PORT, BOSS_POSTGRES_PORT,
   BOSS_PUBLIC_URL, BOSS_SECRET_STORE
 
+  Do not pass API keys or tokens as arguments. The shell saves them in history
+  and process listings. Export them, or paste the OpenAI key at the hidden prompt.
+
 Examples:
   ./install.sh --dir "\$PWD" --yes --skip-model-key
   ./install.sh --dir "\$PWD" --ref REVIEWED_COMMIT --backup-dir "\$HOME/boss-backups"
@@ -176,9 +176,8 @@ while [[ $# -gt 0 ]]; do
     --connect-claude-local) CONNECT_CLAUDE_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --connect-grok-local) CONNECT_GROK_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --accept-database-fallback) ACCEPT_DATABASE_FALLBACK=1; shift ;;
-    --openai-key) OPENAI_KEY_PRESET="$2"; shift 2 ;;
-    --anthropic-key) ANTHROPIC_KEY_PRESET="$2"; shift 2 ;;
-    --github-token) GITHUB_TOKEN_PRESET="$2"; shift 2 ;;
+    --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
+      die "Refusing a secret on the command line. It would be saved in shell history and process listings. Export OPENAI_API_KEY, ANTHROPIC_API_KEY, or BOSS_GITHUB_TOKEN, or paste the OpenAI key at the hidden prompt." ;;
     --no-web) WITH_WEB=0; WEB_EXPLICIT=1; shift ;;
     --web) WITH_WEB=1; WEB_EXPLICIT=1; shift ;;
     --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
@@ -428,7 +427,7 @@ fi
 OPENAI_KEY="$OPENAI_KEY_PRESET"
 if [[ -z "$OPENAI_KEY" && "$SKIP_MODEL_KEY" -eq 0 ]]; then
   if [[ "$NONINTERACTIVE" -eq 1 ]]; then
-    die "Non-interactive mode needs OPENAI_API_KEY env, --openai-key, or --skip-model-key"
+    die "Non-interactive mode needs OPENAI_API_KEY in the environment, or --skip-model-key"
   fi
   echo ""
   ui_info "BOSS Community uses YOUR model keys (BYOK). Paste an OpenAI key, or leave blank to skip."

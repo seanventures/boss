@@ -70,10 +70,10 @@ def test_a_failure_records_its_reason():
 
 def test_and_the_reason_is_the_useful_part():
     """This is the sentence an operator can act on, and it is safe to store."""
-    error = RuntimeError("GitHub has no paramg/boss-sandbox visible to this token.")
+    error = RuntimeError("GitHub has no example-user/boss-sandbox visible to this token.")
 
     assert _redact_credentials(error) == (
-        "GitHub has no paramg/boss-sandbox visible to this token.")
+        "GitHub has no example-user/boss-sandbox visible to this token.")
 
 
 def test_but_a_credential_never_survives_it():
@@ -123,8 +123,8 @@ def test_a_404_is_explained_as_a_scope_answer():
 
 def test_and_it_says_what_the_token_can_actually_reach():
     """One extra call on a path that has already failed, and it turns a status code into the
-    sentence that names the fix. Verified live: "The token belongs to paramg. It can reach 2
-    repositories: … paramg/boss-sandbox is not among them — add it under Repository access."
+    sentence that names the fix. Verified live: "The token belongs to example-user. It can reach 2
+    repositories: … example-user/boss-sandbox is not among them — add it under Repository access."
     """
     source = inspect.getsource(GitHubConnectionService._explain_repository_failure)
     assert '/user/repos' in source

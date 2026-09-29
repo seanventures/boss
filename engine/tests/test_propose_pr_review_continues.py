@@ -14,11 +14,11 @@ class _ContextOverflow(Exception):
 
 def test_review_packet_overflow_falls_back_and_keeps_reservation():
     settings = Settings(
-        BOSS_TARGET_GITHUB_OWNER="paramg",
+        BOSS_TARGET_GITHUB_OWNER="example-user",
         BOSS_TARGET_GITHUB_REPO="boss-sandbox",
         BOSS_GITHUB_TOKEN="legacy-token",
     )
-    sf = SoftwareFactoryService(settings, owner="paramg", repo="boss-sandbox")
+    sf = SoftwareFactoryService(settings, owner="example-user", repo="boss-sandbox")
     emitted: list[tuple] = []
 
     class Events:

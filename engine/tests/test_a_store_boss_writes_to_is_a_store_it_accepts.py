@@ -97,14 +97,14 @@ def test_a_pasted_github_url_is_a_repository():
     format" makes them retype what they had already given us correctly."""
     from boss_engine.services.github_connections import GitHubConnectionService as G
 
-    for given in ("paramg/boss-sandbox",
-                  "https://github.com/paramg/boss-sandbox",
-                  "http://github.com/paramg/boss-sandbox/",
-                  "https://github.com/paramg/boss-sandbox.git",
-                  "https://github.com/paramg/boss-sandbox/tree/main/docs",
-                  "git@github.com:paramg/boss-sandbox.git",
-                  "  paramg/boss-sandbox  "):
-        assert G._normalize_repository(given)[2] == "paramg/boss-sandbox", given
+    for given in ("example-user/boss-sandbox",
+                  "https://github.com/example-user/boss-sandbox",
+                  "http://github.com/example-user/boss-sandbox/",
+                  "https://github.com/example-user/boss-sandbox.git",
+                  "https://github.com/example-user/boss-sandbox/tree/main/docs",
+                  "git@github.com:example-user/boss-sandbox.git",
+                  "  example-user/boss-sandbox  "):
+        assert G._normalize_repository(given)[2] == "example-user/boss-sandbox", given
 
 
 def test_but_something_that_names_no_repository_is_still_refused():
@@ -114,7 +114,7 @@ def test_but_something_that_names_no_repository_is_still_refused():
 
     from boss_engine.services.github_connections import GitHubConnectionService as G
 
-    for given in ("", "notarepo", "https://github.com/paramg", "/boss-sandbox",
-                  "paramg/", "a b/c"):
+    for given in ("", "notarepo", "https://github.com/example-user", "/boss-sandbox",
+                  "example-user/", "a b/c"):
         with _pytest.raises(ValueError, match="owner/name"):
             G._normalize_repository(given)
