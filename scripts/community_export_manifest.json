@@ -210,7 +210,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "158909ac599d79026518cdbe6ef097d9340cfb932e50f39f639cca26d087de7f"
+    "sha256": "cacc1a8aa4f66b898602c935dae13c7d59da188b5389e478bc0b08cd05d4aaec"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -220,7 +220,7 @@
   "makefile_export_rewrite": {
     "source": "Makefile.community",
     "destination": "Makefile",
-    "sha256": "5af8c61ecc0128818ad414dee9eee0e288a41f4cf32450741a2ffeeaf52e2fdd"
+    "sha256": "d4bcebe859b649439944333829ff59aa15f2e5cfd1f90fe4ea1b810298a6cecb"
   },
   "schema_export_rewrite": {
     "source": "db/schema.community.sql",
