@@ -414,9 +414,11 @@ Then run the upgrade. It takes its own fresh backup before changing source:
 cd ~/boss && ./scripts/install/upgrade.sh --dir "$PWD"
 ```
 
-Both commands print private backup paths. If the local
-`boss-community-api:local` image is missing, backup
-also stops before any build or pull; restore the reviewed image first. For a
+Both commands print private backup paths. If this install's
+`boss-community-api` image is missing, backup
+also stops before any build or pull; restore the reviewed image first. The
+installer tags that image with the compose project name, so a second project
+does not replace the first. For a
 host where Docker requires administrator access, run the Docker commands
 through your host's approved `sudo` policy.
 

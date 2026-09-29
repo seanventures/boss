@@ -79,7 +79,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-    image: boss-community-api:local
+    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       db:
@@ -198,7 +198,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-    image: boss-community-worker:local
+    image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       api:
@@ -298,7 +298,7 @@ services:
         # correct, and the only way in was unreachable.
         NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:${BOSS_API_PORT:-8000}}
         NEXT_PUBLIC_BOSS_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
-    image: boss-community-web:local
+    image: boss-community-web:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       api:

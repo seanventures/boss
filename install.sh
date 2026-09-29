@@ -861,6 +861,9 @@ ui_step "Building and starting Community stack (this can take several minutes th
 ui_info "Services: Postgres · API · worker$( [[ $WITH_WEB -eq 1 ]] && echo ' · Mission Control' )"
 
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-boss-community}"
+# The image tag follows this compose project. A second install on the same
+# machine must not replace the images this one is running.
+export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}"
 # shellcheck disable=SC2086
 ${COMPOSE[@]} \
   -f scripts/install/community-compose.yml \

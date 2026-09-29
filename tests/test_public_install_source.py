@@ -35,6 +35,7 @@ def _fake_tools(tmp_path: Path) -> dict[str, str]:
         "  info) exit 0 ;;\n"
         "  compose)\n"
         "    if [ \"$2\" = version ]; then echo 'Docker Compose version v2'; exit 0; fi\n"
+        "    if [ -n \"$BOSS_TAG_SEEN\" ]; then printf '%s\\n' \"$BOSS_COMMUNITY_IMAGE_TAG\" > \"$BOSS_TAG_SEEN\"; fi\n"
         "    exit 0 ;;\n"
         "esac\n"
         "exit 1\n"
@@ -171,11 +172,14 @@ def test_local_hardware_agent_receives_the_seeded_project(tmp_path: Path) -> Non
     _git("remote", "add", "origin", str(tmp_path / "missing.git"), cwd=install)
     env = _fake_tools(tmp_path)
     env["BOSS_AGENT_SEEN"] = str(seen)
+    tag_seen = tmp_path / "image-tag"
+    env["BOSS_TAG_SEEN"] = str(tag_seen)
 
     result = _install(INSTALLER, install, env)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert seen.read_text() == "boss-dogfood\n"
+    assert tag_seen.read_text() == "boss-community\n"
     assert "Hardware agent did not install" not in result.stdout + result.stderr
 
 
