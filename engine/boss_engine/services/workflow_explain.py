@@ -52,6 +52,31 @@ def _source_of(binding: Any, step_labels: dict[str, str]) -> str:
     return "NOT SET — this step cannot run until it is"
 
 
+def _declared_inputs(raw: Any) -> list[tuple[str, bool]]:
+    """Read capability names and the stored custom-step input schema alike.
+
+    Custom steps persist ``[{name, required, description}, ...]`` while built-in
+    capabilities declare plain names. Using a schema object as a dict key made
+    the plan endpoint throw a TypeError for otherwise valid custom workflows.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, str):
+            name, required = item.strip(), True
+        elif isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            required = bool(item.get("required", True))
+        else:
+            continue
+        if name and name not in seen:
+            out.append((name, required))
+            seen.add(name)
+    return out
+
+
 def explain_version(
     connection: Connection,
     *,
@@ -172,14 +197,23 @@ def explain_version(
         minutes += int(spec_of.get("typical_minutes") or 0)
 
         inputs = []
-        declared = list(spec_of.get("required_inputs") or own.get("inputs") or [])
+        declared = _declared_inputs(
+            spec_of.get("required_inputs") or own.get("inputs") or [])
         wired = binding.get("inputs") or {}
-        for name in declared:
+        if not isinstance(wired, dict):
+            wired = {}
+        for name, required in declared:
             where_from = _source_of(wired.get(name), labels)
-            if "you supply" in where_from and name not in supply:
+            if not required:
+                if "NOT SET" in where_from:
+                    where_from = "optional — you may supply it when starting the run"
+                elif "you supply" in where_from:
+                    where_from = "you may supply it when starting the run"
+            if required and "you supply" in where_from and name not in supply:
                 supply.append(name)
             inputs.append({"name": name, "source": where_from,
-                           "ready": "NOT SET" not in where_from})
+                           "required": required,
+                           "ready": not required or "NOT SET" not in where_from})
 
         steps.append({
             "position": index + 1,
@@ -210,7 +244,7 @@ def explain_version(
 
     blocked = [
         f"“{s['label']}” has no source for {i['name']!r}"
-        for s in steps for i in s["inputs"] if not i["ready"]
+        for s in steps for i in s["inputs"] if i["required"] and not i["ready"]
     ]
     return {
         "workflow_key": row["workflow_key"],

@@ -223,6 +223,10 @@ marked in the canvas as you place it, with the reason and the fix.
 A named, reusable step a customer defines: `workflow_custom_steps` holds the label, the thing it
 binds, and the inputs it declares. It appears in the same builder palette as the eighteen
 built-in capabilities, and runs through `workflow_capability_runner` like any other step.
+The readable workflow plan accepts the stored custom input objects
+(`name`, `required`, `description`) as well as built-in capability input names.
+It names optional inputs without presenting them as fields the operator must
+supply to start a run.
 
 **The risk tier is never a field the customer fills in.** It is resolved from whatever the step
 binds — the skill's registered `config.risk_tier`, or the MCP server's tier and its per-tool

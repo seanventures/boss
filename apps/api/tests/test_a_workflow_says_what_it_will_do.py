@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -162,3 +163,79 @@ def test_a_definition_with_no_version_explains_itself_instead_of_404ing(engine):
     assert plan["published"] is False
     assert plan["steps"] == []
     assert "no published version" in plan["summary"]
+
+
+def test_custom_step_object_inputs_render_a_plan_over_http(engine, client):
+    """A real custom-step schema must not make the operator's plan throw 500."""
+    project_id = get_settings().default_project_id
+    suffix = uuid4().hex[:10]
+    key = f"video_plan_{suffix}"
+    step_key = f"publish_video_{suffix}"
+    definition_id = f"wfd_{suffix}"
+    version_id = f"wfv_{suffix}"
+    custom_inputs = [
+        {"name": "title", "required": True, "description": "Publication title"},
+        {"name": "channel", "required": False, "description": "Optional channel"},
+    ]
+    spec = {
+        "entry_step": "publish",
+        "steps": [{
+            "id": "publish", "kind": "capability", "next": [],
+            "binding": {
+                "custom_step": step_key,
+                "inputs": {
+                    "title": {"from_input": "title"},
+                },
+            },
+        }],
+    }
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO workflow_custom_steps (
+                id, project_id, step_key, label, summary, binding_kind,
+                skill_id, inputs, produces, created_by
+            ) VALUES (
+                :id, :project_id, :step_key, 'Publish video', 'Publishes a video',
+                'skill', 'social_publish', CAST(:inputs AS JSONB),
+                '["published_url"]'::jsonb, 'ceo'
+            )
+        """), {
+            "id": f"wcs_{suffix}", "project_id": project_id,
+            "step_key": step_key, "inputs": json.dumps(custom_inputs),
+        })
+        connection.execute(text("""
+            INSERT INTO workflow_definitions (
+                id, project_id, workflow_key, name, created_by, active_version_id
+            ) VALUES (
+                :id, :project_id, :key, 'Video edit and publish', 'ceo', :version_id
+            )
+        """), {"id": definition_id, "project_id": project_id,
+                 "key": key, "version_id": version_id})
+        connection.execute(text("""
+            INSERT INTO workflow_versions (
+                id, project_id, workflow_definition_id, version, status,
+                spec, content_hash, created_by
+            ) VALUES (
+                :id, :project_id, :definition_id, 1, 'published',
+                CAST(:spec AS JSONB), :content_hash, 'ceo'
+            )
+        """), {
+            "id": version_id, "project_id": project_id,
+            "definition_id": definition_id, "spec": json.dumps(spec),
+            "content_hash": hashlib.sha256(
+                json.dumps(spec, sort_keys=True).encode()).hexdigest(),
+        })
+
+    response = client.get(f"/v1/delivery-workflows/{key}/plan",
+                          params={"project_id": project_id})
+    assert response.status_code == 200, response.text
+    plan = response.json()
+    assert plan["published"] is True
+    assert plan["you_must_supply"] == ["title"]
+    assert plan["can_start"] is True
+    inputs = {item["name"]: item for item in plan["steps"][0]["inputs"]}
+    assert inputs["title"]["required"] is True
+    assert inputs["channel"]["required"] is False
+    assert inputs["channel"]["ready"] is True
+    assert "optional" in inputs["channel"]["source"]
+    assert "may supply" in inputs["channel"]["source"]
