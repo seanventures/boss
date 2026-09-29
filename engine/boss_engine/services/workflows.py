@@ -29,7 +29,7 @@ from .workflow_capabilities import (
     validate_step as capability_problems,
     validate_captain,
 )
-from .typed_decisions import GOVERNANCE_HOLD, step_problems as typed_decision_problems
+from .typed_decisions import step_problems as typed_decision_problems
 
 logger = logging.getLogger(__name__)
 
@@ -919,10 +919,13 @@ def list_definition_details(
 
 
 def _hold_new_typed_decision_work(spec: dict[str, Any]) -> None:
-    """Reject new runs while allowing already-running steps to fail with evidence."""
-    for step in spec.get("steps", []):
-        if (step.get("binding") or {}).get("typed_decision"):
-            raise WorkflowValidationError(f"step '{step['id']}': {GOVERNANCE_HOLD}")
+    """Publishing is allowed. The spend hold is on the attempt, not the spec.
+
+    run_step still refuses a call that has no committed reservation, lease, and
+    receipt. Key proof stays on its own hold. The argument is accepted so older
+    callers and tests can keep patching this function.
+    """
+    del spec
 
 
 def publish_version(

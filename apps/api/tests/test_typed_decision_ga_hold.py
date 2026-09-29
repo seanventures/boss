@@ -37,18 +37,18 @@ def _definition(connection) -> dict:
     )
 
 
-def test_new_typed_decision_versions_cannot_publish(engine):
+def test_new_typed_decision_versions_publish_onto_the_governed_path(engine):
     with engine.begin() as connection:
         definition = _definition(connection)
-        with pytest.raises(workflows.WorkflowValidationError, match="BOSS-451"):
-            workflows.publish_version(
-                connection, project_id=PROJECT, definition_id=definition["id"],
-                spec=_spec(), actor="ceo",
-            )
+        version = workflows.publish_version(
+            connection, project_id=PROJECT, definition_id=definition["id"],
+            spec=_spec(), actor="ceo",
+        )
         count = connection.execute(text(
             "SELECT count(*) FROM workflow_versions WHERE workflow_definition_id=:id"
         ), {"id": definition["id"]}).scalar_one()
-    assert count == 0
+    assert version["id"]
+    assert count == 1
 
 
 def test_typesafe_setup_api_exposes_hold_without_provider_call_or_key_storage(client, monkeypatch):

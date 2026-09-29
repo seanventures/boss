@@ -162,15 +162,15 @@ KNOBS: dict[str, dict[str, Any]] = {
     "decision_backend": {
         "attr": "decision_backend",
         "label": "Decision model",
-        "help": "Saved preference for workflow choice decisions. Live decisions are paused "
-                "until their model calls have budget and receipt tracking (BOSS-451).",
+        "help": "Saved preference for workflow choice decisions. A live decision spends "
+                "only after a budget reservation, model lease, and receipt commit (BOSS-451).",
         "kind": "choice", "choices": ("claude", "typesafe"),
     },
     "decision_model": {
         "attr": "decision_model",
         "label": "Claude model for decisions",
-        "help": "Saved Claude model for decisions; live workflow decisions are paused "
-                "until BOSS-451 is resolved.",
+        "help": "Saved Claude model for decisions. The call still waits for a committed "
+                "reservation, lease, and receipt (BOSS-451).",
         "kind": "choice", "choices": "claude_models",
     },
 }

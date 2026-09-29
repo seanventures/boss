@@ -51,9 +51,9 @@ class DecisionBatch:
 
 
 GOVERNANCE_HOLD = (
-    "Typed decision model calls are paused (BOSS-451): each provider attempt needs a "
-    "committed budget reservation, active lease, deduplicated receipt, and cost settlement "
-    "before a workflow can use its answer. Use a human decision step for now."
+    "Typed decision model calls stay paused (BOSS-451) unless this attempt already has a "
+    "committed budget reservation, active model lease, deduplicated receipt, and cost "
+    "settlement. Key proof is still paused."
 )
 
 
@@ -359,6 +359,13 @@ def _step_output(spec: dict, batch: DecisionBatch) -> dict:
     }
 
 
-def run_step(settings: Settings, binding: dict, state) -> dict:
-    """Hold live workflow decisions until their model calls are durable and governed."""
-    raise TypedDecisionGovernanceHold(GOVERNANCE_HOLD)
+def run_step(settings: Settings, binding: dict, state, *, spend=None) -> dict:
+    """Answer one typed decision, or hold when the call has no spend authority.
+
+    `spend` is a TypedDecisionSpend that has already committed a reservation,
+    a model lease, and a receipt. Without it this function does not construct
+    a provider client.
+    """
+    if spend is None:
+        raise TypedDecisionGovernanceHold(GOVERNANCE_HOLD)
+    return spend.execute(settings, binding, state)

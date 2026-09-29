@@ -27,6 +27,45 @@ class ReceiptService:
         ).mappings().first()
         return dict(row) if row else None
 
+    def list_by_dedupe_prefix(
+        self, connection: Connection, org_id: str, prefix: str
+    ) -> list[dict]:
+        """Receipts whose dedupe key starts with prefix, oldest first.
+
+        Used to replay the original typed-decision receipt. The prefix is a
+        composed identity, never a caller-supplied LIKE pattern.
+        """
+        if any(character in prefix for character in "%_\\"):
+            raise ValueError("dedupe prefix cannot contain LIKE wildcards.")
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
+                       status, provider_ref, created_by_job_id, data_boundary, result, error,
+                       created_at, updated_at
+                FROM receipts
+                WHERE org_id = :org_id AND dedupe_key LIKE :prefix
+                ORDER BY created_at ASC, id ASC
+                """
+            ),
+            {"org_id": org_id, "prefix": prefix + "%"},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def merge_result(self, connection: Connection, receipt_id: str, result: dict) -> None:
+        """Add fields to a receipt result without dropping what settlement wrote."""
+        connection.execute(
+            text(
+                """
+                UPDATE receipts
+                SET result = COALESCE(result, '{}'::jsonb) || CAST(:result AS JSONB),
+                    updated_at = now()
+                WHERE id = :receipt_id
+                """
+            ),
+            {"receipt_id": receipt_id, "result": json.dumps(result)},
+        )
+
     def get_by_id(
         self, connection: Connection, org_id: str, receipt_id: str
     ) -> Optional[dict]:
