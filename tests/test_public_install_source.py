@@ -91,6 +91,47 @@ def test_checkout_ahead_of_origin_main_installs_without_rewinding(tmp_path: Path
     assert "BOSS_API_KEY=" in (install / ".env").read_text()
 
 
+def _diverged_pair(tmp_path: Path) -> tuple[Path, str]:
+    upstream = tmp_path / "upstream"
+    (upstream / "scripts/install").mkdir(parents=True)
+    for name in ("community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py"):
+        (upstream / "scripts/install" / name).write_bytes((REPO / "scripts/install" / name).read_bytes())
+    (upstream / "version").write_text("base\n")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(upstream)], check=True)
+    _commit(upstream, "base")
+    _git("checkout", "-q", "-b", "feature", cwd=upstream)
+    (upstream / "version").write_text("feature\n")
+    _commit(upstream, "feature")
+    feature = _git("rev-parse", "HEAD", cwd=upstream)
+    _git("checkout", "-q", "main", cwd=upstream)
+    (upstream / "version").write_text("other-main\n")
+    _commit(upstream, "other main")
+    install = tmp_path / "boss"
+    subprocess.run(["git", "clone", "-q", "--branch", "feature", str(upstream), str(install)], check=True)
+    return install, feature
+
+
+def test_diverged_default_branch_keeps_the_local_checkout(tmp_path: Path) -> None:
+    install, feature = _diverged_pair(tmp_path)
+
+    result = _install(INSTALLER, install, _fake_tools(tmp_path))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "has diverged from this checkout" in result.stdout
+    assert _git("rev-parse", "HEAD", cwd=install) == feature
+
+
+def test_explicit_diverged_ref_does_not_replace_the_checkout(tmp_path: Path) -> None:
+    install, feature = _diverged_pair(tmp_path)
+
+    result = _install(INSTALLER, install, _fake_tools(tmp_path), "--ref", "main")
+
+    assert result.returncode != 0
+    assert "cannot fast-forward" in result.stdout + result.stderr
+    assert _git("rev-parse", "HEAD", cwd=install) == feature
+    assert not (install / ".env").exists()
+
+
 def test_unreachable_origin_uses_the_local_checkout(tmp_path: Path) -> None:
     install = tmp_path / "boss"
     (install / "scripts/install").mkdir(parents=True)

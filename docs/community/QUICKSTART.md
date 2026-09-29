@@ -45,8 +45,10 @@ cd /path/to/boss
 ./install.sh --dir "$HOME/boss" --yes --skip-model-key
 ```
 
-If this checkout is already ahead of the default branch, the installer keeps
-that source. It does not rewind the tree to an older `main`.
+If this checkout is already ahead of the default branch, or that branch has
+diverged, the installer keeps this source. It does not rewind the tree.
+Pass `--ref` when a different commit must be checked out; a diverged ref then
+stops instead of installing the wrong source.
 
 On a fresh public install, the default checkout is `~/boss`. The installer
 writes secrets to `~/boss/.env` with mode 0600 and never prints the generated

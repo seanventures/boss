@@ -19,6 +19,10 @@ REPO_URL_EXPLICIT=0
 if [[ -n "${BOSS_REPO_URL:-}" ]]; then
   REPO_URL_EXPLICIT=1
 fi
+REF_EXPLICIT=0
+if [[ -n "${BOSS_REPO_REF:-}" ]]; then
+  REF_EXPLICIT=1
+fi
 BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanventures/boss.git}"
 BOSS_REPO_REF="${BOSS_REPO_REF:-main}"
 
@@ -182,7 +186,7 @@ while [[ $# -gt 0 ]]; do
     --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
     --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
     --postgres-port) PG_PORT="$2"; PG_PORT_EXPLICIT=1; shift 2 ;;
-    --ref) BOSS_REPO_REF="$2"; shift 2 ;;
+    --ref) BOSS_REPO_REF="$2"; REF_EXPLICIT=1; shift 2 ;;
     --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
     --secret-store)
@@ -637,8 +641,13 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
         die "Could not fast-forward; recovery backup: ${_recovery_backup:-not needed}."
     elif git -C "$INSTALL_DIR" merge-base --is-ancestor "$_fetched_commit" "$_installed_commit"; then
       ui_info "This checkout is already ahead of $BOSS_REPO_REF; source left unchanged."
-    else
+    elif [[ "$REF_EXPLICIT" -eq 1 ]]; then
       die "The requested ref cannot fast-forward this install; existing checkout left unchanged."
+    else
+      # Default main is not a reason to refuse the tree the operator already has.
+      # An explicit --ref still refuses a diverged history so an upgrade cannot
+      # silently run the wrong source.
+      ui_warn "The requested ref $BOSS_REPO_REF has diverged from this checkout; source left unchanged."
     fi
   else
     _local_ref=""
