@@ -76,6 +76,7 @@ and policy result when `/op` invokes an operation.
 | --- | --- | --- | --- |
 | Pick a project and inspect work | `/projects`, `/project ID`, `/ops tasks` | `/op get_v1_tasks_339c8c60` | Project membership and task visibility |
 | Create auditable work | `/describe post_v1_tasks_54d40d0b` | `/op post_v1_tasks_54d40d0b {"body":{"title":"Title","dedupe_key":"unique-key"}}` | Task creation, event and dedupe rules |
+| Review and resolve decisions | `/decisions`, `/decision ID` | `/decision approve ID NOTE` or `/decision reject ID NOTE` | Project read scope, authenticated human reviewer, role/risk/confirmation and transition rules |
 | Start and inspect workflows | `/ops workflow-runs` | Invoke listed create/read/run operations | Version pinning, lease and approval state |
 | Author an agent | `/ops agent-studio` | Invoke listed definition/version/validate/publish operations | Project permissions, validation and publication |
 | Control spend | `/ops budget` | Invoke quote/status/reserve/consume/release operations | Budget Governor and reservation rules |
@@ -93,6 +94,12 @@ For the common task path, `/tasks [PAGE]`, `/task ID`, and
 `/task create DEDUPE_KEY TITLE` provide direct commands over those same API
 routes. The user supplies a stable dedupe key so retrying a task creation does
 not produce a second task. Other fields remain available through `/op`.
+
+For decisions, `/decisions [open|all] [PAGE]` reads the scoped inbox,
+`/decision ID` reads one card, and `/decision approve|reject ID NOTE` uses the
+existing decision transition API after a scoped detail read. The API owns
+reviewer identity, role and risk checks, any required human confirmation,
+transition legality, and audit events. Other decision transitions use `/op`.
 
 ## Verification and limits
 

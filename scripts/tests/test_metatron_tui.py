@@ -264,6 +264,101 @@ def test_direct_task_create_works_in_one_shot_json_mode(monkeypatch, capsys):
     assert SECRET not in output.out + output.err
 
 
+def _decision(decision_id: str = "dec-1", status: str = "pending") -> dict[str, Any]:
+    return {
+        "id": decision_id, "status": status, "risk_tier": 2,
+        "question": "Approve the launch plan?", "reason": "Release gate",
+        "recommendation": {"action": "hold"}, "options": [{"id": "approve"}],
+        "cost_summary": {"estimate_usd": 10},
+    }
+
+
+def test_parse_direct_decision_commands_requires_explicit_action_note():
+    assert (tui.parse_line("/decisions").message, tui.parse_line("/decisions").page) == ("open", 1)
+    assert (tui.parse_line("/decisions all 3").message, tui.parse_line("/decisions all 3").page) == ("all", 3)
+    assert tui.parse_line("/decision dec-1").kind == "decision"
+    action = tui.parse_line("/decision approve dec-1 Reviewed the release gates")
+    assert (action.kind, action.method, action.message, action.body) == (
+        "decision_action", "approve", "dec-1", {"note": "Reviewed the release gates"}
+    )
+    for line in (
+        "/decisions unknown", "/decisions all 0", "/decisions open 1 extra",
+        "/decision", "/decision ../other", "/decision reject dec-1",
+        "/decision approve dec%2F2 note", "/decision execute dec-1 note",
+    ):
+        assert tui.parse_line(line).kind == "error", line
+
+
+def test_decision_inbox_is_project_scoped_filtered_and_paged():
+    decisions = [_decision(f"dec-{index}") for index in range(26)] + [_decision("done", "approved")]
+    opener = FakeOpener([
+        (200, {"project_id": "project-two", "items": decisions}),
+        (200, {"project_id": "project-two", "items": decisions}),
+        (200, {"project_id": "project-two", "items": decisions}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.dispatch(tui.parse_line("/project project-two"))
+    first = client.handle(tui.parse_line("/decisions"))
+    second = client.dispatch(tui.parse_line("/decisions open 2"))
+    all_items = client.dispatch(tui.parse_line("/decisions all"))
+    assert "26 total, page 1/2" in first
+    assert "Next: /decisions open 2" in first
+    assert second["items"][0]["id"] == "dec-25"
+    assert all_items["total_count"] == 27
+    assert opener.calls[0]["url"].endswith("/v1/decisions/inbox?project_id=project-two")
+    assert all(call["headers"]["x-boss-api-key"] == SECRET for call in opener.calls)
+
+
+def test_decision_review_shows_rationale_and_uses_selected_project_filter():
+    opener = FakeOpener([(200, _decision())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    rendered = client.handle(tui.parse_line("/decision dec-1"))
+    assert "Decision dec-1: Approve the launch plan?" in rendered
+    assert "risk tier: 2" in rendered
+    assert 'recommendation: {"action": "hold"}' in rendered
+    assert "cost summary" in rendered
+    assert opener.calls[0]["url"].endswith("/v1/decisions/dec-1?project_id=boss-dogfood")
+
+
+def test_decision_commands_do_not_present_mismatched_project_or_id():
+    opener = FakeOpener([
+        (200, {"project_id": "another-project", "items": [_decision()]}),
+        (200, _decision("different-decision")),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    inbox = client.dispatch(tui.parse_line("/decisions"))
+    action = client.dispatch(tui.parse_line("/decision approve dec-1 Reviewed"))
+    assert inbox["__command_error__"] is True
+    assert action["__command_error__"] is True
+    assert all(call["method"] == "GET" for call in opener.calls)
+
+
+def test_decision_action_preflight_enforces_selected_project_and_server_denial():
+    opener = FakeOpener([
+        (404, {"detail": "Decision not found"}),
+        (200, _decision()),
+        (409, {"detail": "mcp_confirmation_required"}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    out_of_project = client.handle(tui.parse_line("/decision approve dec-1 Reviewed and approved"))
+    denied = client.handle(tui.parse_line("/decision approve dec-1 Reviewed and approved"))
+    assert "HTTP 404" in out_of_project
+    assert "HTTP 409" in denied and "mcp_confirmation_required" in denied
+    assert [call["method"] for call in opener.calls] == ["GET", "GET", "POST"]
+    assert opener.calls[2]["url"].endswith("/v1/decisions/dec-1/approve")
+    assert opener.calls[2]["body"] == {"actor": "ceo", "note": "Reviewed and approved"}
+
+
+def test_direct_decision_reject_uses_governed_api_and_returns_record():
+    opener = FakeOpener([(200, _decision()), (200, _decision(status="rejected"))])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    rejected = client.dispatch(tui.parse_line("/decision reject dec-1 Keep the guardrail in place"))
+    assert rejected["status"] == "rejected"
+    assert opener.calls[0]["url"].endswith("/v1/decisions/dec-1?project_id=boss-dogfood")
+    assert opener.calls[1]["url"].endswith("/v1/decisions/dec-1/reject")
+    assert opener.calls[1]["body"] == {"actor": "ceo", "note": "Keep the guardrail in place"}
+
+
 def test_api_command_parses_method_path_and_json():
     command = tui.parse_line('/api POST /v1/metatron/watch {"project_id":"boss-dogfood","actor":"ceo"}')
     assert command.kind == "api"

@@ -27,6 +27,27 @@ metatron> /task task-123
 metatron> /tasks 2
 ```
 
+Review the selected project's decision inbox with `/decisions` (pending and
+delegated items), `/decisions all` (every status), or
+`/decisions open 2` (the next page). `/decision ID` shows the question, risk,
+reason, recommendation, options, and cost summary before an action. Approve or
+reject with an explicit note:
+
+```text
+metatron> /decisions
+metatron> /decision dec-launch-1
+metatron> /decision approve dec-launch-1 Release gates reviewed
+metatron> /decision reject dec-launch-2 Keep the spending guardrail
+```
+
+These commands use the ordinary decision API. The terminal includes the selected
+project on inbox and detail reads, and checks the detail in that project before
+posting an action. The API binds the action to the authenticated reviewer and
+enforces role, risk, confirmation, and transition rules. A service key that
+requires a separate human confirmation still receives an HTTP 409; the terminal
+does not grant one. Use `--exec '/decision ID' --json` for the full decision card.
+Other decision transitions and fields remain available through `/op`.
+
 Use `/ops` to see
 product domains exposed by the running API, `/ops TASK` to search operations,
 or `/ops * --page N` to browse every operation in pages of 25. Domain searches

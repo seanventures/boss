@@ -42,6 +42,7 @@ OPS_PAGE_SIZE = 25
 HELP_TEXT = (
     "Slash commands: /watch  /overwatch  /drive [auto|go]  /goals  /projects  /project [ID]  /quit\n"
     "Work: /tasks [PAGE]  /task ID  /task create DEDUPE_KEY TITLE\n"
+    "Decisions: /decisions [open|all] [PAGE]  /decision ID  /decision approve ID NOTE  /decision reject ID NOTE\n"
     "API commands: /ops [domain or search|*] [--page N]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
     "Fallback: /api METHOD /v1/path [JSON]\n"
     "Type naturally to POST /v1/metatron/session.\n"
@@ -229,6 +230,23 @@ def parse_line(line: str) -> Command:
         if len(parts) != 2 or not SIMPLE_ID.fullmatch(parts[1]):
             return Command(kind="error", message="usage: /task ID or /task create DEDUPE_KEY TITLE")
         return Command(kind="task", message=parts[1])
+    if lowered == "/decisions" or lowered.startswith("/decisions "):
+        parts = raw.split()
+        if (len(parts) > 3 or (len(parts) >= 2 and parts[1].lower() not in {"open", "all"})
+                or (len(parts) == 3 and not re.fullmatch(r"[1-9][0-9]{0,5}", parts[2]))):
+            return Command(kind="error", message="usage: /decisions [open|all] [PAGE], with PAGE >= 1")
+        return Command(kind="decisions", message=parts[1].lower() if len(parts) >= 2 else "open",
+                       page=int(parts[2]) if len(parts) == 3 else 1)
+    if lowered == "/decision" or lowered.startswith("/decision "):
+        parts = raw.split(None, 3)
+        if len(parts) >= 2 and parts[1].lower() in {"approve", "reject"}:
+            if len(parts) != 4 or not SIMPLE_ID.fullmatch(parts[2]) or not parts[3].strip():
+                return Command(kind="error", message="usage: /decision approve|reject ID NOTE")
+            return Command(kind="decision_action", method=parts[1].lower(),
+                           message=parts[2], body={"note": parts[3].strip()})
+        if len(parts) != 2 or not SIMPLE_ID.fullmatch(parts[1]):
+            return Command(kind="error", message="usage: /decision ID or /decision approve|reject ID NOTE")
+        return Command(kind="decision", message=parts[1])
     if lowered == "/ops" or lowered.startswith("/ops "):
         return Command(kind="ops", message=raw.partition(" ")[2].strip())
     if lowered == "/coverage":
@@ -434,8 +452,41 @@ def format_task(payload: Mapping[str, Any]) -> str:
     if payload.get("description"):
         lines.append(str(payload["description"]))
     if payload.get("has_open_decision"):
-        lines.append("Open decision: yes; use /ops decisions for the decision inbox.")
+        lines.append("Open decision: yes; use /decisions to review the inbox.")
     lines.append("For the complete record, use --exec '/task ID' --json.")
+    return "\n".join(lines)
+
+
+def format_decisions(payload: Mapping[str, Any]) -> str:
+    view = payload["view"]
+    lines = [
+        f"{view.title()} decisions in {payload['project_id']} "
+        f"({payload['total_count']} total, page {payload['page']}/{payload['pages']}):"
+    ]
+    for decision in payload["items"]:
+        lines.append(
+            f"  {decision.get('id') or '?'}  [{decision.get('status') or '?'}; "
+            f"risk {decision.get('risk_tier', '?')}]  {decision.get('question') or 'Untitled'}"
+        )
+    if not payload["items"]:
+        lines.append("  No decisions on this page.")
+    if payload["page"] < payload["pages"]:
+        lines.append(f"Next: /decisions {view} {payload['page'] + 1}")
+    lines.append("Use /decision ID to review a decision before acting.")
+    return "\n".join(lines)
+
+
+def format_decision(payload: Mapping[str, Any]) -> str:
+    lines = [f"Decision {payload['id']}: {payload.get('question') or 'Untitled'}"]
+    for field in ("status", "risk_tier", "task_id", "deadline_at", "reason",
+                  "default_action", "approved_by", "delegated_to", "resolution_note"):
+        if payload.get(field) is not None:
+            lines.append(f"{field.replace('_', ' ')}: {payload[field]}")
+    for field in ("recommendation", "options", "cost_summary"):
+        if payload.get(field):
+            lines.append(f"{field.replace('_', ' ')}: {json.dumps(payload[field], ensure_ascii=False)}")
+    lines.append("Use /decision approve ID NOTE or /decision reject ID NOTE; the API checks the authenticated reviewer and policy.")
+    lines.append("For the complete record, use --exec '/decision ID' --json.")
     return "\n".join(lines)
 
 
@@ -765,6 +816,45 @@ class MetatronClient:
             "dedupe_key": dedupe_key,
         })
 
+    def decisions(self, view: str, page: int) -> Any:
+        query = urlencode({"project_id": self.project_id})
+        payload = self.request("GET", f"/v1/decisions/inbox?{query}")
+        if isinstance(payload, dict) and payload.get("__http_error__"):
+            return payload
+        if (not isinstance(payload, dict) or payload.get("project_id") != self.project_id
+                or not isinstance(payload.get("items"), list)):
+            return _command_error("the API did not return the selected project's decision inbox")
+        items = payload["items"]
+        if any(not isinstance(item, dict) for item in items):
+            return _command_error("the API returned an invalid decision inbox")
+        if view == "open":
+            items = [item for item in items if item.get("status") in {"pending", "delegated"}]
+        pages = max(1, (len(items) + OPS_PAGE_SIZE - 1) // OPS_PAGE_SIZE)
+        if page > pages:
+            return _command_error(f"page {page} is past the last page ({pages})")
+        return {"project_id": self.project_id, "view": view, "page": page, "pages": pages,
+                "total_count": len(items), "items": items[(page - 1) * OPS_PAGE_SIZE:page * OPS_PAGE_SIZE]}
+
+    def decision(self, decision_id: str) -> Any:
+        query = urlencode({"project_id": self.project_id})
+        payload = self.request("GET", f"/v1/decisions/{quote(decision_id, safe='')}?{query}")
+        if isinstance(payload, dict) and payload.get("__http_error__"):
+            return payload
+        if not isinstance(payload, dict) or payload.get("id") != decision_id:
+            return _command_error("the API did not return the requested decision")
+        return payload
+
+    def decide(self, action: str, decision_id: str, note: str) -> Any:
+        # The scoped read keeps the selected project meaningful even though the
+        # transition endpoint itself identifies the decision only by ID.
+        detail = self.decision(decision_id)
+        if isinstance(detail, dict) and (detail.get("__http_error__") or detail.get("__command_error__")):
+            return detail
+        return self.request(
+            "POST", f"/v1/decisions/{quote(decision_id, safe='')}/{action}",
+            {"actor": self.config.actor, "note": note},
+        )
+
     def project(self, project_id: str) -> dict[str, Any]:
         if project_id:
             if (
@@ -1029,6 +1119,12 @@ class MetatronClient:
             payload = self.task(command.message)
         elif command.kind == "task_create":
             payload = self.create_task(command.message, command.dedupe_key)
+        elif command.kind == "decisions":
+            payload = self.decisions(command.message, command.page)
+        elif command.kind == "decision":
+            payload = self.decision(command.message)
+        elif command.kind == "decision_action":
+            payload = self.decide(command.method, command.message, command.body["note"])
         elif command.kind == "ops":
             payload = self.ops(command.message)
         elif command.kind == "describe":
@@ -1072,6 +1168,10 @@ class MetatronClient:
             return redact(format_tasks(payload, command.page), self.config.api_key)
         if command.kind == "task" and isinstance(payload, dict):
             return redact(format_task(payload), self.config.api_key)
+        if command.kind == "decisions" and isinstance(payload, dict):
+            return redact(format_decisions(payload), self.config.api_key)
+        if command.kind in {"decision", "decision_action"} and isinstance(payload, dict):
+            return redact(format_decision(payload), self.config.api_key)
         if command.kind in {"api", "op", "project"}:
             return redact(json.dumps(payload, indent=2, default=str), self.config.api_key)
         return redact(format_payload(payload), self.config.api_key)
