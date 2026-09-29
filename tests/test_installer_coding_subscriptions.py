@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import importlib.util
-import builtins
-from contextlib import nullcontext
-import os
 from pathlib import Path
 
 import pytest
@@ -60,12 +57,15 @@ def test_connect_requires_explicit_flag_and_does_not_send_on_discovery(monkeypat
     assert module.main() == 0
 
 
-def test_claude_setup_token_stays_with_official_interactive_cli(monkeypatch) -> None:
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-    monkeypatch.setattr(module.shutil, "which", lambda name: "/bin/claude")
-    monkeypatch.setattr(module, "checked_output", lambda *args, **kwargs: pytest.fail("CLI must not be captured"))
-    monkeypatch.setattr(module.getpass, "getpass", lambda prompt: "a" * 48)
-    real_open = builtins.open
-    monkeypatch.setattr(builtins, "open", lambda path, *args, **kwargs:
-                        nullcontext() if path == "/dev/tty" else real_open(path, *args, **kwargs))
-    assert module.claude_credential() == "a" * 48
+def test_claude_setup_token_import_cannot_run(monkeypatch) -> None:
+    token = "sk-ant-oat01-session-token-material"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", token)
+    monkeypatch.setattr(module, "send_to_boss", lambda *args, **kwargs: pytest.fail("credential sent"))
+    monkeypatch.setattr(module, "discover", lambda: pytest.fail("import must stop before discovery"))
+    with pytest.raises(RuntimeError, match="clearance") as raised:
+        module.claude_credential()
+    assert token not in str(raised.value)
+    monkeypatch.setattr(module.sys, "argv", ["coding_subscriptions.py", "--connect-claude"])
+    with pytest.raises(RuntimeError, match="disabled") as raised:
+        module.main()
+    assert token not in str(raised.value)

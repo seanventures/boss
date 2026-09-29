@@ -68,8 +68,9 @@ describe("connecting a model", () => {
     // up", which reads as though BOSS shares a live session with your CLI. It does not, and
     // /connect would not give it one — that endpoint RECORDS a connection from a reference the
     // caller already holds. Pointing the wizard at it would be a green tick over nothing.
-    expect(UI).toContain("claude setup-token");
-    expect(UI).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(UI).toContain("Claude setup-token import is disabled");
+    expect(UI).toContain('data-testid="setup-agent-claude-import-disabled"');
+    expect(UI).not.toContain("paste the result");
     expect(UI).not.toContain("once the provider");
   });
 
@@ -248,11 +249,17 @@ describe("a connection that was made says so", () => {
  */
 describe("a subscription whose credential travels gets a box to travel in", () => {
   it("takes the token, rather than naming an environment variable to go and set", () => {
-    // The old answer was: set CLAUDE_CODE_OAUTH_TOKEN on the API container and restart it —
-    // which is the step the wizard exists to remove.
+    // Non-Claude token CLIs can still use the box. Claude setup-token import cannot.
     expect(UI).toContain('data-testid="setup-agent-token"');
     expect(UI).toContain('data-testid="setup-agent-token-input"');
-    expect(UI).toContain('detected.credential_kind === "token"');
+    expect(UI).toContain('provider !== "claude_code"');
+  });
+
+  it("does not let the console run the Claude setup-token import", () => {
+    expect(UI).toContain('if (provider === "claude_code")');
+    expect(UI).toContain("Claude setup-token import is disabled");
+    const fn = UI.slice(UI.indexOf("const storeTokenAndConnect"));
+    expect(fn.slice(0, 500)).toContain('provider === "claude_code"');
   });
 
   it("the field is a password field and is wiped as soon as BOSS has the value", () => {

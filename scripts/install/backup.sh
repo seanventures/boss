@@ -5,13 +5,15 @@ umask 077
 
 INSTALL_DIR="${BOSS_INSTALL_DIR:-}"
 BACKUP_ROOT="${BOSS_BACKUP_DIR:-$HOME/boss-backups}"
+SESSION_KEYS_FILE=""
 
 usage() {
   cat <<'EOF'
 Usage: backup.sh [--dir INSTALL_DIR] [--backup-dir BACKUP_ROOT]
 
 Creates a private backup of .env, BOSS and optional Infisical Postgres databases,
-and the BOSS artifacts volume. Writers pause during the snapshot and resume on
+and the BOSS artifacts volume. CLI session secrets (Claude setup token and Codex
+auth JSON) are left blank and are not copied into the archive. Writers pause during the snapshot and resume on
 success or failure. If Postgres was stopped, it starts only for the snapshot
 and is stopped again before this command returns. Prints only the backup
 directory path on stdout.
@@ -85,8 +87,40 @@ fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="$BACKUP_ROOT/boss-$STAMP-$$"
 mkdir -m 700 "$BACKUP"
-cp -p "$ENV_FILE" "$BACKUP/.env"
-chmod 600 "$BACKUP/.env"
+# A backup is a portable archive. Never copy a CLI session secret into it.
+# The live .env is not modified; only the archive copy is blanked.
+SESSION_KEYS_FILE="$(mktemp)"
+chmod 600 "$SESSION_KEYS_FILE"
+trap 'rm -f "$SESSION_KEYS_FILE"' EXIT
+python3 - "$ENV_FILE" "$BACKUP/.env" "$SESSION_KEYS_FILE" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+src, dest, keys_path = sys.argv[1:]
+blocked = {"CLAUDE_CODE_OAUTH_TOKEN", "CODEX_AUTH_JSON"}
+secrets = []
+out = []
+text = Path(src).read_text()
+for line in text.splitlines():
+    if "=" not in line or line.startswith("#"):
+        out.append(line)
+        continue
+    key, value = line.split("=", 1)
+    if key in blocked:
+        if value:
+            secrets.append(value)
+        out.append(f"{key}=")
+        continue
+    out.append(line)
+body = "\n".join(out) + ("\n" if out else "")
+temporary = dest + ".writing"
+Path(temporary).write_text(body)
+os.chmod(temporary, 0o600)
+os.replace(temporary, dest)
+Path(keys_path).write_text("\n".join(secrets))
+os.chmod(keys_path, 0o600)
+PY
 if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
   git -C "$INSTALL_DIR" rev-parse HEAD > "$BACKUP/source-commit"
 else
@@ -111,9 +145,40 @@ restore_services() {
   done
   return "$failed"
 }
+scrub_session_material() {
+  [[ -n "$SESSION_KEYS_FILE" && -f "$SESSION_KEYS_FILE" ]] || return 0
+  python3 - "$BACKUP" "$SESSION_KEYS_FILE" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+secrets = [line.encode() for line in Path(sys.argv[2]).read_text().splitlines() if len(line) >= 20]
+for path in sorted(root.rglob("*")):
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    updated = data
+    for secret in secrets:
+        updated = updated.replace(secret, b"X" * len(secret))
+    if updated != data:
+        path.write_bytes(updated)
+for path in sorted(root.rglob("*")):
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    for secret in secrets:
+        if secret in data:
+            raise SystemExit(1)
+PY
+}
+
 on_exit() {
   local status=$?
   trap - EXIT
+  if [[ -d "${BACKUP:-}" ]]; then
+    scrub_session_material || { rm -rf "$BACKUP"; status=1; }
+  fi
+  rm -f "$SESSION_KEYS_FILE"
   if ! restore_services; then
     echo 'Backup could not restore the previous service state; inspect docker compose ps.' >&2
     status=1
@@ -156,6 +221,13 @@ fi
 }
 printf 'source_commit=%s\ncreated_utc=%s\n' \
   "$(cat "$BACKUP/source-commit")" "$STAMP" > "$BACKUP/manifest"
+if ! scrub_session_material; then
+  rm -rf "$BACKUP"
+  echo 'Backup would have contained a CLI session secret and was discarded.' >&2
+  exit 1
+fi
+rm -f "$SESSION_KEYS_FILE"
+SESSION_KEYS_FILE=""
 restore_services
 PAUSED=()
 DB_STARTED_FOR_BACKUP=0

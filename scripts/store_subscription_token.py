@@ -7,7 +7,8 @@ on their laptop, the pipeline runs in a container.
 
 WHAT TRAVELS depends on the CLI, and the spec decides — this script is never told:
 
-  * claude-code mints a headless token (`claude setup-token`), so the TOKEN travels.
+  * claude-code's setup-token import is disabled. This command refuses provider
+    claude_code before it reads stdin or a file. No counsel clearance is recorded.
   * codex has no such thing. `codex login --with-access-token` rejects every field its auth
     file holds, because it wants an agent identity JWT and a consumer ChatGPT plan never mints
     one; setting CODEX_ACCESS_TOKEN makes `codex login status` error outright. Restoring the
@@ -268,6 +269,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="find the credential and report its size; send nothing")
     args = parser.parse_args(argv)
+    if args.provider == "claude_code":
+        raise SystemExit(
+            "Claude setup-token import is disabled. No provider or counsel clearance is "
+            "recorded for copying a Claude session token into BOSS. Sign in with "
+            "claude auth login as the boss user inside the API container, then use "
+            "the installer --connect-claude-local path. This command did not read or "
+            "store a token."
+        )
 
     spec = tokenable[args.provider]
     source_file = args.auth_file or spec.token_source_file

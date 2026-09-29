@@ -126,7 +126,7 @@ Options:
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
   --connect-codex        Explicitly import this VM user's Codex ChatGPT login into BOSS
-  --connect-claude       Explicitly import a provider-minted Claude Code setup token
+  --connect-claude       Rejected. Claude setup-token import has no recorded clearance
   --connect-claude-local Record the CLI-owned Claude login made inside the API container
   --accept-database-fallback  Allow a subscription credential in Postgres if no secret store
   --secret-store WHICH    database (default) or infisical. Both stay on your own machine:
@@ -183,6 +183,9 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+if [[ "$CONNECT_CLAUDE" -eq 1 ]]; then
+  die "Claude setup-token import is disabled. No provider or counsel clearance is recorded for copying a Claude session token into BOSS. Use --connect-claude-local after claude auth login as the boss user inside the API container."
+fi
 if [[ "$CONNECT_CLAUDE" -eq 1 && "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
   die "Choose --connect-claude or --connect-claude-local, not both."
 fi

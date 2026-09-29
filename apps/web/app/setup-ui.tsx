@@ -582,6 +582,10 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
   }, [connecting, projectId, actor, provider, liveProofAvailable, onDone, loadAgents]);
 
   const storeTokenAndConnect = useCallback(async () => {
+    if (provider === "claude_code") {
+      setResult({ ok: false, text: "Claude setup-token import is disabled. No provider or counsel clearance is recorded for copying a Claude session token into BOSS." });
+      return;
+    }
     if (connecting || !token.trim()) return;
     setConnecting(true); setResult(null);
     const stored = await call<Record<string, unknown>>({
@@ -766,7 +770,11 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
               {detected.installed ? " — already installed." : null}
             </li>
             <li>
-              {detected.credential_kind === "token"
+              {provider === "claude_code"
+                ? <>Sign in with <code>claude auth login</code> as the boss user inside the
+                    API container. Claude setup-token import is disabled, so this screen does
+                    not accept a pasted session token.</>
+                : detected.credential_kind === "token"
                 ? <>Mint a token for BOSS: <code>{detected.signin_hint}</code> on your own
                     machine, then paste it below. It is made for headless use, so it does not
                     disturb the session you sign in with yourself.</>
@@ -774,7 +782,10 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
               {detected.authenticated ? " — already signed in." : null}
             </li>
             <li>
-              {detected.credential_kind === "token"
+              {provider === "claude_code"
+                ? <>Rerun the installer with <code>--connect-claude-local</code>. BOSS records
+                    the CLI-owned login and does not receive OAuth bytes.</>
+                : detected.credential_kind === "token"
                 // "It never asks you for a credential" is true of the file route and false
                 // here, where the box below is asking for exactly one.
                 ? <>Press <b>Store and connect</b>. {liveProofAvailable
@@ -792,7 +803,15 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
               container and restart it — the exact step this wizard exists to remove. BOSS
               takes the value and picks the store itself. Shown even once a token is present,
               because replacing one is how an expired token gets fixed. */}
-          {detected.credential_kind === "token" ? (
+          {provider === "claude_code" ? (
+            <p data-testid="setup-agent-claude-import-disabled">
+              Claude setup-token import is disabled. No provider or counsel clearance is
+              recorded for copying a Claude session token into BOSS. Sign in with{" "}
+              <code>claude auth login</code> inside the API container, then rerun the
+              installer with <code>--connect-claude-local</code>.
+            </p>
+          ) : null}
+          {detected.credential_kind === "token" && provider !== "claude_code" ? (
             <div className="setup-form" data-testid="setup-agent-token">
               <label className="setup-field">
                 <span>
@@ -825,7 +844,7 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
               : `${liveProofAvailable ? "Re-check" : "Connect"} ${chosen?.label ?? provider}`}
           </button>
           {detected.ready ? null
-            : detected.credential_kind === "token" && !detected.token_present ? (
+            : detected.credential_kind === "token" && provider !== "claude_code" && !detected.token_present ? (
               // The thing to do is ON THIS PAGE. Detection's own next step is a shell
               // instruction for setting an environment variable, which was the right answer
               // until the box above existed and is a worse one now.
@@ -853,14 +872,15 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
         <div className="detail" data-testid="setup-model-subscription">
           <p>
             {chosen?.note} There is no browser login here and BOSS does not hold a live session
-            from your machine. What it uses is the long-lived token the CLI mints for headless
-            use — you authorise once, on your own machine, and paste the result.
+            from your machine.
           </p>
           {chosen?.provider === "claude_code" ? (
             <p>
-              Run <code>claude setup-token</code>, then set{" "}
-              <code>CLAUDE_CODE_OAUTH_TOKEN</code> on this install. The coding pipeline picks it
-              up for the builder agents.{" "}
+              Claude setup-token import is disabled. No provider or counsel clearance is
+              recorded for copying a Claude session token into BOSS. Sign in with{" "}
+              <code>claude auth login</code> as the boss user inside the API container,
+              then record it with <code>--connect-claude-local</code>. BOSS does not
+              receive the OAuth session.{" "}
               <b>It powers builds, not this chat</b> — the conversation you are reading uses the
               model configured above.
             </p>

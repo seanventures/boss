@@ -110,25 +110,18 @@ def test_remote_model_error_with_provider_field_is_not_success(tmp_path: Path) -
     assert "stored" not in result.stdout
 
 
-def test_remote_subscription_requests_recording_without_unmetered_proof(tmp_path: Path) -> None:
+def test_remote_claude_setup_token_import_cannot_run(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    ssh_log = tmp_path / "ssh.log"
     fake = bin_dir / "ssh"
     fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import base64, re, sys\n"
-        "command = sys.argv[-1]\n"
-        "if 'base64 -d' in command:\n"
-        "    match = re.search(r\"printf %s '([^']+)'\", command)\n"
-        "    script = base64.b64decode(match.group(1)).decode() if match else ''\n"
-        "    if 'prove' not in script or 'false' not in script:\n"
-        "        sys.exit(2)\n"
-        "    print('STORE:{\"ok\":true}')\n"
-        "    print('CONNECT:{\"ok\":true,\"connected\":true,"
-        "\"entitlement_recorded\":true,\"proof\":{\"ok\":true,\"skipped\":true}}')\n"
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {ssh_log}\n"
+        "echo STORE:should-not-run\n"
     )
     fake.chmod(0o700)
-    token = "test-token-should-not-appear-in-output"
+    token = "sk-ant-oat01-session-token-material-not-for-import"
     result = subprocess.run(
         [
             "bash", str(ROOT / "scripts/install/remote.sh"),
@@ -142,9 +135,11 @@ def test_remote_subscription_requests_recording_without_unmetered_proof(tmp_path
         timeout=15,
         check=False,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "remains unverified" in result.stdout
+    assert result.returncode != 0
+    assert "disabled" in result.stderr
+    assert "clearance" in result.stderr
     assert token not in result.stdout + result.stderr
+    assert not ssh_log.exists()
 
 
 def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -> None:

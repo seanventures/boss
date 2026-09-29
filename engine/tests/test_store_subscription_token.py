@@ -76,6 +76,21 @@ def test_a_corrupt_file_does_not_quote_its_contents_back(mod, tmp_path) -> None:
     assert "super-secret-value" not in str(exc.value)
 
 
+def test_claude_setup_token_import_cannot_run(mod, monkeypatch) -> None:
+    """Provider claude_code must stop before stdin, a file, or the secret store."""
+    monkeypatch.setattr(mod, "read_piped_token", lambda stream: pytest.fail("token was read"))
+    monkeypatch.setattr(mod, "send_to_boss", lambda *args, **kwargs: pytest.fail("credential sent"))
+    monkeypatch.setattr(mod, "write_env_file", lambda *args, **kwargs: pytest.fail("env written"))
+
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["claude_code", "--stdin", "--dry-run"])
+
+    message = str(exc.value)
+    assert "disabled" in message
+    assert "clearance" in message
+    assert "did not read or store" in message
+
+
 def test_codex_sends_the_whole_file_not_one_field(mod, tmp_path, capsys) -> None:
     """The field route cannot work for Codex, so the script must not offer it one.
 

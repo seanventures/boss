@@ -80,7 +80,9 @@ def test_dry_run_and_safe_uninstall_preserve_existing_env(tmp_path: Path) -> Non
         assert (install / ".env").read_bytes() == initial
     commands = log.read_text().splitlines()
     assert len(commands) == 2
-    assert all("down --remove-orphans" in command for command in commands)
+    assert all(command.endswith(" stop") or command.endswith(" stop\n") or " stop" in command
+               for command in commands)
+    assert all("down" not in command for command in commands)
     assert all("--volumes" not in command for command in commands)
 
 
@@ -98,7 +100,10 @@ def test_backup_and_uninstall_accept_command_scoped_passwordless_sudo(tmp_path: 
         'case "$*" in\n'
         '  info) exit 0 ;;\n'
         '  *"pg_isready"*) exit 9 ;;\n'
-        '  compose*) exit 0 ;;\n'
+        '  *config*) printf "%s\\n" \'{"services":{"api":{"image":"boss-community-api:local"}}}\'; exit 0 ;;\n'
+        '  *"image inspect"*) exit 0 ;;\n'
+        '  *ps*) printf "db\\n"; exit 0 ;;\n'
+        '  *compose*) exit 0 ;;\n'
         'esac\n'
         'exit 42\n'
     )
@@ -111,10 +116,11 @@ def test_backup_and_uninstall_accept_command_scoped_passwordless_sudo(tmp_path: 
     assert uninstall.returncode == 0, uninstall.stderr
     assert "BOSS Community stopped" in uninstall.stdout
     assert backup.returncode != 0
-    assert "BOSS Postgres is not ready" in backup.stderr
+    assert "not ready" in backup.stderr
     calls = sudo_log.read_text().splitlines()
     assert all(call.startswith("-n docker ") for call in calls)
-    assert any("down --remove-orphans" in call for call in calls)
+    assert any(call.endswith(" stop") or " stop" in call for call in calls)
+    assert all("down" not in call for call in calls)
     assert any("pg_isready -U boss -d boss" in call for call in calls)
 
 
@@ -128,7 +134,8 @@ def test_piped_uninstall_uses_explicit_install_dir(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stderr == ""
     assert "BOSS Community stopped." in result.stdout
-    assert "down --remove-orphans" in log.read_text()
+    assert " stop" in log.read_text()
+    assert "down" not in log.read_text()
     assert (install / ".env").exists()
 
 
@@ -210,7 +217,7 @@ def test_upgrade_backup_failure_leaves_checkout_and_env_unchanged(tmp_path: Path
     subprocess.run(["git", "clone", "-q", str(upstream), str(install)], check=True)
     (install / ".env").write_text("BOSS_API_KEY=keep\n")
     old_sha = subprocess.check_output(["git", "-C", str(install), "rev-parse", "HEAD"], text=True).strip()
-    (upstream / "install.sh").write_text("echo new\n")
+    (upstream / "install.sh").write_text("#!/bin/sh\necho 'Backup failed' >&2\nexit 7\n")
     subprocess.run(["git", "-C", str(upstream), "add", "install.sh"], check=True)
     subprocess.run(
         ["git", "-C", str(upstream), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -221,6 +228,7 @@ def test_upgrade_backup_failure_leaves_checkout_and_env_unchanged(tmp_path: Path
     result = _run(UPGRADE, install, os.environ.copy())
     assert result.returncode != 0
     assert "Backup failed" in result.stderr
+    assert "Upgrade failed" in result.stderr
     assert subprocess.check_output(["git", "-C", str(install), "rev-parse", "HEAD"], text=True).strip() == old_sha
     assert (install / "install.sh").read_text() == "echo old\n"
     assert (install / ".env").read_text() == "BOSS_API_KEY=keep\n"
@@ -267,7 +275,7 @@ def test_upgrade_bootstraps_backup_helper_from_target_ref(tmp_path: Path) -> Non
 
     result = _run(UPGRADE, install, os.environ.copy())
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Private recovery backup: /tmp/fetched-backup" in result.stdout
+    assert "Upgrade complete:" in result.stdout
     assert (install / "upgrade-ran").exists()
     assert (install / ".env").read_text() == "BOSS_API_KEY=keep\n"
     piped = subprocess.run(
@@ -452,3 +460,98 @@ def test_remote_successful_update_migrates_legacy_worker_key(tmp_path: Path) -> 
     )
     assert not list(install.glob(".env.worker-next.*"))
     assert not tmp_path.joinpath("remote-boss.prev").exists()
+
+
+def test_connect_claude_import_cannot_run(tmp_path: Path) -> None:
+    log = tmp_path / "docker.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\nexit 0\n")
+    docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    result = subprocess.run(
+        ["bash", str(INSTALLER), "--connect-claude", "--yes", "--dir", str(tmp_path / "boss")],
+        env=env, text=True, capture_output=True, timeout=15, check=False,
+    )
+    assert result.returncode != 0
+    assert "disabled" in result.stderr
+    assert "clearance" in result.stderr
+    assert not log.exists()
+    assert not (tmp_path / "boss").exists()
+
+
+def test_backup_output_excludes_cli_session_material(tmp_path: Path) -> None:
+    token = "sk-ant-oat01-session-token-material-not-for-backup"
+    codex = '{"tokens":{"access_token":"codex-session-secret-material-0123456789"}}'
+    install = tmp_path / "boss"
+    (install / "scripts/install").mkdir(parents=True)
+    (install / "scripts/install/community-compose.yml").write_text(
+        "name: boss-lifecycle-test\nservices: {}\n"
+    )
+    env_file = install / ".env"
+    env_file.write_text(
+        "BOSS_API_KEY=keep-api-key\n"
+        "BOSS_DB_PASSWORD=keep-db\n"
+        "BOSS_CONSOLE_SESSION_SECRET=keep-console-session\n"
+        f"CLAUDE_CODE_OAUTH_TOKEN={token}\n"
+        f"CODEX_AUTH_JSON={codex}\n"
+    )
+    (install / ".boss-shipped-commit").write_text("fixture-commit\n")
+    log = tmp_path / "docker.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "args = sys.argv[1:]\n"
+        "if args[:1] == ['info']:\n"
+        "    raise SystemExit(0)\n"
+        "if 'image' in args and 'inspect' in args:\n"
+        "    raise SystemExit(0)\n"
+        "if 'config' in args:\n"
+        "    print('{\"services\":{\"api\":{\"image\":\"boss-community-api:local\"}}}')\n"
+        "    raise SystemExit(0)\n"
+        "if 'ps' in args and '--status' in args:\n"
+        "    print('db')\n"
+        "    raise SystemExit(0)\n"
+        "if 'ps' in args and '--all' in args:\n"
+        "    print('db')\n"
+        "    raise SystemExit(0)\n"
+        "if 'pg_isready' in args:\n"
+        "    raise SystemExit(0)\n"
+        "if 'pg_dump' in args:\n"
+        f"    sys.stdout.write('DUMP-HEADER\\n' + {token!r} + '\\n' + {codex!r} + '\\nDUMP-FOOTER\\n')\n"
+        "    raise SystemExit(0)\n"
+        "if 'psql' in args:\n"
+        "    raise SystemExit(0)\n"
+        "if 'tar' in args:\n"
+        f"    sys.stdout.buffer.write(b'ART\\n' + {token!r}.encode() + b'\\n' + {codex!r}.encode())\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(0)\n"
+    )
+    docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    backup_root = tmp_path / "backups"
+    result = _run(REPO / "scripts/install/backup.sh", install, env, "--backup-dir", str(backup_root))
+    assert result.returncode == 0, result.stderr
+    backup = Path(result.stdout.strip())
+    archived = b"".join(path.read_bytes() for path in backup.rglob("*") if path.is_file())
+    assert token.encode() not in archived
+    assert b"codex-session-secret-material-0123456789" not in archived
+    copied = (backup / ".env").read_text()
+    assert "BOSS_API_KEY=keep-api-key" in copied
+    assert "BOSS_CONSOLE_SESSION_SECRET=keep-console-session" in copied
+    assert "CLAUDE_CODE_OAUTH_TOKEN=" in copied.splitlines()
+    assert "CODEX_AUTH_JSON=" in copied.splitlines()
+    assert "DUMP-HEADER" in (backup / "boss.dump").read_text()
+    assert b"ART\n" in (backup / "artifacts.tar").read_bytes()
+    assert token in env_file.read_text()
+    calls = log.read_text()
+    assert "/var/lib/boss/artifacts" in calls
+    assert "/home/boss/.claude" not in calls
+    assert (backup / ".env").stat().st_mode & 0o077 == 0
