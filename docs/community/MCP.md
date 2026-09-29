@@ -234,8 +234,8 @@ The 28 held Community and two paid-only actions return
 `operator_only_unavailable`. They include direct host/provider effects without
 a governed ChangeSet/receipt path, host key material, global or ID-only routes
 without a sound project boundary, and routes lacking API-side actor checks.
-See the [operator boundary audit](../operations/BOSS-429_MCP_OPERATOR_BOUNDARY_AUDIT.md)
-for per-operation disposition.
+See the [operation matrix](mcp-api-capability-matrix.json) for each mounted
+operation's current disposition.
 
 The 67 excluded Community routes are internal worker and lease protocols,
 webhook and identity callbacks, preview reverse proxies, the bootstrap seed,
