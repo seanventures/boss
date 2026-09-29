@@ -2,11 +2,13 @@
 
 **Target:** `seanventures/boss` (created empty and private on 2026-09-24).
 **Source:** private `seanheiney/boss` monorepo.
-**Status (2026-09-28):** current source
+**Status (2026-09-29):** the last fully qualified source
 `0db60f6c8318c37cf846409363c1755f81f99bda` produced a 1,880-file
 candidate with zero mechanical blockers. Its pristine Ubuntu 24.04 x86_64 VM
 and unpublished one-root history passed technical review. A separate pristine
 guest passed the exact installer through stdin with local file transport.
+Later changes are being reconciled in [draft PR #280](https://github.com/seanheiney/boss/pull/280);
+its source and export have not completed a new clean-VM qualification.
 The public HTTPS path remains untested while the target is private and empty.
 No code has been pushed to the target. The public flip is blocked by the
 [release checklist](PUBLIC_FLIP_CHECKLIST.md).
@@ -86,7 +88,7 @@ install and runtime lifecycle; the
 records the Grok image gap that was repaired after this source. These results
 do not qualify any later source commit.
 
-The current `0db60f6c` export selected 1,880 files with zero mechanical
+The last fully qualified `0db60f6c` export selected 1,880 files with zero mechanical
 blockers. Its local unpublished new-root commit is
 `af200616ce793cb169c4fcfb15adf3f7abf508bb` (tree
 `2c69a0c2e10aa8bf2685ac124386c5e3ff738a65`), with one reachable
