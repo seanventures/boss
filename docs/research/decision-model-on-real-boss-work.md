@@ -2,6 +2,8 @@
 
 *28 September 2026 · run on goldeneye (`boss-dogfood`) against BOSS's own history · Jev key saved through the console*
 
+**Current release status:** This records a historical experiment, not an available Community workflow feature. Typed decision model calls are paused under BOSS-451 until each provider attempt has a durable budget reservation, lease, deduplicated receipt, and cost settlement. The experiment's measured agreement is not a safety or production qualification.
+
 ## The short version
 
 We gave BOSS two real questions it faces every day and let three answerers decide them for 67 real cases from goldeneye's own history:
