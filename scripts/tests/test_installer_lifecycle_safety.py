@@ -260,9 +260,22 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
     assert "selected secret store cannot be provisioned" in rerun.stderr
 
 
+def _private_host_denylist() -> tuple[str, ...]:
+    """Private CI loads the unexported denylist. A Community tree has no list and skips it."""
+    path = ROOT / "scripts" / "private" / "public_export_host_denylist.txt"
+    if not path.is_file():
+        return ()
+    hosts: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        host = line.split("#", 1)[0].strip()
+        if host:
+            hosts.append(host)
+    return tuple(hosts)
+
+
 def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
-    """A stranger's install must not call Sean's network or a private registry."""
-    forbidden = ("sean.network", "tail95d980", "local.sean", "OPS_TOKEN")
+    """A stranger's install must not call a private network or registry."""
+    forbidden = (*_private_host_denylist(), "OPS_TOKEN")
     private_registry = re.compile(r"[\w.-]+\.ts\.net(?::\d+)?", re.IGNORECASE)
     paths = [ROOT / "install.sh", *sorted((ROOT / "scripts/install").rglob("*"))]
     offenders: list[str] = []
