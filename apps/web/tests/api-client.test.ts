@@ -2358,7 +2358,7 @@ describe("createBossApiClient", () => {
     });
 
     expect(calls[0].url).toBe(
-      "http://127.0.0.1:8000/v1/self-improvement/proposals?project_id=boss-dogfood&limit=25",
+      "http://127.0.0.1:8000/v1/self-improvement/proposals?project_id=boss-dogfood&limit=25&offset=0",
     );
     expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/self-improvement/proposals");
     expect(calls[2].url).toContain("/v1/self-improvement/proposals/imp_1/canary");
@@ -3138,7 +3138,7 @@ describe("createBossApiClient", () => {
     });
 
     expect(calls[0].url).toBe(
-      "http://127.0.0.1:8000/v1/change-journal?project_id=boss-dogfood&limit=3",
+      "http://127.0.0.1:8000/v1/change-journal?project_id=boss-dogfood&limit=3&offset=0",
     );
     expect(calls[1].url).toBe(
       "http://127.0.0.1:8000/v1/change-journal/art_diff?project_id=boss-dogfood",
