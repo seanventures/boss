@@ -221,7 +221,13 @@ class SecondOpinionDecider:
             latency_ms=first.latency_ms + second.latency_ms,
             cost_usd_micros=(first.cost_usd_micros or 0) + (second.cost_usd_micros or 0),
             usage={"fast": first.usage, "careful": second.usage,
-                   "escalated": [q.key for q in unsure]},
+                   "escalated": [q.key for q in unsure],
+                   # WHAT THE FAST BACKEND SAID BEFORE IT WAS OVERRULED. Keeping only the final
+                   # answer made "how often is Jev right on its own?" unanswerable, and an
+                   # operator auditing a decision wants both opinions, not the winner.
+                   "first_opinion": {q.key: {"answer": first.decisions[q.key].answer,
+                                             "confidence": first.decisions[q.key].confidence}
+                                     for q in unsure}},
         )
 
 
@@ -347,6 +353,9 @@ def _step_output(spec: dict, batch: DecisionBatch) -> dict:
         "reason": d.reason,
         "backend": batch.backend, "model": batch.model,
         "latency_ms": batch.latency_ms, "cost_usd_micros": batch.cost_usd_micros,
+        # Present only when a second opinion overruled or confirmed an unsure first answer.
+        **({"first_opinion": batch.usage["first_opinion"]["decision"]}
+           if "decision" in (batch.usage.get("first_opinion") or {}) else {}),
     }
 
 
