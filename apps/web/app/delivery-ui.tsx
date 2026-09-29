@@ -25,6 +25,7 @@ import { getDeliveryPipelineAction } from "./actions";
 import {
   FleetPanel, OnboardWizard, SecretsPanel, TargetControls, type SecretsView,
 } from "./delivery-manage";
+import { HardwareManagerLink } from "./hardware-manager-ui";
 import { DeployWizard, RecentDeployments } from "./deploy-ui";
 
 type Stage = {
@@ -598,6 +599,9 @@ export function DeliveryPipeline({ initial, secrets, deployments,
             org or a new BOSS instance is) the wizard we built for onboarding a VM could not
             be reached at all. An empty state must contain the thing that ends the empty
             state. */}
+        <div className="hw-hosts-link">
+          <HardwareManagerLink />
+        </div>
         <FleetPanel projectId={data.project_id} targets={(data.targets || []) as any} />
 
         <details className="dm-advanced">
@@ -621,6 +625,9 @@ export function DeliveryPipeline({ initial, secrets, deployments,
           add an app, or look at what happened. Seven stacked panels made that impossible to
           see: two overlapping onboarding wizards, a raw credential table, and a manual deploy
           form all competed with the two things anyone actually needs. */}
+      <div className="hw-hosts-link">
+        <HardwareManagerLink />
+      </div>
       <FleetPanel projectId={data.project_id} targets={(data.targets || []) as any} />
 
       {/* ---- targets: one card per app, the console's card ---- */}

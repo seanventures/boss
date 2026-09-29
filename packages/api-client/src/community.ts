@@ -5049,6 +5049,55 @@ export type A2AListResponse = {
   items: Array<Record<string, unknown>>;
 };
 
+export type HardwareAgentState = "installed" | "absent";
+
+export type HardwarePlace = {
+  id: string;
+  kind: string;
+  name: string;
+  hostname?: string | null;
+  arch?: string | null;
+  os?: string | null;
+  provider?: string | null;
+  secret_ref?: string | null;
+  /** Present on every place, including the computer where BOSS was installed. */
+  agent_state?: HardwareAgentState | null;
+};
+
+export type HardwarePlacesResponse = {
+  places: HardwarePlace[];
+  default_place_id: string | null;
+};
+
+export type HardwareLocalPlaceRequest = {
+  project_id: string;
+  actor: string;
+  hostname: string;
+  arch: string;
+  os: string;
+};
+
+export type HardwareAgentEnrollRequest = {
+  project_id: string;
+  actor: string;
+  name: string;
+};
+
+/** `enroll_command` is the live API name. `command` is accepted from older callers. */
+export type HardwareAgentEnrollResponse = {
+  command?: string;
+  enroll_command?: string;
+  place?: HardwarePlace;
+};
+
+export type HardwareProviderPlaceRequest = {
+  project_id: string;
+  actor: string;
+  name: string;
+  provider: string;
+  secret_ref: string;
+};
+
 export class BossApiError extends Error {
   status: number;
   body?: unknown;
@@ -8192,6 +8241,34 @@ export function createBossApiClient(config: BossApiClientConfig) {
         `/v1/deadletters/${deadletterId}/retry`,
         { body: payload },
       );
-    }
+    },
+    listHardwarePlaces(projectId: string) {
+      return request<HardwarePlacesResponse>("GET", "/v1/hardware/places", {
+        query: { project_id: projectId },
+      });
+    },
+    registerLocalHardwarePlace(payload: HardwareLocalPlaceRequest) {
+      return request<HardwarePlace>("POST", "/v1/hardware/places/local", {
+        body: payload,
+      });
+    },
+    enrollHardwareAgent(payload: HardwareAgentEnrollRequest) {
+      return request<HardwareAgentEnrollResponse>(
+        "POST",
+        "/v1/hardware/places/agents",
+        { body: payload },
+      );
+    },
+    registerHardwareProvider(payload: HardwareProviderPlaceRequest) {
+      return request<HardwarePlace>("POST", "/v1/hardware/places/providers", {
+        body: payload,
+      });
+    },
+    /** Local place when `placeId` is omitted. */
+    resolveHardwarePlace(projectId: string, placeId?: string) {
+      return request<HardwarePlace>("GET", "/v1/hardware/resolve", {
+        query: { project_id: projectId, place_id: placeId },
+      });
+    },
   };
 }

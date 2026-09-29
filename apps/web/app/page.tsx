@@ -170,6 +170,7 @@ import { OrgChartArea, WorkforceArea } from "./workforce-ui";
 import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
+import { HardwareManager } from "./hardware-manager-ui";
 import { MonitoringArea } from "./monitoring-ui";
 import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction,
          listDeploymentsAction } from "./actions";
@@ -7034,6 +7035,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <DeploymentManagerPanel projectId={activeProjectId} />
+        </section>
+        ) : null}
+
+        {shows("delivery") ? (
+        <section className="panel-stack" id="hardware-manager" data-area="delivery" aria-label="Where apps install">
+          <HardwareManager projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 

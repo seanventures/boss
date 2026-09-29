@@ -215,7 +215,7 @@
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",
     "destination": "apps/web/app/page.tsx",
-    "sha256": "fed01a48dd885381340b1e78d061b1afc1722e4ffca3a49f817b2f3fbd1e40c5"
+    "sha256": "04a394cf61c39740c569b20a50b912edf9becdab25558dcba7691cc39c9aff60"
   },
   "readme_export_rewrite": {
     "source": "README.community.md",

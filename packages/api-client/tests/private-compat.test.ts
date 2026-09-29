@@ -48,7 +48,7 @@ describe("Community API client boundary", () => {
   it("preserves the private package's paid routes and request contract", async () => {
     const { requests, config } = clientFixture();
     const client = createPrivateClient(config);
-    expect(Object.keys(client)).toHaveLength(393);
+    expect(Object.keys(client)).toHaveLength(398);
     await client.linkAccountConnect({ project_id: "p1", hosted_org_id: "h1" });
     await client.getCloudCatalog("p1");
     await client.listEnterpriseClusters("p1");
