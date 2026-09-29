@@ -78,6 +78,42 @@ def test_paid_setup_retains_live_probe_before_storage(client, engine, monkeypatc
     assert metadata["verification_state"] == "verified"
 
 
+@pytest.mark.parametrize(("provider", "model"), [
+    ("gemini", "gemini-3.8-flash"), ("xai", "grok-4.7"),
+])
+def test_community_provider_key_model_and_endpoint_are_saved_together(
+    client, engine, monkeypatch, provider, model,
+):
+    monkeypatch.setattr(api_main.settings, "boss_edition", "community")
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", "ceo-key")
+    monkeypatch.setattr(api_main.settings, "api_key_principals", "ceo-key:ceo")
+    monkeypatch.setattr(secret_backends, "default_secret_backend", lambda _settings: "database")
+    monkeypatch.setattr(
+        setup_service, "verify_model_key",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected live model call")),
+    )
+    response = client.post(
+        "/v1/setup/model", headers={"Authorization": "Bearer ceo-key"},
+        json={"project_id": "boss-dogfood", "actor": "ceo", "provider": provider,
+              "api_key": "test-provider-key", "model": model},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["verification_state"] == "unverified"
+    assert "test-provider-key" not in response.text
+    with engine.begin() as connection:
+        saved = connection.execute(text(
+            "SELECT e.supported_models, e.connection_metadata, s.provider "
+            "FROM entitlement_sources e JOIN secret_refs s "
+            "ON s.id=e.credential_secret_ref_id "
+            "WHERE e.project_id='boss-dogfood' AND e.source_id=:source"
+        ), {"source": f"setup-{provider}"}).mappings().one()
+    assert saved["provider"] == provider
+    assert saved["supported_models"] == [model]
+    assert saved["connection_metadata"]["base_url"] == setup_service.PROVIDERS[provider]["base_url"]
+
+
 def test_community_setup_status_marks_environment_key_unverified_without_network(
     client, monkeypatch,
 ):

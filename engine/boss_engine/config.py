@@ -233,10 +233,11 @@ class Settings(BaseSettings):
         if pair:
             key_field, url_field = pair
             key, url = getattr(self, key_field, None), getattr(self, url_field, None)
-            if key:
-                self.openai_api_key = key
-            if url:
-                self.openai_base_url = url
+            # A missing key for the selected lane must fail visibly. Retaining
+            # OPENAI_API_KEY would bill a different provider while the lock says
+            # Gemini, xAI, or another direct endpoint answered.
+            self.openai_api_key = key or None
+            self.openai_base_url = url or None
             # A lock onto a lane whose Azure credentials are also present would silently
             # dispatch to Azure inside OpenAIAdapter, which takes precedence.
             self.azure_openai_key = None

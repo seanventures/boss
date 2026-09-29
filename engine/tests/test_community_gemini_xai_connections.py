@@ -119,6 +119,19 @@ def test_custom_compatible_source_drives_native_with_its_own_key(entitlement_tab
     assert bound.openai_base_url == "http://model.local:1234/v1"
 
 
+@pytest.mark.parametrize(("lane", "key_alias"), [
+    ("gemini", "GOOGLE_API_KEY"), ("xai", "XAI_API_KEY"),
+])
+def test_provider_lock_cannot_fall_back_to_a_different_key(lane, key_alias):
+    missing = Settings(_env_file=None, BOSS_PROVIDER_LOCK=lane,
+                       OPENAI_API_KEY="another-provider-key", **{key_alias: ""})
+    assert not missing.openai_api_key
+    present = Settings(_env_file=None, BOSS_PROVIDER_LOCK=lane,
+                       OPENAI_API_KEY="another-provider-key",
+                       **{key_alias: f"{lane}-key"})
+    assert present.openai_api_key == f"{lane}-key"
+
+
 @pytest.mark.parametrize(("source_id", "lane"), [
     ("setup-gemini", "gemini"), ("setup-xai", "xai"),
 ])
