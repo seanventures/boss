@@ -19,6 +19,7 @@ def _harness(tmp_path: Path, *, secret_store: str = "database") -> tuple[Path, d
     for name in (
         "community-compose.yml", "restore_preserved_env.sh",
         "reconcile_api_credentials.py", "gen_infisical_keys.sh",
+        "node_agent.sh",
     ):
         shutil.copy2(REPO / "scripts/install" / name, helpers / name)
     (helpers / "bootstrap_infisical.sh").write_text("#!/bin/sh\nexit 0\n")

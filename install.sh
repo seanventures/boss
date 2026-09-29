@@ -927,6 +927,11 @@ else
   ui_warn "Providers probe HTTP $PROV_CODE"
 fi
 
+# hardware-agent: install the one node agent on this computer, the default place.
+BOSS_AGENT_CONFIG="$INSTALL_DIR/.boss/node-agent.env" \
+BOSS_PROJECT_ID="${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" \
+  bash "$INSTALL_DIR/scripts/install/node_agent.sh" --local
+
 # ---- success card ----------------------------------------------------------
 echo ""
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"

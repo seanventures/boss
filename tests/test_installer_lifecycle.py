@@ -292,6 +292,7 @@ def test_installer_rerun_preserves_existing_credentials(tmp_path: Path) -> None:
     for filename in (
         "community-compose.yml", "restore_preserved_env.sh",
         "reconcile_api_credentials.py", "gen_infisical_keys.sh",
+        "node_agent.sh",
     ):
         source = REPO / "scripts/install" / filename
         target = upstream / "scripts/install" / filename

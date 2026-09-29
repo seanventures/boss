@@ -6293,3 +6293,60 @@ CREATE INDEX IF NOT EXISTS idx_agent_wakeups_due
   ON agent_wakeups (next_wake_at) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_agent_wakeups_thread
   ON agent_wakeups (project_id, thread_id);
+
+-- Places an app can be installed. The default is always the computer where the
+-- community installer ran (`kind = local`). The same node agent installs there
+-- and on extra machines. Extra places are never the default. `agent_state` stays
+-- `absent` until that agent install finishes, then `installed`. Inserting a row
+-- does not open a socket or an SSH session. `secret_ref` is a reference only.
+-- Enroll tokens are not stored; only `hardware_agent_enroll_tokens.token_hash`.
+CREATE TABLE IF NOT EXISTS hardware_places (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  provider_key TEXT,
+  status TEXT NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  agent_state TEXT NOT NULL DEFAULT 'absent',
+  endpoint TEXT,
+  hostname TEXT,
+  arch TEXT,
+  os_name TEXT,
+  dependency_report JSONB NOT NULL DEFAULT '{}'::jsonb,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret_ref TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT hardware_places_kind CHECK (kind IN ('local', 'agent', 'provider')),
+  CONSTRAINT hardware_places_status CHECK (status IN ('ready', 'pending', 'retired')),
+  CONSTRAINT hardware_places_agent_state CHECK (agent_state IN ('absent', 'installed')),
+  CONSTRAINT hardware_places_provider_key_value CHECK (
+    provider_key IS NULL OR provider_key IN ('aws', 'digitalocean', 'generic')
+  ),
+  CONSTRAINT hardware_places_provider_key CHECK (
+    (kind = 'provider') = (provider_key IS NOT NULL)
+  ),
+  CONSTRAINT hardware_places_local_is_default CHECK ((kind = 'local') = is_default),
+  CONSTRAINT hardware_places_local_stays CHECK (kind <> 'local' OR status <> 'retired'),
+  CONSTRAINT hardware_places_secret_ref CHECK (
+    (kind = 'provider') = (secret_ref IS NOT NULL)
+  )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hardware_places_one_local
+  ON hardware_places (project_id) WHERE kind = 'local';
+CREATE INDEX IF NOT EXISTS idx_hardware_places_project
+  ON hardware_places (project_id, kind, status);
+
+CREATE TABLE IF NOT EXISTS hardware_agent_enroll_tokens (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  place_id TEXT NOT NULL REFERENCES hardware_places(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  consumed_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hardware_agent_enroll_tokens_place
+  ON hardware_agent_enroll_tokens (place_id, consumed_at);
