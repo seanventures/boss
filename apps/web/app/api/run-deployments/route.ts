@@ -31,11 +31,58 @@ const MAX_IDS = 60;
 // One page can ask about sixty runs, and several page chunks can arrive together. Letting
 // each chunk open sixty API requests at once can saturate the API's database connection pool.
 const MAX_CONCURRENT_LOOKUPS = 4;
+// Shared by every invocation of this route in one web process. The per-request cap alone still
+// opened 36 API reads when nine browser batches arrived in the same second.
+const MAX_PROCESS_LOOKUPS = 8;
 const LOOKUP_TIMEOUT_MS = 3_000;
 const BATCH_BUDGET_MS = 12_000;
 
 type RunResult = { error: string } | Record<string, unknown>;
 type RunEntry = readonly [string, RunResult];
+type SlotWaiter = {
+  deadline: number;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (release: (() => void) | null) => void;
+};
+
+let activeProcessLookups = 0;
+const slotWaiters: SlotWaiter[] = [];
+
+function releaseProcessSlot(): void {
+  activeProcessLookups -= 1;
+  while (slotWaiters.length > 0) {
+    const waiter = slotWaiters.shift()!;
+    clearTimeout(waiter.timer);
+    if (Date.now() >= waiter.deadline) {
+      waiter.resolve(null);
+      continue;
+    }
+    activeProcessLookups += 1;
+    waiter.resolve(releaseProcessSlot);
+    return;
+  }
+}
+
+function acquireProcessSlot(deadline: number): Promise<(() => void) | null> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) return Promise.resolve(null);
+  if (activeProcessLookups < MAX_PROCESS_LOOKUPS) {
+    activeProcessLookups += 1;
+    return Promise.resolve(releaseProcessSlot);
+  }
+  return new Promise((resolve) => {
+    const waiter: SlotWaiter = {
+      deadline,
+      timer: setTimeout(() => {
+        const index = slotWaiters.indexOf(waiter);
+        if (index >= 0) slotWaiters.splice(index, 1);
+        resolve(null);
+      }, remainingMs),
+      resolve,
+    };
+    slotWaiters.push(waiter);
+  });
+}
 
 async function lookupDeployment(
   id: string, name: string, remainingMs: number,
@@ -109,10 +156,18 @@ export async function GET(req: Request) {
   let next = 0;
   async function worker() {
     while (next < ids.length) {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) return;
+      if (Date.now() >= deadline) return;
       const index = next++;
-      results[index] = await lookupDeployment(ids[index], names[index], remainingMs);
+      const release = await acquireProcessSlot(deadline);
+      if (!release) return;
+      try {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) {
+          results[index] = await lookupDeployment(ids[index], names[index], remainingMs);
+        }
+      } finally {
+        release();
+      }
     }
   }
   await Promise.all(Array.from(

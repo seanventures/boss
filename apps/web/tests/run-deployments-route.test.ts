@@ -20,6 +20,52 @@ function request(ids: string[], names: string[] = []): Request {
 }
 
 describe("deployment lookup batch route", () => {
+  it("caps upstream reads across nine simultaneous route requests", async () => {
+    let active = 0;
+    let peak = 0;
+    const fetchMock = vi.fn(async (input: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return Response.json({ deployments: [], linked_host: input });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const responses = await Promise.all(Array.from({ length: 9 }, (_, batch) =>
+      GET(request(Array.from({ length: 4 }, (_, i) => `run-${batch}-${i}`))),
+    ));
+    expect(fetchMock).toHaveBeenCalledTimes(36);
+    expect(peak).toBe(8);
+    for (const response of responses) {
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(Object.keys(body.runs)).toHaveLength(4);
+      expect(Object.values(body.runs).every((item) =>
+        !(item as { error?: string }).error)).toBe(true);
+    }
+  });
+
+  it("returns partial errors by the deadline when shared slots stay busy", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    const replies = Array.from({ length: 9 }, (_, batch) =>
+      GET(request(Array.from({ length: 4 }, (_, i) => `blocked-${batch}-${i}`))),
+    );
+    await vi.advanceTimersByTimeAsync(12_000);
+    const responses = await Promise.all(replies);
+
+    expect(fetchMock.mock.calls.length).toBeLessThan(36);
+    for (const response of responses) {
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(Object.keys(body.runs)).toHaveLength(4);
+      expect(Object.values(body.runs).every((item) =>
+        Boolean((item as { error?: string }).error))).toBe(true);
+    }
+  });
+
   it("limits in-flight API reads and keeps each app name paired with its run", async () => {
     const pending: Array<() => void> = [];
     const seen: string[] = [];
@@ -42,7 +88,7 @@ describe("deployment lookup batch route", () => {
     const ids = Array.from({ length: 8 }, (_, i) => `run-${i}`);
     const names = ids.map((_, i) => `App ${i}`);
     const reply = GET(request(ids, names));
-    expect(seen).toHaveLength(4);
+    await vi.waitFor(() => expect(seen).toHaveLength(4));
     pending.splice(0, 4).forEach((resolve) => resolve());
     await vi.waitFor(() => expect(seen).toHaveLength(8));
     pending.splice(0).forEach((resolve) => resolve());
