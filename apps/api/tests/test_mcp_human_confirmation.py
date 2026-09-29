@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -280,6 +281,15 @@ def test_confirmed_mcp_decision_records_human_reviewer_as_actor(
     body = {"actor": mcp_member, **extra}
     requested = {"project_id": PROJECT, "operation": alias, "method": "POST",
                  "path": path, "query": {}, "body": body}
+    # The key is still an API key. Omitting MCP headers must not turn it into a human
+    # approval credential for the same route.
+    direct = client.post(path, headers=_headers(mcp_key), json=body)
+    assert direct.status_code == 409, direct.text
+    assert direct.json()["detail"] == "mcp_confirmation_required"
+    with engine.begin() as connection:
+        assert connection.execute(text("""
+            SELECT status FROM decisions WHERE id = :id
+        """), {"id": decision_id}).scalar_one() == initial_status
     proposed = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key),
                            json=requested)
     assert proposed.status_code == 201, proposed.text
@@ -497,6 +507,13 @@ def test_confirmed_mcp_changeset_approval_persists_the_human_actor(
     body = {"actor": mcp_member}
     requested = {"project_id": PROJECT, "operation": alias, "method": "POST",
                  "path": path, "query": {}, "body": body}
+    direct = client.post(path, headers=_headers(mcp_key), json=body)
+    assert direct.status_code == 409, direct.text
+    assert direct.json()["detail"] == "mcp_confirmation_required"
+    with engine.begin() as connection:
+        assert connection.execute(text("""
+            SELECT status FROM changesets WHERE id = :id
+        """), {"id": changeset_id}).scalar_one() == "pending_approval"
     proposal = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key),
                            json=requested)
     assert proposal.status_code == 201, proposal.text
@@ -527,3 +544,207 @@ def test_confirmed_mcp_changeset_approval_persists_the_human_actor(
             ORDER BY created_at DESC LIMIT 1
         """), {"project_id": PROJECT, "id": changeset_id}).scalar_one()
         assert event_actor == "ceo"
+
+
+@pytest.mark.parametrize("principal", ["system", "executive_console"])
+def test_stock_nonhuman_api_keys_cannot_bypass_decision_review(
+    client, engine, monkeypatch, principal,
+):
+    key = f"stock-{uuid4().hex[:10]}"
+    decision_id = f"dec_stock_{uuid4().hex[:10]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:{principal}")
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO decisions (
+                id, project_id, question, recommendation, options,
+                risk_tier, default_action, status
+            ) VALUES (
+                :id, :project_id, 'Stock nonhuman approval test',
+                '{"action":"manual_test"}'::jsonb,
+                '[{"label":"Review","action":"review"}]'::jsonb,
+                1, 'hold', 'pending'
+            )
+        """), {"id": decision_id, "project_id": PROJECT})
+    path = f"/v1/decisions/{decision_id}/reject"
+    direct = client.post(path, headers=_headers(key), json={"actor": principal})
+    assert direct.status_code == 409, direct.text
+    assert direct.json()["detail"] == "mcp_confirmation_required"
+    held = client.post(f"/v1/decisions/{decision_id}/approve",
+                       headers=_headers(key), json={"actor": principal})
+    assert held.status_code == 409, held.text
+    assert held.json()["detail"] == "mcp_operation_held"
+    with engine.begin() as connection:
+        assert connection.execute(text("""
+            SELECT status FROM decisions WHERE id = :id
+        """), {"id": decision_id}).scalar_one() == "pending"
+
+
+def test_human_api_key_still_uses_the_normal_decision_route(client, engine, monkeypatch):
+    key = f"human-{uuid4().hex[:10]}"
+    decision_id = f"dec_human_{uuid4().hex[:10]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:ceo")
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO decisions (
+                id, project_id, question, recommendation, options,
+                risk_tier, default_action, status
+            ) VALUES (
+                :id, :project_id, 'Human API approval test',
+                '{"action":"manual_test"}'::jsonb,
+                '[{"label":"Review","action":"review"}]'::jsonb,
+                1, 'hold', 'pending'
+            )
+        """), {"id": decision_id, "project_id": PROJECT})
+    response = client.post(f"/v1/decisions/{decision_id}/reject",
+                           headers=_headers(key), json={"actor": "ceo"})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "rejected"
+
+
+@pytest.mark.parametrize("auth_method", ["oidc", "saml"])
+@pytest.mark.parametrize("principal,expected_status", [("system", 409), ("ceo", 200)])
+def test_session_principal_type_controls_direct_decision_approval(
+    client, engine, monkeypatch, auth_method, principal, expected_status,
+):
+    decision_id = f"dec_session_{uuid4().hex[:10]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", "")
+    monkeypatch.setattr(api_main.settings, "api_key_principals", "")
+    if auth_method == "oidc":
+        monkeypatch.setattr(api_main.settings, "oidc_enabled", True)
+        monkeypatch.setattr(
+            api_main.oidc_auth, "verify_bearer_token",
+            lambda _token: SimpleNamespace(member_id=principal),
+        )
+    else:
+        monkeypatch.setattr(api_main.settings, "enterprise_saml_enabled", True)
+        monkeypatch.setattr(
+            api_main.saml_sessions, "authenticate_token",
+            lambda _connection, _token: {"member_id": principal},
+        )
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO decisions (
+                id, project_id, question, recommendation, options,
+                risk_tier, default_action, status
+            ) VALUES (
+                :id, :project_id, 'Session principal approval test',
+                '{"action":"manual_test"}'::jsonb,
+                '[{"label":"Review","action":"review"}]'::jsonb,
+                1, 'hold', 'pending'
+            )
+        """), {"id": decision_id, "project_id": PROJECT})
+    response = client.post(f"/v1/decisions/{decision_id}/reject",
+                           headers=_headers("oidc-test-token"),
+                           json={"actor": principal})
+    assert response.status_code == expected_status, response.text
+    if expected_status == 409:
+        assert response.json()["detail"] == "mcp_confirmation_required"
+    with engine.begin() as connection:
+        assert connection.execute(text("""
+            SELECT status FROM decisions WHERE id = :id
+        """), {"id": decision_id}).scalar_one() == (
+            "rejected" if expected_status == 200 else "pending"
+        )
+
+
+@pytest.mark.parametrize("path,service_name", [
+    ("/v1/github/merge-authorizations/mga_missing/authorize", "authorize"),
+    ("/v1/github/resolution-plans/grp_missing/approve", "approve_resolution"),
+])
+def test_github_approval_routes_reject_direct_agent_http_without_review(
+    client, engine, monkeypatch, path, service_name,
+):
+    key = f"mcp-{uuid4().hex[:10]}"
+    principal = f"mcp_github_{uuid4().hex[:10]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:{principal}")
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id=principal,
+            display_name="GitHub MCP caller", member_type="agent",
+            role_keys=[], permissions=["github_manage"], actor="ceo",
+        )
+    service = (api_main.github_merge_authorizations if service_name == "authorize"
+               else api_main.github_code_sync)
+    called = []
+    monkeypatch.setattr(service, service_name, lambda *args, **kwargs: called.append(True))
+    response = client.post(path, headers=_headers(key), json={
+        "project_id": PROJECT, "actor": principal,
+        "review_evidence": {"verdict": "approved", "summary": "Review"},
+    })
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "mcp_confirmation_required"
+    assert called == []
+
+
+@pytest.mark.parametrize("template,path,service_name,missing_error", [
+    (
+        "/v1/github/merge-authorizations/{authorization_id}/authorize",
+        "/v1/github/merge-authorizations/mga_missing/authorize",
+        "authorize", api_main.GitHubMergeAuthorizationNotFoundError,
+    ),
+    (
+        "/v1/github/resolution-plans/{plan_id}/approve",
+        "/v1/github/resolution-plans/grp_missing/approve",
+        "approve_resolution", api_main.GitHubResolutionPlanNotFoundError,
+    ),
+])
+def test_confirmed_github_approval_routes_pass_human_actor_to_domain_service(
+    client, engine, monkeypatch, template, path, service_name, missing_error,
+):
+    suffix = uuid4().hex[:10]
+    mcp_key, human_key = f"mcp-{suffix}", f"human-{suffix}"
+    principal = f"mcp_github_{suffix}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", f"{mcp_key},{human_key}")
+    monkeypatch.setattr(api_main.settings, "api_key_principals",
+                        f"{mcp_key}:{principal},{human_key}:ceo")
+    with engine.begin() as connection:
+        api_main.members.upsert_member(
+            connection, project_id=PROJECT, member_id=principal,
+            display_name="GitHub MCP caller", member_type="agent",
+            role_keys=[], permissions=["github_manage"], actor="ceo",
+        )
+    service = (api_main.github_merge_authorizations if service_name == "authorize"
+               else api_main.github_code_sync)
+    observed_actors = []
+
+    def observe_and_fail(_connection, **kwargs):
+        observed_actors.append(kwargs["actor"])
+        raise missing_error("Missing fixture target")
+
+    monkeypatch.setattr(service, service_name, observe_and_fail)
+    body = {
+        "project_id": PROJECT, "actor": principal,
+        "review_evidence": {"verdict": "approved", "summary": "Independent review"},
+    }
+    alias = operation_alias("POST", template)
+    requested = {
+        "project_id": PROJECT, "operation": alias, "method": "POST",
+        "path": path, "query": {}, "body": body,
+    }
+    proposed = client.post("/v1/mcp-confirmations", headers=_headers(mcp_key),
+                           json=requested)
+    assert proposed.status_code == 201, proposed.text
+    confirmation = proposed.json()
+    approved = client.post(
+        f"/v1/mcp-confirmations/{confirmation['id']}/approve",
+        headers=_headers(human_key), json={
+            "project_id": PROJECT, "reviewed_digest": confirmation["request_digest"],
+            "reviewed_request": requested,
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    effect = client.post(path, headers={
+        **_headers(mcp_key), "X-BOSS-MCP-Operation": alias,
+        "X-BOSS-MCP-Confirmation": confirmation["id"],
+        "X-BOSS-MCP-Project": PROJECT,
+    }, json=body)
+    assert effect.status_code == 404, effect.text
+    assert observed_actors == ["ceo"]

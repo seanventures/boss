@@ -1555,6 +1555,23 @@ def _require_exclusive_mcp_project(connection, *, principal: str, project_id: st
         raise HTTPException(status_code=403, detail="exclusive_mcp_project_required")
 
 
+def _authenticated_principal_is_human(connection, principal: str) -> bool:
+    """Only an active human member may use a sensitive API route without MCP review.
+
+    Authentication is bound to a principal, not to the MCP header. A model can call
+    the same HTTP route directly and omit every MCP header, so the API must classify
+    that principal before dispatch. Mixed human/nonhuman memberships fail closed.
+    """
+    kinds = connection.execute(text("""
+        SELECT member_type FROM project_members
+        WHERE member_id = :principal AND status = 'active'
+        UNION ALL
+        SELECT member_type FROM org_members
+        WHERE member_id = :principal AND status = 'active'
+    """), {"principal": principal}).scalars().all()
+    return bool(kinds) and all(kind == "human" for kind in kinds)
+
+
 @app.middleware("http")
 async def require_transport_auth_for_v1(request: Request, call_next):
     auth_required = (
@@ -1717,8 +1734,20 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         confirmed_project = request.headers.get("X-BOSS-MCP-Project")
         if confirmation_id and not mcp_operation:
             return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_without_operation"})
+        matched = (_matched_mcp_operation(request.method, request.url.path)
+                   if mcp_operation or request.method in {"POST", "PUT", "PATCH", "DELETE"}
+                   else None)
+        if (matched is not None
+                and not mcp_exclusion_reason(request.method, matched[1])
+                and mcp_needs_operator_confirmation(request.method, matched[1])):
+            with begin(engine) as connection:
+                human_principal = _authenticated_principal_is_human(connection, principal)
+            if not human_principal and not mcp_operation:
+                detail = ("mcp_confirmation_required"
+                          if mcp_confirmation_eligible(request.method, matched[1])
+                          else "mcp_operation_held")
+                return JSONResponse(status_code=409, content={"detail": detail})
         if mcp_operation:
-            matched = _matched_mcp_operation(request.method, request.url.path)
             if matched is None or matched[0] != mcp_operation:
                 return JSONResponse(status_code=409, content={"detail": "mcp_operation_mismatch"})
             eligible = mcp_confirmation_eligible(request.method, matched[1])

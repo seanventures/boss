@@ -265,6 +265,10 @@ Seven decision and approval actions now use the exact-request review flow:
 decision reject, revise, delegate, and manual execute; ChangeSet approval;
 GitHub merge authorization; and GitHub conflict-resolution approval. For these
 actions, the MCP member must also hold the route's normal project permission.
+The API applies this boundary to nonhuman authenticated principals even when a
+caller uses direct HTTP and omits MCP headers. Bind the MCP key to an active agent or
+system member, never to a human member or the console's human key. A direct
+call with the MCP key cannot turn its approval permission into human approval.
 The API checks that permission and the reviewing human's active CEO membership
 again when it consumes the confirmation. The domain records the human reviewer
 as the actor, while the confirmation trail retains the MCP requester. The
