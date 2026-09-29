@@ -151,6 +151,40 @@ def test_unreachable_origin_uses_the_local_checkout(tmp_path: Path) -> None:
     assert _git("rev-parse", "HEAD", cwd=install) == head
 
 
+def test_database_start_failure_prints_the_engine_log(tmp_path: Path) -> None:
+    install = tmp_path / "boss"
+    (install / "scripts/install").mkdir(parents=True)
+    for name in ("community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py"):
+        (install / "scripts/install" / name).write_bytes((REPO / "scripts/install" / name).read_bytes())
+    subprocess.run(["git", "init", "-q", "-b", "main", str(install)], check=True)
+    _commit(install, "local only")
+    _git("remote", "add", "origin", str(install), cwd=install)
+    env = _fake_tools(tmp_path)
+    docker = Path(env["PATH"].split(":", 1)[0]) / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  info) exit 0 ;;\n"
+        "  compose)\n"
+        "    for arg in \"$@\"; do\n"
+        "      if [ \"$arg\" = version ]; then echo 'Docker Compose version v2'; exit 0; fi\n"
+        "      if [ \"$arg\" = logs ]; then echo 'initdb: No space left on device'; exit 0; fi\n"
+        "      if [ \"$arg\" = up ]; then echo 'container db is unhealthy' >&2; exit 1; fi\n"
+        "    done\n"
+        "    exit 0 ;;\n"
+        "esac\n"
+        "exit 1\n"
+    )
+    docker.chmod(0o755)
+
+    result = _install(INSTALLER, install, env)
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "No space left on device" in combined
+    assert "virtual disk" in combined
+
+
 def test_empty_directory_copies_the_script_checkout_not_github(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     (tree / "scripts/install").mkdir(parents=True)

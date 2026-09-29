@@ -887,8 +887,15 @@ fi
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
 # shellcheck disable=SC2086
-${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
-  $COMPOSE_PROFILES up -d --no-build db api </dev/null
+if ! ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  $COMPOSE_PROFILES up -d --no-build db api </dev/null; then
+  ui_err "Database or API did not start."
+  ui_info "Recent database and API logs:"
+  # shellcheck disable=SC2086
+  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES logs --tail 40 db api </dev/null || true
+  die "The stack did not start. On Docker Desktop the virtual disk can be full while the host still has free space; the log above names the cause."
+fi
 ui_ok "Database and API started"
 
 # The store has to be PROVISIONED, not merely running. `infisical bootstrap` returns the
@@ -940,9 +947,10 @@ for i in $(seq 1 60); do
 done
 if [[ "$HEALTH_OK" -ne 1 ]]; then
   ui_err "API did not become healthy in time."
-  echo ""
-  echo "Debug:"
-  echo "  ${COMPOSE[*]} -f scripts/install/community-compose.yml --env-file $ENV_FILE logs api --tail 80"
+  ui_info "Recent API and database logs:"
+  # shellcheck disable=SC2086
+  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES logs --tail 40 api db </dev/null || true
   exit 1
 fi
 ui_ok "API healthy at ${API_URL}/health"
