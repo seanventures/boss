@@ -207,6 +207,13 @@ through `workflow_manage`. A task can be soft-archived with `task_create` and
 an audit event; a paused workflow migration can be rolled back only before
 its new steps execute, with `workflow_manage` and an audit event.
 
+Project meeting-role edits require `workflow_manage`; planned team-structure
+and agent-role edits require `role_review`. The API records the authenticated
+member as the actor even if a request body names another actor. Changing or
+applying the gate-autonomy policy requires a human CEO member with
+`decision_resolve`; an MCP agent cannot grant itself this authority. The
+standard MCP member does not receive these management permissions by default.
+
 For the 29 confirmation-gated actions, MCP calls `api_request_confirmation`
 with the exact intended operation, path, query, and body. BOSS stores a digest
 of the complete request, its method and target, and a limited review summary;

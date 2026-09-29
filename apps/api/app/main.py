@@ -1907,6 +1907,36 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
         raise HTTPException(status_code=403, detail=str(error)) from error
 
 
+def require_project_write_actor(
+    connection, project_id: str, claimed_actor: str | None, permission: str,
+) -> str:
+    """Bind a project mutation to the authenticated member and its permission."""
+    actor = str(current_api_principal.get() or claimed_actor or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    require_project_actor(connection, project_id, actor, permission)
+    return actor
+
+
+def require_autonomy_operator(connection, project_id: str, claimed_actor: str | None) -> str:
+    """Only a human CEO may change or apply the policy that resolves gates."""
+    actor = require_project_write_actor(
+        connection, project_id, claimed_actor, "decision_resolve"
+    )
+    try:
+        member = members.require_member(
+            connection, project_id, actor, role_keys_any=["ceo"]
+        )
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        record_policy_denial(project_id, actor, "autonomy_manage", str(error))
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    if member.get("member_type") != "human":
+        reason = "A human CEO member is required to change autonomy policy."
+        record_policy_denial(project_id, actor, "autonomy_manage", reason)
+        raise HTTPException(status_code=403, detail=reason)
+    return actor
+
+
 def require_project_reader(connection, project_id: str) -> None:
     """Limit project-scoped reads to an active member of that project or its org."""
     if not current_transport_authenticated.get():
@@ -5612,34 +5642,57 @@ def upsert_meeting_role_endpoint(payload: open_bodies.MeetingRoleUpsertBody):
         raise HTTPException(status_code=422, detail="project_id, title and lens are required.")
     from .services.meeting_service import upsert_meeting_role
     with begin(engine) as connection:
-        return upsert_meeting_role(
+        actor = require_project_write_actor(
+            connection, project_id, payload.get("actor") or "ceo", "workflow_manage"
+        )
+        role = upsert_meeting_role(
             connection, project_id,
             key=payload.get("key") or title, title=title, lens=lens,
             risk_tier=int(payload.get("risk_tier") or 1),
             is_default=bool(payload.get("is_default")),
             enabled=bool(payload.get("enabled", True)),
         )
+        emit_event(
+            connection, project_id, "meeting_role.upserted", actor,
+            "meeting_role", role["key"], {"title": title},
+        )
+        return role
 
 
 @app.patch("/v1/meeting-roles/{role_key}")
-def toggle_meeting_role_endpoint(role_key: str, project_id: str, enabled: bool):
+def toggle_meeting_role_endpoint(role_key: str, project_id: str, enabled: bool,
+                                 actor: str = "ceo"):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.meeting_service import set_meeting_role_enabled
     with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, actor, "workflow_manage"
+        )
         if not set_meeting_role_enabled(connection, project_id, role_key, enabled):
             raise HTTPException(status_code=404, detail="role not found")
+        emit_event(
+            connection, project_id, "meeting_role.enabled_changed", actor,
+            "meeting_role", role_key, {"enabled": enabled},
+        )
     return {"role_key": role_key, "enabled": enabled}
 
 
 @app.delete("/v1/meeting-roles/{role_key}", status_code=204)
-def delete_meeting_role_endpoint(role_key: str, project_id: str):
+def delete_meeting_role_endpoint(role_key: str, project_id: str, actor: str = "ceo"):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.meeting_service import delete_meeting_role
     with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, actor, "workflow_manage"
+        )
         if not delete_meeting_role(connection, project_id, role_key):
             raise HTTPException(status_code=404, detail="role not found")
+        emit_event(
+            connection, project_id, "meeting_role.deleted", actor,
+            "meeting_role", role_key, {},
+        )
     return Response(status_code=204)
 
 
@@ -12726,13 +12779,16 @@ def put_org_assignment(agent_id: str, payload: open_bodies.OrgAssignmentBody) ->
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, payload.get("actor") or "ceo", "role_review"
+        )
         try:
             return oa.set_one(
                 connection, project_id, agent_id,
                 reports_to=payload.get("reports_to"),
                 display_name=payload.get("display_name"),
                 sort=int(payload.get("sort") or 0),
-                actor=str(payload.get("actor") or "operator"),
+                actor=actor,
             )
         except oa.OrgCycle as error:
             # 409, with the sentence: "X already sits above Y" is actionable; a tree that
@@ -12743,16 +12799,20 @@ def put_org_assignment(agent_id: str, payload: open_bodies.OrgAssignmentBody) ->
 
 
 @app.delete("/v1/console/v2/org/{agent_id}")
-def delete_org_assignment(agent_id: str, project_id: str) -> dict:
+def delete_org_assignment(agent_id: str, project_id: str,
+                          actor: str = "ceo") -> dict:
     """Hand this agent back to the observed chart."""
     from boss_engine.services import org_assignments as oa
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, actor, "role_review"
+        )
         if agent_id == "*":
-            return {"cleared": oa.clear_all(connection, project_id)}
-        oa.clear_one(connection, project_id, agent_id)
+            return {"cleared": oa.clear_all(connection, project_id, actor=actor)}
+        oa.clear_one(connection, project_id, agent_id, actor=actor)
     return {"agent_id": agent_id, "cleared": 1}
 
 
@@ -12819,22 +12879,28 @@ def console_v2_autonomy_set(payload: open_bodies.AutonomySetBody = Body(...)) ->
     from boss_engine.services.autonomy import describe, set_policy
 
     project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "").strip()
     mode = str(payload.get("mode") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
-    if not actor:
-        raise HTTPException(status_code=400, detail="actor is required for an autonomy change")
 
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     try:
         with begin(engine) as connection:
+            actor = require_autonomy_operator(
+                connection, project_id, payload.get("actor")
+            )
             policy = set_policy(
                 connection, project_id,
                 mode=mode, actor=actor,
                 threshold_usd=payload.get("threshold_usd"),
                 max_risk_tier=payload.get("max_risk_tier"),
+            )
+            emit_event(
+                connection, project_id, "autonomy.policy_set", actor,
+                "project", project_id,
+                {"mode": policy.mode, "threshold_usd": policy.threshold_usd,
+                 "max_risk_tier": policy.max_risk_tier},
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -12858,7 +12924,17 @@ def console_v2_autonomy_apply(payload: open_bodies.AutonomyApplyBody = Body(...)
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        return apply_policy(connection, project_id, limit=int(payload.get("limit") or 25))
+        actor = require_autonomy_operator(
+            connection, project_id, payload.get("actor")
+        )
+        result = apply_policy(connection, project_id, limit=int(payload.get("limit") or 25))
+        emit_event(
+            connection, project_id, "autonomy.policy_applied", actor,
+            "project", project_id,
+            {"mode": result["mode"], "approved_count": len(result["approved"]),
+             "declined_count": len(result["declined"])},
+        )
+        return result
 
 
 @app.get("/v1/metrics/delivery")
@@ -13101,6 +13177,9 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, body.project_id, "ceo", "role_review"
+        )
         try:
             role = specpack.register_role(
                 connection, body.project_id, body.role_key,
@@ -13109,6 +13188,11 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        emit_event(
+            connection, body.project_id, "role.registered", actor,
+            "role", body.role_key,
+            {"autonomy_level": role["autonomy_level"]},
+        )
         return role_detail_from_service(role)
 
 

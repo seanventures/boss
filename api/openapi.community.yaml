@@ -2676,6 +2676,13 @@ paths:
         schema:
           type: string
           title: Project Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ceo
+          title: Actor
       responses:
         '204':
           description: Successful Response
@@ -2707,6 +2714,13 @@ paths:
         schema:
           type: boolean
           title: Enabled
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ceo
+          title: Actor
       responses:
         '200':
           description: Successful Response
@@ -9707,6 +9721,13 @@ paths:
         schema:
           type: string
           title: Project Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ceo
+          title: Actor
       responses:
         '200':
           description: Successful Response
@@ -32497,6 +32518,11 @@ components:
           - type: string
           - type: 'null'
           title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
         limit:
           anyOf:
           - type: integer
@@ -48266,6 +48292,11 @@ components:
           - type: string
           - type: 'null'
           title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
         title:
           anyOf:
           - type: string

@@ -508,6 +508,7 @@ class MeetingRoleUpsertBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'title', 'lens']})
 
     project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
     title: SkipValidation[str | None] = None
     lens: SkipValidation[str | None] = None
     key: SkipValidation[str | None] = None
@@ -743,6 +744,7 @@ class AutonomyApplyBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
 
     project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
     limit: SkipValidation[int | None] = None
 
 class ArtifactRebuildBody(OpenRequestBody):
