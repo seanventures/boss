@@ -143,6 +143,8 @@ describe("datetime helpers are hydration-safe", () => {
       "client-forms.tsx",
       "actions.ts",
       "api/debug-api/route.ts",
+      // This server-only route uses deadlines to bound upstream lookups; it renders no UI.
+      "api/run-deployments/route.ts",
       "page.tsx",
       // Community's page is a server component; the count is computed before hydration.
       "page-community.tsx",
