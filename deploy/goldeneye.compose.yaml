@@ -2,6 +2,12 @@ services:
   api:
     image: ${BOSS_API_IMAGE}
     restart: unless-stopped
+    # Goldeneye has a persistent systemd journal. Keep API tracebacks across
+    # Docker container recreation so a short-lived 5xx remains diagnosable.
+    logging:
+      driver: journald
+      options:
+        tag: boss-api
     env_file:
       - ./.env
     environment:

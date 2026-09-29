@@ -17,6 +17,26 @@ Supabase, MinIO, or mail infrastructure.
 - `deploy/goldeneye.compose.yaml`: image-backed compose file for the goldeneye `deploy --compose` CLI.
 - `app.env.tmpl`: env template for goldeneye to fill and operators to review.
 
+## API error logs
+
+The image-backed Goldeneye compose sends API stdout and stderr to the host's
+persistent systemd journal with tag `boss-api`. Docker's previous `json-file`
+limit was 10 MB times three files, and recreating the API container deleted
+its tracebacks. After deploying this compose version, operators can inspect
+errors across API container recreations with:
+
+```sh
+ssh root@goldeneye 'journalctl SYSLOG_IDENTIFIER=boss-api --since "12 hours ago" --no-pager'
+```
+
+Journal retention is controlled by the Goldeneye host, not this compose file.
+Verify available history with `journalctl --disk-usage` and
+`journalctl --list-boots`. Do not post raw application logs to public issues;
+redact credentials, request bodies, and customer data before sharing evidence.
+The existing container must be recreated by a normal reviewed deployment for
+the logging driver change to take effect. This configuration does not itself
+identify the cause of an error or deploy a code fix.
+
 ## Single Command
 
 For a source-tree deployment on goldeneye, after goldeneye fills `app.env`,
