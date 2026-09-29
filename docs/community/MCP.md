@@ -220,6 +220,10 @@ matching request. Existing API permissions, budget, ChangeSet, receipt, and
 route policies still apply. Request, approval, consumption, and HTTP result
 are distinct audit events.
 
+Promotion of a winning improvement trial is among these actions. It creates
+an approval-gated proposal and decision; it does not adopt a new baseline or
+roll out code.
+
 The human can find the pending request with `/ops mcp-confirmations` and
 `/op` on the GET confirmation operation, then approve it with `/op` on the
 POST approve operation, passing `project_id`, `reviewed_digest`, and the
