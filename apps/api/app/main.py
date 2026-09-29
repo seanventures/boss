@@ -1989,9 +1989,14 @@ def require_project_write_actor(
 
 def require_autonomy_operator(connection, project_id: str, claimed_actor: str | None) -> str:
     """Only a human CEO may change or apply the policy that resolves gates."""
-    actor = require_project_write_actor(
-        connection, project_id, claimed_actor, "decision_resolve"
-    )
+    claimed = str(claimed_actor or "").strip()
+    if current_mcp_human_attribution.get():
+        actor = _decision_action_actor(claimed)
+        require_project_actor(connection, project_id, actor, "decision_resolve")
+    else:
+        actor = require_project_write_actor(
+            connection, project_id, claimed_actor, "decision_resolve"
+        )
     try:
         member = members.require_member(
             connection, project_id, actor, role_keys_any=["ceo"]
@@ -2025,6 +2030,44 @@ def require_project_reader(connection, project_id: str) -> None:
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
         record_policy_denial(project_id, principal, "project_read", str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+def _record_governed(connection, **kwargs):
+    """Receipt a local effect. The helper does not call a provider."""
+    from .governed_effect import record_governed_effect
+
+    return record_governed_effect(connection, **kwargs)
+
+
+def _governed_plan(payload) -> list[str] | None:
+    from .governed_effect import governed_steps
+
+    if not isinstance(payload, dict):
+        return None
+    return governed_steps(payload.get("rollback_plan"))
+
+
+def _governed_reservation(payload) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    value = str(payload.get("reservation_id") or "").strip()
+    return value or None
+
+
+def _governed_cost(payload) -> int:
+    if not isinstance(payload, dict) or payload.get("expected_cost_usd_micros") in (None, ""):
+        return 1
+    try:
+        value = int(payload.get("expected_cost_usd_micros"))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be an integer"
+        ) from error
+    if value < 0:
+        raise HTTPException(
+            status_code=422, detail="expected_cost_usd_micros must be non-negative"
+        )
+    return value
 
 
 def require_code_task_reader(connection, run_id: str) -> str:
@@ -3168,7 +3211,13 @@ def _mcp_reviewed_actor(claimed_actor: str) -> str:
 
 
 def _decision_action_actor(claimed_actor: str) -> str:
-    if current_mcp_human_attribution.get():
+    review = current_mcp_human_attribution.get()
+    if review:
+        # Preview approval calls the decision route after the actor is already
+        # the reviewing human. A body that still names the MCP principal is
+        # rewritten to that same human.
+        if claimed_actor == review[1]:
+            return claimed_actor
         return _mcp_reviewed_actor(claimed_actor)
     return current_api_principal.get() or claimed_actor
 
@@ -4107,6 +4156,14 @@ def upsert_enterprise_identity_provider(
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        _record_governed(
+            connection,
+            project_id=payload.project_id,
+            actor=payload.actor,
+            effect_kind="enterprise.identity_provider.upsert",
+            dedupe_parts=[payload.provider_key, provider.get("id") or payload.provider_key],
+            payload={"provider_key": payload.provider_key, "status": payload.status},
+        )
         return enterprise_identity_provider_summary_from_service(provider)
 
 
@@ -4558,6 +4615,23 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .bootstrap import onboard_org
     with begin(engine) as connection:
+        principal = current_api_principal.get()
+        if principal and current_transport_authenticated.get():
+            member = connection.execute(
+                text(
+                    """
+                    SELECT 1 FROM project_members
+                    WHERE member_id = :member_id AND status = 'active'
+                    LIMIT 1
+                    """
+                ),
+                {"member_id": principal},
+            ).first()
+            if not member:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Authenticated principal must already belong to a project.",
+                )
         result = onboard_org(
             connection, settings, name,
             entitlements=entitlements, members=members, specpack=specpack,
@@ -4581,6 +4655,14 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
             priority="p3",
             risk_tier=0,
             data_boundary="internal",
+        )
+        _record_governed(
+            connection,
+            project_id=result["project_id"],
+            actor=principal or "onboarding",
+            effect_kind="org.onboard",
+            dedupe_parts=[result["org_id"]],
+            payload={"name": name, "org_id": result["org_id"]},
         )
     return result
 
@@ -7351,6 +7433,28 @@ def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = 
         require_project_actor(
             connection, run_row["project_id"], actor, "providerops_manage"
         )
+        plan = _governed_plan(p)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=run_row["project_id"],
+                actor=actor,
+                effect_kind="delivery.execute",
+                dedupe_parts=[deployment_run_id, plan],
+                payload={"deployment_run_id": deployment_run_id},
+                rollback_plan=plan,
+                destructive=True,
+                spends=True,
+                reservation_id=_governed_reservation(p),
+                expected_cost_usd_micros=_governed_cost(p),
+                worker=True,
+            )
+            return {
+                "deployment_run_id": deployment_run_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
         blocked = block_ungoverned_connector_execution(
             connection, run_row, settings, actor=actor
         )
@@ -7659,6 +7763,25 @@ def teardown_deployment_target_endpoint(target_id: str, payload: DeploymentTarge
                 status_code=428,
                 detail=(f"confirm must equal the app name {target['app_name']!r} to remove it"
                         f"{' INCLUDING ITS DATA' if payload.get('include_data') else ''}"))
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=target["project_id"],
+                actor=actor,
+                effect_kind="deployment_target.teardown",
+                dedupe_parts=[target_id, plan],
+                payload={"target_id": target_id, "stop_only": bool(payload.get("stop_only"))},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "target_id": target_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
     raise HTTPException(status_code=409, detail=(
         "Direct teardown is disabled. Submit an approved Resource Plane ChangeSet with "
         "a rollback plan, budget reservation, and ResourceReceipt before host removal."
@@ -7691,6 +7814,25 @@ def purge_deployment_target_endpoint(target_id: str, payload: DeploymentTargetPu
                 f"{target['app_name']} is still active. Remove the deployment first (Stop or "
                 f"Destroy), then delete — otherwise the host keeps a container that no target "
                 f"describes."))
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=target["project_id"],
+                actor=actor,
+                effect_kind="deployment_target.purge",
+                dedupe_parts=[target_id, plan],
+                payload={"target_id": target_id},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "target_id": target_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
     raise HTTPException(status_code=409, detail=(
         "Direct purge is disabled. Use an approved flow with a rollback or archive plan "
         "and an audit receipt before deleting deployment history."
@@ -7713,6 +7855,28 @@ def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict]
         require_project_actor(
             connection, row["project_id"], actor, "providerops_manage"
         )
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=row["project_id"],
+                actor=actor,
+                effect_kind="deployment_target.bootstrap",
+                dedupe_parts=[target_id, plan],
+                payload={"target_id": target_id},
+                rollback_plan=plan,
+                destructive=True,
+                spends=True,
+                reservation_id=_governed_reservation(payload),
+                expected_cost_usd_micros=_governed_cost(payload),
+                worker=True,
+            )
+            return {
+                "target_id": target_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
     raise HTTPException(status_code=409, detail=(
         "Direct host bootstrap is disabled. Submit a Resource Plane ChangeSet with "
         "a budget reservation and ResourceReceipt before changing the host."
@@ -8041,6 +8205,35 @@ def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
     for field in ("project_id", "host_target_id"):
         if not payload.get(field):
             raise HTTPException(status_code=422, detail=f"{field} is required")
+    plan = _governed_plan(payload)
+    if plan:
+        actor = str(payload.get("actor") or "").strip()
+        if not actor:
+            raise HTTPException(status_code=422, detail="actor is required")
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload["project_id"], actor, "providerops_manage"
+            )
+            effect = _record_governed(
+                connection,
+                project_id=payload["project_id"],
+                actor=actor,
+                effect_kind="observability.stack.deploy",
+                dedupe_parts=[payload["host_target_id"], plan],
+                payload={"host_target_id": payload["host_target_id"]},
+                rollback_plan=plan,
+                destructive=True,
+                spends=True,
+                reservation_id=_governed_reservation(payload),
+                expected_cost_usd_micros=_governed_cost(payload),
+                worker=True,
+            )
+        return {
+            "status": "recorded",
+            "provider_called": False,
+            "project_id": payload["project_id"],
+            **effect,
+        }
     result = deploy_stack(engine, settings, project_id=payload["project_id"],
                           host_target_id=payload["host_target_id"],
                           ports=payload.get("ports"),
@@ -8449,6 +8642,25 @@ def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] 
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
         require_project_actor(connection, host["project_id"], actor, "task_create")
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=host["project_id"],
+                actor=actor,
+                effect_kind="deployment_host.key",
+                dedupe_parts=[host_id, plan],
+                payload={"host_id": host_id, "provider_called": False},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "host_id": host_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
         try:
             return generate_host_key(
                 connection, settings, host_id=host_id,
@@ -8485,7 +8697,7 @@ def adopt_deployment_host_key_endpoint(host_id: str, payload: DeploymentHostAdop
     private_key = str(payload.get("private_key") or "")
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
-    if not private_key.strip():
+    if not _governed_plan(payload) and not private_key.strip():
         raise HTTPException(status_code=422, detail="private_key is required")
     from boss_engine.services.deployment_fleet import adopt_host_key, get_host
     from boss_engine.services.secret_backends import SecretUnavailable
@@ -8495,6 +8707,25 @@ def adopt_deployment_host_key_endpoint(host_id: str, payload: DeploymentHostAdop
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
         require_project_actor(connection, host["project_id"], actor, "task_create")
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=host["project_id"],
+                actor=actor,
+                effect_kind="deployment_host.adopt_key",
+                dedupe_parts=[host_id, plan],
+                payload={"host_id": host_id, "provider_called": False},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "host_id": host_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
         try:
             return adopt_host_key(
                 connection, settings, host_id=host_id, private_key=private_key,
@@ -8525,6 +8756,25 @@ def install_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] =
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
         require_project_actor(connection, host["project_id"], actor, "providerops_manage")
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=host["project_id"],
+                actor=actor,
+                effect_kind="deployment_host.install_key",
+                dedupe_parts=[host_id, plan],
+                payload={"host_id": host_id},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "host_id": host_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
         try:
             require_direct_host_write_policy(settings)
             return install_generated_key(
@@ -8558,6 +8808,28 @@ def provision_deployment_host_endpoint(host_id: str, payload: Optional[dict] = N
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
         require_project_actor(connection, host["project_id"], actor, "providerops_manage")
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=host["project_id"],
+                actor=actor,
+                effect_kind="deployment_host.provision",
+                dedupe_parts=[host_id, plan],
+                payload={"host_id": host_id},
+                rollback_plan=plan,
+                destructive=True,
+                spends=True,
+                reservation_id=_governed_reservation(payload),
+                expected_cost_usd_micros=_governed_cost(payload),
+                worker=True,
+            )
+            return {
+                "host_id": host_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
         try:
             require_direct_host_write_policy(settings)
             return provision_host(
@@ -8616,6 +8888,25 @@ def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
         if not host:
             raise HTTPException(status_code=404, detail="no such deployment host")
         require_project_actor(connection, host["project_id"], actor, "providerops_manage")
+        plan = _governed_plan(p)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=host["project_id"],
+                actor=actor,
+                effect_kind="deployment_host.retire",
+                dedupe_parts=[host_id, plan],
+                payload={"host_id": host_id},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "host_id": host_id,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
         try:
             require_direct_host_write_policy(settings)
             return retire_host(
@@ -8718,9 +9009,18 @@ def set_auto_deploy_endpoint(target_id: str, payload: AutoDeployBody):
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="no such deployment target")
         row = connection.execute(
-            text("SELECT id, app_name, auto_deploy, paused FROM deployment_targets WHERE id=:i"),
+            text("SELECT id, app_name, auto_deploy, paused, project_id FROM deployment_targets WHERE id=:i"),
             {"i": target_id}).mappings().first()
-    return dict(row)
+        _record_governed(
+            connection,
+            project_id=row["project_id"],
+            actor=actor,
+            effect_kind="deployment_target.auto_deploy",
+            dedupe_parts=[target_id, row["auto_deploy"], row["paused"]],
+            payload={"auto_deploy": row["auto_deploy"], "paused": row["paused"]},
+        )
+    return {"id": row["id"], "app_name": row["app_name"],
+            "auto_deploy": row["auto_deploy"], "paused": row["paused"]}
 
 
 @app.get("/v1/delivery/deployments")
@@ -8913,6 +9213,31 @@ def promote_deployment_endpoint(deployment_run_id: str, payload: DeploymentPromo
                 detail=(f"no active production deployment_target for app "
                         f"{run['app_name']!r} in {run['repo']!r}. Register one, or keep "
                         "deploying to this environment only."))
+
+        plan = _governed_plan(payload)
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=run["project_id"],
+                actor=actor,
+                effect_kind="deployment.promote",
+                dedupe_parts=[deployment_run_id, production["id"], plan],
+                payload={"deployment_run_id": deployment_run_id,
+                         "production_target_id": production["id"]},
+                rollback_plan=plan,
+                destructive=True,
+                spends=True,
+                reservation_id=_governed_reservation(payload),
+                expected_cost_usd_micros=_governed_cost(payload),
+                worker=True,
+            )
+            return {
+                "promoted_from": deployment_run_id,
+                "approved_by": actor,
+                "status": "recorded",
+                "provider_called": False,
+                **effect,
+            }
 
         from boss_engine.services.promotion_orchestrator import PromotionOrchestrator
 
@@ -9219,7 +9544,28 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         require_project_actor(
             connection, run_row["project_id"], actor, "infra_provision"
         )
+        project_id = run_row["project_id"]
     mode = str(p.get("mode", "dry_run")).lower()
+    if mode not in {"dry_run", "ssh"}:
+        raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
+    plan = _governed_plan(p)
+    if mode == "ssh" and plan:
+        with begin(engine) as connection:
+            effect = _record_governed(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                effect_kind="code_task.deploy",
+                dedupe_parts=[run_id, plan],
+                payload={"run_id": run_id, "mode": "ssh"},
+                rollback_plan=plan,
+                destructive=True,
+                spends=True,
+                reservation_id=_governed_reservation(p),
+                expected_cost_usd_micros=_governed_cost(p),
+                worker=True,
+            )
+        return {"status": "recorded", "provider_called": False, "run_id": run_id, **effect}
     from .services.deploy_service import deploy_ssh, plan_ssh_deploy, render_plan_markdown
     try:
         plan = plan_ssh_deploy(
@@ -9888,7 +10234,11 @@ def approve_preview_endpoint(preview_id: str, payload: open_bodies.PreviewApprov
     payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    actor = str(current_api_principal.get() or payload.get("actor") or "").strip()
+    claimed = str(payload.get("actor") or "").strip()
+    if current_mcp_human_attribution.get():
+        actor = _decision_action_actor(claimed)
+    else:
+        actor = str(current_api_principal.get() or claimed).strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
     from boss_engine.services.preview_approval import (
@@ -9923,6 +10273,14 @@ def approve_preview_endpoint(preview_id: str, payload: open_bodies.PreviewApprov
              "decision_id": decision_id,
              "pull_request_url": gate["pull_request_url"],
              "will_deploy": gate["will_deploy"], "note": (gate.get("note") or "")[:500]},
+        )
+        _record_governed(
+            connection,
+            project_id=gate["project_id"],
+            actor=actor,
+            effect_kind="preview.approve",
+            dedupe_parts=[preview_id, decision_id],
+            payload={"decision_id": decision_id, "run_id": gate["run_id"]},
         )
     return {"preview_id": preview_id, "decision_id": decision_id,
             "approved_by": actor, "decision": card,
@@ -10536,6 +10894,17 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
         )
         emit_event(connection, project_id, "discovery.promoted", "operator", "discovery_run", run_id,
                    {"task_id": task_id, "outcome_index": idx})
+        _record_governed(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            effect_kind="discovery.promote",
+            dedupe_parts=[run_id, idx],
+            payload={"task_id": task_id, "meeting_run_id": meeting_run_id},
+            spends=True,
+            reservation_id=reservation_id,
+            expected_cost_usd_micros=settings.plan_budget_usd_micros * 4,
+        )
     return {"status": "convened", "task_id": task_id, "meeting_run_id": meeting_run_id}
 
 
@@ -10804,10 +11173,47 @@ def sandbox_preserve_endpoint(sandbox_id: str, payload: open_bodies.SandboxPrese
 def sandbox_destroy_endpoint(sandbox_id: str):
     actor = current_api_principal.get() or "operator"
     with begin(engine) as connection:
-        require_sandbox_actor(connection, sandbox_id, actor)
-    # Releasing a retained VM discards its rootfs. There is no decision-bound
-    # rollback/receipt path for that effect, so an actor with permission must
-    # still be refused before the host receives a DELETE.
+        project_id = require_sandbox_actor(connection, sandbox_id, actor)
+        stored = connection.execute(
+            text(
+                """
+                SELECT finalize_ctx FROM code_task_runs
+                WHERE finalize_ctx->>'sandbox_task_id' = :sandbox_id
+                  AND project_id = :project_id
+                """
+            ),
+            {"sandbox_id": sandbox_id, "project_id": project_id},
+        ).scalars().all()
+        plan = None
+        for ctx in stored:
+            if isinstance(ctx, str):
+                try:
+                    ctx = json.loads(ctx)
+                except ValueError:
+                    ctx = None
+            plan = _governed_plan(ctx if isinstance(ctx, dict) else None)
+            if plan:
+                break
+        if plan:
+            effect = _record_governed(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                effect_kind="sandbox.delete",
+                dedupe_parts=[sandbox_id, plan],
+                payload={"sandbox_id": sandbox_id, "provider_called": False},
+                rollback_plan=plan,
+                destructive=True,
+                worker=True,
+            )
+            return {
+                "sandbox_id": sandbox_id,
+                "status": "released",
+                "provider_called": False,
+                **effect,
+            }
+    # Releasing a retained VM discards its rootfs. Without a stored rollback
+    # plan there is no host DELETE.
     raise HTTPException(
         status_code=409,
         detail=(
@@ -13042,6 +13448,14 @@ def console_v2_autonomy_set(payload: open_bodies.AutonomySetBody = Body(...)) ->
                 {"mode": policy.mode, "threshold_usd": policy.threshold_usd,
                  "max_risk_tier": policy.max_risk_tier},
             )
+            _record_governed(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                effect_kind="autonomy.policy_set",
+                dedupe_parts=[policy.mode, policy.threshold_usd, policy.max_risk_tier],
+                payload={"mode": policy.mode},
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return describe(policy)
@@ -13073,6 +13487,14 @@ def console_v2_autonomy_apply(payload: open_bodies.AutonomyApplyBody = Body(...)
             "project", project_id,
             {"mode": result["mode"], "approved_count": len(result["approved"]),
              "declined_count": len(result["declined"])},
+        )
+        _record_governed(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            effect_kind="autonomy.policy_applied",
+            dedupe_parts=[result["mode"], len(result["approved"]), len(result["declined"])],
+            payload={"mode": result["mode"]},
         )
         return result
 
@@ -13336,6 +13758,14 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
             connection, body.project_id, "role.registered", actor,
             "role", body.role_key,
             {"autonomy_level": role["autonomy_level"]},
+        )
+        _record_governed(
+            connection,
+            project_id=body.project_id,
+            actor=actor,
+            effect_kind="role.register",
+            dedupe_parts=[body.role_key, role.get("autonomy_level")],
+            payload={"role_key": body.role_key},
         )
         return role_detail_from_service(role)
 
@@ -15149,10 +15579,20 @@ def disconnect_channel(
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "integration_manage")
         try:
-            return disconnect(connection, settings, project_id=project_id,
-                              connection_key=connection_key, actor=actor)
+            result = disconnect(connection, settings, project_id=project_id,
+                                connection_key=connection_key, actor=actor)
         except ChannelOAuthError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        _record_governed(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            effect_kind="channel.disconnect",
+            dedupe_parts=[provider, connection_key],
+            payload={"provider": provider, "connection_key": connection_key,
+                     "status": result.get("status")},
+        )
+        return result
 
 
 @app.post("/v1/role-skills/sync")
@@ -19319,6 +19759,17 @@ def rollback_deployment_rollout(
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        _record_governed(
+            connection,
+            project_id=project_id,
+            actor=payload.actor,
+            effect_kind="deployment_rollout.rollback",
+            dedupe_parts=[deployment_run_id, payload.reason],
+            payload={"deployment_run_id": deployment_run_id},
+            rollback_plan=[payload.reason],
+            destructive=True,
+            worker=True,
+        )
         return DeploymentRolloutSummary(**rollout)
 
 
@@ -20752,9 +21203,9 @@ def approve_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
-        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
-        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
-        payload.actor = current_api_principal.get() or payload.actor
+        # Ordinary keys use their bound principal; exact MCP confirmations use
+        # the independently authenticated human reviewer.
+        payload.actor = _decision_action_actor(payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -20772,6 +21223,14 @@ def approve_decision(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
             raise_decision_actor_error(decision_id, payload.actor, error)
+        _record_governed(
+            connection,
+            project_id=row["project_id"],
+            actor=payload.actor,
+            effect_kind="decision.approve",
+            dedupe_parts=[decision_id],
+            payload={"decision_id": decision_id, "status": row.get("status")},
+        )
         return decision_card_from_row(row)
 
 

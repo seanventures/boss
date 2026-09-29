@@ -177,9 +177,26 @@ def release_preview_sandbox(
             )
             # A cross-project id may never reach the host DELETE path.
             _svc().get(connection, preview_id, project_id=payload.project_id)
-            return _svc().release(
+            released = _svc().release(
                 connection, preview_id, actor=actor.strip()
             )
+            from apps.api.app.governed_effect import record_governed_effect
+
+            record_governed_effect(
+                connection,
+                project_id=payload.project_id,
+                actor=actor.strip(),
+                effect_kind="preview_sandbox.delete",
+                dedupe_parts=[preview_id],
+                payload={"preview_id": preview_id, "status": released.get("status")},
+                rollback_plan=[
+                    "restore the preview sandbox row from this receipt",
+                    "no host rootfs is deleted by this governed record",
+                ],
+                destructive=True,
+                worker=True,
+            )
+            return released
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:

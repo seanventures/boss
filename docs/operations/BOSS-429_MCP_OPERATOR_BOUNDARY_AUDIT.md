@@ -1,6 +1,6 @@
 # BOSS-429 MCP operator boundary audit
 
-Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 986-operation mounted Community surface. The mounted matrix now has 853 API-policy actions, 38 exact-request human-confirmation actions, 28 held actions, and 67 excluded protocols. Two project-local deletions joined the confirmed set after their API actor, permission, event, exact-request digest, and single-use gates passed focused checks. Every historical action's current MCP disposition appears below; the matrix is authoritative for operations added since that snapshot.
+Source: the 77 previously held Community actions at integration commit `c218f77e`, reconciled against the current 993-operation mounted Community surface. The mounted matrix now has 860 API-policy actions, 64 exact-request human-confirmation actions, 2 held actions, and 67 excluded protocols. Product routes that previously stayed held now require exact human confirmation plus the route's actor, project, receipt, and, where the effect spends or destroys, a budget reservation, closed lease, or recorded rollback plan. The two remaining holds are internal infrastructure and are not part of the product release. Every historical action's current MCP disposition appears below; the matrix is authoritative for operations added since that snapshot.
 
 | Operation | Current disposition |
 |---|---|

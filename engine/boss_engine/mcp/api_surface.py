@@ -154,6 +154,31 @@ _CONFIRMABLE_EXACT = frozenset({
     # workflow_manage/role_review and records the authenticated actor.
     ("DELETE", "/v1/meeting-roles/{role_key}"),
     ("DELETE", "/v1/console/v2/org/{agent_id}"),
+    # Community product routes. Each handler still requires an actor, project
+    # scope, and a receipt. Spend, lease, and rollback are enforced there.
+    # Goldeneye routes stay out of this set.
+    ("DELETE", "/v1/channels/{provider}"),
+    ("POST", "/v1/code-tasks/{run_id}/deploy"),
+    ("POST", "/v1/delivery/deployments/{deployment_run_id}/execute"),
+    ("POST", "/v1/deployment-hosts/{host_id}/adopt-key"),
+    ("POST", "/v1/deployment-hosts/{host_id}/install-key"),
+    ("POST", "/v1/deployment-hosts/{host_id}/key"),
+    ("POST", "/v1/deployment-hosts/{host_id}/provision"),
+    ("POST", "/v1/deployment-hosts/{host_id}/retire"),
+    ("POST", "/v1/deployment-runs/{deployment_run_id}/rollout/rollback"),
+    ("POST", "/v1/deployment-targets/{target_id}/auto-deploy"),
+    ("POST", "/v1/deployment-targets/{target_id}/bootstrap"),
+    ("POST", "/v1/deployment-targets/{target_id}/purge"),
+    ("POST", "/v1/deployment-targets/{target_id}/teardown"),
+    ("POST", "/v1/deployments/{deployment_run_id}/promote"),
+    ("POST", "/v1/discoveries/{run_id}/promote"),
+    ("POST", "/v1/enterprise/identity-providers"),
+    ("POST", "/v1/observability/stack/deploy"),
+    ("POST", "/v1/orgs"),
+    ("DELETE", "/v1/preview-sandboxes/{preview_id}"),
+    ("POST", "/v1/roles"),
+    ("DELETE", "/v1/sandboxes/{sandbox_id}"),
+    ("POST", "/v1/worker-autoscaling/apply"),
 })
 _HUMAN_ATTRIBUTED_CONFIRMATIONS = {
     # These handlers persist the actor of a human decision. The API may use the
@@ -162,6 +187,10 @@ _HUMAN_ATTRIBUTED_CONFIRMATIONS = {
     ("POST", "/v1/decisions/{decision_id}/revise"): "decision_resolve",
     ("POST", "/v1/decisions/{decision_id}/delegate"): "decision_resolve",
     ("POST", "/v1/decisions/{decision_id}/execute"): "decision_resolve",
+    ("POST", "/v1/decisions/{decision_id}/approve"): "decision_resolve",
+    ("POST", "/v1/previews/{preview_id}/approve"): "decision_resolve",
+    ("POST", "/v1/console/v2/autonomy"): "decision_resolve",
+    ("POST", "/v1/console/v2/autonomy/apply"): "decision_resolve",
     ("POST", "/v1/changesets/{changeset_id}/approve"): "providerops_manage",
     ("POST", "/v1/github/merge-authorizations/{authorization_id}/authorize"): "github_manage",
     ("POST", "/v1/github/resolution-plans/{plan_id}/approve"): "github_manage",

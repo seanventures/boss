@@ -126,15 +126,12 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
         ("POST", "/v1/changesets/{changeset_id}/approve"),
         ("POST", "/v1/github/merge-authorizations/{authorization_id}/authorize"),
         ("POST", "/v1/github/resolution-plans/{plan_id}/approve"),
-    }:
-        assert rows[key]["mcp_status"] == "human_confirmation_gated"
-    for key in {
         ("POST", "/v1/decisions/{decision_id}/approve"),
         ("POST", "/v1/previews/{preview_id}/approve"),
         ("POST", "/v1/console/v2/autonomy"),
         ("POST", "/v1/console/v2/autonomy/apply"),
     }:
-        assert rows[key]["mcp_status"] == "operator_only_unavailable"
+        assert rows[key]["mcp_status"] == "human_confirmation_gated"
     assert rows[("POST", "/v1/delivery/deploy")]["mcp_status"] == (
         "human_confirmation_gated"
     )
@@ -146,6 +143,6 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
         "api_policy_gated"
     )
     assert sum(row["mcp_status"] == "human_confirmation_gated"
-               for row in community["operations"]) == 38
+               for row in community["operations"]) == 64
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 28
+               for row in community["operations"]) == 2
