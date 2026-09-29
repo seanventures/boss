@@ -9,6 +9,7 @@
 # project, and verifies health. No BOSS Cloud required.
 # =============================================================================
 set -euo pipefail
+umask 077
 
 BOSS_INSTALL_VERSION="1.1.0"
 BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanventures/boss.git}"
@@ -503,8 +504,41 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
   ui_info "Updating existing checkout at $INSTALL_DIR to $BOSS_REPO_REF"
   git -C "$INSTALL_DIR" fetch origin "$BOSS_REPO_REF" </dev/null ||
     die "Could not fetch $BOSS_REPO_REF; existing checkout left unchanged."
+  _installed_commit="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+  _fetched_commit="$(git -C "$INSTALL_DIR" rev-parse FETCH_HEAD)"
+  git -C "$INSTALL_DIR" merge-base --is-ancestor "$_installed_commit" "$_fetched_commit" ||
+    die "The requested ref cannot fast-forward this install; existing checkout left unchanged."
+  if [[ "$_installed_commit" != "$_fetched_commit" && -f "$INSTALL_DIR/.env" ]]; then
+    # A pasted install command is also an upgrade command for an existing checkout.
+    # Snapshot the old database, artifacts and credentials before switching source:
+    # the new API may migrate the database as soon as it starts. upgrade.sh has
+    # already made this snapshot, so reuse it when its source commit matches.
+    _recovery_backup="${BOSS_PREUPGRADE_BACKUP_DIR:-}"
+    if [[ -n "$_recovery_backup" ]]; then
+      [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
+         -s "$_recovery_backup/artifacts.tar" &&
+         "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
+        die "The supplied pre-upgrade backup does not match the installed commit; source left unchanged."
+    else
+      _backup_helper="$(mktemp)"
+      if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
+        rm -f "$_backup_helper"
+        die "The fetched source has no backup helper; existing checkout left unchanged."
+      fi
+      if ! _recovery_backup="$(bash "$_backup_helper" --dir "$INSTALL_DIR" </dev/null)"; then
+        rm -f "$_backup_helper"
+        die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
+      fi
+      rm -f "$_backup_helper"
+    fi
+    [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
+       -s "$_recovery_backup/artifacts.tar" &&
+       "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
+      die "Recovery backup is incomplete or for another source commit; existing checkout left unchanged."
+    ui_ok "Private recovery backup: $_recovery_backup"
+  fi
   git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD </dev/null ||
-    die "Could not fast-forward; existing checkout left unchanged."
+    die "Could not fast-forward; recovery backup: ${_recovery_backup:-not needed}."
 elif [[ -d "$INSTALL_DIR" ]]; then
   [[ -z "$(ls -A "$INSTALL_DIR")" ]] ||
     die "$INSTALL_DIR is not empty and is not a Git checkout. Choose --dir; nothing was removed."

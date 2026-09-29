@@ -42,6 +42,10 @@ On rerun, both API credentials and any operator-added API keys, the database pas
 model keys, secret-store encryption key, console login, public URL, port settings,
 Mission Control choice, and secret-store choice are retained. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
+Pasting the installer line again also backs up an existing running install
+before switching to a newer source revision. If the database is unavailable,
+it leaves source and configuration untouched and tells you to start the
+installed database before retrying. The backup path is printed; keep it private.
 For an older headless install, pass `--no-web` once to record that choice;
 use `--web` to enable it later.
 If you choose Infisical and it cannot be provisioned, the installer reports an

@@ -44,9 +44,9 @@ API key or console password. A rerun keeps existing credentials and data. It
 leaves the operator GitHub owner/repo unbound until you configure them; the
 installer's source repository is not your project repository.
 
-If the installer added your user to the Docker group, sign out of the VM and
-back in before running the `docker compose` commands below. Group membership
-does not change in the current login session.
+The installer does not add your user to the root-equivalent Docker group. If
+Docker requires administrator access, use `sudo docker compose` for manual
+commands; the installer detects that access for its own commands.
 
 Installing coding CLIs does not sign in to subscriptions. A laptop login is
 not available on the VM. Codex and Claude have explicit connect steps after
@@ -105,7 +105,10 @@ cd ~/boss
 ```
 
 The upgrade backs up private configuration, Postgres and artifacts before it
-changes source or containers. It keeps named volumes and login sessions. To
+changes source or containers. Rerunning the one-line installer also makes a
+recovery backup before it fast-forwards an existing checkout. If the existing
+database is stopped or unavailable, the source is left unchanged until a
+backup can complete. Upgrades keep named volumes and login sessions. To
 stop BOSS and retain `.env`, volumes, images, backups and the checkout:
 
 ```bash

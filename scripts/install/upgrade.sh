@@ -73,7 +73,7 @@ printf 'Private recovery backup: %s\n' "$BACKUP"
 # rerun. Execute that version so new installer fixes apply during this upgrade.
 install_args=(--dir "$INSTALL_DIR" --ref "$REF" --yes --skip-model-key)
 [[ -n "$WEB_MODE" ]] && install_args+=("$WEB_MODE")
-if ! bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
+if ! BOSS_PREUPGRADE_BACKUP_DIR="$BACKUP" bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
   echo "Upgrade failed. Recovery backup: $BACKUP" >&2
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2
   exit 1
