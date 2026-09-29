@@ -1,6 +1,6 @@
 # BOSS-451 typed decision model-spend hold
 
-**Plane:** [BOSS-451](https://plane.local.sean.network/goldeneye/projects/cc97d5cc-e8c6-4893-ac14-7f646c37f3d7/issues/621dbb33-c55a-4149-911d-119d6cf75e8e) · **Status:** In Progress · **Release:** BOSS-293 Community GA blocker until governed execution is implemented and qualified.
+**Plane:** [BOSS-451](https://plane.local.sean.network/goldeneye/projects/cc97d5cc-e8c6-4893-ac14-7f646c37f3d7/issues/621dbb33-c55a-4149-911d-119d6cf75e8e) · **Status:** In Progress · **Release:** workflow attempts spend through the existing budget, lease, and receipt path. Key proof and Community/VM qualification are still open.
 
 ## Scope and observed gap
 
@@ -10,14 +10,31 @@ The delivery-workflow worker calls `POST /v1/delivery-workflows/run-capabilities
 
 TypeSafe key setup had a second spend path: `POST /v1/setup/decision-model/key` called Jev to prove the key inside its API transaction, before any reservation or receipt. A failed secret-store write or process crash could erase all evidence of that billed proof.
 
-## Explicit release hold
+## What is in this release
 
-- New workflow versions and new runs containing `binding.typed_decision` fail validation with `BOSS-451` before work begins. API, TUI, and MCP clients use these same server-side paths.
-- A typed-decision step already running from a previously published version fails once as `deadlettered`. Its step and run keep the `BOSS-451` reason, and `workflow.step_deadlettered` plus a deadletter record make the hold visible. No model backend is constructed.
-- TypeSafe key setup returns HTTP 503 before a provider call, key write, or backend-setting change. Read-only status and existing saved keys remain available; status reports `effective_backend: paused` and the hold reason. The Setup UI no longer claims that a live key proof succeeded or accepts a key during the hold.
-- Ordinary human `decision` steps and other workflow capabilities are unaffected. No shipped catalogue YAML currently uses `binding.typed_decision`; the route-ticket example in tests and any customer-authored or previously published typed-decision workflow are affected.
+A workflow `binding.typed_decision` can run when the attempt has a spend authority (`settings`, a database engine, project, run, and step). `typed_decisions.run_step` still raises `TypedDecisionGovernanceHold` when that authority is missing, and the runner records that as one deadletter. No model client is constructed on that path.
+
+When the authority is present, `TypedDecisionSpend` commits, on a second connection, before any provider call:
+
+- a `BudgetGovernor` reservation for the attempt quote
+- a project-scoped job lease (`lease_owned_job`) with the same TTL, token, and heartbeat rules as other worker leases
+- a model-gateway lease that accepts only that job lease and that reservation
+- one in-progress receipt per attempt (`model-gateway:{project}:{dedupe}`)
+
+Settlement consumes the reservation down to the actual cost. A definite failure or a cancellation before the call releases the unused reservation. An expired lease before the call is abandoned and released, and the model is not called. A timeout or a lease expiry after the call stays `in_progress` with a blocking decision and `typed_decision.reconciliation_required`. Replaying a succeeded receipt returns that receipt. The same attempt is not called or receipted twice. A later attempt emits `typed_decision.retry` and then uses a new dedupe key.
+
+Publishing and starting a typed-decision workflow is no longer rejected at validation. The attempt is the hold boundary.
+
+## What stays held
+
+- TypeSafe key setup returns HTTP 503 before a provider call, key write, or backend-setting change. Read-only status still reports `effective_backend: paused` and `execution_available: false`. The Setup UI does not treat that as a live key proof.
+- Community export and clean-VM qualification of this path are not done.
+- Key proof is not on the spend path. Restore step 5 below is still open.
+- Ordinary human `decision` steps and other workflow capabilities are unchanged.
 
 ## Restore the capability
+
+Steps 1–4 are the workflow path in this branch. Step 5 is not.
 
 1. Queue each typed-decision step as a durable BOSS job linked to its workflow-step lease, or add an equivalent committed model-execution record with TTL, heartbeat, fencing, and retry/deadletter semantics. Do not call a provider in the transaction that first claims the step.
 2. Quote the selected source, enforce entitlement and policy, reserve the maximum authorized cost, and commit the reservation and a deduplicated in-progress `Receipt` **before** each external attempt.
@@ -27,4 +44,8 @@ TypeSafe key setup had a second spend path: `POST /v1/setup/decision-model/key` 
 
 ## Validation
 
-Focused unit tests prove no model construction or secret write during the hold. A database-backed transition test proves an already running step deadletters once and emits `workflow.step_deadlettered`; API tests prove the key endpoint returns 503 and read-only status says paused. The hold is a safety containment, not completed typed-decision support. Keep BOSS-451 In Progress and BOSS-293 GA blocked for this capability until the durable path is shipped and accepted.
+`engine/tests/test_typed_decision_spend.py` covers insufficient funds, lease expiry before the call, receipt replay, settlement against the reservation, a visible retry, an uncertain outcome that is not retried, cancellation, and a gateway double that still requires the lease and the reservation. The doubles are not a live model API.
+
+`engine/tests/test_a_typed_decision_never_guesses.py` still fails closed when `run_step` has no spend authority. `engine/tests/test_a_jev_key_is_proved_before_it_is_kept.py` still refuses key proof. The API hold tests keep the key endpoint at 503 and the ungoverned deadletter, and they allow publish onto the governed path.
+
+Keep BOSS-451 In Progress until key proof uses the same committed spend path and the Community export and clean VM qualify it. Do not treat this branch as that qualification.

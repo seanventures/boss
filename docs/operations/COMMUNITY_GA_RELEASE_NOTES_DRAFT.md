@@ -83,13 +83,15 @@ include direct host or deployment effects and approval transitions that need
 verified human actor attribution. API and terminal calls retain their own
 server-side checks.
 
-New Community Discovery web research, live investigations, BOSS-initiated SSH
-deployment planning, and typed-decision model execution remain paused until
-their spend, lease, receipt, and recovery paths are complete. Existing records
-remain readable. Saving a provider key or detecting a coding CLI is a
-configuration check, not a successful live model call. No provider login or
-paid model call is part of this candidate's qualification, because this
-candidate is not qualified.
+New Community Discovery web research, live investigations, and BOSS-initiated
+SSH deployment planning remain paused until their spend, lease, receipt, and
+recovery paths are complete. A typed-decision workflow attempt spends only
+after a committed budget reservation, model lease, and deduplicated receipt;
+TypeSafe key proof stays paused, and that path is not Community-export or
+clean-VM qualified. Existing records remain readable. Saving a provider key
+or detecting a coding CLI is a configuration check, not a successful live
+model call. No provider login or paid model call is part of this candidate's
+qualification, because this candidate is not qualified.
 
 Older `0db60f6c` local tests, export review, and pristine Ubuntu x86 VM runs
 (including a local-file stdin-piped first install) stay historical. They used

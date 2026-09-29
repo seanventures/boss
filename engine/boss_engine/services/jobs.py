@@ -28,6 +28,10 @@ class LeaseNotFoundError(RuntimeError):
     pass
 
 
+class JobDeferredError(RuntimeError):
+    """The job was not leased because budget or capacity policy refused it."""
+
+
 def resolve_job_data_boundary(
     connection: Connection,
     task_id: Optional[str],
@@ -746,6 +750,135 @@ class JobLeaseService:
             }
 
         return None
+
+    def lease_owned_job(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        job_id: str,
+        worker_id: str,
+        lease_ttl_seconds: int,
+    ) -> dict[str, Any]:
+        """Lease one job this project already queued.
+
+        claim_job takes the next job of a kind in any project. A typed decision
+        must not spend under somebody else's lease. Token, TTL, heartbeat, and
+        attempt match claim_job.
+        """
+        if lease_ttl_seconds < 5 or lease_ttl_seconds > 3600:
+            raise ValueError("lease_ttl_seconds must be between 5 and 3600.")
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
+                       allocation_id, kind, payload, data_boundary, workload_class,
+                       resource_units, status
+                FROM jobs
+                WHERE id = :job_id AND project_id = :project_id
+                FOR UPDATE
+                """
+            ),
+            {"job_id": job_id, "project_id": project_id},
+        ).mappings().first()
+        if not row:
+            raise LeaseNotFoundError("Job not found.")
+        if row["status"] not in {"queued", "failed_retryable"}:
+            raise LeaseNotFoundError(f"Job is {row['status']}.")
+        allocated, allocation_reason = self.work_orchestration.reserve_job_slot(
+            connection,
+            project_id=project_id,
+            job_id=job_id,
+            job_kind=row["kind"],
+            work_item_id=row["work_item_id"],
+            tracker_binding_id=row["tracker_binding_id"],
+            allocation_id=row["allocation_id"],
+            resource_units=int(row["resource_units"] or 1),
+            already_held=False,
+        )
+        if not allocated:
+            raise JobDeferredError(allocation_reason)
+        policy = self._budget_state_policy_for_job(
+            connection, project_id, row["task_id"], job_id, row["kind"],
+        )
+        if policy is not None:
+            self.work_orchestration.release_job_slot(
+                connection,
+                project_id=project_id,
+                job_id=job_id,
+                allocation_id=row["allocation_id"],
+                resource_units=int(row["resource_units"] or 1),
+                reason="budget_state_deferred",
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE jobs
+                    SET status = 'cancelled',
+                        last_error = CAST(:last_error AS JSONB),
+                        updated_at = :updated_at
+                    WHERE id = :job_id
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "last_error": json.dumps({"reason": policy.get("reason")}),
+                    "updated_at": now_utc(),
+                },
+            )
+            raise JobDeferredError(str(policy.get("reason") or "budget_deferred"))
+
+        current_time = now_utc()
+        lease_token = f"lease_{uuid4().hex}"
+        lease_expires_at = current_time + timedelta(seconds=lease_ttl_seconds)
+        updated = connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'leased',
+                    lease_owner = :worker_id,
+                    lease_token_hash = :lease_token_hash,
+                    lease_expires_at = :lease_expires_at,
+                    heartbeat_at = :now_utc,
+                    attempt = jobs.attempt + 1,
+                    updated_at = :now_utc
+                WHERE id = :job_id
+                RETURNING id, kind, payload, data_boundary, workload_class,
+                          allocation_id, attempt
+                """
+            ),
+            {
+                "job_id": job_id,
+                "worker_id": worker_id,
+                "lease_token_hash": self._hash_token(lease_token),
+                "lease_expires_at": lease_expires_at,
+                "now_utc": current_time,
+            },
+        ).mappings().one()
+        emit_event(
+            connection,
+            project_id,
+            "job.leased",
+            worker_id,
+            "job",
+            job_id,
+            {"attempt": updated["attempt"], "kind": updated["kind"]},
+        )
+        payload = updated["payload"] or {}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return {
+            "id": updated["id"],
+            "project_id": project_id,
+            "kind": updated["kind"],
+            "payload": payload,
+            "data_boundary": updated["data_boundary"],
+            "workload_class": updated["workload_class"],
+            "allocation_id": updated["allocation_id"],
+            "attempt": int(updated["attempt"]),
+            "lease_token": lease_token,
+            "lease_expires_at": lease_expires_at.isoformat(),
+        }
 
     def heartbeat(
         self,

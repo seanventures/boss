@@ -1280,13 +1280,45 @@ def execute_step(
         if connection is not None and settings is not None:
             # The project's own choice of decision model, set in the console.
             settings = project_settings.applied(connection, project_id, settings)
+        spend = None
+        engine = getattr(connection, "engine", None)
+        if (
+            settings is not None
+            and engine is not None
+            and project_id
+            and context.get("run_id")
+            and step.get("id")
+        ):
+            from .typed_decision_spend import TypedDecisionSpend
+
+            spend = TypedDecisionSpend.for_runner(
+                settings,
+                engine=engine,
+                project_id=project_id,
+                run_id=str(context["run_id"]),
+                step_id=str(step["id"]),
+                attempt=int(context.get("step_attempt") or 1),
+                actor=actor,
+                worker_id=str(context.get("worker_id") or actor),
+            )
         try:
-            return typed_decisions.run_step(settings, binding, state)
+            return typed_decisions.run_step(settings, binding, state, spend=spend)
         except typed_decisions.TypedDecisionGovernanceHold as error:
-            # A release safety hold is settled, not a transient provider fault.
-            # fail_step records it on the step and emits its normal audit event.
+            # No reservation, lease, and receipt on this call. Settled, not retried
+            # into a provider. fail_step records it and emits its audit event.
             raise SettledCapabilityError(str(error)) from error
-        except Exception as error:  # noqa: BLE001 — the step records the sentence
+        except Exception as error:
+            from .typed_decision_spend import (
+                TypedDecisionReconciliationRequired,
+                TypedDecisionSpendError,
+            )
+
+            if isinstance(error, TypedDecisionReconciliationRequired):
+                raise SettledCapabilityError(str(error)) from error
+            if isinstance(error, TypedDecisionSpendError):
+                raise CapabilityExecutionError(str(error)) from error
+            # The step records the sentence. A provider fault is retryable; a
+            # reconciliation is settled above so it cannot spend twice.
             raise CapabilityExecutionError(f"typed decision failed: {error}") from error
 
     # A step the customer defined. Checked first because it is the only kind that has no
@@ -2881,7 +2913,12 @@ def tick(
                     output = execute_step(
                         connection, ctx, project_id=project_id,
                         actor=run.get("actor") or "workflow",
-                        step=spec_step, context=_run_context(connection, run_id),
+                        step=spec_step,
+                        context={
+                            **_run_context(connection, run_id),
+                            "step_attempt": int(claimed.get("attempt") or 1),
+                            "worker_id": worker_id,
+                        },
                     )
                 except BaseException:
                     try:

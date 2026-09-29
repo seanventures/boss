@@ -149,11 +149,9 @@ def _spec(step):
         {"id": "a", "kind": "task"}, {"id": "b", "kind": "task"}]}
 
 
-def test_a_new_decision_step_cannot_publish_while_model_spend_is_ungoverned():
-    import pytest
+def test_a_governed_decision_step_is_not_rejected_at_publish():
     normalized = validate_workflow_spec(_spec(_route_step()))
-    with pytest.raises(WorkflowValidationError, match="BOSS-451"):
-        _hold_new_typed_decision_work(normalized)
+    _hold_new_typed_decision_work(normalized)
 
 
 def test_a_decision_step_with_one_option_does_not_publish():

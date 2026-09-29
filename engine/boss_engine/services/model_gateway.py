@@ -432,6 +432,7 @@ class ModelGatewayService:
         max_usage: dict[str, Any],
         dedupe_key: str,
         ttl_seconds: int,
+        existing_reservation_id: Optional[str] = None,
     ) -> dict[str, Any]:
         job = self.jobs.require_active_lease(
             connection, worker_id, job_id, job_lease_token
@@ -518,7 +519,22 @@ class ModelGatewayService:
                 "Paid model capacity requires a positive cost estimate and reservation."
             )
         reservation_id = None
-        if paid:
+        if existing_reservation_id:
+            # The caller committed this reservation before the provider attempt.
+            # Re-reserving would hold the same spend twice.
+            active = self.budget.assert_active_reservation(
+                connection, project_id, existing_reservation_id
+            )
+            if not active:
+                raise ModelCapacityDeniedError(
+                    "Model capacity requires an active budget reservation."
+                )
+            if int(active["amount_usd_micros"]) < int(estimated_cost_usd_micros):
+                raise ModelCapacityDeniedError(
+                    "Budget reservation does not cover the model estimate."
+                )
+            reservation_id = existing_reservation_id
+        elif paid:
             reserved = self.budget.reserve(
                 connection,
                 project_id,
@@ -879,6 +895,85 @@ class ModelGatewayService:
         emit_event(connection, project_id, "model_gateway.lease_released", worker_id,
                    "model_gateway_lease", lease_id, {"reason": reason})
         return self._serialize_lease(dict(row))
+
+    def abandon_expired_attempt(
+        self,
+        connection: Connection,
+        project_id: str,
+        lease_id: str,
+        *,
+        worker_id: str,
+        invocation_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Close a lease that expired before the provider was contacted.
+
+        settle_invocation refuses an expired lease, so the reservation would
+        stay held and the in-progress receipt would look like a call that might
+        have been billed. This path is only for the window before the call.
+        """
+        row = connection.execute(
+            text(
+                """
+                SELECT * FROM model_gateway_leases
+                WHERE id = :lease_id AND project_id = :project_id
+                FOR UPDATE
+                """
+            ),
+            {"lease_id": lease_id, "project_id": project_id},
+        ).mappings().first()
+        if not row:
+            raise ModelGatewayLeaseError("Model gateway lease not found.")
+        lease = dict(row)
+        if lease["worker_id"] != worker_id:
+            raise ModelGatewayLeaseError("Model capacity lease is owned by another worker.")
+        if lease["status"] == "active" and lease["expires_at"] > now_utc():
+            raise ModelGatewayLeaseError("Model capacity lease is still active.")
+        if lease["status"] == "active":
+            connection.execute(
+                text(
+                    "UPDATE model_gateway_leases "
+                    "SET status='expired', completed_at=now() WHERE id=:id"
+                ),
+                {"id": lease_id},
+            )
+            if lease.get("budget_reservation_id"):
+                self.budget.release(connection, project_id, lease["budget_reservation_id"], reason)
+            emit_event(
+                connection, project_id, "model_gateway.lease_expired", worker_id,
+                "model_gateway_lease", lease_id,
+                {"budget_reservation_id": lease.get("budget_reservation_id"), "reason": reason},
+            )
+        invocation = connection.execute(
+            text(
+                """
+                SELECT * FROM model_gateway_invocations
+                WHERE id=:id AND project_id=:project_id AND model_gateway_lease_id=:lease_id
+                FOR UPDATE
+                """
+            ),
+            {"id": invocation_id, "project_id": project_id, "lease_id": lease_id},
+        ).mappings().first()
+        if invocation and invocation["status"] == "in_progress":
+            self.receipts.mark_failed(
+                connection, invocation["receipt_id"], {"reason": reason},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE model_gateway_invocations
+                    SET status='failed', error=CAST(:error AS JSONB), completed_at=now()
+                    WHERE id=:id
+                    """
+                ),
+                {"id": invocation_id, "error": json.dumps({"reason": reason})},
+            )
+            emit_event(
+                connection, project_id, "model_gateway.invocation_failed", worker_id,
+                "model_gateway_invocation", invocation_id,
+                {"lease_id": lease_id, "receipt_id": invocation["receipt_id"], "reason": reason},
+            )
+        return {"lease_id": lease_id, "status": "expired"}
 
     def resolve_execution_binding(
         self, connection: Connection, project_id: str, lease_id: str, *,
