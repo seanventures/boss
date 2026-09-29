@@ -82,6 +82,74 @@ class TestItRemovesWhatTheRunOwnsAndNothingElse:
         assert 'run["project_id"] != project_id' in source
 
 
+class TestItWillNotStrandAParentThatIsStillWaiting:
+    """A finished child is still the row a waiting subworkflow step resumes from.
+
+    Advance copies the child's output only while `child_workflow_run_id` is set. Deleting the
+    child nulls that pointer, the next advance skips the step, and the parent waits forever.
+    The console lists the child as its own run, and the button this feature added is exactly
+    how an operator clears the "error" row while the parent still says "waiting".
+    """
+
+    def _connection(self, waiter):
+        class _Rows:
+            def __init__(self, row):
+                self._row = row
+
+            def mappings(self):
+                return self
+
+            def first(self):
+                return self._row
+
+        class _Conn:
+            def __init__(self):
+                self.sql: list[str] = []
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                self.sql.append(sql)
+                if "FROM workflow_step_runs" in sql:
+                    return _Rows(waiter)
+                return _Rows({
+                    "id": "wfr_child",
+                    "project_id": "proj",
+                    "status": "completed",
+                    "workflow_definition_id": "wfd_1",
+                })
+
+        return _Conn()
+
+    def test_a_live_waiter_is_refused_before_any_pointer_is_cleared(self):
+        from boss_engine.services.workflows import WorkflowError, delete_run
+
+        connection = self._connection({
+            "run_id": "wfr_parent",
+            "run_status": "waiting",
+            "step_id": "build_child",
+        })
+        with pytest.raises(WorkflowError, match="waiting forever"):
+            delete_run(connection, "proj", "wfr_child", "operator")
+        assert not any("SET " in sql for sql in connection.sql)
+        assert not any("DELETE FROM" in sql for sql in connection.sql)
+
+    def test_a_finished_child_whose_parent_already_moved_on_is_removed(self):
+        """Once the parent step has succeeded, the child's output lives on that step.
+        Nothing is waiting, so the tidy-up the operator asked for still happens."""
+        from boss_engine.services.workflows import delete_run
+
+        connection = self._connection(None)
+        assert delete_run(connection, "proj", "wfr_child", "operator")["deleted"] is True
+        assert any("DELETE FROM workflow_runs" in sql for sql in connection.sql)
+
+    def test_the_guard_runs_before_references_are_cleared(self):
+        source = inspect.getsource(workflows.delete_run)
+        assert source.index("child_workflow_run_id = :run_id") < source.index(
+            "SET {column} = NULL")
+        assert "TERMINAL_STEP_STATES" in source
+        assert "TERMINAL_RUN_STATES" in source
+
+
 class TestTheEndpointIsReachable:
     def test_a_run_can_be_deleted_over_http(self):
         from pathlib import Path

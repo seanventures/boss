@@ -3284,7 +3284,9 @@ def delete_run(connection: Connection, project_id: str, run_id: str, actor: str)
 
     A run that is still going is NOT deleted, it is refused. Deleting the bookkeeping while the
     work carries on is the failure `cancel_run` documents above it, one table further down. Cancel
-    it first, which stops the work, and then it can be removed.
+    it first, which stops the work, and then it can be removed. A finished child whose parent
+    step is still waiting on it is refused for the same reason: the parent resumes from that
+    child id, and clearing the pointer leaves the parent waiting forever.
 
     The steps, migrations and compensation rows go with it by cascade. The records that merely
     POINT at it — a panel, a studio run — are kept and their reference cleared: they are somebody
@@ -3298,6 +3300,47 @@ def delete_run(connection: Connection, project_id: str, run_id: str, actor: str)
         raise WorkflowError(
             f"That run is {run['status']}, and work that is still going cannot be deleted. "
             "Cancel it first — that stops the work — and then it can be removed.")
+
+    # A FINISHED CHILD IS STILL LOAD-BEARING WHILE ITS PARENT IS WAITING ON IT.
+    #
+    # A subworkflow step stores the child id and stays `waiting` until a later advance copies
+    # the child's output (or records that the child failed). Nulling that pointer — which the
+    # loop below does for every reference — makes the advance skip the step, because a
+    # subworkflow with no child id is not a subworkflow it knows how to resume. The parent
+    # then waits forever, and the child's output is already gone. The console lists that
+    # child as its own finished run, so "clean up the error runs" deletes exactly the row
+    # the waiting parent still needs.
+    #
+    # Cancelled parents are safe: cancel marks their waiting steps cancelled, which is
+    # terminal, so they no longer match. A step that already succeeded has the output copied
+    # onto itself and does not match either.
+    terminal_steps = ", ".join(f":done_{i}" for i in range(len(TERMINAL_STEP_STATES)))
+    terminal_runs = ", ".join(f":closed_{i}" for i in range(len(TERMINAL_RUN_STATES)))
+    waiter = connection.execute(
+        text(
+            f"""
+            SELECT r.id AS run_id, r.status AS run_status, s.step_id
+            FROM workflow_step_runs s
+            JOIN workflow_runs r ON r.id = s.workflow_run_id
+            WHERE s.child_workflow_run_id = :run_id
+              AND s.workflow_run_id <> :run_id
+              AND s.status NOT IN ({terminal_steps})
+              AND r.status NOT IN ({terminal_runs})
+            LIMIT 1
+            """
+        ),
+        {
+            "run_id": run_id,
+            **{f"done_{i}": status for i, status in enumerate(sorted(TERMINAL_STEP_STATES))},
+            **{f"closed_{i}": status for i, status in enumerate(sorted(TERMINAL_RUN_STATES))},
+        },
+    ).mappings().first()
+    if waiter:
+        raise WorkflowError(
+            f"Run {waiter['run_id']} is {waiter['run_status']} and its step "
+            f"'{waiter['step_id']}' is still waiting on this run. Removing it would leave "
+            f"that run waiting forever — let it finish, or cancel it, and then this run "
+            f"can be removed.")
 
     for table, column in POINTS_AT_A_RUN:
         connection.execute(
