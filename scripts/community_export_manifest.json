@@ -76,6 +76,7 @@
     "apps/api/tests/test_api.py",
     "apps/api/tests/test_cloud_easy_connect_e2e.py",
     "apps/api/tests/test_edition_routers.py",
+    "apps/api/tests/test_kubernetes_manifests.py",
     "apps/api/app/services/commercial.py",
     "apps/api/app/services/enterprise.py",
     "apps/api/app/routers/enterprise.py",
