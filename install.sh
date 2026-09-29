@@ -275,11 +275,13 @@ install_vm_deps() {
   local admin=()
   if [[ "$(id -u)" -ne 0 ]]; then
     need_cmd sudo || die "Install sudo or run as root to install missing VM packages."
-    admin=(sudo)
-    "${admin[@]}" -v || die "Administrator access is needed to install VM packages."
+    # Some cloud images allow passwordless package commands but reject sudo -v.
+    # Test access through the real operation, without prompting in a piped install.
+    admin=(sudo -n)
   fi
   ui_step "Installing missing VM dependencies"
-  "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq ||
+    die "Could not update VM packages. Check package sources, network, and noninteractive administrator access."
   "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git make openssl python3
   if ! need_cmd docker || ! docker compose version >/dev/null 2>&1; then
     # Replacing an existing container runtime can interrupt unrelated workloads.
@@ -321,10 +323,10 @@ fi
 # Adding the current user to the docker group would grant root-equivalent access and does
 # not take effect in this shell. Use sudo for this install when the socket requires it.
 if ! docker info >/dev/null 2>&1; then
-  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -v && sudo docker info >/dev/null 2>&1; then
-    DOCKER=(sudo docker)
+  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
   else
-    die "Docker daemon is unavailable. Start Docker and rerun; on Linux ensure sudo access."
+    die "Docker daemon is unavailable. Start Docker and rerun; on Linux ensure noninteractive sudo access to Docker."
   fi
 fi
 ui_ok "Docker daemon is running"

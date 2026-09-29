@@ -84,6 +84,40 @@ def test_dry_run_and_safe_uninstall_preserve_existing_env(tmp_path: Path) -> Non
     assert all("--volumes" not in command for command in commands)
 
 
+def test_backup_and_uninstall_accept_command_scoped_passwordless_sudo(tmp_path: Path) -> None:
+    install, env, _ = _fixture(tmp_path)
+    (install / ".boss-shipped-commit").write_text("fixture-commit\n")
+    (tmp_path / "bin" / "docker").write_text("#!/bin/sh\nexit 42\n")
+    sudo_log = tmp_path / "sudo.log"
+    sudo = tmp_path / "bin" / "sudo"
+    sudo.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$SUDO_CALL_LOG"\n'
+        '[ "$1" = -n ] && [ "$2" = docker ] || exit 42\n'
+        "shift 2\n"
+        'case "$*" in\n'
+        '  info) exit 0 ;;\n'
+        '  *"pg_isready"*) exit 9 ;;\n'
+        '  compose*) exit 0 ;;\n'
+        'esac\n'
+        'exit 42\n'
+    )
+    sudo.chmod(0o755)
+    env.update(SUDO_CALL_LOG=str(sudo_log), BOSS_BACKUP_DIR=str(tmp_path / "backups"))
+
+    uninstall = _run(UNINSTALL, install, env, "--yes")
+    backup = _run(REPO / "scripts/install/backup.sh", install, env)
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert "BOSS Community stopped" in uninstall.stdout
+    assert backup.returncode != 0
+    assert "BOSS Postgres is not ready" in backup.stderr
+    calls = sudo_log.read_text().splitlines()
+    assert all(call.startswith("-n docker ") for call in calls)
+    assert any("down --remove-orphans" in call for call in calls)
+    assert any("pg_isready -U boss -d boss" in call for call in calls)
+
+
 def test_piped_uninstall_uses_explicit_install_dir(tmp_path: Path) -> None:
     install, env, log = _fixture(tmp_path)
     result = subprocess.run(

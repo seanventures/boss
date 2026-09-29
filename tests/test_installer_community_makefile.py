@@ -75,7 +75,7 @@ def test_community_targets_explain_missing_docker_access(tmp_path: Path) -> None
     result, calls = _run_make(tmp_path, direct=False, elevated=False, target="status")
     assert result.returncode != 0
     assert "Docker is unavailable to this user" in result.stderr
-    assert "sudo -v" in result.stderr
+    assert "noninteractive sudo access" in result.stderr
     assert not calls
 
 

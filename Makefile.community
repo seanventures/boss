@@ -11,7 +11,7 @@ COMPOSE := $(DOCKER) compose -f scripts/install/community-compose.yml --env-file
 .PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready
 
 docker-ready:
-	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or run sudo -v and retry; a new login also activates docker-group access.' >&2; exit 1; }
+	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or grant noninteractive sudo access to Docker; a new login also activates docker-group access.' >&2; exit 1; }
 
 help:
 	@printf '%s\n' 'BOSS Community' \

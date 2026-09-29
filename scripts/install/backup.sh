@@ -47,8 +47,8 @@ esac
 
 DOCKER=(docker)
 if ! docker info >/dev/null 2>&1; then
-  if command -v sudo >/dev/null 2>&1 && sudo -v && sudo docker info >/dev/null 2>&1; then
-    DOCKER=(sudo docker)
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
   else
     echo 'Docker daemon is unavailable to this user.' >&2; exit 1
   fi
