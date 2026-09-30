@@ -11,12 +11,11 @@ page does not repeat live in the [quickstart](QUICKSTART.md) and the
 
 ## Install from a checkout
 
-The GitHub one-liner is not usable yet. It still contains the placeholder
-`REPLACE_WITH_REVIEWED_40_CHARACTER_SHA`. That text is not a commit. Do not
-invent a 40-character SHA, and do not point the download at another host.
-Leave the placeholder as written until a reviewed commit is published.
+The GitHub one-liner installs release `v1.0-rc1`, commit
+`7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. Do not point the download at
+another host.
 
-From a checkout you already have, this is the path that works today:
+From a checkout you already have:
 
 ```sh
 ./install.sh --dir "$PWD"

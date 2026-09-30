@@ -302,7 +302,7 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
     assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer
-    assert 'REPLACE_WITH_REVIEWED_40_CHARACTER_SHA' in (
+    assert "7b88a18a2b4cd0b14b09a47fc415f7ffd4580066" in (
         ROOT / "scripts/install/README.md"
     ).read_text(encoding="utf-8")
     assert './install.sh --dir "$PWD"' in (ROOT / "scripts/install/README.md").read_text(encoding="utf-8")

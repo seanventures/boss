@@ -1,16 +1,14 @@
 # BOSS Community installer
 
-Install BOSS Community on a machine you administer. For one path from a checkout to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md). This page is the installer itself: the unpublished command, a local checkout, loopback, the private `.env`, upgrade, and uninstall.
+Install BOSS Community on a machine you administer. For one path from a checkout to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md). This page is the installer itself: the `v1.0-rc1` command, a local checkout, loopback, the private `.env`, upgrade, and uninstall.
 
-## Unpublished one-liner
+## Release one-liner
 
-This repository has not been published yet. After a reviewed release commit exists, replace the placeholder with that commit's full 40-character SHA and run:
+Release `v1.0-rc1` is commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. The download and the Git checkout use that same commit, and the installer verifies it. If the download fails, the installer does not run. Do not point the URL at another host.
 
 ```bash
-BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
-
-The download and the Git checkout use that same commit, and the installer verifies it. If the download fails, the installer does not run. Until a reviewed commit exists, this command cannot succeed. Do not invent a SHA, and do not point the URL at another host.
 
 ## Local checkout
 
@@ -20,7 +18,7 @@ From a checkout you already have:
 ./install.sh --dir "$PWD"
 ```
 
-That installs into the checkout. It does not contact a maintainer server, it does not clone the unpublished GitHub URL, and it does not SSH to a maintainer machine. Passing an empty directory as `--dir` fills that directory from this tree instead. A checkout that is ahead of `main`, or whose history has diverged from it, stays on that source. Pass `--ref` to require a different commit. A diverged ref then stops with the checkout unchanged.
+That installs into the checkout. It does not contact a maintainer server, it does not clone the release URL, and it does not SSH to a maintainer machine. Passing an empty directory as `--dir` fills that directory from this tree instead. A checkout that is ahead of `main`, or whose history has diverged from it, stays on that source. Pass `--ref` to require a different commit. A diverged ref then stops with the checkout unchanged.
 
 ## Loopback and the private .env
 
