@@ -1105,8 +1105,11 @@ elif [[ ! -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
 else
   # The agent refuses to install with an empty project id. The id is the
   # project this installer just seeded, not a value from the shell environment.
+  # bash, not sh: node_agent.sh is a bash program (`set -euo pipefail`, arrays). Run with sh,
+  # which is dash on Ubuntu and Debian, it stopped at "set: Illegal option -o pipefail", so no
+  # Ubuntu or Debian install ever recorded its own machine as a place to run work.
   if BOSS_PROJECT_ID="${_place_project}" \
-      sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+      bash "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
   else
     ui_warn "Hardware agent did not install. The local machine was not recorded."

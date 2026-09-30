@@ -365,3 +365,16 @@ def test_package_manager_commands_name_the_declared_packages() -> None:
         assert needle in result.stdout
         for package in ("curl", "ca-certificates", "python3"):
             assert package in result.stdout
+
+
+def test_the_installer_runs_the_agent_with_the_shell_it_is_written_for() -> None:
+    """install.sh ran node_agent.sh with `sh`. On Ubuntu and Debian that is dash, which stops at
+    `set -o pipefail`, so every install there warned "Hardware agent did not install" and never
+    recorded its own machine. Every other test here runs the agent with bash, which is why the
+    mismatch went unseen (found on a fresh v1.0-rc1 install, 2026-09-30)."""
+    installer = (ROOT / "install.sh").read_text()
+    calls = [line.strip() for line in installer.splitlines()
+             if "scripts/install/node_agent.sh" in line and "--local" in line]
+    assert calls, "install.sh no longer runs the local agent"
+    assert all(line.startswith("bash ") for line in calls), calls
+    assert SCRIPT.read_text().startswith("#!/usr/bin/env bash")
