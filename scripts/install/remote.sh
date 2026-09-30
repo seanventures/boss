@@ -170,6 +170,16 @@ rshq() { ssh "${SSH_OPTS[@]}" "$HOST" "$@" 2>/dev/null; }
 # ---------------------------------------------------------------------------- preflight
 preflight() {
   rsh 'echo ok' >/dev/null 2>&1 || die "cannot SSH to $HOST (try: ssh ${KEY:+-i $KEY} $HOST)"
+  # `~` MEANS THE SSH USER'S HOME ON THE HOST. Every command below single-quotes "$DIR" into
+  # the remote shell, so `--dir '~/boss'` reached the host as a literal "~/boss": smoke looked
+  # for "~/boss/.env", found nothing, and quietly skipped the authenticated check — and install
+  # or uninstall would have acted on the wrong path. Resolved once, here, before any use.
+  if [[ "$DIR" == "~" || "$DIR" == "~/"* ]]; then
+    local remote_home
+    remote_home="$(rshq 'printf %s "$HOME"')"
+    [[ -n "$remote_home" ]] || die "could not read the home directory of $HOST to resolve $DIR"
+    DIR="${remote_home}${DIR#\~}"
+  fi
   local missing
   missing="$(rshq 'for c in docker tar; do command -v $c >/dev/null 2>&1 || echo $c; done')"
   [[ -z "$missing" ]] || die "missing on the host: $(echo "$missing" | tr '\n' ' ')"
