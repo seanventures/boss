@@ -293,8 +293,13 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
         line.strip() for line in compose.splitlines()
         if re.search(r'- "[^"]+:\d+"\s*$', line)
     ]
-    assert len(published) == 4
-    assert all(line.startswith('- "127.0.0.1:') and "0.0.0.0" not in line for line in published)
+    assert published == [
+        '- "127.0.0.1:${BOSS_POSTGRES_PORT:-5432}:5432"',
+        '- "127.0.0.1:${INFISICAL_PORT:-8080}:8080"',
+        '- "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"',
+        '- "127.0.0.1:${BOSS_WEB_PORT:-3000}:3000"',
+    ]
+    assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer
     assert 'REPLACE_WITH_REVIEWED_40_CHARACTER_SHA' in (
