@@ -43,6 +43,7 @@ CUSTOMER_FACING = (
     REPO / "docs" / "operations" / "DESIGN_PARTNER_ONBOARDING.md",
     REPO / "README.md",
     REPO / "engine" / "README.md",
+    REPO / "scripts" / "install" / "README.md",
 )
 
 
