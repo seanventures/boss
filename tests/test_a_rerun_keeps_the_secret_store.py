@@ -364,7 +364,9 @@ def test_the_live_env_is_replaced_only_after_the_old_key_is_back():
     assert 'cat > "$ENV_FILE"' not in text
     # A non-interactive update does not pass --secret-store. The token check that keeps the
     # secrets profile has to run outside the interactive prompt.
+    # The installer no longer asks; the detection must still decide the profile it starts.
     detect_at = text.index("grep -qs '^BOSS_INFISICAL_TOKEN=.'")
-    prompt_at = text.index('prompt "Secret store:')
-    assert detect_at < prompt_at
+    assert 'prompt "Secret store:' not in text
+    profile_at = text.index('COMPOSE_PROFILES="$COMPOSE_PROFILES --profile secrets"')
+    assert detect_at < profile_at
     assert "SECRET_STORE_EXPLICIT=1" in text

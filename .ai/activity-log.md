@@ -2322,3 +2322,10 @@ PR: https://github.com/seanheiney/boss/pull/3
 - Live proof: `GET /v1/sandboxes` → `host.connected: true`.
 - Residual: `guest-base.ext4` missing (registry `boss-sandbox-guest` has no tags) — task execution still blocked.
 - Report: `docs/operations/BOSS-340_SANDBOX_HOST_DIAGNOSIS.md` on branch `ai/grok/boss-340-sandbox-host`.
+
+## 2026-09-30 installer: one command, boss CLI, remembered release (ai/claude/installer-simple)
+
+- Website bootstrap `docs/landing/install.sh` picks the newest `v*` release and runs its `install.sh` with that ref.
+- `install.sh` asks nothing but an optional OpenAI key, records the installed ref in `.boss-release`, reports model keys and subscriptions (read only; copies a login only on consent or `--connect-found`), and installs the `boss` command.
+- `scripts/install/boss.sh` wraps status/open/password/doctor/logs/connect/upgrade/update/uninstall; `upgrade.sh` follows the recorded channel.
+- Tests: `engine/tests/test_community_boss_cli.py`. Plane tracking not updated from this session (no ops token in the environment).

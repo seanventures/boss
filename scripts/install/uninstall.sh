@@ -71,7 +71,7 @@ fi
 
 if [[ "$PURGE_DATA" -eq 1 ]]; then
   if [[ "$CONFIRM_PURGE" != 'DELETE-BOSS-DATA' ]]; then
-    if [[ ! -r /dev/tty ]]; then
+    if ! (: </dev/tty) 2>/dev/null; then
       echo 'Data purge needs a terminal confirmation or --confirm-purge DELETE-BOSS-DATA; nothing was removed.' >&2
       exit 1
     fi
@@ -80,7 +80,7 @@ if [[ "$PURGE_DATA" -eq 1 ]]; then
     [[ "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Confirmation did not match; nothing was removed.' >&2; exit 1; }
   fi
 elif [[ "$ASSUME_YES" -eq 0 ]]; then
-  if [[ ! -r /dev/tty ]]; then
+  if ! (: </dev/tty) 2>/dev/null; then
     echo 'Pass --yes for a noninteractive safe uninstall; nothing was removed.' >&2; exit 1
   fi
   printf 'Stop BOSS Community? Data and credentials will be kept. [y/N] ' >/dev/tty

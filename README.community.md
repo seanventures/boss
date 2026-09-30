@@ -66,7 +66,15 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 
-**2. Install the `v1.0-rc1` release** on the server. This one command downloads the installer, checks out the same pinned commit into `~/boss` (it asks before using another directory), and walks you through setup:
+**2. Install** on the server with one command. It installs the newest published release into `~/boss`, needs no answers, and finishes by installing the `boss` command:
+
+```sh
+curl -fsSL https://seanventures.github.io/boss/install.sh | bash -s -- --console-origin https://boss.example.com
+```
+
+Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer records the release, so reruns and `boss upgrade` never move it to `main`.
+
+To pin the reviewed `v1.0-rc1` commit instead, this command downloads the installer and checks out that same commit:
 
 ```sh
 BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
@@ -82,7 +90,7 @@ cd boss
 ./install.sh --dir "$PWD" --ref v1.0-rc1 --console-origin https://boss.example.com
 ```
 
-Either way, run later commands such as `make metatron` and upgrades from the install directory.
+Run `make metatron` from the install directory. The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
 
 **3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
 
@@ -98,9 +106,9 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once.
 
-**4. Sign in** at your address, such as `https://boss.example.com`. The installer finishes by printing the command that shows your console password.
+**4. Sign in** at your address, such as `https://boss.example.com`, with the password from `boss password`.
 
-When the installer asks for a model key, paste it at the hidden prompt or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
+Export a provider key such as `OPENAI_API_KEY` before installing, paste an OpenAI key at the hidden prompt, or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The installer reports Codex, Claude Code, and Grok logins it finds and asks before copying one; `boss connect` does the same later. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 > [!TIP]
 > **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal.
@@ -192,12 +200,14 @@ Everything else is linked from the [documentation home](docs/community/README.md
 
 ## Upgrade and uninstall
 
-From the installed checkout:
+From any directory:
 
 ```sh
-./scripts/install/upgrade.sh --dir "$PWD"          # writes a private backup, then upgrades
-./scripts/install/uninstall.sh --dir "$PWD" --yes  # stops BOSS, keeps data and credentials
+boss upgrade      # writes a private backup, then moves to the newest release
+boss uninstall    # stops BOSS, keeps data and credentials
 ```
+
+Without the `boss` command, run `./scripts/install/upgrade.sh --dir "$PWD"` and `./scripts/install/uninstall.sh --dir "$PWD" --yes` from the install directory.
 
 Deleting data takes a separate confirmation. See [upgrade, backup, and restore](scripts/install/README.md#upgrade--recover).
 

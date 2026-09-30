@@ -1,8 +1,73 @@
 # BOSS Community installer
 
-Install BOSS Community on a machine you administer. This page is the installer reference: the pinned `v1.0-rc1` command, local checkouts, network and secret defaults, upgrade, recovery, and uninstall. For a single guided path from a checkout to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md).
+Install BOSS Community on a machine you administer. This page is the installer reference: the one-line install, the `boss` command, the pinned `v1.0-rc1` command, local checkouts, network and secret defaults, upgrade, recovery, and uninstall. For a single guided path from install to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md).
 
 ## Install
+
+### One command
+
+```bash
+curl -fsSL https://seanventures.github.io/boss/install.sh | bash
+```
+
+That is the whole install on a fresh Ubuntu 22.04/24.04 or Debian 12/13 machine, or on macOS with Docker Desktop running. It needs no answers:
+
+- It finds the newest published release (`v*` tag), downloads that release's `install.sh` from GitHub over HTTPS, and installs that release into `~/boss`. A failed download runs nothing.
+- On Ubuntu and Debian it installs what is missing: `git`, `curl`, Python 3, and Docker Engine with Compose from Docker's signed apt repository. At a terminal, `sudo` asks for your password once; with `--yes` it never prompts.
+- It uses the database secret store, turns Mission Control on, and keeps every listener on `127.0.0.1`.
+- The only question is an optional OpenAI key, asked only when no provider key is exported and a person is at the terminal. `--yes` asks nothing.
+- After the stack is healthy it looks for model keys and subscriptions already on the machine and installs the [`boss` command](#the-boss-command).
+
+Pass installer flags after `bash -s --`:
+
+```bash
+curl -fsSL https://seanventures.github.io/boss/install.sh | bash -s -- --yes
+curl -fsSL https://seanventures.github.io/boss/install.sh | bash -s -- --ref v1.0-rc1 --console-origin https://boss.example.com
+```
+
+`BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
+
+### Models and subscriptions already on this machine
+
+The installer reports each of these as `found` or `not found` and never prints a value:
+
+| Source | What happens |
+|---|---|
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY` exported for the installer | Saved to the private `.env`. Exporting the key for this command is the consent. |
+| Codex ChatGPT login (`~/.codex/auth.json`, verified with `codex login status`) | Asks once before copying it into BOSS's secret store. `--yes` copies nothing unless you add `--connect-found`; on the database store that also needs `--accept-database-fallback`. |
+| Claude Code or Grok Build login on this machine | Reported only. BOSS signs these CLIs in inside its own container: `boss connect claude`, `boss connect grok`. |
+| Ollama on `127.0.0.1:11434` | Reported only. Add it in Mission Control as an OpenAI-compatible model. |
+
+A found login that fails to connect is shown with `✗` on the summary card; BOSS itself stays installed. Retry with `boss connect`. Skip the whole step with `--no-discover`.
+
+### The `boss` command
+
+The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is already writable and `~/.local/bin` is not on `PATH`; `BOSS_BIN_DIR` overrides both). It never needs `sudo` and never replaces another program's `boss`. It remembers the install directory, so it works from any directory:
+
+| Command | What it does |
+|---|---|
+| `boss status` | Install directory, release, services, and API health |
+| `boss open` | Prints the Mission Control address |
+| `boss password` | Shows the console password, in a terminal only. `boss password reset` rotates it |
+| `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
+| `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
+| `boss connect [codex\|claude\|grok]` | Looks for model keys and subscriptions again and connects them, asking before any copy |
+| `boss upgrade [--to REF]` | Backs up, then moves to the newest release, or to `REF`. `--dry-run` shows the move first |
+| `boss update` | Re-applies configuration on the installed release: reruns the installer so newly exported keys and flags such as `--web` take effect. It never changes the release |
+| `boss uninstall [--purge]` | Stops BOSS and keeps data. `--purge` deletes data after a backup and a typed confirmation |
+| `boss version` | Installed release and commit |
+
+### Which release, and staying on it
+
+The installer records the ref it installed in `.boss-release` in the install directory (not secret). Reruns and `boss upgrade` read it, so a release install never moves to `main` by itself:
+
+| Channel | Installed with | `boss upgrade` without `--to` |
+|---|---|---|
+| `release` | a `v*` tag, the default | the newest stable release tag. A prerelease install may also move to a newer prerelease. Never an older tag |
+| `branch` | `--ref main` or another branch | fast-forwards that branch |
+| `pinned` | `--ref` with a full commit SHA | refuses; pass `--to REF` |
+
+An install made before this record existed stays where it is: a checkout at a release tag keeps that tag, a detached commit stays on that commit, and a branch checkout follows `main` as before. `--ref` always wins and is recorded.
 
 ### Release one-liner
 
@@ -15,7 +80,7 @@ BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[
 > [!WARNING]
 > Do not point the download URL at another host.
 
-The installer asks where to install, defaulting to `~/boss`. Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
+The installer uses `~/boss` unless you pass `--dir`. Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
 
 ### From a local checkout
 
@@ -27,7 +92,7 @@ cd boss
 ./install.sh --dir "$PWD" --ref v1.0-rc1
 ```
 
-Without `--ref`, the installer fast-forwards the checkout to `main`. From a checkout you already have on the branch you want:
+A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:
 
 ```bash
 ./install.sh --dir "$PWD"
@@ -70,19 +135,21 @@ You can add a key to the private `.env` later. See [model connections](../../doc
 ## What the installer does
 
 1. On a fresh Ubuntu 22.04/24.04 or Debian 12/13 VM, installs `git`, `curl`, OpenSSL, Python 3, Docker Engine, Buildx, and Compose from the signed Docker apt repository. Existing runtimes that conflict are left untouched.
-2. Prompts for the install directory and a **BYOK** model key (optional skip).
-3. Clones or fast-forwards the BOSS repo without deleting a nonempty directory or overwriting tracked local changes.
+2. Chooses defaults without asking (`~/boss`, database secret store, Mission Control on). The only prompt is an optional **BYOK** OpenAI key, and only when no provider key is exported.
+3. Clones or fast-forwards the BOSS repo at the recorded or newest release, without deleting a nonempty directory or overwriting tracked local changes, and records the ref in `.boss-release`.
 4. Writes a private `.env` (separate owner and worker API keys generated, mode 600).
 5. Runs `docker compose` to build and start **Postgres + API + worker** (+ Mission Control if selected).
 6. Waits for `/health`, runs the DB seed, and fails visibly if seeding or edition verification fails.
 7. Verifies the Community edition and ProviderOps surface.
+8. Reports the model keys and subscriptions it finds on this machine and connects only what you agree to.
+9. Installs the `boss` command and prints a summary card: console address, how to get the password, the release, what was connected, and the next commands.
 
 ### Reruns
 
 A rerun retains both API credentials and any operator-added API keys, the database password, model keys, the secret-store encryption key, the console login, public URL, console origin, API bind, port settings, the Mission Control choice, and the secret-store choice, unless this run sets the console origin or API bind again.
 
-- Use the lifecycle [upgrade command](#upgrade--recover) to back up state before updating a long-lived install.
-- A rerun does not remember which release you installed. Without `--ref`, it moves the checkout forward to `main`. To change a setting and stay on a release, pass the same ref again, for example `./install.sh --dir "$PWD" --ref v1.0-rc1 --install-coding-clis`.
+- Use `boss upgrade` (the lifecycle [upgrade command](#upgrade--recover)) to back up state before moving a long-lived install to a newer release.
+- A rerun remembers which release you installed. Without `--ref`, it stays on the ref recorded in `.boss-release`, so changing a setting never moves a release install to `main`: `boss update --install-coding-clis` or `./install.sh --dir "$PWD" --install-coding-clis`.
 - Pasting the installer line again also backs up an existing running install before switching to a newer source revision. A stopped database container is started from its existing image ID for that snapshot, then returned to its stopped state. If that container is missing, cannot start, or backup fails, the source and configuration stay untouched. The backup path is printed; keep it private.
 - For an older headless install, pass `--no-web` once to record that choice; use `--web` to enable the console later.
 - If you choose Infisical and it cannot be provisioned, the installer reports an incomplete install. The next rerun keeps that choice and retries it rather than silently switching to database credential storage.
@@ -105,10 +172,8 @@ The installer does not add your account to the root-equivalent Docker group. On 
 Mission Control has its own single-operator password and signed session secret, generated on first install and stored only in the private `.env`. The password is never the BOSS API key. On the VM, retrieve or rotate it deliberately:
 
 ```bash
-cd ~/boss
-python3 scripts/install/console_password.py show
-python3 scripts/install/console_password.py reset
-# After reset, run the web recreate command printed by the helper.
+boss password          # or: cd ~/boss && python3 scripts/install/console_password.py show
+boss password reset    # then run the web recreate command printed by the helper
 ```
 
 `show` requires a terminal so the password is not piped into logs.
@@ -201,8 +266,12 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 | Path | Role |
 |---|---|
-| `install.sh` | One-line entry (repo root) |
+| `docs/landing/install.sh` | Website bootstrap: finds the newest release and runs its `install.sh` |
+| `install.sh` | The installer (repo root) |
+| `scripts/install/boss.sh` | The `boss` command; the launcher on `PATH` runs it from the install |
+| `scripts/install/discover_models.py` | Read-only report of model keys, subscriptions, and Ollama on this machine |
 | `scripts/install/coding_subscriptions.py` | Read-only VM CLI discovery and explicit Claude/Codex binding |
+| `.boss-release` (generated) | The ref this install follows; not secret |
 | `scripts/install/community-compose.yml` | Self-contained Community stack |
 | `.env` (generated) | Secrets + ports — never commit |
 
@@ -257,11 +326,12 @@ Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. The pu
 ## Verify the install
 
 ```bash
-./scripts/install/checkup.sh            # free checks only
-./scripts/install/checkup.sh --probe    # also ask a model a question
+boss doctor                             # free checks only (runs ./scripts/install/checkup.sh)
+boss doctor --probe                     # also ask a model a question
+./scripts/install/checkup.sh            # the same checks, from the install directory
 ```
 
-Without `--probe`, the checks do not call a model. `--probe` asks a model a question and spends money. The command is `checkup`, not `doctor`.
+Without `--probe`, the checks do not call a model. `--probe` asks a model a question and spends money. The script is `checkup.sh`; `boss doctor` and `boss checkup` both run it.
 
 The checks cover: containers running, the API answering, the address compiled into the console, a model connected, a model that answers (`--probe` only), the repository pushable, and whether this machine can schedule work. The script exits 0 when those checks pass.
 
@@ -308,7 +378,15 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 ## Upgrade & recover
 
 ```bash
-./scripts/install/upgrade.sh --dir "$PWD"                   # fast-forward and back up first
+boss upgrade --dry-run                                      # show the release it would move to
+boss upgrade                                                # back up, then move to the newest release
+boss upgrade --to v1.1                                      # back up, then move to one ref
+```
+
+`boss upgrade` runs `scripts/install/upgrade.sh` from the install. Without `--to`, a release install moves to the newest published release tag and never to `main`; see [which release](#which-release-and-staying-on-it). The script works directly too:
+
+```bash
+./scripts/install/upgrade.sh --dir "$PWD"                   # back up, then move along the recorded channel
 ./scripts/install/upgrade.sh --dir "$PWD" --dry-run         # inspect source change
 ./scripts/install/upgrade.sh --dir "$PWD" --no-web          # record older headless installs once
 ./scripts/install/upgrade.sh --dir "$PWD" --web             # deliberately enable the console
@@ -466,6 +544,13 @@ scripts/install/remote.sh --host user@your-vm uninstall --yes --purge-data --con
 ## Uninstall / reinstall
 
 ```bash
+boss uninstall                     # safe: stops BOSS, keeps data and credentials (asks first)
+boss uninstall --purge             # backs up, then asks you to type DELETE-BOSS-DATA
+```
+
+`boss uninstall` runs `scripts/install/uninstall.sh`. The script works directly too:
+
+```bash
 ./scripts/install/uninstall.sh --dir "$PWD" --dry-run
 ./scripts/install/uninstall.sh --dir "$PWD" --yes           # safe: keeps data and credentials
 ./install.sh --dir "$PWD" --yes --skip-model-key             # reuses the same volumes and keys
@@ -489,6 +574,18 @@ cd ~/boss
 > [!WARNING]
 > A manual `docker compose down` removes the stopped container needed for a later no-recreation backup. If an older uninstall already did that, use [Recover an older safe uninstall](#recover-an-older-safe-uninstall).
 
+The `boss` command stays on `PATH` after an uninstall so you can reinstall with `boss update`. Remove it with `rm ~/.local/bin/boss`.
+
 ## Flags
 
-See `./install.sh --help`.
+Every flag is optional. See `./install.sh --help` for the full list. Added for the one-command install:
+
+| Flag | What it does |
+|---|---|
+| `--yes`, `-y` | Never ask. Starts without a model key when none is exported |
+| `--ref REF` | Install a release tag, branch, or full commit SHA, and record it |
+| `--connect-found` | Connect found subscriptions without asking (the only way `--yes` copies a login) |
+| `--no-discover` | Skip looking for model keys and subscriptions |
+| `--no-boss-command` | Do not install `boss` on `PATH` |
+
+`BOSS_BIN_DIR` chooses where `boss` goes. `BOSS_INSTALL_DIR` points `boss` at another install.

@@ -23,7 +23,19 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from store_subscription_token import read_whole_file, send_to_boss  # noqa: E402
+try:
+    from store_subscription_token import read_whole_file, send_to_boss  # noqa: E402
+except ImportError as _import_error:  # e.g. a host Python older than the engine needs
+    # Discovery (detect_logins) must still work; only a credential import needs the engine.
+    _IMPORT_PROBLEM = f"{type(_import_error).__name__}: {_import_error}"
+
+    def read_whole_file(path: Path) -> str:
+        raise RuntimeError("This machine's python3 cannot load the BOSS credential helper "
+                           f"({_IMPORT_PROBLEM}). It needs a BOSS checkout and Python 3.11 "
+                           "or newer. Nothing was stored.")
+
+    def send_to_boss(*_args, **_kwargs):
+        read_whole_file(Path())
 
 
 def checked_output(argv: list[str], timeout: int = 15) -> tuple[int, str]:
@@ -35,8 +47,8 @@ def checked_output(argv: list[str], timeout: int = 15) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
-def discover() -> dict[str, bool]:
-    """Report only booleans; CLI status output might include private account data."""
+def detect_logins() -> dict[str, bool]:
+    """Booleans only, nothing printed; CLI status output might include private account data."""
     found = {name: bool(shutil.which(name)) for name in ("claude", "codex", "grok")}
     codex_subscription = False
     claude_subscription = False
@@ -51,6 +63,16 @@ def discover() -> dict[str, bool]:
                 auth.get("authMethod") in ("claude_ai", "oauth_token", "oauth")
         except (ValueError, AttributeError):
             pass
+    return {**found, "claude_subscription": claude_subscription,
+            "codex_subscription": codex_subscription}
+
+
+def discover() -> dict[str, bool]:
+    """Report only booleans; CLI status output might include private account data."""
+    logins = detect_logins()
+    found = {name: logins[name] for name in ("claude", "codex", "grok")}
+    codex_subscription = logins["codex_subscription"]
+    claude_subscription = logins["claude_subscription"]
     print("Coding CLI discovery on this VM user (read only):")
     for name in ("claude", "codex", "grok"):
         print(f"  {name}: {'installed' if found[name] else 'missing'}")
