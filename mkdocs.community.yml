@@ -60,6 +60,7 @@ nav:
       - Interfaces: interfaces.md
       - Connect models: MODEL_CONNECTIONS.md
       - Mission Control: CONSOLE_AUTH.md
+      - Hostname: hostname.md
       - Terminal: terminal.md
       - CLI: cli.md
   - Control plane:

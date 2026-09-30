@@ -27,7 +27,7 @@ The manual for a control plane you run yourself. Give it a goal. Review the plan
 
 ### Web console
 
-On the install machine, open [http://127.0.0.1:3000](http://127.0.0.1:3000). Sign-in is [console access](CONSOLE_AUTH.md). A hostname needs a TLS proxy you run. The installer flag is `--console-origin`, and the listener stays on loopback.
+On the install machine, open [http://127.0.0.1:3000](http://127.0.0.1:3000). Sign-in is [console access](CONSOLE_AUTH.md). A hostname needs a TLS proxy you run; the steps are on the [hostname](hostname.md) page. The installer flag is `--console-origin`, and the listener stays on loopback.
 
 </div>
 

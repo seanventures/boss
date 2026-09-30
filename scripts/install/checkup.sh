@@ -44,7 +44,7 @@ env_value() {
   [ -f "$ENV_FILE" ] || return 0
   grep -m 1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true
 }
-for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL; do
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
   if [ -z "${!key:-}" ]; then
     value="$(env_value "$key")"
     [ -z "$value" ] || printf -v "$key" '%s' "$value"
@@ -55,7 +55,14 @@ export BOSS_ENV_FILE="$ENV_FILE"
 API_PORT="${BOSS_API_PORT:-8000}"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
 PROJECT="${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}"
-API="http://127.0.0.1:${API_PORT}"
+# 0.0.0.0 still answers on loopback. A specific --api-bind address does not.
+API_BIND="${BOSS_API_BIND:-127.0.0.1}"
+case "$API_BIND" in
+  ""|127.0.0.1|0.0.0.0) API="http://127.0.0.1:${API_PORT}" ;;
+  \[*) API="http://${API_BIND}:${API_PORT}" ;;
+  *:*) API="http://[${API_BIND}]:${API_PORT}" ;;
+  *) API="http://${API_BIND}:${API_PORT}" ;;
+esac
 KEY="${BOSS_API_KEY:-}"
 AUTH=(); [ -n "$KEY" ] && AUTH=(-H "Authorization: Bearer $KEY")
 

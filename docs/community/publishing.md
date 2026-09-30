@@ -25,6 +25,8 @@ These pages are in `mkdocs.community.yml`:
 - `interfaces.md`
 - `terminal.md`
 - `cli.md`
+- `hostname.md`
+- `remote-api.md`
 
 ## Installer pin
 
