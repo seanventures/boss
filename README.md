@@ -85,6 +85,24 @@ cd boss
 
 Either way, run later commands such as `make metatron` and upgrades from the install directory.
 
+**Deploying from your own machine instead?** Both commands above run on the server, and the server downloads BOSS from GitHub. If the server can't reach GitHub, or you're working from a private copy of the repository, deploy from a checkout on your own machine instead: `remote.sh` copies it to the server over SSH, runs the installer there, and backs up before every update. The server never needs GitHub access.
+
+```sh
+git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+cd boss
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes
+```
+
+Later, update or check that install from the same checkout:
+
+```sh
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 update --with-console
+scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
+scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
+```
+
+`--host` is anything `ssh` accepts, including an alias from `~/.ssh/config` (use one for a non-standard SSH port), and `--key PATH` picks a private key. `--dir` defaults to `/opt/boss`, which needs root; `~/boss` keeps it where the commands above install. Add `--secret-store infisical` to `install` for the bundled secret store. The [installer guide](scripts/install/README.md#remote-archive-installs) covers recovery and uninstall.
+
 **3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
 
 ```caddy
@@ -99,7 +117,13 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once.
 
-**4. Sign in** at your address, such as `https://boss.example.com`. The installer finishes by printing the command that shows your console password.
+**4. Sign in** at your address, such as `https://boss.example.com`. The installer generated the console password and kept it on the server; the sign-in page says how to find it. To print it, run this in the install directory on the server:
+
+```sh
+python3 scripts/install/console_password.py show
+```
+
+From your own machine: `ssh user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'`. [Console access](docs/community/CONSOLE_AUTH.md) covers resetting it.
 
 When the installer asks for a model key, paste it at the hidden prompt or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
