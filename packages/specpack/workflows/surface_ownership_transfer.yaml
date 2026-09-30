@@ -1,0 +1,59 @@
+kind: WorkflowSpec
+id: surface_ownership_transfer
+version: 0.1.0
+name: Surface ownership transfer
+description: >
+  Coordinate and atomically transfer deploying authority without allowing a
+  split-brain interval or stale writer.
+entry_step: load_current_ownership
+input_schema:
+  required: [project_id, surface_ownership_id, expected_version, from_owner_ref, to_owner_ref, reason, dedupe_key]
+output_schema:
+  required: [ownership_transition_id, ownership_version, status, event_ref]
+steps:
+  - id: load_current_ownership
+    kind: task
+    input: { operation: assurance.ownership.load_exact_version }
+    next: [validate_transfer_parties]
+  - id: validate_transfer_parties
+    kind: task
+    input: { operation: assurance.ownership.validate_owner_recipient_and_route }
+    next: [approval_required]
+  - id: approval_required
+    kind: condition
+    expression: { path: context.approval_required, op: eq, value: true }
+    on_true: approve_transfer
+    on_false: apply_transfer
+  - id: approve_transfer
+    kind: decision
+    question: Approve transfer of this production surface to the proposed deploying owner?
+    input: { default_action: hold, required_refs: [surface, from_owner, to_owner, reason, rollback_plan] }
+    next: [apply_transfer]
+  - id: apply_transfer
+    kind: task
+    input: { operation: assurance.ownership.compare_and_swap_transfer }
+    next: [transfer_applied]
+  - id: transfer_applied
+    kind: condition
+    expression: { path: context.transfer_applied, op: eq, value: true }
+    on_true: publish_handoff
+    on_false: report_stale_version
+  - id: publish_handoff
+    kind: task
+    input: { operation: assurance.ownership.publish_handoff_and_coordination_route }
+    next: [emit_transfer_event]
+  - id: report_stale_version
+    kind: task
+    input: { operation: assurance.ownership.reject_stale_transfer }
+    next: [emit_transfer_event]
+  - id: emit_transfer_event
+    kind: task
+    input: { operation: audit.emit_ownership_transfer }
+rules:
+  no_interval_with_two_current_owners: true
+  expected_version_compare_and_swap_required: true
+  stale_transfer_is_rejected: true
+  emergency_or_policy_selected_transfer_requires_decision: true
+  handoff_preserves_coordination_route: true
+completion:
+  artifacts_required: [SurfaceOwnership, OwnershipTransition, Decision]

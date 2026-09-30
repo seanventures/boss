@@ -1,0 +1,48 @@
+kind: ObjectSpec
+id: ChangeSet
+version: 0.1.0
+description: Planned provider/resource change that must pass policy, budget, approval, and receipt gates.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: task_id
+    type: string
+  - name: title
+    type: string
+  - name: state
+    type: enum
+    values: [draft, quoted, policy_checked, budget_reserved, pending_approval, approved, applying, applied, failed, rolled_back, deadlettered]
+  - name: risk_tier
+    type: integer
+  - name: operations
+    type: array
+  - name: cost_quote_usd_micros
+    type: integer
+  - name: budget_reservation_id
+    type: string
+  - name: rollback_plan
+    type: string
+  - name: approvals_required
+    type: array
+  - name: expected_receipts
+    type: array
+  - name: resource_receipt_ids
+    type: array
+state_machine:
+  draft: [quoted, failed]
+  quoted: [policy_checked, failed]
+  policy_checked: [budget_reserved, pending_approval, failed]
+  budget_reserved: [pending_approval, approved, failed]
+  pending_approval: [approved, failed, deadlettered]
+  approved: [applying, failed]
+  applying: [applied, failed, rolled_back]
+  applied: [rolled_back]
+  failed: [rolled_back, deadlettered]
+  rolled_back: []
+  deadlettered: []
+rules:
+  provider_write_requires_changeset: true
+  spendy_action_requires_budget_reservation: true
+  destructive_action_requires_explicit_approval: true

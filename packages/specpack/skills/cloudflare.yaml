@@ -1,0 +1,61 @@
+skills:
+  - id: cloudflare.dns.record.upsert
+    kind: provider
+    risk_tier: 2
+    mock_mode: false
+    description: Upsert a Cloudflare DNS record through a ChangeSet and ResourceReceipt.
+    data_boundary: internal
+    input_schema:
+      zone_id: string
+      name: string
+      record_type: string
+      value: string
+      ttl: integer?
+    output_schema:
+      provider_ref: string
+      resource_receipt_id: string
+    cost: { estimator: fixed, category: provider }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_dns_write] }
+    policy: { requires_changeset: true, requires_resource_receipt: true, production_requires_approval: true, production_requires_rollback_plan: true }
+  - id: cloudflare.worker.deploy
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Deploy a Cloudflare Worker target with release receipts and rollback evidence.
+    data_boundary: internal
+    input_schema: { deployment_target_id: string, artifact_id: string, environment: string }
+    output_schema: { deployment_id: string, resource_receipt_id: string }
+    cost: { estimator: provider_plan, category: deploy }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_deploy] }
+    policy: { requires_changeset: true, requires_approval: [ceo, release_manager], requires_rollback_plan: true }
+  - id: cloudflare.pages.deploy
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Trigger a Git-connected Cloudflare Pages deployment with release receipts and rollback evidence.
+    data_boundary: internal
+    input_schema: { deployment_target_id: string, project_name: string, account_id: string, branch: "string?" }
+    output_schema: { deployment_id: string, deployment_url: "string?", resource_receipt_id: string }
+    cost: { estimator: provider_plan, category: deploy }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_deploy] }
+    policy: { requires_changeset: true, requires_approval: [ceo, release_manager], requires_rollback_plan: true }
+  - id: cloudflare.r2.bucket.create
+    kind: provider
+    risk_tier: 2
+    mock_mode: false
+    description: Create an R2 bucket after budget, policy, and ChangeSet checks.
+    data_boundary: internal
+    input_schema:
+      account_id: string
+      bucket_name: string
+      region: string?
+    output_schema:
+      bucket_ref: string
+      resource_receipt_id: string
+    cost: { estimator: storage_usage_estimate, category: storage }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_storage_write] }
+    policy: { requires_changeset: true, requires_budget_reservation: true, requires_resource_receipt: true }

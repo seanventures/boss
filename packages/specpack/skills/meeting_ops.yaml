@@ -1,0 +1,71 @@
+# Turning a meeting into tracked work.
+#
+# The same split the video lane uses, for the same reason: a model reads the prose and writes a
+# structured list, a person approves the list, and a separate step performs the effect. The
+# model decides WHAT was agreed; it never creates anything.
+skills:
+  - id: meeting.extract_actions
+    kind: analysis
+    # Tier 0: it reads a transcript and returns a list. It touches no tracker, no channel and
+    # no file, which is what makes it safe to run unattended and worth separating from the step
+    # that does.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Read a meeting transcript and write down what was decided and what somebody has to do,
+      with the owner as named and the timing as said. Creates nothing.
+    data_boundary: internal
+    input_schema:
+      transcript: string
+      # Anything the model should know that the transcript does not say — who the team are,
+      # what the project is called, how tickets are usually written here.
+      context: string?
+    output_schema:
+      decisions: array
+      actions: array
+      # What it heard and could not place. An output rather than a log, because it is where a
+      # missed action item will be.
+      unclear: array
+      summary: string
+      action_count: integer
+    cost: { estimator: runtime_plus_model, category: model }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [program_manager, pm, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: false
+
+  - id: tracker.issues.create
+    kind: work_tracking
+    # Tier 2 — at the approval floor, deliberately. This writes into a tracker other people
+    # read and act on, and tickets invented from a misheard sentence cost somebody a day. A
+    # person sees the list as sentences before any of it is real.
+    risk_tier: 2
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Create issues in the project's work tracker — Plane by default, or Jira, Linear, GitHub
+      Issues or Azure DevOps. Takes a LIST, because a meeting produces several actions and a
+      workflow's step list is fixed.
+    data_boundary: internal
+    input_schema:
+      actions: array
+      # Which tracker, when a project has more than one. Empty means its default.
+      provider_key: string?
+    output_schema:
+      created: array
+      # Reported, not hidden. Six tickets where the fourth fails leaves five real ones behind,
+      # and a step that simply raised would say nothing about which.
+      failed: array
+      created_count: integer
+      tracker: string
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [program_manager, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_capabilities: [work_tracker.write]

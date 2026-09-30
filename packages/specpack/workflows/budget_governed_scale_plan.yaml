@@ -1,0 +1,35 @@
+kind: WorkflowSpec
+id: budget_governed_scale_plan
+version: 0.1.0
+description: Scale local or cloud worker capacity only when budget, provider health, policy, and approval gates allow.
+phases:
+  - id: inspect_queue_pressure
+    actor: scheduler
+    outputs: [WorkerPool]
+  - id: inspect_budget_headroom
+    actor: budget_governor
+    outputs: [BudgetPolicy, BudgetAllocation]
+  - id: inspect_provider_health
+    actor: resource_plane_kernel
+    outputs: [ProviderHealth]
+  - id: produce_scale_plan
+    actor: autoscaler
+    outputs: [ScalePlan]
+  - id: reserve_budget
+    actor: budget_governor
+    outputs: [BudgetReservation]
+    optional: true
+  - id: create_changeset_for_cloud_spillover
+    actor: resource_plane_kernel
+    outputs: [ChangeSet]
+    optional: true
+  - id: request_approval
+    actor: decision_inbox
+    outputs: [Decision]
+    optional: true
+rules:
+  budget_governor_wins_over_autoscaler: true
+  cloud_spillover_requires_budget_reservation: true
+  provider_write_requires_changeset: true
+  red_or_frozen_budget_enters_degraded_mode: true
+

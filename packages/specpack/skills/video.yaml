@@ -1,0 +1,544 @@
+# Editing a video, as a BOSS capability.
+#
+# `builtin`, not `sandboxed_command`, and the difference is the entire safety argument. That
+# kind exists for operator-authored command lines and refuses without micro-VM isolation —
+# correctly, since an arbitrary ffmpeg line on the control plane is remote code execution
+# against the host holding every project's credentials.
+#
+# Nothing here is operator-authored. BOSS owns every argument vector; the operator supplies a
+# corner from a fixed set and timecodes matched against a regex, and no shell is involved at
+# all. See engine/boss_engine/services/video_edit.py.
+#
+# EVERY STEP TAKES A DRIVE FILE AND LEAVES A DRIVE FILE. Steps cannot hand each other a local
+# path — each runs in its own invocation and the working directory is gone by the time the next
+# starts. The unit passed between them is an artifact naming a Drive file, which has the useful
+# side effect that an operator can watch the output of any intermediate step.
+skills:
+  - id: video.trim
+    kind: media_edit
+    # Writes a new file and destroys nothing. The source is never modified: `drive.file` cannot
+    # reach a file BOSS did not create.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: Cut a video to a start and end timecode, re-encoding so the cut lands where asked.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      start: string
+      end: string
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: video.watermark
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Overlay a logo in a corner, scaled as a fraction of the video's own width so the same
+      setting looks right on every aspect ratio the channel uses.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      logo_artifact_id: string
+      corner: string?
+      scale: number?
+      margin: integer?
+      opacity: number?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      # A fixed vocabulary, because this value becomes part of a filter expression.
+      allowed_values:
+        corner: [top_right, top_left, bottom_right, bottom_left]
+
+  - id: video.bookend
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Put a title card before and an ending slide after, normalising every part to one format
+      first. EITHER MAY BE A PICTURE or a clip — a still is held on screen for `seconds`. A part
+      with no audio track gets silence at its own length rather than failing.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      intro_artifact_id: string?
+      outro_artifact_id: string?
+      # How long a STILL stands on screen. Ignored for a clip, which has its own length.
+      seconds: number?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: video.cut
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Remove one or more ranges from the middle and join what is left. Not video.trim with
+      different arguments: trim keeps a single range, and "take out the bit at 3:10" cannot be
+      expressed as one range once the removal is in the middle.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      # A list of {start, end}. Overlapping ranges remove their union rather than failing —
+      # writing 3-6 and 5-8 by hand is ordinary, and naively it produces a zero-length segment
+      # ffmpeg refuses to encode.
+      remove: array
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: video.reframe
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Recrop to a different aspect ratio — a landscape recording to a vertical short. Crops,
+      never pads: padding gives a technically-vertical file with the original letterboxed
+      inside it, which is the thing vertical video exists to avoid.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      aspect: string
+      strategy: string?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      # The only editing step whose output dimensions differ from its input's, so a reviewer can
+      # see from the artifact alone whether the reframe happened.
+      width: integer
+      height: integer
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      allowed_values:
+        aspect: ["9:16", "16:9", "1:1", "4:5"]
+        # Only centre exists today. The value is listed rather than omitted so that asking for
+        # anything else is refused by policy and not silently centre-cropped — cropping to the
+        # middle when asked to follow the speaker crops out the speaker.
+        strategy: [center]
+
+  - id: video.overlay_image
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Show an image over part of the video for a set window while the audio keeps playing. Not
+      video.watermark with a time range: a watermark is small, cornered and present throughout.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      image_artifact_id: string
+      start: string
+      end: string
+      position: string?
+      scale: number?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      allowed_values:
+        position: [center, top_right, top_left, bottom_right, bottom_left]
+
+  - id: video.caption
+    kind: media_edit
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Burn a line of text over a window of the video. The text is the only free-form operator
+      string in this capability: it is written to a file and ffmpeg is handed the path, so no
+      character in it can be read as a filter option.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      text: string
+      start: string
+      end: string
+      style: string?
+      size: integer?
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+      allowed_values:
+        style: [lower_third, bottom, top]
+
+  - id: video.plan_edit
+    kind: media_edit
+    # THE ONE STEP THAT NEEDS JUDGEMENT. Fetching, editing and publishing are mechanical;
+    # reading "cut the boring bit and make it vertical" and deciding it means two specific
+    # operations is not. So a model writes a PLAN here and performs no edit — everything it
+    # produces goes through the same validator a hand-written step faces.
+    #
+    # SEPARATE FROM video.apply_plan ON PURPOSE. Together they would be one step that thinks and
+    # edits, and re-running it would re-plan — so a reviewer who rejected a render could not ask
+    # for the same plan again with one operation changed. Apart, the plan is its own artifact.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Turn free-form editing instructions into a validated edit plan, using the project's
+      standing house style as the default and this video's instructions as the override.
+      Renders nothing; the plan is reviewed before anything runs.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      # What to do with THIS video. The standing rules come from the editable
+      # `video_editing_standards` skill unless house_style is passed explicitly.
+      instructions: string
+      house_style: string?
+      # Images the plan may refer to, as {name: artifact_id}. A plan can only name what is
+      # listed here — the model never chooses which file gets read.
+      assets: object?
+    output_schema:
+      plan: array
+      # What it had to guess, and what it was asked for and could not do. These are the two
+      # things most likely to make the answer wrong, so they are outputs rather than logs.
+      assumptions: array
+      refused: array
+      timeline_note: string?
+      # The plan as sentences, for the human review step. Nobody reads JSON carefully while
+      # deciding whether to publish something.
+      summary: string
+      steps: integer
+    cost: { estimator: runtime_plus_model, category: model }
+    # One retry lives inside the executor and carries the rejection reason, which is the retry
+    # worth doing. A second identical attempt would spend money on the same mistake.
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      # No connection and no receipt: it touches no channel and changes nothing. Tier 0 is
+      # honest here in a way it would not be for any other step in this file.
+      requires_receipt: false
+
+  - id: video.apply_plan
+    kind: media_edit
+    # THE STEP A VIBE INSTRUCTION ACTUALLY RUNS. A workflow's step list is fixed when the
+    # version is authored and an instruction a person writes is not — four operations this time,
+    # nine the next. So the variability lives in `plan` rather than in the step graph: a model
+    # turns the prose into an ordered plan, BOSS validates every operation in it against the
+    # same vocabularies a hand-written step faces, and this runs the list.
+    #
+    # The model chooses WHAT to do. It never chooses what is possible: an op outside the fixed
+    # set is refused, an image is named as an artifact and never as a path, and an invalid plan
+    # is rejected whole before a single frame is encoded — a half-edited file is
+    # indistinguishable from a finished one without watching it.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Apply an ordered edit plan — cut, reframe, overlay, caption, trim, watermark — in one
+      pass, and record what each operation changed so a reviewer can check the result rather
+      than trust it.
+    data_boundary: internal
+    input_schema:
+      media_artifact_id: string
+      # A list of {op, ...arguments, why?}. `why` is the model's own reason, carried through to
+      # the artifact untouched: it is what makes a plan reviewable without watching the output.
+      plan: array
+      output_name: string?
+      output_folder_id: string?
+    output_schema:
+      media_artifact_id: string
+      view_url: string
+      # Per operation: the duration and frame size before and after. "The plan ran" is not
+      # evidence; a duration that fell where a cut was asked for is.
+      applied: array
+      # Set when the plan places a timed operation after a cut, because those timecodes then
+      # refer to the shortened video rather than the original recording.
+      timeline_note: string?
+      duration_seconds: number
+      width: integer
+      height: integer
+    cost: { estimator: runtime_plus_model, category: tool }
+    # NOT RETRIED AUTOMATICALLY. Every other editing step is idempotent in the ways that matter;
+    # a plan is long enough that a retry re-renders everything, and a plan that failed has
+    # usually failed for a reason a retry cannot fix.
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_connection: google
+      requires_connection_health: healthy
+
+  - id: media.fetch_link
+    kind: media_edit
+    # THE ENTRY POINT FOR A LINK, which drive.import_video is not: that takes a Drive file id and
+    # a person has a URL. The provider is worked out from the link itself — Google Drive,
+    # OneDrive/SharePoint, an S3-compatible bucket, or a plain HTTPS file — so "which storage
+    # holds the video" stops being a question the workflow has to be rebuilt to answer.
+    #
+    # A Google link is NOT copied: it already sits in the store the editing steps read from.
+    # Anything else is fetched once and stored once, and the artifact records the source URL so a
+    # published video is traceable back to the link it came from.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Turn a pasted video link into a media artifact the editing steps can take, whatever storage
+      it lives in. Refuses a link pointing inside BOSS's own network, and refuses a link that
+      returns a web page rather than a video.
+    data_boundary: internal
+    input_schema:
+      url: string
+      output_name: string?
+      output_folder_id: string?
+      # Where the fetched copy is kept. Google today; the port takes others as they are built.
+      store_provider: string?
+    output_schema:
+      media_artifact_id: string
+      name: string
+      provider: string
+      # False for a Google link, which needed no copy. Worth reporting: it is the difference
+      # between a step that moved several gigabytes and one that moved none.
+      copied: boolean
+      source_url: string
+      duration_seconds: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      # CAPABILITIES, NOT A PROVIDER NAME. `requires_connection: google` is what the rest of this
+      # file still says, and it is both unenforced and wrong for three of the four providers this
+      # skill accepts. A capability is a claim about what the step needs; which provider satisfies
+      # it is the connection's business. See engine/boss_engine/services/media_providers.py.
+      requires_capabilities: [storage.read, storage.write]
+      requires_connection_health: healthy
+
+  - id: media.fetch_image
+    kind: media_edit
+    # THE SLIDE, THE LOGO, THE END CARD. `media.fetch_link` refuses anything that is not a video,
+    # which is correct for the thing being edited and left no way at all to get a PICTURE into
+    # BOSS. There is no artifact upload in the console, so an operator asked for an "ending slide"
+    # had to name an artifact id they had no means of obtaining — the same class of dead end as a
+    # start form with no fields.
+    #
+    # IT ALSO PRODUCES `assets` READY TO WIRE. The planning step takes {name: artifact_id}, and a
+    # step output is a single value, so returning the map means the two steps join with no
+    # intermediate anything.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Turn a pasted image link into an artifact the editing steps can put on screen — an ending
+      slide, a title card, a logo. Refuses a link pointing inside BOSS's own network, and refuses
+      a link that returns a web page rather than an image.
+    data_boundary: internal
+    input_schema:
+      url: string
+      # What the plan calls it. The planning model reads this name to decide what the picture is
+      # FOR, so "ending slide" plans differently from "logo" — which is the whole reason the
+      # asset map is keyed by a name rather than being a bare list.
+      name: string?
+      output_name: string?
+      output_folder_id: string?
+      store_provider: string?
+    output_schema:
+      image_artifact_id: string
+      # {name: artifact_id}, for wiring straight into video.plan_edit's `assets`.
+      assets: object
+      name: string
+      provider: string
+      width: number
+      height: number
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_capabilities: [storage.read, storage.write]
+      requires_connection_health: healthy
+
+  - id: media.read_document
+    kind: media_edit
+    # READING WHAT THE OPERATOR ALREADY WROTE DOWN.
+    #
+    # An agent could fetch a video and an image and not a document, so a title and description
+    # written in a Drive doc had to be retyped into a form. This is the third member of the
+    # same family: turn a link into something the agent can use.
+    #
+    # Tier 0 — it reads, and it stores nothing.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Read a Google Doc, Slides deck, Sheet, PDF or plain text file from Drive and return its
+      text. Use it when the operator points at a document for the details — a title, a
+      description, a brief. Any script: the text comes back as UTF-8 in the order it was
+      written, so Tamil and other non-Latin writing survives intact, including out of a PDF,
+      where the glyphs are stored in the order they are PAINTED and have to be put back. A
+      scanned PDF is read by OCR; give `language` (an ISO code such as "ta") if you know it.
+      It cannot read an image — use media.fetch_image for that.
+      GIVE EITHER `url` (the share link) OR `file_id` (the id out of it) — one of them, not both.
+    data_boundary: internal
+    input_schema:
+      # NEITHER IS REQUIRED, BECAUSE EITHER WILL DO — and the declaration is the contract the
+      # MODEL PROVIDER ENFORCES, not a hint. `url: string` meant the tool schema said url was
+      # required; an agent that had already extracted the id called it with `file_id` alone and
+      # Groq refused the call before BOSS ever saw it:
+      #
+      #   Tool call validation failed: parameters for tool skill_media_read_document did not
+      #   match schema: errors: [missing properties: 'url']
+      #
+      # The step deadlettered over a schema that disagreed with its own executor, which has
+      # always accepted either. A declaration that overstates what is required is a lie the
+      # provider tells on your behalf. The executor rejects a call with neither, and says so.
+      url: string?
+      file_id: string?
+      language: string?
+    output_schema:
+      text: string
+      # The same text with "N: " in front of every line. An agent hands a value to the next step
+      # by pointing at the lines it is on — retyping it corrupts non-Latin script, and a pointer
+      # made of the document's own words is corrupted the same way. Digits are safe.
+      numbered_text: string
+      name: string
+      characters: number
+      mime_type: string
+      read_via: string
+      file_id: string
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm, program_manager]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+      requires_capabilities: [storage.read]
+      requires_connection_health: healthy
+
+  - id: drive.import_video
+    kind: media_edit
+    # THE ENTRY POINT. Records where a video is; downloads nothing. Every editing step takes a
+    # media_artifact_id, and without this there is no way to make the first one.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: Turn a Drive video into a media artifact the editing steps can take.
+    data_boundary: internal
+    input_schema:
+      file_id: string
+    output_schema:
+      media_artifact_id: string
+      name: string
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_connection: google
+
+  - id: drive.list_videos
+    kind: media_edit
+    # A read. Lists only video mime types, and only what the connected account can already see.
+    risk_tier: 0
+    mock_mode: false
+    load: on_demand
+    description: List the videos in the operator's Drive, so a workflow can be given one by name.
+    data_boundary: internal
+    input_schema:
+      folder_id: string?
+      limit: integer?
+    output_schema:
+      files: array
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: [media_publisher, video_editor, workflow_runner, pm]
+      required_permissions: [workflow_execute]
+    policy:
+      requires_connection: google

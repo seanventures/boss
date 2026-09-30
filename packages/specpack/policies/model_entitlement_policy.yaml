@@ -1,0 +1,29 @@
+kind: Policy
+id: model_entitlement_policy
+version: 0.1.0
+scope:
+  type: org
+rules:
+  invariant: optimize_across_authorized_capacity_do_not_bypass_limits
+  access_classes: [local_model, official_cli, official_api, enterprise_model_gateway, managed_cloud_model_gateway]
+  routing_modes: [subscription_first, quality_first, budget_safe, parallel_sprint, local_first, enterprise_policy]
+  require_model_route_decision: true
+  require_capacity_receipt_for_subscription_or_cli_work: true
+  require_cost_receipt_for_api_work: true
+  api_fallback_requires_budget_reservation: true
+  fail_closed_on:
+    - missing_credentials
+    - exhausted_capacity
+    - rate_limited
+    - unhealthy_provider
+    - data_boundary_conflict
+    - provider_rule_conflict
+    - missing_budget_reservation
+  prohibited:
+    consumer_ui_scraping: true
+    private_endpoint_use: true
+    credential_sharing: true
+    account_pooling: true
+    rate_limit_circumvention: true
+    personal_subscription_for_multi_tenant_customer_workloads: true
+

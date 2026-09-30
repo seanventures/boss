@@ -1,0 +1,25 @@
+# Ruff configuration for the BOSS repository.
+#
+# `make lint` runs ruff over apps/api and apps/worker; CI additionally runs the real-bug
+# subset (E9,F63,F7,F82) over engine/ and apps/ — see .github/workflows/ci.yml.
+#
+# Ignores below are DELIBERATE PATTERNS, each with the reason it exists. An ignore without a
+# reason is indistinguishable from an unfixed bug.
+
+line-length = 100
+
+[lint.per-file-ignores]
+# Import order is load-bearing in both test configurations. DATABASE_URL must be rewritten to a private schema
+# BEFORE `apps.api.app.main` is imported, because the app builds its own engine at import
+# time; a fixture that rewrites it later would leave the app in `public` while the tests
+# work in their own schema. The file explains this at length. Reordering these imports
+# would break the confinement that makes `clean_tables` safe to run at all.
+"apps/api/tests/conftest.py" = ["E402"]
+"apps/api/tests/conftest-community.py" = ["E402"]
+
+# BOSS-418: apps/api/app/main.py is a 24,796-line module whose later imports sit after
+# service construction. Some of that placement is deliberate (circular-import avoidance),
+# some is drift, and telling them apart needs the apps/api suite against a real Postgres.
+# Ignored rather than reordered blind: an import moved wrongly here fails at startup, not
+# in a test. Remove this entry when the module is split.
+"apps/api/app/main.py" = ["E402"]

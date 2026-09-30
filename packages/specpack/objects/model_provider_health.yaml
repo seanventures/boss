@@ -1,0 +1,23 @@
+id: ModelProviderHealth
+version: 1
+description: Health and capacity posture for model providers, backed by entitlement pools, capacity receipts, route decisions, and provider health where applicable.
+backing_runtime:
+  primary_tables: [entitlement_pools, capacity_receipts, model_route_decisions, provider_health]
+fields:
+  - name: provider
+    type: string
+    required: true
+  - name: source
+    type: enum
+    values: [subscription, api, local, enterprise_gateway, managed_cloud]
+    required: true
+  - name: status
+    type: enum
+    values: [available, cooldown, degraded, denied, unavailable]
+    required: true
+  - name: observed_capacity
+    type: object
+    required: false
+invariants:
+  - Health observations must not bypass provider limits.
+  - Paid fallback requires BudgetReservation when policy requires it.

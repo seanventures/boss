@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in BOSS Community did not do what you expected.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us what you were doing and what you expected. Do not paste secrets.
+
+        Do not paste `.env`, API keys, tokens, passwords, private keys, or customer data. Redact hostnames you do not want public.
+
+        If this is a vulnerability, stop. Email boss@sean.net. Do not open a public issue for a vulnerability.
+  - type: textarea
+    id: doing
+    attributes:
+      label: What were you doing?
+      description: The screen, command, or goal you were in the middle of.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened instead?
+      description: Include the exact error text if there is one, with secrets removed.
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How did you install?
+      options:
+        - 'Local checkout (./install.sh --dir "$PWD")'
+        - Pinned one-liner, after a reviewed commit replaced the placeholder
+        - Upgrade of an existing install
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: edition
+    attributes:
+      label: Edition
+      description: Community, or the value returned for your project by the edition endpoint. Say if the install never got that far.
+      placeholder: Community
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BOSS version or commit
+      placeholder: v0.14.0 or the full commit SHA from your checkout
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. Paste only redacted logs. Do not paste secrets, tokens, passwords, or the contents of .env.
+    validations:
+      required: false
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, tokens, passwords, and private hostnames.
+          required: true

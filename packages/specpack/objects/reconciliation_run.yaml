@@ -1,0 +1,30 @@
+kind: ObjectSpec
+id: ReconciliationRun
+version: 0.1.0
+description: Provider inventory and desired-state reconciliation pass.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: status
+    type: enum
+    values: [running, succeeded, failed, deadlettered]
+  - name: resources_seen
+    type: integer
+  - name: resources_changed
+    type: integer
+  - name: drift_report_ids
+    type: array
+  - name: started_at
+    type: datetime
+  - name: completed_at
+    type: datetime
+  - name: error
+    type: object
+  - name: metadata
+    type: object
+rules:
+  every_sync_run_creates_inventory_snapshot_artifact: true
+  inventory_snapshot_artifact_id_stored_in_metadata: true
+  failed_syncs_keep_deadletter_and_snapshot_links: true

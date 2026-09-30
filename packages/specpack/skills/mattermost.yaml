@@ -1,0 +1,20 @@
+skills:
+  - id: mattermost.post_real
+    kind: communications
+    risk_tier: 2
+    mock_mode: false
+    load: on_demand
+    description: Post a governed status message as a configured Mattermost bot through the BOSS outbox.
+    data_boundary: internal
+    input_schema: { channel_id: string, subject: "string?", body: string, bot_identity_id: "string?" }
+    output_schema: { post_ref: string, receipt_id: string }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 3, backoff: exponential }
+    permissions:
+      allowed_callers: [comms_worker, coo, release_manager]
+      required_permissions: [mattermost_message_post]
+    policy:
+      requires_receipt: true
+      requires_budget_reservation: true
+      requires_lease: true
+      dedupe_key_template: "mattermost.post:{channel_id}:{subject}"

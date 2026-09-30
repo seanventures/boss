@@ -1,0 +1,39 @@
+kind: ObjectSpec
+id: WorkerPool
+version: 0.1.0
+description: Local or cloud worker-capacity pool governed by the Budget-Aware Autoscaler.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: pool_key
+    type: string
+  - name: kind
+    type: enum
+    values: [local, cloud]
+  - name: provider_account_id
+    type: string
+  - name: status
+    type: enum
+    values: [active, draining, disabled, error]
+  - name: current_workers
+    type: integer
+  - name: desired_workers
+    type: integer
+  - name: min_workers
+    type: integer
+  - name: max_workers
+    type: integer
+  - name: max_queue_depth_per_worker
+    type: integer
+  - name: cost_per_worker_hour_usd_micros
+    type: integer
+  - name: capabilities
+    type: array
+  - name: metadata
+    type: object
+rules:
+  local_capacity_can_update_desired_state: true
+  cloud_capacity_requires_changeset: true
+  budget_governor_overrides_autoscaler: true

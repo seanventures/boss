@@ -1,0 +1,80 @@
+name: Install or setup problem
+description: The installer, model connection, or startup did not finish as you expected.
+title: "[Installation] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Say where setup stopped and what you expected to see. Do not paste secrets.
+
+        Do not paste `.env`, API keys, model tokens, passwords, or private logs. Redact hostnames and customer data.
+
+        If this is a vulnerability, stop. Email boss@sean.net. Do not open a public issue for a vulnerability.
+  - type: textarea
+    id: doing
+    attributes:
+      label: What were you doing?
+      description: The command or step you ran, without secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: For example, a success card and Mission Control on 127.0.0.1 port 3000.
+    validations:
+      required: true
+  - type: textarea
+    id: stopped
+    attributes:
+      label: Where did setup stop?
+      description: The step name and the redacted error output.
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How did you install?
+      options:
+        - 'Local checkout (./install.sh --dir "$PWD")'
+        - Pinned one-liner, after a reviewed commit replaced the placeholder
+        - Upgrade of an existing install
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: edition
+    attributes:
+      label: Edition
+      description: Community, or the edition value if the API came up. Write "did not get that far" if it never started.
+      placeholder: Community
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS and version
+      placeholder: Ubuntu 24.04 or Debian 12, and the CPU architecture
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BOSS version or commit
+      description: The checkout commit, or "not published yet" if you have not replaced the install placeholder.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. If BOSS started, you can run scripts/install/checkup.sh and paste only the failing lines. Do not paste secrets, tokens, passwords, or the contents of .env.
+    validations:
+      required: false
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, tokens, passwords, and private hostnames.
+          required: true

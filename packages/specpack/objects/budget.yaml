@@ -1,0 +1,49 @@
+kind: ObjectSchemas
+version: 0.1.0
+objects:
+  BudgetPolicy:
+    fields:
+      id: string
+      scope_type: { enum: [org, workspace, project, initiative] }
+      scope_id: string
+      daily_cap_usd_micros: integer
+      monthly_cap_usd_micros: integer
+      burst_cap_usd_micros_per_min: integer
+      max_concurrent_jobs: integer
+      max_workers_total: integer
+      allowed_model_tiers: { array: string }
+      soft_cap_pct: number
+      auto_lite_mode_pct: number
+      freeze_provisioning_pct: number
+      freeze_tier2_pct: number
+      version: integer
+  BudgetAllocation:
+    fields:
+      id: string
+      parent_allocation_id: string?
+      scope_type: { enum: [org, workspace, project, initiative, department, role] }
+      scope_id: string
+      amount_usd_micros: integer
+      period_start: datetime
+      period_end: datetime
+      status: { enum: [active, exhausted, cancelled, expired] }
+  BudgetReservation:
+    fields:
+      id: string
+      allocation_id: string
+      job_id: string?
+      category: { enum: [model, tool, infra, comms, storage] }
+      amount_usd_micros: integer
+      status: { enum: [active, consumed, released, expired, denied] }
+      expires_at: datetime
+  CostReceipt:
+    fields:
+      id: string
+      reservation_id: string?
+      receipt_id: string?
+      category: { enum: [model, tool, infra, comms, storage] }
+      skill_or_model_id: string
+      estimated_usd_micros: integer
+      actual_usd_micros: integer?
+      status: { enum: [estimated, actual, reconciled, failed] }
+      created_at: datetime

@@ -1,0 +1,23 @@
+# BOSS Engine runtime dependencies.
+#
+# Derived from apps/api/requirements.txt MINUS the web layer (fastapi, uvicorn)
+# and dev tools (pytest, ruff) — the engine ships without an HTTP framework.
+# The optional HTTP transport for the MCP server needs the [mcp-http] extra in
+# pyproject.toml (fastapi + uvicorn); stdio MCP and the engine-native agent do
+# not. Keep this in sync with the api manifest for the shared packages.
+boto3==1.43.51
+httpx==0.28.1
+openai==1.93.0
+pydantic-settings==2.10.1
+PyJWT[crypto]==2.13.0
+cryptography==50.0.0
+PyYAML==6.0.2
+psycopg[binary]==3.2.9
+sqlalchemy==2.0.41
+websockets==15.0.1
+reportlab==4.5.1
+markdown==3.9
+redis==5.2.1
+# playwright is only needed by the visual/design screenshot path; install
+# separately if you enable those gates:  pip install playwright==1.60.0
+pypdf==5.9.0

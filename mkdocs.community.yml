@@ -1,0 +1,80 @@
+site_name: BOSS
+site_description: Self-hosted control plane for software work
+# site_url is filled in when GitHub Pages is enabled. The site has not been published.
+repo_url: https://github.com/seanventures/boss
+repo_name: seanventures/boss
+docs_dir: docs/community
+strict: true
+copyright: You run this. The manual is not a hosted service.
+
+theme:
+  name: material
+  language: en
+  font: false
+  logo: assets/mark.svg
+  favicon: assets/mark.svg
+  features:
+    - navigation.sections
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/white-balance-sunny
+        name: Switch to light
+
+extra:
+  generator: false
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.highlight:
+      pygments_lang_class: true
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+nav:
+  - Home: README.md
+  - Start:
+      - Quickstart: QUICKSTART.md
+      - Use cases: use-cases.md
+      - Walkthroughs: walkthroughs.md
+      - Interfaces: interfaces.md
+      - Connect models: MODEL_CONNECTIONS.md
+      - Mission Control: CONSOLE_AUTH.md
+      - Hostname: hostname.md
+      - Terminal: terminal.md
+      - CLI: cli.md
+  - Control plane:
+      - Control surfaces: CONTROL_SURFACES.md
+      - Terminal and API: TERMINAL_API.md
+      - Remote API: remote-api.md
+      - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+      - MCP: MCP.md
+      - Grok CLI: GROK_CLI.md
+  - Product:
+      - Features: FEATURES.md
+      - Feedback: FEEDBACK_LOOP.md
+  - Maintainers:
+      - Publishing: publishing.md
+
+plugins:
+  - search

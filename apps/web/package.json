@@ -1,0 +1,28 @@
+{
+  "name": "boss-web",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "1.0.0-rc.1",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next typegen && tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@boss/api-client": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
+    "next": "^15.3.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "happy-dom": "^20.14.5",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

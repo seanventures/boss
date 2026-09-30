@@ -1,0 +1,22 @@
+kind: WorkflowSpec
+id: meeting_consensus
+version: 0.1.0
+phases:
+  - propose
+  - critique
+  - revise
+  - vote
+timeouts_minutes:
+  propose: 30
+  critique: 30
+  revise: 30
+  vote: 15
+rules:
+  no_tool_use_without_budget: true
+  no_phase_runs_past_timeout: true
+  quorum_minimum: 2
+outputs:
+  - transcript_artifact
+  - minutes_artifact
+  - decision_records
+  - action_tasks

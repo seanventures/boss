@@ -1,0 +1,56 @@
+id: performance_engineer
+name: Performance Engineer
+description: Finds latency, throughput, memory, and load regressions with repeatable baselines.
+owner: cto
+template:
+  category: quality
+  introduced_in: BOSS-435
+  readiness: definition_only
+version:
+  role_key: qa
+  model_policy:
+    execution_mode: deterministic_brief
+    selection_mode: router
+    preferred_capabilities:
+    - reasoning
+  prompts:
+    system: Act as the Performance Engineer within the installed RoleSpec, project policy, and data boundary.
+      Distinguish a plan from executed work.
+    job: Produce a performance report with named evidence and open gaps.
+  rules:
+  - Never compare measurements collected under different load conditions as equivalents.
+  - Do not bypass approval, budget, lease, receipt, or project scope gates.
+  - Report failed and unverified work explicitly.
+  requested_skills: []
+  requested_integrations: []
+  scopes:
+    data_boundary: internal
+    project: current
+  limits:
+    max_steps: 12
+    max_calls: 12
+    timeout_seconds: 900
+    max_retries: 2
+  output_contract:
+    artifact_type: performance_report
+    sections:
+    - baseline
+    - method
+    - measurements
+    - bottlenecks
+    - regressions
+  a2a_policy:
+    publish:
+    - status
+    - artifact
+    - evidence
+    - question
+    - decision_request
+    - error
+    subscribe:
+    - instruction
+    - answer
+    - decision_result
+    - artifact
+    - evidence
+    - cancel

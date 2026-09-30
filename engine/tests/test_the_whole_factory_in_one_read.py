@@ -1,0 +1,329 @@
+"""One agent, given the whole factory — and the Shepherd's judgement without its autopilot.
+
+BOSS had three agent surfaces and the operator used one of them:
+
+  * the chat area — a thread rail and a composer that knew nothing about the system;
+  * the Metatron Captain — an always-on captain whose `metatron_sessions` table does not exist
+    in this database, so the page was a shell over state that was never created;
+  * the Task Shepherd — an autopilot switched off after one afternoon in which it opened repair
+    tasks nobody asked about, retried a build the operator was already retrying by hand, and
+    held the only worker slot for 33 minutes.
+
+"I never used Metatron and Agent chat is not good... please come up with the new design for
+common Agent and it should have full picture of the BOSS software factory."
+
+What makes the agent good on the OTHER screens is not the model. Those screens hand it the facts
+before the first word. This is that, for everything at once.
+
+And the Shepherd's taxonomy — what an operational failure MEANS and what usually fixes it,
+written from a session where 13 runs cost $66.65 and 58% produced nothing — was always the good
+part. Acting on it unattended was the problem. Here it names each failure and offers the remedy
+as a button.
+"""
+from __future__ import annotations
+
+import inspect
+
+import pytest
+
+from boss_engine.services import task_shepherd
+from boss_engine.services.factory_briefing import (
+    PER_KIND,
+    briefing_lines,
+    factory_briefing,
+)
+
+
+class _Conn:
+    """Answers each of the briefing's queries from a canned table."""
+
+    def __init__(self, **by_table):
+        self.by_table = by_table
+
+    def execute(self, statement, params=None):
+        text = str(statement)
+        rows = []
+        for table, value in self.by_table.items():
+            if f"FROM {table}" in text:
+                rows = value
+                break
+
+        class Result:
+            def mappings(self_inner):
+                return self_inner
+
+            def all(self_inner):
+                return rows
+
+        return Result()
+
+
+DECISION = {"id": "dec_1", "question": "Merge PR #186", "status": "pending", "risk_tier": 2,
+            "deadline_at": "2026-09-07T02:33Z", "default_action": "hold",
+            "created_at": "2026-09-06T02:31Z"}
+STEP = {"id": "wfs_1", "step_id": "deploy", "status": "deadlettered",
+        "last_error": "deployment failed: connection refused", "output": {},
+        "workflow_run_id": "wfr_1", "updated_at": "2026-09-06T06:04Z",
+        "input": {"title": "Build a lead triage inbox.\nWho it is for: a small team"}}
+
+
+class TestTheBriefingIsTheWholeFactory:
+    def test_it_covers_every_domain_that_can_stop(self):
+        out = factory_briefing(_Conn(), "p")
+        assert set(out["counts"]) == {"decisions", "workflow_steps", "unhealthy", "quiet_builds"}
+
+    def test_a_quiet_factory_says_so_rather_than_inventing_work(self):
+        out = factory_briefing(_Conn(), "p")
+        assert out["quiet"] is True and out["total"] == 0
+
+    def test_one_broken_section_does_not_take_the_others_with_it(self):
+        """A briefing that fails because one table is missing tells the operator nothing about
+        the four that are fine."""
+        class Half(_Conn):
+            def execute(self, statement, params=None):
+                if "FROM decisions" in str(statement):
+                    raise RuntimeError("relation does not exist")
+                return super().execute(statement, params)
+
+        out = factory_briefing(Half(workflow_step_runs=[STEP]), "p")
+        assert out["counts"]["decisions"] == 0
+        assert out["counts"]["workflow_steps"] == 1
+
+    def test_an_unanswered_hold_says_why_it_waits_for_ever(self):
+        """"Overdue" alone is a nag. An expired hold applies NOTHING, which is the reason to
+        act — seven of these were why the factory was idle."""
+        out = factory_briefing(_Conn(decisions=[DECISION]), "p")
+        assert "applies nothing" in out["items"][0]["note"]
+
+    def test_a_quiet_build_is_not_called_stalled(self):
+        """The last build called stalled was cancelled, and it was fine."""
+        conn = _Conn(code_task_runs=[{"id": "crun_1", "title": "Interview Scorecard App",
+                                      "status": "running", "phase": "implement",
+                                      "updated_at": "x", "quiet_seconds": 1700}])
+        item = factory_briefing(conn, "p")["items"][0]
+        assert "stall" not in item["note"].lower()
+        assert item["quiet_minutes"] == 28
+
+    def test_each_kind_is_bounded(self):
+        """Thirty rows of "needs you" is the same as none: nobody reads to the bottom."""
+        conn = _Conn(decisions=[{**DECISION, "id": f"dec_{i}"} for i in range(40)])
+        assert factory_briefing(conn, "p")["counts"]["decisions"] <= PER_KIND
+
+
+class TestTheShepherdsJudgementWithoutItsAutopilot:
+    def test_a_failure_is_named_in_words(self):
+        out = factory_briefing(_Conn(workflow_step_runs=[STEP]), "p")
+        assert out["items"][0]["diagnosis"]["kind"] == "deployment failed"
+
+    def test_and_carries_what_usually_fixes_it(self):
+        out = factory_briefing(_Conn(workflow_step_runs=[STEP]), "p")
+        remedies = out["items"][0]["diagnosis"]["remedies"]
+        assert remedies and all("describe" in r for r in remedies)
+
+    def test_the_taxonomy_is_the_shepherd_s_own(self):
+        """Not a second table that drifts from it — the same classify() the shepherd used."""
+        from boss_engine.services import factory_briefing as module
+
+        body = inspect.getsource(module)
+        assert "task_shepherd.classify(" in body
+        assert "task_shepherd.REMEDIES" in body
+
+    def test_nothing_is_run(self):
+        """The one thing the autopilot got wrong. Remedies are described and offered; the
+        briefing never calls one."""
+        from boss_engine.services import factory_briefing as module
+
+        body = inspect.getsource(module)
+        assert "registry.invoke" not in body
+        assert "_act_on_deployment" not in body
+
+    def test_an_unclassifiable_failure_is_still_shown(self):
+        out = factory_briefing(
+            _Conn(workflow_step_runs=[{**STEP, "last_error": "something nobody has seen"}]), "p")
+        assert out["total"] == 1
+
+    @pytest.mark.parametrize("error,expected", [
+        ("deployment failed: connection refused", "deployment failed"),
+        ("merge conflict in server/index.js", "true merge conflict"),
+    ])
+    def test_the_classes_it_leans_on_still_exist(self, error, expected):
+        assert task_shepherd.CLASS_NAMES[task_shepherd.classify(error)] == expected
+
+
+class TestWhatTheAgentIsHanded:
+    def test_the_lines_name_the_app_not_the_directive(self):
+        lines = briefing_lines(factory_briefing(_Conn(workflow_step_runs=[STEP]), "p"))
+        assert "Lead Triage Inbox" in lines[0]
+        assert "Who it is for" not in lines[0]
+
+    def test_and_the_failure_class_travels_with_the_error(self):
+        lines = briefing_lines(factory_briefing(_Conn(workflow_step_runs=[STEP]), "p"))
+        assert "(deployment failed)" in lines[0]
+
+    def test_it_is_reachable_as_a_tool_so_the_agent_reads_the_same_picture(self):
+        """The list an operator is looking at and the facts BOSS answers from must not be two
+        different reads."""
+        from boss_engine.tools import build_discuss_read_registry
+
+        registry = build_discuss_read_registry()
+        assert "factory_briefing" in registry.names()
+        assert registry.get("factory_briefing").kind == "read"
+
+    def test_the_tool_tells_the_model_to_start_there(self):
+        from boss_engine.tools import builtin
+
+        body = inspect.getsource(builtin)
+        assert "Call this FIRST when asked an open " in body
+        assert "instead of assembling the same picture from six separate " in body
+
+
+class TestASectionThatCouldNotBeReadIsNotAnEmptySection:
+    """It happened here, on the first live call. The decisions query named `title`; the column
+    is `question`. The section raised, the handler logged into a container nobody reads and
+    returned [], and the briefing answered "nothing needs you" while six decisions sat
+    unanswered and eleven workflow steps were stuck.
+
+    That is the exact shape of failure this page exists to end, produced by the page itself."""
+
+    class Boom:
+        def execute(self, statement, params=None):
+            raise RuntimeError('column "title" does not exist')
+
+    def test_the_reason_travels_with_the_answer(self):
+        out = factory_briefing(self.Boom(), "p")
+        assert out["errors"]
+        assert 'column "title" does not exist' in out["errors"]["decisions"]
+
+    def test_and_the_factory_is_not_called_quiet(self):
+        """Quiet means LOOKED AND FOUND NOTHING. With a section unread the honest answer is "I
+        do not know", and `quiet` is what the page renders as "nothing is blocked"."""
+        assert factory_briefing(self.Boom(), "p")["quiet"] is False
+
+    def test_a_genuinely_empty_factory_is_still_quiet(self):
+        assert factory_briefing(_Conn(), "p")["quiet"] is True
+
+    def test_the_column_it_got_wrong_is_the_one_the_table_has(self):
+        from boss_engine.services import factory_briefing as module
+
+        body = inspect.getsource(module)
+        assert "SELECT id, question, status, risk_tier" in body
+        assert 'row["question"]' in body
+
+    def test_the_console_says_which_part_it_could_not_read(self):
+        import pathlib
+
+        ui = pathlib.Path("apps/web/app/boss-agent-home.tsx").read_text()
+        assert 'data-testid="agent-briefing-partial"' in ui
+        assert "is therefore" in ui and "incomplete" in ui
+
+
+class TestWhatTheLiveBoardActuallyShowed:
+    """Six stopped rows, and every one of them wrong in the same four ways:
+
+        Interview Scorecard App. — build failed        unknown · usually: ask the operator…
+        New work — preview failed                      unknown · usually: ask the operator…
+        Vendor Status Watcher. — deploy deadlettered   unknown · usually: ask the operator…
+        Services + Last-Check-Time — monitor deadlettered
+            "nothing is being watched: this project has no active deployment target"
+
+    A placeholder rendered as an app name. Trailing full stops from the directive. An identical
+    grey "unknown" badge on all six, above the ESCALATE entry — which is not a remedy, it is the
+    table saying there isn't one — presented as "usually:". No dates, though they were one to
+    four days old. And two of them asserting the project had no deployment target while it had
+    six.
+    """
+
+    STEP = {"id": "wfs_x", "step_id": "monitor", "status": "deadlettered", "workflow_run_id": "wfr_9",
+            "last_error": "nothing is being watched: this project has no active deployment "
+                          "target, so no health probe will ever run against it.",
+            "output": {}, "updated_at": "2026-09-03T22:18:18+00:00",
+            "input": {"title": "New work"}}
+
+    def test_a_placeholder_is_not_an_app_name(self):
+        """"New work" passes every "is this a real row?" check because it IS a real row. An
+        operator then goes looking for an app called New work."""
+        from boss_engine.services.factory_briefing import _app_of
+
+        assert _app_of("New work", fallback="run wfr_9") == "run wfr_9"
+        assert _app_of("", fallback="run wfr_9") == "run wfr_9"
+
+    def test_the_directive_s_full_stop_does_not_become_the_name(self):
+        from boss_engine.services.factory_briefing import _app_of
+
+        assert _app_of("Build a vendor status watcher.") == "Vendor Status Watcher"
+        assert _app_of("Build an interview scorecard app.") == "Interview Scorecard App"
+
+    def test_a_real_name_is_untouched(self):
+        from boss_engine.services.factory_briefing import _app_of
+
+        assert _app_of("Team Directory") == "Team Directory"
+
+    def test_an_unrecognised_failure_says_nothing_rather_than_unknown(self):
+        """A badge that appears on every row carries no information, and costs the rows that DO
+        have a diagnosis their distinctiveness."""
+        from boss_engine.services.factory_briefing import _diagnosis
+
+        assert _diagnosis("the code_task it started finished as 'cancelled'") == {}
+
+    def test_escalate_is_never_offered_as_a_remedy(self):
+        """"usually: ask the operator one decision-shaped question" reads as advice. It is the
+        table's way of saying there is no remedy."""
+        from boss_engine.services.factory_briefing import _diagnosis
+
+        out = _diagnosis("deployment failed: connection refused")
+        assert out["remedies"]
+        assert all(r["id"] != "escalate" for r in out["remedies"])
+
+    def test_every_row_carries_its_age(self):
+        from boss_engine.services.factory_briefing import _age_of
+
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        assert _age_of((now - timedelta(days=4)).isoformat()) == "4 days ago"
+        assert _age_of((now - timedelta(minutes=20)).isoformat()) == "20m ago"
+        assert _age_of(None) == ""
+        assert _age_of("not a date") == ""
+
+    def test_a_reason_named_in_prose_is_re_checked_too(self):
+        """The monitor step set no `missing` key — it wrote a sentence. The recorded sentence
+        was true when written and false by the time anyone read it, which is the whole failure
+        this re-check exists for; it should not depend on which field the writer used."""
+        from boss_engine.services.workflow_recheck import blocker_status
+
+        class Targets:
+            def execute(self, statement, params=None):
+                class R:
+                    def mappings(self_inner): return self_inner
+                    def first(self_inner):
+                        return {"id": "deptgt_1", "app_name": "Change Calendar",
+                                "environment": "staging", "domains": ["192.0.2.202:3013"]}
+                    def all(self_inner): return []
+                return R()
+
+        out = blocker_status(Targets(), "p", self.STEP)
+        assert out and out["cleared"] is True
+        assert "now has active deployment targets" in out["reason"]
+
+    def test_and_still_says_no_when_it_is_still_true(self):
+        from boss_engine.services.workflow_recheck import blocker_status
+
+        class NoTargets:
+            def execute(self, statement, params=None):
+                class R:
+                    def mappings(self_inner): return self_inner
+                    def first(self_inner): return None
+                    def all(self_inner): return []
+                return R()
+
+        out = blocker_status(NoTargets(), "p", self.STEP)
+        assert out and out["cleared"] is False
+
+    def test_the_console_shows_the_age_and_the_cleared_reason(self):
+        import pathlib
+
+        ui = pathlib.Path("apps/web/app/boss-agent-home.tsx").read_text()
+        assert 'data-testid="agent-item-age"' in ui
+        assert 'data-testid="agent-item-cleared"' in ui
+        assert "No longer true:" in ui
+        # Not dropped: the step really did stop, and hiding that would be its own lie.
+        assert 'Recorded then: ' in ui

@@ -1,0 +1,28 @@
+kind: ObjectSpec
+id: EnterpriseScimGroup
+version: 0.1.0
+description: Enterprise SCIM group mapped to deterministic BOSS role and permission grants.
+fields:
+  - name: id
+    type: string
+  - name: org_id
+    type: string
+  - name: project_id
+    type: string
+  - name: external_id
+    type: string
+  - name: display_name
+    type: string
+  - name: role_keys
+    type: array
+  - name: permissions
+    type: array
+  - name: raw_group
+    type: object
+  - name: status
+    type: enum
+    values: [active, inactive]
+rules:
+  enterprise_manage_permission_required: true
+  group_permissions_merge_into_scim_users: true
+  raw_group_is_audit_metadata_not_authority: true

@@ -1,0 +1,57 @@
+# Exported as Makefile in the public Community repository.
+# The one-line installer creates .env and seeds the project. These targets operate
+# an existing install from its checkout; they never print credentials.
+
+SHELL := /bin/sh
+# A fresh installer session cannot yet use the docker group added for future logins.
+# Match the installer: use the socket directly when possible, then noninteractive sudo.
+DOCKER := $(shell if docker info >/dev/null 2>&1; then printf 'docker'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then printf 'sudo -n docker'; fi)
+COMPOSE := $(DOCKER) compose -f scripts/install/community-compose.yml --env-file .env
+
+.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready
+
+docker-ready:
+	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or grant noninteractive sudo access to Docker; a new login also activates docker-group access.' >&2; exit 1; }
+
+help:
+	@printf '%s\n' 'BOSS Community' \
+	  '  make dev     Start or rebuild the local stack after installation' \
+	  '  make seed    Rerun the idempotent project seed' \
+	  '  make status  Show service status' \
+	  '  make check   Check installation health' \
+	  '  make metatron  Open the local BOSS terminal' \
+	  '  make mcp-setup  Create a dedicated project MCP credential' \
+	  '  make mcp    Start a scoped MCP stdio session for an agent client' \
+	  '  make stop    Stop services and keep data' \
+	  'Install first: see docs/community/QUICKSTART.md for the reviewed-commit command'
+
+dev: .env docker-ready
+	$(COMPOSE) --profile web up -d --build
+
+seed: .env docker-ready
+	$(COMPOSE) exec -T api python -c 'from boss_engine.bootstrap import seed; seed()'
+
+status: .env docker-ready
+	$(COMPOSE) --profile web ps
+
+check: .env
+	./scripts/install/checkup.sh
+
+metatron: .env docker-ready
+	$(COMPOSE) exec api sh -c 'BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" python scripts/metatron_tui.py'
+
+# BOSS_PROJECT_ID=another-project selects an accessible project. Setup uses the
+# installed owner key only for member provisioning; the MCP session receives a
+# different credential and cannot use the owner or worker keys.
+mcp-setup: .env docker-ready
+	python3 scripts/install/mcp_access.py setup --restart-api
+
+mcp: .env
+	@python3 scripts/install/mcp_access.py serve
+
+stop: .env docker-ready
+	$(COMPOSE) --profile web stop
+
+.env:
+	@printf '%s\n' 'BOSS is not installed in this checkout. Run ./install.sh --dir "$$PWD" first.' >&2
+	@exit 1

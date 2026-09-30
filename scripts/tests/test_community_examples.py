@@ -1,0 +1,257 @@
+"""The public examples publish startable workflows with their promised briefs."""
+from __future__ import annotations
+
+import http.server
+import json
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from typing import ClassVar
+
+
+ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES = ("meeting-to-tickets", "weekly-newsletter", "sales-signal", "trend-to-content")
+REQUIRED = {
+    "meeting-to-tickets": {"transcript"},
+    "weekly-newsletter": {"sectors", "to"},
+    "sales-signal": {"company", "salesperson"},
+    "trend-to-content": {"trend", "to"},
+}
+
+
+class _Api(http.server.BaseHTTPRequestHandler):
+    requests: ClassVar[list[tuple[str, str]]] = []
+    specs: ClassVar[list[dict]] = []
+    schedules: ClassVar[list[dict]] = []
+    step_count = 0
+
+    def _send(self, status: int, payload: dict) -> None:
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self) -> None:
+        self.requests.append(("GET", self.path))
+        if self.path.startswith("/v1/settings?"):
+            self._send(200, {})
+        elif self.path.startswith("/v1/delivery-workflows/custom-steps?"):
+            self._send(200, {"steps": []})
+        elif self.path.startswith("/v1/delivery-workflows/schedules?"):
+            self._send(200, {"schedules": self.schedules})
+        elif self.path.startswith("/v1/delivery-workflows/") and "/spec?" in self.path:
+            self._send(404, {"detail": "No workflow yet"})
+        else:
+            self._send(404, {"detail": "Unexpected test read"})
+
+    def do_POST(self) -> None:
+        self.requests.append(("POST", self.path))
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path.startswith("/v1/skills/") and self.path.endswith("/enable"):
+            self._send(200, {"config": {"risk_tier": 0}})
+        elif self.path == "/v1/role-skills":
+            self._send(200, {})
+        elif self.path == "/v1/delivery-workflows/custom-steps":
+            type(self).step_count += 1
+            self._send(201, {"custom_step": {"step_key": f"test_step_{self.step_count}"}})
+        elif self.path == "/v1/delivery-workflows/create":
+            self._send(201, {"definition": {"id": "wfd_test"}})
+        elif self.path == "/v1/delivery-workflows/save":
+            self.specs.append(body["spec"])
+            self._send(200, {"version": {"version": 1}})
+        elif self.path == "/v1/delivery-workflows/schedules":
+            self.schedules.append({**body, "enabled": True})
+            self._send(201, {"describes": "every Monday at 08:00 (UTC)",
+                             "next_run_at": "2026-10-05T08:00:00+00:00"})
+        else:
+            self._send(404, {"detail": "Unexpected test write"})
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+def _server():
+    _Api.requests, _Api.specs, _Api.schedules, _Api.step_count = [], [], [], 0
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Api)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _run(server: http.server.HTTPServer, script: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "BOSS_API_KEY": "test-only-key"}
+    return subprocess.run(
+        [sys.executable, str(script), "--api", f"http://127.0.0.1:{server.server_port}", *args],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+
+
+def test_four_examples_publish_console_inputs_and_stored_default_briefs() -> None:
+    server, thread = _server()
+    try:
+        for name in EXAMPLES:
+            result = _run(server, ROOT / "examples" / name / "setup.py")
+            assert result.returncode == 0, f"{name}: {result.stdout}\n{result.stderr}"
+        assert len(_Api.specs) == len(EXAMPLES)
+        for name, spec in zip(EXAMPLES, _Api.specs):
+            schema = spec["input_schema"]
+            assert set(schema["required"]) == REQUIRED[name]
+            assert REQUIRED[name] <= set(schema["properties"])
+            assert all(schema["properties"][field].get("title") for field in REQUIRED[name])
+            assert all(step["approval"]["mode"] == "manual"
+                       for step in spec["steps"] if not step["next"])
+
+        weekly, sales, trend = _Api.specs[1:]
+        weekly_steps = {step["id"]: step for step in weekly["steps"]}
+        sales_steps = {step["id"]: step for step in sales["steps"]}
+        trend_steps = {step["id"]: step for step in trend["steps"]}
+        assert weekly_steps["write"]["binding"]["inputs"]["prompt"]["default"]
+        assert weekly_steps["send"]["binding"]["inputs"]["subject"]["default"]
+        assert sales_steps["assess"]["binding"]["inputs"]["prompt"]["default"]
+        assert "DRAFT TO EDIT" in sales_steps["draft"]["binding"]["inputs"]["prompt"]["default"]
+        assert sales_steps["notify"]["binding"]["inputs"]["body"] == {
+            "from_step": "draft", "field": "text",
+        }
+        assert trend_steps["assess"]["binding"]["inputs"]["prompt"]["default"]
+        assert trend_steps["script"]["binding"]["inputs"]["prompt"]["default"]
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_all_five_publish_valid_specs_and_do_not_start_runs() -> None:
+    """Installing an example publishes a workflow. It does not start one."""
+    import sys
+
+    sys.path.insert(0, str(ROOT / "engine"))
+    from boss_engine.services.workflows import validate_workflow_spec
+
+    names = (
+        "video-workflow",
+        "trend-to-content",
+        "sales-signal",
+        "weekly-newsletter",
+        "meeting-to-tickets",
+    )
+    server, thread = _server()
+    try:
+        for name in names:
+            result = _run(server, ROOT / "examples" / name / "setup.py")
+            assert result.returncode == 0, f"{name}: {result.stdout}\n{result.stderr}"
+        assert len(_Api.specs) == len(names)
+        for spec in _Api.specs:
+            validate_workflow_spec(spec)
+            assert spec["entry_step"]
+            assert spec["steps"]
+        started = [
+            path for method, path in _Api.requests
+            if method != "GET" and (
+                "/runs" in path or "run-capabilities" in path or path.rstrip("/").endswith("/start")
+            )
+        ]
+        assert started == []
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_all_five_dry_runs_make_only_reads() -> None:
+    server, thread = _server()
+    try:
+        result = _run(server, ROOT / "examples" / "setup_all.py", "--dry-run", "--schedule",
+                      "UTC", "--newsletter-sectors", "healthcare, energy",
+                      "--newsletter-to", "reader@example.test")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout.count("would create") == 5
+        assert "would schedule it Monday 08:00 UTC" in result.stdout
+        assert _Api.requests and all(method == "GET" for method, _ in _Api.requests)
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_newsletter_schedule_requires_complete_inputs_before_any_api_call() -> None:
+    server, thread = _server()
+    try:
+        for script, args, expected in (
+            ("weekly-newsletter/setup.py", ("--schedule", "UTC"), "needs"),
+            ("weekly-newsletter/setup.py", ("--schedule", "UTC", "--to", "reader@example.test"), "needs"),
+            ("weekly-newsletter/setup.py", ("--schedule", "UTC", "--sectors", "energy",
+                                            "--to", "not-an-email"), "must be one email"),
+            ("setup_all.py", ("--only", "weekly-newsletter", "--schedule", "UTC"), "needs"),
+            ("setup_all.py", ("--only", "weekly-newsletter", "--schedule", "UTC",
+                              "--newsletter-sectors", "healthcare"), "needs"),
+            ("setup_all.py", ("--only", "weekly-newsletter", "--schedule", "UTC",
+                              "--newsletter-sectors", "healthcare",
+                              "--newsletter-to", "not-an-email"), "must be one email"),
+        ):
+            result = _run(server, ROOT / "examples" / script, *args)
+            assert result.returncode == 1
+            assert expected in result.stderr
+        assert _Api.requests == []
+        assert _Api.schedules == []
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_newsletter_schedule_stores_supplied_inputs_and_keeps_send_approval() -> None:
+    server, thread = _server()
+    try:
+        result = _run(server, ROOT / "examples" / "weekly-newsletter" / "setup.py",
+                      "--schedule", "UTC", "--sectors", "healthcare, energy",
+                      "--to", "reader@example.test")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(_Api.schedules) == 1
+        schedule = _Api.schedules[0]
+        assert schedule["input"]["sectors"] == "healthcare, energy"
+        assert schedule["input"]["to"] == "reader@example.test"
+        assert schedule["cadence"] == "weekly"
+        assert schedule["weekday"] == 0
+        assert schedule["timezone"] == "UTC"
+        assert len(_Api.specs) == 1
+        send = next(step for step in _Api.specs[0]["steps"] if step["id"] == "send")
+        assert send["approval"]["mode"] == "manual"
+
+        repeated = _run(server, ROOT / "examples" / "weekly-newsletter" / "setup.py",
+                        "--schedule", "UTC", "--sectors", "healthcare, energy",
+                        "--to", "reader@example.test")
+        assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+        assert "unchanged" in repeated.stdout
+        assert len(_Api.schedules) == 1
+
+        changed = _run(server, ROOT / "examples" / "weekly-newsletter" / "setup.py",
+                       "--schedule", "UTC", "--sectors", "healthcare, energy",
+                       "--to", "other@example.test")
+        assert changed.returncode == 1
+        assert "different inputs" in changed.stderr
+        assert len(_Api.schedules) == 1
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_video_example_stores_operator_overrides_for_publishing() -> None:
+    server, thread = _server()
+    try:
+        result = _run(server, ROOT / "examples" / "video-workflow" / "setup.py")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(_Api.specs) == 1
+        spec = _Api.specs[0]
+        assert set(spec["input_schema"]["required"]) == {"instructions"}
+        assert {"title", "description"} <= set(spec["input_schema"]["properties"])
+        publish = next(step for step in spec["steps"] if step["id"] == "publish")
+        assert publish["approval"]["mode"] == "manual"
+        assert publish["binding"]["inputs"]["title"] == {
+            "from_step": "edit", "field": "title", "override_from_input": "title",
+        }
+        assert publish["binding"]["inputs"]["description"] == {
+            "from_step": "edit", "field": "description", "override_from_input": "description",
+        }
+    finally:
+        server.shutdown()
+        thread.join()

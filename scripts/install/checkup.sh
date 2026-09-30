@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# BOSS checkup — is this install actually able to do its job?
+#
+# WHY THIS EXISTS. Everything it checks was already knowable, and answering "is my install
+# healthy" still meant reading container logs, querying Postgres by hand, and knowing which of
+# four endpoints to trust. Every check below is one that has actually failed here:
+#
+#   containers   a stack that is "up" with one service quietly restarting
+#   API          reachable from the machine, which is not the same as reachable from a browser
+#   browser URL  compiled into the web bundle at BUILD time — 127.0.0.1 on a server means
+#                every preview link points at the operator's own laptop
+#   models       connected AND with capacity; an exhausted subscription looks connected
+#   chat         a model that answers, which is the difference between configured and working
+#   repository   pushable, not merely named
+#   host         whether this machine can schedule BOSS at all
+#
+# Exit 0 when BOSS can work, 1 when it cannot. Advisory checks never fail the run.
+#
+# NAMED `checkup`, NOT `doctor`. The behaviour is the `consensus doctor` convention and the
+# --probe flag is kept for exactly that reason, but "doctor" is now the name several other tools
+# use for their own version of this, and a command that means something slightly different in
+# every product is a command nobody trusts. This one word is ours. What --probe
+# costs them. Without it, only free checks run; with it, a model is actually asked a question,
+# which is the difference between "configured" and "working" and takes a few seconds and a few
+# tokens to establish.
+set -uo pipefail
+
+PROBE=0
+for arg in "$@"; do
+  case "$arg" in
+    --probe) PROBE=1 ;;
+    -h|--help)
+      echo "usage: checkup.sh [--probe]"
+      echo "  --probe   also ask a model a question (costs a few tokens; proves it works)"
+      exit 0 ;;
+  esac
+done
+
+ENV_FILE="${BOSS_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env}"
+# .env is Docker data, not shell code. A model key or operator-added value may
+# contain shell metacharacters; sourcing it would execute them on the host.
+env_value() {
+  local key="$1"
+  [ -f "$ENV_FILE" ] || return 0
+  grep -m 1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true
+}
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
+  if [ -z "${!key:-}" ]; then
+    value="$(env_value "$key")"
+    [ -z "$value" ] || printf -v "$key" '%s' "$value"
+  fi
+done
+export BOSS_ENV_FILE="$ENV_FILE"
+
+API_PORT="${BOSS_API_PORT:-8000}"
+WEB_PORT="${BOSS_WEB_PORT:-3000}"
+PROJECT="${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}"
+# 0.0.0.0 still answers on loopback. A specific --api-bind address does not.
+API_BIND="${BOSS_API_BIND:-127.0.0.1}"
+case "$API_BIND" in
+  ""|127.0.0.1|0.0.0.0) API="http://127.0.0.1:${API_PORT}" ;;
+  \[*) API="http://${API_BIND}:${API_PORT}" ;;
+  *:*) API="http://[${API_BIND}]:${API_PORT}" ;;
+  *) API="http://${API_BIND}:${API_PORT}" ;;
+esac
+KEY="${BOSS_API_KEY:-}"
+AUTH=(); [ -n "$KEY" ] && AUTH=(-H "Authorization: Bearer $KEY")
+
+G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'
+fail=0
+ok()   { printf "  ${G}ok${N}    %s\n" "$1"; }
+warn() { printf "  ${Y}warn${N}  %s\n" "$1"; }
+bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; }
+
+printf "\n${B}BOSS checkup${N}  (%s)\n\n" "$API"
+
+# 1. containers. FOUR are required; web and the bundled secret store are profiles, and a
+# healthy install that runs neither is still a healthy install. The first version of this
+# check hardcoded "expected 6" and failed a correct install — exactly the kind of wrong
+# confident answer a checkup must not give.
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
+  else
+    DOCKER=()
+  fi
+fi
+compiled=""
+if [ "${#DOCKER[@]}" -eq 0 ]; then
+  bad "containers: Docker is unavailable (start Docker or run this checkup with sudo)"
+else
+  missing=""
+  for svc in db api worker; do
+    "${DOCKER[@]}" ps --filter "name=boss-community-${svc}-" --format '{{.Names}}' 2>/dev/null \
+      | grep -q . || missing="$missing $svc"
+  done
+  running=$("${DOCKER[@]}" ps --filter "name=boss-community" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
+  if [ -z "$missing" ]; then
+    ok "containers: $running running (db, api, worker required; web and secrets are optional)"
+  else
+    bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)"
+  fi
+fi
+
+# 2. the API answers
+if curl -fsS --max-time 10 "$API/health" >/dev/null 2>&1; then ok "api: /health answers on $API"
+else bad "api: no answer on $API/health"; fi
+
+# 3. the address compiled into the console — the one a browser must reach
+#
+# LABELLED AS WHAT IT IS, WHICH IS NOT THE CONSOLE'S OWN ADDRESS.
+#
+# This reads NEXT_PUBLIC_BOSS_API_URL: the API address baked into the web bundle. It was
+# printed as `console: http://host:8000`, which reads as "the console is there" — so an
+# operator opened :8000, got {"detail":"Not Found"} from the API, and reasonably concluded the
+# install was broken. It was fine. That is the API port; the console is on WEB_PORT.
+if [ "${#DOCKER[@]}" -gt 0 ]; then
+  compiled=$("${DOCKER[@]}" exec boss-community-web-1 printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null || echo "")
+fi
+if [ -z "$compiled" ]; then warn "console → API: could not read the address it was built with (web container not running?)"
+elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
+  if [ -n "${BOSS_PUBLIC_URL:-}" ]; then
+    bad "console → API: built with $compiled — a browser on another machine cannot reach that.
+        Rebuild web with --public-url (see scripts/install/README.md)"
+  elif [ -n "${SSH_CONNECTION:-}" ]; then
+    warn "console → API: $compiled uses loopback; forward both console :$WEB_PORT and API :$API_PORT over SSH before opening it in a browser"
+  else ok "console → API: $compiled (local install)"; fi
+else ok "console → API: $compiled"; fi
+
+# WHERE THE CONSOLE ACTUALLY IS, in the words of whoever is reading this.
+#
+# Every line below used to say http://127.0.0.1:3000. That is true on the box and false for the
+# person reading it over SSH from a laptop, which is how this script is usually run. The host
+# is taken from the address the console was built for, because that is already known to be one
+# a browser can reach.
+console_host=$(printf '%s' "$compiled" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+if [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
+  CONSOLE_URL="http://${console_host}:${WEB_PORT}"
+else
+  CONSOLE_URL="http://127.0.0.1:${WEB_PORT}"
+fi
+
+# 4. models: connected AND with capacity
+models=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/settings?project_id=$PROJECT" 2>/dev/null)
+engines=$(printf '%s' "$models" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(d.get("connected_engines") or []))' 2>/dev/null || echo "")
+if [ -n "$engines" ]; then ok "models connected: $engines"
+else
+  # NOT A FAILURE ON A FRESH INSTALL — it is the next step, and saying "FAIL" to someone who
+  # has just installed correctly teaches them to distrust this output.
+  warn "models: none connected yet — open Mission Control ($CONSOLE_URL) and connect one"
+fi
+
+advice=$(curl -fsS --max-time 10 "${AUTH[@]}" "$API/v1/projects/$PROJECT/host-advice" 2>/dev/null)
+blocked=$(printf '%s' "$advice" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("headline") or "")' 2>/dev/null || echo "")
+
+# 5. a model actually answers — configured is not working. Costs tokens, so --probe only.
+if [ "$PROBE" -eq 1 ]; then
+  reply=$(curl -fsS --max-time 120 -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+    "$API/v1/engine/agent/chat" \
+    -d "{\"project_id\":\"$PROJECT\",\"actor\":\"executive_console\",\"message\":\"Reply with the single word OK.\"}" 2>/dev/null)
+  if printf '%s' "$reply" | grep -qi "ok"; then ok "chat: a model answered"
+  else bad "chat: no usable answer — a model is connected but not working"; fi
+else
+  warn "chat: not asked (run with --probe to prove a model actually answers)"
+fi
+
+# 6. repository, pushable
+setup=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/setup/status?project_id=$PROJECT" 2>/dev/null)
+if printf '%s' "$setup" | grep -q '"github"[^}]*"done": *true' 2>/dev/null; then ok "repository: connected"
+else warn "repository: not connected — builds cannot open a pull request"; fi
+
+# 7. can this machine run BOSS at all
+if [ -n "$blocked" ]; then warn "host: $blocked"; else ok "host: scheduling BOSS normally"; fi
+
+# 8. configuration drift — how far this install has wandered from a stock one.
+#
+# ADVISORY, NEVER A FAILURE. Most drift is correct: an install needs its own credentials, its
+# own repo, its own caps. The point is that it be VISIBLE. Every "works there, not here" bug
+# this install has had was a line in this list that nobody knew was there — a CI timeout of 20
+# seconds, a reviewer turn cap, three coding agents on a box that fits one.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if drift=$(python3 "$HERE/drift.py" 2>/dev/null); then
+  n=$(printf '%s' "$drift" | sed 's/\x1b\[[0-9;]*m//g' | grep -c '^  ~ ' || true)
+  unread=$(printf '%s' "$drift" | sed 's/\x1b\[[0-9;]*m//g' | grep -c '^  ? ' || true)
+  if [ "$n" -eq 0 ]; then ok "config: identical to a stock install"
+  else ok "config: $n setting(s) differ from stock — scripts/install/drift.py to see which"; fi
+  [ "$unread" -gt 0 ] && warn "config: $unread BOSS_ variable(s) set that nothing reads (drift.py names them)"
+else
+  warn "config: could not compare against a stock install"
+fi
+
+printf "\n"
+if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
+else printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"; fi
+exit "$fail"

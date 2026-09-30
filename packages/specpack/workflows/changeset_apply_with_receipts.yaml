@@ -1,0 +1,34 @@
+kind: WorkflowSpec
+id: changeset_apply_with_receipts
+version: 0.1.0
+description: Apply provider/resource changes with policy, budget, approval, ResourceReceipt, and reconciliation gates.
+phases:
+  - id: draft
+    actor: providerops_manager
+    outputs: [ChangeSet]
+  - id: quote
+    actor: resource_plane_kernel
+    outputs: [CostEstimate]
+  - id: policy_check
+    actor: policy_engine
+    outputs: [PolicyEvaluation]
+  - id: reserve
+    actor: budget_governor
+    outputs: [BudgetReservation]
+    optional: true
+  - id: approve
+    actor: decision_inbox
+    outputs: [Decision]
+  - id: apply
+    actor: resource_plane_kernel
+    requires: [ChangeSet, PolicyEvaluation, Decision]
+    outputs: [ResourceReceipt]
+  - id: reconcile
+    actor: resource_plane_kernel
+    outputs: [ReconciliationRun, DriftReport]
+rules:
+  no_provider_write_without_changeset: true
+  no_spendy_action_without_budget_reservation: true
+  destructive_actions_require_explicit_approval: true
+  receipts_required_for_each_provider_action: true
+  failed_provider_calls_deadletter_or_escalate: true

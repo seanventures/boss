@@ -1,0 +1,25 @@
+kind: WorkflowSpec
+id: providerops_readonly_sync
+version: 0.1.0
+description: Read-only ProviderOps inventory, billing, health, and reconciliation sync.
+phases:
+  - id: load_provider_account
+    actor: resource_plane_kernel
+    outputs: [ProviderAccount, SecretRef]
+  - id: test_connection
+    actor: provider_adapter
+    outputs: [ProviderHealth, Capability]
+  - id: sync_inventory
+    actor: provider_adapter
+    outputs: [ExternalResource]
+  - id: sync_billing
+    actor: provider_adapter
+    outputs: [CostEvent]
+    optional: true
+  - id: reconcile
+    actor: resource_plane_kernel
+    outputs: [ReconciliationRun, DriftReport]
+rules:
+  read_only: true
+  raw_secrets_not_sent_to_agent: true
+  failures_emit_event_or_deadletter: true

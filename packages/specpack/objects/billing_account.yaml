@@ -1,0 +1,19 @@
+kind: ObjectSpec
+id: BillingAccount
+version: 0.1.0
+description: Provider billing scope used for cost sync and reconciliation.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: currency
+    type: string
+  - name: billing_scope
+    type: enum
+    values: [org, workspace, project, provider_account]
+  - name: status
+    type: enum
+    values: [active, read_only, unavailable, disabled]
+  - name: last_synced_at
+    type: datetime

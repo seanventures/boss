@@ -1,0 +1,45 @@
+kind: ObjectSpec
+id: AgentGroupRun
+version: 0.1.0
+description: >
+  Durable execution record for a reusable Agent Group collaboration.
+fields:
+  - { name: id, type: string, required: true }
+  - { name: org_id, type: string, required: true }
+  - { name: workspace_id, type: string, required: true }
+  - { name: project_id, type: string, required: true }
+  - { name: agent_group_spec_id, type: string, required: true }
+  - { name: agent_group_spec_version, type: integer, required: true }
+  - { name: workflow_run_ref, type: string, required: false }
+  - { name: assurance_case_ref, type: string, required: false }
+  - { name: input_refs, type: array, required: true }
+  - { name: member_assignments, type: array, required: true }
+  - { name: work_product_refs, type: array, required: true }
+  - { name: message_refs, type: array, required: true }
+  - { name: artifact_refs, type: array, required: true }
+  - { name: dissent, type: array, required: true }
+  - { name: quorum_result, type: object, required: true }
+  - { name: cost_micros, type: integer, required: true }
+  - { name: budget_reservation_refs, type: array, required: true }
+  - { name: receipt_refs, type: array, required: true }
+  - name: status
+    type: enum
+    values: [queued, leased, running, waiting, completed, escalated, deadlettered]
+    required: true
+  - { name: lease_owner, type: string, required: false }
+  - { name: lease_expires_at, type: datetime, required: false }
+  - { name: heartbeat_at, type: datetime, required: false }
+  - { name: attempt, type: integer, required: true }
+  - { name: final_disposition, type: object, required: false }
+  - { name: escalation_decision_id, type: string, required: false }
+  - { name: dedupe_key, type: string, required: true }
+  - { name: created_at, type: datetime, required: true }
+  - { name: completed_at, type: datetime, required: false }
+rules:
+  all_member_work_and_dissent_are_durable: true
+  partial_failure_retries_or_escalates: true
+  quorum_without_proof_cannot_satisfy_assurance: true
+  spend_requires_reservation_and_receipts: true
+constraints:
+  unique:
+    - [project_id, dedupe_key]

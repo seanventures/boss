@@ -1,0 +1,42 @@
+kind: ObjectSpec
+id: CostAnomaly
+version: 0.1.0
+description: Provider spend anomaly generated from CostEvents and budget policy thresholds.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: provider_account_id
+    type: string?
+  - name: cost_event_id
+    type: string?
+  - name: decision_id
+    type: string?
+  - name: provider
+    type: string
+  - name: anomaly_type
+    type: string
+    values: [provider_spend_freeze_threshold_crossed]
+  - name: severity
+    type: string
+    values: [yellow, orange, red]
+  - name: status
+    type: string
+    values: [open, reviewing, resolved]
+  - name: amount_usd_micros
+    type: integer
+  - name: threshold_usd_micros
+    type: integer
+  - name: summary
+    type: string
+  - name: recommended_actions
+    type: array
+  - name: created_at
+    type: datetime
+  - name: resolved_at
+    type: datetime?
+invariants:
+  - Cost anomalies must link to the CostEvent that triggered them when available.
+  - Provider spend freeze anomalies must create a visible decision.
+  - Read-only provider kill switches are allowed as fail-closed protection; destructive cleanup still requires a ChangeSet and approval.

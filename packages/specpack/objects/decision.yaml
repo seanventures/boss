@@ -1,0 +1,28 @@
+kind: ObjectSchema
+object: Decision
+version: 0.1.0
+fields:
+  id: { type: string, required: true, example: DEC-000001 }
+  project_id: { type: string, required: true }
+  task_id: { type: string, required: false }
+  question: { type: string, required: true }
+  recommendation: { type: object, required: true }
+  options: { type: array, items: object, required: true }
+  risk_tier: { type: integer, minimum: 0, maximum: 3, default: 1 }
+  cost_summary: { type: object }
+  deadline_at: { type: datetime, required: false }
+  default_action: { type: string, required: false, example: hold }
+  status:
+    type: enum
+    values: [pending, approved, rejected, expired, executed, cancelled]
+  approver_user_ids: { type: array, items: string }
+  approved_by: { type: string, required: false }
+  approved_at: { type: datetime, required: false }
+  created_at: { type: datetime }
+state_machine:
+  pending: [approved, rejected, expired, cancelled]
+  approved: [executed]
+  rejected: []
+  expired: []
+  executed: []
+  cancelled: []

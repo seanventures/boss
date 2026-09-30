@@ -1,0 +1,26 @@
+kind: ObjectSchema
+object: OpsDigest
+version: 0.1.0
+fields:
+  id: string
+  project_id: string
+  generated_at: timestamp
+  budget_state: string
+  queue_state: object
+  workload_state: object
+  incident_state: object
+  job_status_counts: object
+  job_kind_counts: object
+  stale_lease_job_ids: { array: string }
+  ready_job_ids: { array: string }
+  job_ids: { array: string }
+  deadletter_ids: { array: string }
+  pending_decision_ids: { array: string }
+  blockers: { array: object }
+  recommended_actions: { array: string }
+  artifact_id: string
+rules:
+  must_reference_jobs_deadletters_decisions_or_events: true
+  no_external_effects: true
+  no_silent_drop_visibility: true
+  deterministic_state_only: true

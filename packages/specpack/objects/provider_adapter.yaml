@@ -1,0 +1,30 @@
+kind: ObjectSpec
+id: ProviderAdapter
+version: 0.1.0
+description: Plugin adapter registered behind the core Resource Plane Kernel.
+fields:
+  - name: id
+    type: string
+  - name: provider
+    type: string
+  - name: version
+    type: string
+  - name: execution_location
+    type: enum
+    values: [control_plane, local_runner, either]
+  - name: capabilities
+    type: array
+  - name: required_secret_kinds
+    type: array
+  - name: supports_dry_run
+    type: boolean
+  - name: supports_billing_sync
+    type: boolean
+  - name: supports_inventory_sync
+    type: boolean
+  - name: status
+    type: enum
+    values: [available, installed, disabled, deprecated]
+rules:
+  adapters_are_plugins: true
+  resource_plane_kernel_remains_core: true

@@ -1,0 +1,38 @@
+kind: Policy
+id: budget_governor_policy
+version: 0.1.0
+scope:
+  type: org
+rules:
+  spend_pipeline: [quote, reserve, execute, receipt, reconcile]
+  budget_states: [green, yellow, orange, red, frozen]
+  hard_caps_prevent_net_new_spend: true
+  soft_caps_degrade_routing_and_loop_cadence: true
+  reservations_required_for:
+    - model_api
+    - provider_write
+    - cloud_worker
+    - paid_tool
+    - external_comms
+  hierarchical_scopes:
+    - org
+    - workspace
+    - project
+    - initiative
+    - department
+    - role
+    - provider
+    - model
+    - worker_pool
+  kill_switches:
+    freeze_all_provisioning: true
+    freeze_destructive_actions: true
+    freeze_model_api_spend: true
+    freeze_public_cloud_spillover: true
+    local_only_mode: true
+    read_only_provider_mode: true
+    destroy_expired_preview_environments: true
+    drain_cloud_workers: true
+  autoscaler:
+    budget_governor_wins: true
+

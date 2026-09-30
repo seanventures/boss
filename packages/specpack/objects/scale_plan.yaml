@@ -1,0 +1,52 @@
+kind: ObjectSpec
+id: ScalePlan
+version: 0.1.0
+description: Durable Budget-Aware Autoscaler decision record with queue, budget, provider health, actions, and approval links.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: worker_pool_id
+    type: string
+  - name: status
+    type: enum
+    values: [no_change, planned, pending_approval, blocked, applied, failed]
+  - name: trigger_reason
+    type: enum
+    values: [queue_pressure, idle_capacity, steady_queue, steady_state, budget_state_orange, budget_state_red]
+  - name: queue_depth
+    type: integer
+  - name: desired_workers_before
+    type: integer
+  - name: desired_workers_after
+    type: integer
+  - name: target_workers
+    type: integer
+  - name: budget_state
+    type: string
+  - name: budget_available_usd_micros
+    type: integer
+  - name: estimated_hourly_delta_usd_micros
+    type: integer
+  - name: provider_health_status
+    type: string
+  - name: actions
+    type: array
+  - name: recommendations
+    type: array
+  - name: changeset_id
+    type: string
+  - name: decision_id
+    type: string
+state_machine:
+  no_change: []
+  planned: [pending_approval, blocked, applied, failed]
+  pending_approval: [applied, blocked, failed]
+  blocked: [planned]
+  applied: []
+  failed: [planned]
+rules:
+  spendy_cloud_scale_requires_budget_reservation: true
+  provider_scale_requires_changeset: true
+  red_budget_creates_degraded_mode_decision: true

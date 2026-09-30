@@ -1,0 +1,36 @@
+kind: ObjectSpec
+id: IntegrationDefinition
+version: 0.1.0
+description: >
+  Trusted catalog definition for a connector or provider type and the typed
+  skills it can implement.
+fields:
+  - { name: id, type: string, required: true }
+  - { name: integration_key, type: string, required: true }
+  - { name: display_name, type: string, required: true }
+  - name: category
+    type: enum
+    values: [saas, data, communications, developer, model, infrastructure, provider]
+    required: true
+  - { name: supported_skill_specs, type: array, required: true }
+  - { name: executor_types, type: array, required: true }
+  - { name: configuration_schema, type: object, required: true }
+  - { name: health_contract, type: object, required: true }
+  - { name: publisher, type: object, required: true }
+  - { name: provenance, type: object, required: true }
+  - { name: trusted, type: boolean, required: true }
+  - { name: version, type: integer, required: true }
+  - { name: definition_hash, type: string, required: true }
+  - name: status
+    type: enum
+    values: [draft, active, deprecated, revoked]
+    required: true
+  - { name: created_at, type: datetime, required: true }
+rules:
+  definition_never_contains_connection_secrets: true
+  untrusted_definition_cannot_enable_effect_capabilities: true
+  supported_skills_are_versioned_references: true
+  revoked_definition_fails_closed: true
+constraints:
+  unique:
+    - [integration_key, version]

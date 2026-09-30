@@ -1,0 +1,28 @@
+id: CanaryRun
+version: 1
+description: Self-improvement canary result backed by self_improvement_proposals canary fields and canary report artifacts.
+backing_runtime:
+  table: self_improvement_proposals
+  artifact_type: self_improvement_canary_report
+  api: /v1/self-improvement/proposals/{proposal_id}/canary
+fields:
+  - name: proposal_id
+    type: string
+    required: true
+  - name: outcome
+    type: enum
+    values: [succeeded, failed]
+    required: true
+  - name: summary
+    type: string
+    required: true
+  - name: metrics
+    type: object
+    required: true
+  - name: evidence_refs
+    type: array
+    items: string
+    required: true
+invariants:
+  - Canary evidence must be recorded before rollout.
+  - Failed canaries must block rollout and preserve evidence.

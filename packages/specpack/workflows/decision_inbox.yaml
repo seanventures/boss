@@ -1,0 +1,40 @@
+kind: WorkflowSpec
+id: decision_inbox
+version: 0.1.0
+states:
+  - pending
+  - approved
+  - rejected
+  - expired
+  - executed
+  - cancelled
+rules:
+  pending:
+    allowed_actions: [approve, reject, expire, cancel]
+  approved:
+    allowed_actions: [execute]
+  rejected:
+    terminal: true
+  expired:
+    terminal: true
+  executed:
+    terminal: true
+ui_contract:
+  card_fields:
+    - question
+    - recommendation
+    - options
+    - risk_tier
+    - cost_summary
+    - deadline_at
+    - default_action
+    - references
+  actions:
+    - approve
+    - reject
+    - request_changes
+acceptance_tests:
+  - pending_decision_appears_in_inbox
+  - approve_changes_status_and_emits_event
+  - reject_changes_status_and_emits_event
+  - expired_decision_uses_default_action_if_policy_allows

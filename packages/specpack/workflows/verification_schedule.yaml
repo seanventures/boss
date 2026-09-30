@@ -1,0 +1,51 @@
+kind: WorkflowSpec
+id: verification_schedule
+version: 0.1.0
+name: Adversarial verification scheduling
+description: >
+  Select authoritative claims under a pinned verification policy, deduplicate
+  the schedule, reserve any required budget, and enqueue visible leased work.
+entry_step: load_policy
+input_schema:
+  required: [project_id, verification_policy_id, verification_policy_version, schedule_window, dedupe_key]
+output_schema:
+  required: [schedule_run_id, selected_claim_refs, enqueued_run_refs, event_ref]
+steps:
+  - id: load_policy
+    kind: task
+    input: { operation: assurance.verification.load_exact_policy_version }
+    next: [select_due_claims]
+  - id: select_due_claims
+    kind: task
+    input: { operation: assurance.verification.select_due_claims }
+    next: [deduplicate_schedule]
+  - id: deduplicate_schedule
+    kind: task
+    input: { operation: assurance.verification.deduplicate_claim_windows }
+    next: [spend_required]
+  - id: spend_required
+    kind: condition
+    expression: { path: context.spend_required, op: eq, value: true }
+    on_true: reserve_budget
+    on_false: enqueue_verification_runs
+  - id: reserve_budget
+    kind: task
+    input: { operation: budget.quote_and_reserve_verification }
+    next: [enqueue_verification_runs]
+  - id: enqueue_verification_runs
+    kind: task
+    input: { operation: assurance.verification.enqueue_idempotent_leased_runs }
+    next: [emit_schedule_event]
+  - id: emit_schedule_event
+    kind: task
+    input: { operation: audit.emit_verification_schedule }
+rules:
+  exact_policy_version_required: true
+  selection_is_deterministic_for_policy_and_window: true
+  one_active_run_per_claim_policy_and_window: true
+  spend_requires_budget_reservation: true
+  every_enqueued_run_requires_lease_ttl_and_heartbeat: true
+  schedule_failures_retry_deadletter_or_escalate: true
+completion:
+  artifacts_required: [VerificationScheduleRun, VerificationRun, Event]
+  failure: retry_or_deadletter

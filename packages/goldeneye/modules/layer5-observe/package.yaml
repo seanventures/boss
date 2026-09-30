@@ -1,0 +1,17 @@
+# Shared-server module manifest — see docs/MODULE_CONTRACT.md
+api_version: 1
+id: layer5-observe
+name: Observability
+version: "0.2.0"
+layer: 5
+kind: observe
+description: >
+  Homepage portal, log viewer, uptime placeholders
+depends_on: [layer2-edge]
+optional: false
+provides: [observe]
+min_kit_version: "0.2.0"
+hooks:
+  install: install.sh
+  upgrade: install.sh
+  check: check.sh

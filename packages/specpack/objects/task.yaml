@@ -1,0 +1,36 @@
+kind: ObjectSchema
+object: Task
+version: 0.1.0
+fields:
+  id: { type: string, required: true, example: TASK-000001 }
+  org_id: { type: string, required: true }
+  workspace_id: { type: string, required: true }
+  project_id: { type: string, required: true }
+  title: { type: string, required: true }
+  description: { type: string, required: false }
+  status:
+    type: enum
+    values: [open, in_progress, blocked, done, cancelled]
+  owner_role_id: { type: string, required: false }
+  assigned_role_ids: { type: array, items: string }
+  priority:
+    type: enum
+    values: [p0, p1, p2, p3]
+    default: p2
+  risk_tier:
+    type: integer
+    minimum: 0
+    maximum: 3
+    default: 0
+  inputs: { type: object }
+  required_artifacts: { type: array, items: object }
+  budget_allocation_id: { type: string, required: false }
+  dedupe_key: { type: string, required: true }
+  created_at: { type: datetime }
+  updated_at: { type: datetime }
+state_machine:
+  open: [in_progress, blocked, cancelled]
+  in_progress: [blocked, done, cancelled]
+  blocked: [open, in_progress, cancelled]
+  done: []
+  cancelled: []

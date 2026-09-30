@@ -1,0 +1,17 @@
+# Shared-server module manifest — see docs/MODULE_CONTRACT.md
+api_version: 1
+id: deploy-cli
+name: Deploy CLI
+version: "0.2.0"
+layer: 2
+kind: tool
+description: >
+  ge/deploy command surface for app ship, rollback, secrets, info
+depends_on: [layer1-runtime]
+optional: false
+provides: [deploy-cli]
+min_kit_version: "0.2.0"
+hooks:
+  install: install.sh
+  upgrade: install.sh
+  check: check.sh

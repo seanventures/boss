@@ -1,0 +1,34 @@
+kind: Policy
+id: concurrency_governance_policy
+version: 0.1.0
+scope:
+  type: org
+# BOSS-100 — VM-pool density, backpressure, rate-limit governance (Python plane).
+# Go sandbox substrate honors the same ceilings via the async contract; this
+# policy is the system-of-record for operator knobs and status APIs.
+rules:
+  density:
+    max_concurrent_vms_per_host: 8
+    max_in_flight: 16
+    document_ceiling_in_status: true
+  queue_backpressure:
+    max_queue_depth_per_worker: 5
+    backpressure_queue_depth_threshold: 20
+    admit_new_work_when_level_high: false
+  lease_contention:
+    expiry_soon_seconds: 30
+    contention_ratio_threshold: 0.75
+    reclaim_expired_before_new_lease: true
+  rate_limit_governance:
+    prefer_provider_rate_limits: true
+    model_lane_pacing_default: paced
+    forbid_rate_limit_evasion: true
+  scale:
+    budget_governor_overrides_autoscaler: true
+    worker_autoscaling_respects_cooldown: true
+  observability:
+    surface: /v1/concurrency/status
+    related:
+      - /v1/worker-autoscaling/status
+      - /v1/elastic/status
+      - /v1/model-gateway/rate-limits
