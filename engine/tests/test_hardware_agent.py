@@ -378,3 +378,14 @@ def test_the_installer_runs_the_agent_with_the_shell_it_is_written_for() -> None
     assert calls, "install.sh no longer runs the local agent"
     assert all(line.startswith("bash ") for line in calls), calls
     assert SCRIPT.read_text().startswith("#!/usr/bin/env bash")
+
+
+def test_the_place_script_is_in_the_image_the_installer_runs_it_in() -> None:
+    """install.sh runs scripts/install/ensure_local_place.py inside the api container, and the
+    image never copied it: every install ended "can't open file .../ensure_local_place.py"
+    (found on a fresh local install of main, 2026-09-30, once the node agent step before it
+    stopped failing under `sh`)."""
+    dockerfile = (ROOT / "Dockerfile.community").read_text()
+    assert "COPY scripts/install/ensure_local_place.py ./scripts/install/ensure_local_place.py" in dockerfile
+    place = (ROOT / "scripts" / "install" / "ensure_local_place.py").read_text()
+    assert '["sh", str(path)' not in place, "the place script runs the bash agent with sh"
