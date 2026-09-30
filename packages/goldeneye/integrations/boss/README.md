@@ -35,9 +35,7 @@ Real remote `ge module install` requires:
 - `BOSS_SSH_HOST_DEPLOY_ALLOWED=true`
 - SSH key SecretRef / host credentials
 
-Real actuation is available in paid BOSS editions only; in Community, turning the
-gate on makes the install API return 409. Otherwise BOSS records **simulated**
-installs with receipts and operator hints.
+Otherwise BOSS records **simulated** installs with receipts and operator hints.
 
 ## Boundary
 

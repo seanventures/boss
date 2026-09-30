@@ -4,9 +4,8 @@ What a single bare-metal box needs to become a self-hosting PaaS: agent-deployab
 apps, automatic TLS, private networking, backups that are *proven* restorable,
 and enough self-healing that a human is not the control loop.
 
-**Status:** open kit (parameterized). A running install may use different package
-versions; `site.yaml` holds site-specific values. The lessons in §8 come from
-operating the kit and are worth reading before you install.
+**Status:** open kit (parameterized). Live dogfood may differ in package versions;
+`site.yaml` holds site-specific values. Lessons in §8 are load-bearing.
 
 ## 0. Design principles
 
