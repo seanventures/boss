@@ -24,7 +24,7 @@ That installs into the checkout. It does not contact a maintainer server, it doe
 
 ## Loopback and the private .env
 
-The installer binds the API and web to `127.0.0.1` and writes credentials only on the machine where it runs. It does not upload `.env`. That file is yours. Keep it private and do not commit it. Nothing in this guide requires Plane, an ops token, or a private registry. `user@your-vm` means a VM you administer, not a shared host and not a machine run by the maintainers.
+The installer binds web, Postgres, and Infisical to `127.0.0.1`. The API binds to `127.0.0.1` unless you pass `--api-bind`. It writes credentials only on the machine where it runs. It does not upload `.env`. That file is yours. Keep it private and do not commit it. Nothing in this guide requires Plane, an ops token, or a private registry. `user@your-vm` means a VM you administer, not a shared host and not a machine run by the maintainers.
 
 ## Secrets stay off the command line
 
@@ -55,8 +55,9 @@ Put a key in the private `.env` later if you want one. See [model connections](.
 7. Verifies Community edition + ProviderOps surface
 
 On rerun, both API credentials and any operator-added API keys, the database password,
-model keys, secret-store encryption key, console login, public URL, port settings,
-Mission Control choice, and secret-store choice are retained. Use the lifecycle
+model keys, secret-store encryption key, console login, public URL, console origin,
+API bind, port settings, Mission Control choice, and secret-store choice are retained
+unless this run set the console origin or API bind again. Use the lifecycle
 upgrade command below to back up state before updating a long-lived install.
 Pasting the installer line again also backs up an existing running install
 before switching to a newer source revision. A stopped database container is
@@ -91,15 +92,22 @@ python3 scripts/install/console_password.py reset
 # After reset, run the web recreate command printed by the helper.
 ```
 
-`show` requires a terminal so the password is not piped into logs. Keep the
-console on loopback or behind an HTTPS reverse proxy; the web login refuses
-non-HTTPS requests outside loopback. For a public console hostname, set
-`BOSS_CONSOLE_PUBLIC_ORIGIN=https://boss.example.com` in `.env` and recreate
-web. The reverse proxy must **overwrite** `Host`, `X-Forwarded-Host`, and
+`show` requires a terminal so the password is not piped into logs. The worked
+path for a hostname is [docs/community/hostname.md](../../docs/community/hostname.md).
+Pass `--console-origin https://console.example` on install, or set
+`BOSS_CONSOLE_PUBLIC_ORIGIN=https://console.example` in `.env` on an install
+that is already running and recreate web without rebuilding:
+
+```bash
+docker compose -f scripts/install/community-compose.yml --env-file .env --profile web up -d --force-recreate --no-deps web
+```
+
+The TLS proxy on this machine must **overwrite** `Host`, `X-Forwarded-Host`, and
 `X-Forwarded-Proto` with the external HTTPS host and scheme; passing through
-client-supplied values is unsafe. Keep the Next listener bound to loopback.
-This setting does not replace TLS. The proxy configuration needs a live login
-and CSRF check before public access is enabled.
+client-supplied values is unsafe. The Next listener stays on loopback. This
+setting does not replace TLS. The https origin answers only after the proxy
+forwards to `127.0.0.1` and those headers match. Check a real login before you
+rely on the proxy. An SSH tunnel is the path that does not need a proxy.
 
 A hosted BOSS account is not required. Connect a model you already have only if you want model work.
 
@@ -219,9 +227,10 @@ Everything derives from these; set them once in `.env`:
 | Variable | Default | Notes |
 |---|---|---|
 | `BOSS_API_PORT` | 8000 | The console's preview links are built from this **at image build time**. Change it and rebuild `web`, or every preview link points at a port with nothing behind it. |
-| `BOSS_WEB_PORT` | 3000 | Mission Control. |
-| `BOSS_POSTGRES_PORT` | 5432 | |
-| `INFISICAL_PORT` | 8080 | |
+| `BOSS_API_BIND` | 127.0.0.1 | Address that accepts API connections. `127.0.0.1`, `0.0.0.0`, or one IPv4/IPv6 address. Web and Postgres stay on loopback. Authentication stays required. |
+| `BOSS_WEB_PORT` | 3000 | Mission Control. Always bound to `127.0.0.1`. |
+| `BOSS_POSTGRES_PORT` | 5432 | Always bound to `127.0.0.1`. |
+| `INFISICAL_PORT` | 8080 | Always bound to `127.0.0.1`. |
 
 `NEXT_PUBLIC_BOSS_API_URL` derives from `BOSS_API_PORT` automatically. Set it explicitly only
 when the API is reached at a different hostname than the browser uses — a remote VM, for
@@ -229,19 +238,26 @@ instance, where it must be the address **the browser** will use, not `127.0.0.1`
 
 ### Installing on a server (not a laptop)
 
-The default VM install binds API and web to loopback. Reach it immediately through an SSH
-tunnel from your laptop:
+The worked path for a console hostname is
+[docs/community/hostname.md](../../docs/community/hostname.md). On the VM, pass
+`--console-origin https://console.example` (and `--public-url` when the browser
+must call the API at a name other than loopback). Point DNS or a hosts entry at
+this machine, and run a TLS proxy here that forwards to `127.0.0.1:3000` and
+overwrites `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`. The web listener
+stays on loopback. Postgres stays on loopback. The API stays on `127.0.0.1`
+unless you pass `--api-bind`. The API key stays in `.env` and is not a URL parameter.
+
+An SSH tunnel is the path that does not need a proxy. `user@your-vm` is a VM you
+administer, not a maintainer machine:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` locally. For a permanent public site, put HTTPS and an
-access policy in front of the loopback ports and pass `--public-url https://boss.example.com`
-when installing or updating. Set `BOSS_CONSOLE_PUBLIC_ORIGIN` to the console's
-HTTPS origin as described above. The public URL is baked into the web build. Community
-keeps API and web ports on loopback even if an older `.env` had a public bind;
-remote access goes through an SSH tunnel or a TLS reverse proxy.
+Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. The
+public URL is baked into the web build. An older `.env` that set
+`BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. Publishing the
+API is only `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
 
 ### Did it work?
 

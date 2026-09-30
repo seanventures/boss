@@ -41,9 +41,18 @@ def _write(path: Path, text: str) -> None:
     os.chmod(path, 0o600)
 
 
-def _restore(old: Path, new: Path, *, explicit_public_url: str = "0") -> None:
+def _restore(
+    old: Path,
+    new: Path,
+    *,
+    explicit_public_url: str = "0",
+    explicit_console_origin: str = "0",
+    explicit_api_bind: str = "0",
+) -> None:
     env = os.environ.copy()
     env["BOSS_PUBLIC_URL_EXPLICIT"] = explicit_public_url
+    env["BOSS_CONSOLE_ORIGIN_EXPLICIT"] = explicit_console_origin
+    env["BOSS_API_BIND_EXPLICIT"] = explicit_api_bind
     subprocess.check_call(["sh", str(RESTORE), str(old), str(new)], env=env)
 
 
@@ -267,6 +276,35 @@ def test_the_console_url_stays_unless_this_run_set_one(tmp_path):
     _write(new, "NEXT_PUBLIC_BOSS_API_URL=http://198.51.100.8:8000\n")
     _restore(old, new, explicit_public_url="1")
     assert _val(new.read_text(), "NEXT_PUBLIC_BOSS_API_URL") == "http://198.51.100.8:8000"
+
+
+def test_the_console_origin_stays_unless_this_run_set_one(tmp_path):
+    """A rerun writes an empty origin when this run was not told one.
+    The previous hostname has to win, or the console behind a TLS proxy forgets its name.
+    BOSS_CONSOLE_ORIGIN_EXPLICIT=1 is the flag or the environment variable for this run."""
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_CONSOLE_PUBLIC_ORIGIN=https://console.example\n")
+    _write(new, "BOSS_CONSOLE_PUBLIC_ORIGIN=\n")
+    _restore(old, new, explicit_console_origin="0")
+    assert _val(new.read_text(), "BOSS_CONSOLE_PUBLIC_ORIGIN") == "https://console.example"
+
+    _write(new, "BOSS_CONSOLE_PUBLIC_ORIGIN=https://other.example:8443\n")
+    _restore(old, new, explicit_console_origin="1")
+    assert _val(new.read_text(), "BOSS_CONSOLE_PUBLIC_ORIGIN") == "https://other.example:8443"
+
+
+def test_the_api_bind_stays_unless_this_run_set_one(tmp_path):
+    old = tmp_path / "old.env"
+    new = tmp_path / "new.env"
+    _write(old, "BOSS_API_BIND=0.0.0.0\n")
+    _write(new, "BOSS_API_BIND=127.0.0.1\n")
+    _restore(old, new, explicit_api_bind="0")
+    assert _val(new.read_text(), "BOSS_API_BIND") == "0.0.0.0"
+
+    _write(new, "BOSS_API_BIND=192.0.2.10\n")
+    _restore(old, new, explicit_api_bind="1")
+    assert _val(new.read_text(), "BOSS_API_BIND") == "192.0.2.10"
 
 
 def test_custom_ports_survive_and_legacy_public_bind_becomes_loopback(tmp_path):

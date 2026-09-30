@@ -166,7 +166,9 @@ services:
       # Community: no Account Connect required
       BOSS_ACCOUNT_CONNECT_URL: ""
     ports:
-      - "127.0.0.1:${BOSS_API_PORT:-8000}:8000"
+      # Default loopback. Widen only BOSS_API_BIND. Web, Postgres, and Infisical stay on 127.0.0.1.
+      # Auth stays required; this file has no switch that turns BOSS_REQUIRE_API_AUTH off.
+      - "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating

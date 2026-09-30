@@ -12,19 +12,21 @@ This owner session protects the whole self-hosted console. It does not create se
 
 ## Reach the console
 
-The installer binds the API and web ports to `127.0.0.1` and creates the console secrets in the local `.env`. That file is not uploaded. On the install machine, open `http://127.0.0.1:3000`.
+The installer binds the web listener to `127.0.0.1` and creates the console secrets in the local `.env`. That file is not uploaded. On this machine, open `http://127.0.0.1:3000`.
 
-From another computer, use an SSH tunnel to a VM you administer. `user@your-vm` means that VM, not a shared host:
+The worked path for a hostname is [A console hostname](hostname.md). Pass `--console-origin https://console.example`, point DNS or a hosts entry at this machine, and run a TLS proxy here. The proxy forwards to `127.0.0.1:3000` and overwrites `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`. The https origin answers only after that proxy is in place. Postgres stays on loopback. The API stays on loopback unless you pass `--api-bind`, and authentication stays required.
+
+An SSH tunnel is the path that does not need a proxy. From another computer, tunnel to a VM you administer. `user@your-vm` means that VM, not a shared host and not a machine run by the maintainers:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. You can instead put a TLS reverse proxy you control in front of the loopback port.
+Then open `http://127.0.0.1:3000` on the computer that opened the tunnel.
 
 ## Remote HTTPS
 
-Remote plain HTTP is rejected, including the login form. For a remote TLS proxy, set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://console.example` on the web service. That value is the origin only, with no trailing slash. The proxy must **overwrite** `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`. Their values must match that public origin's host, host, and `https` respectively. These headers are trusted only because the Next listener remains on loopback. Keep the API port on loopback too.
+Remote plain HTTP is rejected, including the login form. `--console-origin` writes `BOSS_CONSOLE_PUBLIC_ORIGIN` in `.env` (for example `https://console.example`, with no trailing slash). The proxy must **overwrite** `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`. Their values must match that public origin's host, host, and `https` respectively. These headers are trusted only because the Next listener remains on loopback. See [hostname.md](hostname.md) for the nginx snippet and for recreating web on an existing install without rebuilding.
 
 Verify the deployed proxy with an unauthenticated `/login` request, a real sign-in, and a state-changing request before exposing the console. The public edge must reject or redirect plain HTTP and must discard client-supplied forwarded headers. Next rejects requests whose proxy headers are missing or do not match the configured HTTPS origin.
 
