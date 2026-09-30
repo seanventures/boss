@@ -77,13 +77,73 @@ def test_dirty_boss_checkout_is_not_updated(tmp_path: Path) -> None:
     assert tracked.read_text() == "operator edit\n"
 
 
-def test_public_bind_option_is_rejected_before_any_install_action() -> None:
-    result = subprocess.run(
-        ["bash", str(INSTALL), "--bind-address", "0.0.0.0"],
-        text=True, capture_output=True, timeout=5,
+def _reject(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(INSTALL), *args],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=5,
     )
+
+
+def test_public_bind_option_is_rejected_before_any_install_action() -> None:
+    result = _reject(["--bind-address", "0.0.0.0"])
     assert result.returncode != 0
     assert "Community binds API/web to loopback" in result.stderr
+    assert "Checking your machine" not in result.stdout
+    assert "Checking your machine" not in result.stderr
+
+
+def test_console_origin_http_is_rejected_before_any_install_action() -> None:
+    result = _reject(["--console-origin", "http://console.example"])
+    assert result.returncode != 0
+    assert "https origin" in result.stderr
+    assert "Checking your machine" not in result.stdout + result.stderr
+
+
+def test_console_origin_path_is_rejected_before_any_install_action() -> None:
+    result = _reject(["--console-origin", "https://console.example/mission"])
+    assert result.returncode != 0
+    assert "no path" in result.stderr
+    assert "Checking your machine" not in result.stdout + result.stderr
+
+
+def test_console_origin_loopback_is_rejected_before_any_install_action() -> None:
+    result = _reject(["--console-origin", "https://127.0.0.1"])
+    assert result.returncode != 0
+    assert "loopback" in result.stderr
+    assert "Checking your machine" not in result.stdout + result.stderr
+
+
+def test_api_bind_hostname_and_blank_are_rejected_before_any_install_action() -> None:
+    hostname = _reject(["--api-bind", "console.example"])
+    assert hostname.returncode != 0
+    assert "API bind" in hostname.stderr
+    assert "Checking your machine" not in hostname.stdout + hostname.stderr
+
+    blank = _reject(["--api-bind", ""])
+    assert blank.returncode != 0
+    assert "API bind" in blank.stderr
+    assert "Checking your machine" not in blank.stdout + blank.stderr
+
+
+def test_help_documents_console_origin_and_api_bind() -> None:
+    result = _reject(["--help"])
+    assert result.returncode == 0
+    assert "--console-origin" in result.stdout
+    assert "--api-bind" in result.stdout
+    assert "docs/community/hostname.md" in result.stdout
+
+
+def test_a_valid_console_origin_and_api_bind_do_not_die_before_help() -> None:
+    result = _reject([
+        "--console-origin", "https://console.example:443",
+        "--api-bind", "0.0.0.0",
+        "--help",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "Checking your machine" not in result.stdout + result.stderr
 
 
 def test_a_tree_shipped_by_remote_sh_is_used_not_refused(tmp_path: Path) -> None:

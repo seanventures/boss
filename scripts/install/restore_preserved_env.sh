@@ -14,6 +14,8 @@
 # BOSS_PUBLIC_URL_EXPLICIT=1 keeps the public URL the new file already has. Otherwise the
 # previous URL wins: the installer writes http://127.0.0.1 when the flag was not passed, and
 # that default must not rebuild a server's console against the operator's laptop.
+# BOSS_CONSOLE_ORIGIN_EXPLICIT=1 and BOSS_API_BIND_EXPLICIT=1 are the same idea for the
+# console hostname and the API's published address. Unset, the previous value wins.
 set -eu
 
 OLD="${1:?old env file}"
@@ -116,6 +118,20 @@ if [ "${BOSS_PUBLIC_URL_EXPLICIT:-0}" != "1" ]; then
   old="$(old_val NEXT_PUBLIC_BOSS_API_URL)"
   if [ -n "$old" ]; then
     set_val NEXT_PUBLIC_BOSS_API_URL "$old"
+  fi
+fi
+
+if [ "${BOSS_CONSOLE_ORIGIN_EXPLICIT:-0}" != "1" ]; then
+  old="$(old_val BOSS_CONSOLE_PUBLIC_ORIGIN)"
+  if [ -n "$old" ]; then
+    set_val BOSS_CONSOLE_PUBLIC_ORIGIN "$old"
+  fi
+fi
+
+if [ "${BOSS_API_BIND_EXPLICIT:-0}" != "1" ]; then
+  old="$(old_val BOSS_API_BIND)"
+  if [ -n "$old" ]; then
+    set_val BOSS_API_BIND "$old"
   fi
 fi
 

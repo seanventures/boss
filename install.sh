@@ -59,6 +59,55 @@ ui_err()   { echo -e "  ${RED}✗${NC} $*" >&2; }
 ui_info()  { echo -e "  ${MUTED}•${NC} $*"; }
 die()      { ui_err "$*"; exit 1; }
 
+# stdout is the normalized origin. stderr is one reason, and the status is the script's.
+normalize_console_origin() {
+  if [[ ! -f "$CONSOLE_ORIGIN_PY" ]]; then
+    echo "scripts/install/console_origin.py is missing" >&2
+    return 1
+  fi
+  python3 "$CONSOLE_ORIGIN_PY" "$1"
+}
+
+# stdout is the address Compose can publish. Hostnames and blanks are rejected.
+# IPv6 is wrapped in brackets so the host:port:container mapping stays unambiguous.
+normalize_api_bind() {
+  python3 -c '
+import ipaddress, sys
+raw = sys.argv[1].strip()
+if not raw:
+    sys.stderr.write("API bind must be 127.0.0.1, 0.0.0.0, or a single IPv4 or IPv6 address\n")
+    raise SystemExit(2)
+text = raw
+if text.startswith("[") and text.endswith("]") and ":" in text[1:-1]:
+    text = text[1:-1]
+try:
+    parsed = ipaddress.ip_address(text)
+except ValueError:
+    sys.stderr.write("API bind must be 127.0.0.1, 0.0.0.0, or a single IPv4 or IPv6 address\n")
+    raise SystemExit(2)
+if isinstance(parsed, ipaddress.IPv6Address):
+    sys.stdout.write("[%s]\n" % parsed)
+else:
+    sys.stdout.write("%s\n" % parsed)
+' "$1"
+}
+
+# Where a client on this machine opens the API. Publishing 0.0.0.0 still answers
+# on loopback. A specific address does not.
+local_api_url() {
+  local bind="$1" port="$2"
+  case "$bind" in
+    ""|127.0.0.1|0.0.0.0)
+      printf 'http://127.0.0.1:%s\n' "$port" ;;
+    \[*)
+      printf 'http://%s:%s\n' "$bind" "$port" ;;
+    *:*)
+      printf 'http://[%s]:%s\n' "$bind" "$port" ;;
+    *)
+      printf 'http://%s:%s\n' "$bind" "$port" ;;
+  esac
+}
+
 # ---- defaults / flags ------------------------------------------------------
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 BACKUP_DIR=""
@@ -86,6 +135,26 @@ PUBLIC_URL_EXPLICIT=0
 if [ -n "${BOSS_PUBLIC_URL:-}" ]; then
   PUBLIC_URL_EXPLICIT=1
 fi
+# Hostname the browser will use for Mission Control. Empty means loopback only.
+# The web listener stays on 127.0.0.1 either way. A previous .env keeps its origin
+# unless this run passed --console-origin or BOSS_CONSOLE_PUBLIC_ORIGIN.
+CONSOLE_ORIGIN="${BOSS_CONSOLE_PUBLIC_ORIGIN:-}"
+CONSOLE_ORIGIN_EXPLICIT=0
+CONSOLE_ORIGIN_FROM_FLAG=0
+if [ -n "${BOSS_CONSOLE_PUBLIC_ORIGIN:-}" ]; then
+  CONSOLE_ORIGIN_EXPLICIT=1
+fi
+# Host address published for the API. Web, Postgres, and Infisical stay on loopback.
+# Unset means 127.0.0.1, and a rerun keeps a previous bind unless this run set one.
+API_BIND="127.0.0.1"
+API_BIND_EXPLICIT=0
+API_BIND_FROM_FLAG=0
+if [ "${BOSS_API_BIND+x}" = x ]; then
+  API_BIND="${BOSS_API_BIND}"
+  API_BIND_EXPLICIT=1
+fi
+_INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONSOLE_ORIGIN_PY="${_INSTALLER_ROOT}/scripts/install/console_origin.py"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
 WEB_PORT_EXPLICIT=0
 [[ -n "${BOSS_WEB_PORT:-}" ]] && WEB_PORT_EXPLICIT=1
@@ -125,6 +194,10 @@ Options:
   --no-web                Skip Mission Control web console
   --web                   Enable Mission Control on an install previously made without it
   --public-url URL        Browser-reachable API URL when using a reverse proxy
+  --console-origin URL    HTTPS origin for Mission Control (DNS hostname, no path).
+                          The web listener stays on 127.0.0.1. See docs/community/hostname.md
+  --api-bind ADDRESS      Address that accepts API connections (default 127.0.0.1).
+                          127.0.0.1, 0.0.0.0, or one IPv4/IPv6 address. See docs/community/hostname.md
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
   --postgres-port N       Host port for Postgres (default 5432)
@@ -148,12 +221,15 @@ Options:
                                        are referenced rather than held, and rotate cleanly.
   -h, --help              Show this help
 
-API and web bind to loopback only; use an SSH tunnel or HTTPS reverse proxy remotely.
+Web, Postgres, and the optional secret store bind to 127.0.0.1.
+The API binds to 127.0.0.1 unless you pass --api-bind. Authentication stays required.
+Console hostname and API bind are documented in docs/community/hostname.md.
+--bind-address is not a way to publish ports.
 
 Environment overrides:
   BOSS_INSTALL_DIR, OPENAI_API_KEY, ANTHROPIC_API_KEY, BOSS_GITHUB_TOKEN,
   BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT, BOSS_WEB_PORT, BOSS_POSTGRES_PORT,
-  BOSS_PUBLIC_URL, BOSS_SECRET_STORE
+  BOSS_PUBLIC_URL, BOSS_CONSOLE_PUBLIC_ORIGIN, BOSS_API_BIND, BOSS_SECRET_STORE
 
   Do not pass API keys or tokens as arguments. The shell saves them in history
   and process listings. Export them, or paste the OpenAI key at the hidden prompt.
@@ -181,6 +257,24 @@ while [[ $# -gt 0 ]]; do
     --no-web) WITH_WEB=0; WEB_EXPLICIT=1; shift ;;
     --web) WITH_WEB=1; WEB_EXPLICIT=1; shift ;;
     --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
+    --console-origin)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "pass one https origin" >&2
+        exit 2
+      fi
+      CONSOLE_ORIGIN="$(normalize_console_origin "$2")" || exit $?
+      CONSOLE_ORIGIN_EXPLICIT=1
+      CONSOLE_ORIGIN_FROM_FLAG=1
+      shift 2 ;;
+    --api-bind)
+      if [[ $# -lt 2 ]]; then
+        echo "API bind must be 127.0.0.1, 0.0.0.0, or a single IPv4 or IPv6 address" >&2
+        exit 2
+      fi
+      API_BIND="$(normalize_api_bind "$2")" || exit $?
+      API_BIND_EXPLICIT=1
+      API_BIND_FROM_FLAG=1
+      shift 2 ;;
     --bind-address) die "--bind-address is no longer supported; Community binds API/web to loopback. Use an SSH tunnel or HTTPS reverse proxy." ;;
     --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
     --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
@@ -205,6 +299,16 @@ fi
 
 if [[ -n "${BOSS_PREUPGRADE_BACKUP_DIR:-}" ]]; then
   ui_warn 'Ignoring a legacy pre-upgrade backup path; this installer will make its own fresh snapshot before updating source.'
+fi
+
+# A value inherited from the environment is explicit, same as the flag.
+# Checked before the banner so a bad origin or bind never starts an install.
+# A flag already normalized above wins over the environment.
+if [[ "$CONSOLE_ORIGIN_FROM_FLAG" -eq 0 && -n "$CONSOLE_ORIGIN" ]]; then
+  CONSOLE_ORIGIN="$(normalize_console_origin "$CONSOLE_ORIGIN")" || exit $?
+fi
+if [[ "$API_BIND_FROM_FLAG" -eq 0 && "$API_BIND_EXPLICIT" -eq 1 ]]; then
+  API_BIND="$(normalize_api_bind "$API_BIND")" || exit $?
 fi
 
 # Expand ~
@@ -768,11 +872,13 @@ BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood
 BOSS_API_PORT=${API_PORT}
+BOSS_API_BIND=${API_BIND}
 BOSS_WEB_PORT=${WEB_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
 BOSS_COMMUNITY_WEB_ENABLED=${WITH_WEB}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
+BOSS_CONSOLE_PUBLIC_ORIGIN=${CONSOLE_ORIGIN}
 NEXT_PUBLIC_BOSS_API_URL=${PUBLIC_API_URL}
 NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 
@@ -797,6 +903,8 @@ if [ -n "${_ENV_SNAPSHOT:-}" ]; then
     die "scripts/install/restore_preserved_env.sh is missing — left the existing $ENV_FILE unchanged"
   fi
   if ! BOSS_PUBLIC_URL_EXPLICIT="$PUBLIC_URL_EXPLICIT" \
+      BOSS_CONSOLE_ORIGIN_EXPLICIT="$CONSOLE_ORIGIN_EXPLICIT" \
+      BOSS_API_BIND_EXPLICIT="$API_BIND_EXPLICIT" \
       BOSS_API_PORT_EXPLICIT="$API_PORT_EXPLICIT" \
       BOSS_WEB_PORT_EXPLICIT="$WEB_PORT_EXPLICIT" \
       BOSS_POSTGRES_PORT_EXPLICIT="$PG_PORT_EXPLICIT" \
@@ -827,11 +935,14 @@ API_PORT="$(env_value BOSS_API_PORT)"
 WEB_PORT="$(env_value BOSS_WEB_PORT)"
 PG_PORT="$(env_value BOSS_POSTGRES_PORT)"
 PUBLIC_API_URL="$(env_value NEXT_PUBLIC_BOSS_API_URL)"
+API_BIND="$(env_value BOSS_API_BIND)"
+CONSOLE_ORIGIN="$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
+API_URL="$(local_api_url "$API_BIND" "$API_PORT")"
 
-# Local helper for humans
+# Local helper for humans. BOSS_API_URL is the address that answers on this machine.
 cat > "$INSTALL_DIR/boss-community.env.sh" <<EOF
 # Source me:  source $INSTALL_DIR/boss-community.env.sh
-export BOSS_API_URL="http://127.0.0.1:${API_PORT}"
+export BOSS_API_URL="${API_URL}"
 export BOSS_API_KEY="${BOSS_API_KEY}"
 export BOSS_PROJECT_ID="boss-dogfood"
 export BOSS_EDITION="community"
@@ -941,7 +1052,6 @@ fi
 # ---- wait health -----------------------------------------------------------
 ui_step "Waiting for API health"
 
-API_URL="http://127.0.0.1:${API_PORT}"
 HEALTH_OK=0
 for i in $(seq 1 60); do
   if curl -fsS "${API_URL}/health" >/dev/null 2>&1; then
@@ -1086,18 +1196,28 @@ echo -e "${GREEN}${BOLD}  BOSS Community is running.${NC}"
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
 echo ""
 echo -e "  ${BOLD}API${NC}              ${API_URL}"
+if [[ "$API_BIND" != "127.0.0.1" ]]; then
+  echo -e "  ${BOLD}API bind${NC}         ${API_BIND}"
+fi
 echo -e "  ${BOLD}Health${NC}           ${API_URL}/health"
 if [[ "$WITH_WEB" -eq 1 ]]; then
-  echo -e "  ${BOLD}Mission Control${NC}  http://127.0.0.1:${WEB_PORT}"
+  echo -e "  ${BOLD}Mission Control on this machine${NC}  http://127.0.0.1:${WEB_PORT}"
+  if [[ -n "$CONSOLE_ORIGIN" ]]; then
+    echo -e "  ${BOLD}Console origin${NC}   ${CONSOLE_ORIGIN}"
+    echo -e "  ${MUTED}It answers only after a TLS proxy on this machine forwards to 127.0.0.1:${WEB_PORT} and overwrites Host, X-Forwarded-Host, and X-Forwarded-Proto.${NC}"
+  fi
   echo -e "  ${BOLD}Console password${NC} python3 \"$INSTALL_DIR/scripts/install/console_password.py\" show --env-file \"$ENV_FILE\""
 fi
 echo -e "  ${BOLD}Project${NC}          boss-dogfood"
 echo -e "  ${BOLD}API key${NC}          (in $ENV_FILE — not printed)"
 echo -e "  ${BOLD}Install dir${NC}      $INSTALL_DIR"
 echo ""
-echo -e "${BOLD}Quick commands${NC}"
+echo -e "${BOLD}On this machine${NC}"
 echo ""
-echo "  # Load env for this shell"
+echo "  # Terminal on this machine"
+echo "  cd $INSTALL_DIR && make metatron"
+echo ""
+echo "  # CLI on this machine"
 echo "  source $INSTALL_DIR/boss-community.env.sh"
 echo ""
 echo "  # Health check"
