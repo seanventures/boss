@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "docs/community/**"
+      - "docs/landing/**"
       - "mkdocs.community.yml"
       - ".github/workflows/pages.yml"
   push:
     branches: [main]
     paths:
       - "docs/community/**"
+      - "docs/landing/**"
       - "mkdocs.community.yml"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -32,14 +34,16 @@ jobs:
           python-version: "3.11"
       - name: Install MkDocs
         run: pip install mkdocs==1.6.1 mkdocs-material==9.6.15
-      - name: Build the site strictly
-        run: mkdocs build -f mkdocs.community.yml --strict
+      - name: Build the docs strictly
+        run: mkdocs build -f mkdocs.community.yml --strict -d _site/docs
+      - name: Add the landing page
+        run: cp -R docs/landing/. _site/
       - if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
 
   deploy:
     if: github.repository == 'seanventures/boss' && github.event_name != 'pull_request'

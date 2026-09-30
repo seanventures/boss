@@ -66,13 +66,23 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 
-**2. Install the `v1.0-rc1` release**, with that address as the console origin. The script and the checkout are both verified against the same pinned commit:
+**2. Install the `v1.0-rc1` release** on the server. This one command downloads the installer, checks out the same pinned commit into `~/boss` (it asks before using another directory), and walks you through setup:
 
 ```sh
 BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-Append installer flags after the final `_`, for example `_ --console-origin https://boss.example.com` or `_ --console-origin https://192.168.1.50`. Working from a clone instead? Run `./install.sh --dir "$PWD" --console-origin https://boss.example.com`.
+Add installer flags after the final `_`, such as `_ --console-origin https://boss.example.com` for a domain or `_ --console-origin https://192.168.1.50` for a private IP.
+
+Prefer git? Clone the release and install it in place. `--ref` keeps the install on the release instead of moving it to `main`:
+
+```sh
+git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+cd boss
+./install.sh --dir "$PWD" --ref v1.0-rc1 --console-origin https://boss.example.com
+```
+
+Either way, run later commands such as `make metatron` and upgrades from the install directory.
 
 **3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
 
@@ -88,12 +98,12 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once.
 
-**4. Sign in** at your address, such as `https://boss.example.com`. The installer prints the command that shows your console password.
+**4. Sign in** at your address, such as `https://boss.example.com`. The installer finishes by printing the command that shows your console password.
 
 When the installer asks for a model key, paste it at the hidden prompt or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 > [!TIP]
-> **Just evaluating?** Run `./install.sh --dir "$PWD"` on your laptop or a dev box and open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal.
+> **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal.
 
 Optional host copies of the Claude Code, Codex CLI, and Grok Build binaries install with `--install-coding-clis`; you sign in to each one on the server.
 

@@ -6,7 +6,7 @@ Get BOSS running and create your first task in about ten minutes. This guide ins
 
 You need:
 
-- A checkout of this repository on the machine where BOSS will run.
+- `git` on the machine where BOSS will run.
 - One of the following hosts:
     - Ubuntu 22.04 or 24.04, or Debian 12 or 13, with `sudo`. The installer sets up what it needs.
     - Any other Linux or macOS host that already has `git`, `curl`, and Docker Engine or Docker Desktop with Compose.
@@ -15,11 +15,15 @@ A model key is optional. The control plane starts without one, and model work be
 
 ## Install
 
-From the checkout, run:
+Clone the `v1.0-rc1` release and install it in place:
 
 ```bash
-./install.sh --dir "$PWD"
+git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+cd boss
+./install.sh --dir "$PWD" --ref v1.0-rc1
 ```
+
+`--ref v1.0-rc1` keeps the install on the release; without it, the installer moves the checkout forward to `main`. Run the rest of this guide from the `boss` directory.
 
 When the installer finishes, you see a success card confirming that BOSS Community is running. It lists Mission Control at `http://127.0.0.1:3000`, the seeded local project `boss-dogfood`, and the install directory. The API key line tells you the key is stored in `.env` rather than printed.
 
