@@ -1,6 +1,6 @@
 # Publishing the docs
 
-This site is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) from `docs/community/` and published to GitHub Pages at <https://seanventures.github.io/boss/>. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
+The site has two parts, both published to GitHub Pages. The landing page at <https://seanventures.github.io/boss/> is static HTML, CSS, and JavaScript in `docs/site/`. The manual at <https://seanventures.github.io/boss/docs/> is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) from `docs/community/`. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
 
 ## Build locally
 
@@ -10,11 +10,11 @@ From the repository root, install `mkdocs` and `mkdocs-material`, then run:
 mkdocs build -f mkdocs.community.yml --strict
 ```
 
-Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit.
+Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit. The landing page is plain HTML; open `docs/site/index.html` in a browser, or serve the combined build with `python3 -m http.server`.
 
 ## Deploy
 
-The `Docs site` workflow in `.github/workflows/pages.yml` builds the site in strict mode and deploys it to GitHub Pages on every push to `main` that touches the docs. Pull requests build the site without deploying it. Pages must be set to deploy from GitHub Actions in the repository settings.
+The `Docs site` workflow in `.github/workflows/pages.yml` builds the manual in strict mode under `docs/`, copies the landing page to the root, and deploys both to GitHub Pages on every push to `main` that touches the docs. Pull requests build the site without deploying it. Pages must be set to deploy from GitHub Actions in the repository settings.
 
 ## Installer pin
 

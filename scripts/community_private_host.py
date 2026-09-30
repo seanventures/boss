@@ -38,6 +38,9 @@ DOCUMENTED_OPERATION_COUNTS = {
         ("860 are eligible", "851 are eligible"),
         ("2 remain held", "none remain held"),
     ),
+    "docs/site/index.html": (
+        ('<b data-count="api">993</b>', '<b data-count="api">982</b>'),
+    ),
     "docs/community/FEATURES.md": (
         ("All 993 mounted", "All 982 mounted"),
         (

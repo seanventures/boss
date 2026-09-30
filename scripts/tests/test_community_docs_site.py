@@ -14,7 +14,7 @@ def test_community_mkdocs_uses_the_public_repo_and_its_pages_host() -> None:
     manifest = (ROOT / "scripts" / "community_export_manifest.json").read_text(encoding="utf-8")
     assert "mkdocs.community.yml" in manifest
     assert "https://github.com/seanventures/boss" in text
-    assert "site_url: https://seanventures.github.io/boss/" in text
+    assert "site_url: https://seanventures.github.io/boss/docs/" in text
     private_owner = "seanheiney"
     assert private_owner not in text
 
@@ -38,5 +38,26 @@ def test_pages_workflow_deploys_only_from_the_public_repo() -> None:
     text = (COMMUNITY / "publishing.md").read_text(encoding="utf-8")
     assert "https://seanventures.github.io/boss/" in text
     workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
-    assert "mkdocs build -f mkdocs.community.yml --strict" in workflow
+    assert "mkdocs build -f mkdocs.community.yml --strict -d _site/docs" in workflow
+    assert "cp -R docs/site/. _site/" in workflow
     assert workflow.count("github.repository == 'seanventures/boss'") == 2
+
+
+def test_landing_page_links_resolve_and_count_is_redacted_on_export() -> None:
+    import re
+    import sys
+
+    site = ROOT / "docs" / "site"
+    page = (site / "index.html").read_text(encoding="utf-8")
+    for local in re.findall(r'(?:href|src)="((?:assets/|styles|app)[^"#]*)"', page):
+        assert (site / local).exists(), local
+    manual = {path.stem for path in COMMUNITY.glob("*.md")}
+    for slug in re.findall(r'href="docs/([^"/]*)/?"', page):
+        assert not slug or slug in manual, slug
+    assert "goldeneye" not in page.lower()
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import community_private_host as private_host
+
+    public = private_host.redact_private_host("docs/site/index.html", page.encode()).decode()
+    assert '<b data-count="api">982</b>' in public
+    assert "993" not in public

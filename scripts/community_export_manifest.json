@@ -60,6 +60,7 @@
     "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
+    "docs/site/",
     "mkdocs.community.yml",
     "examples/",
     "docs/product/V1_FEATURE_LOCK.md",
