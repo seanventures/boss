@@ -4,18 +4,23 @@ Install BOSS Community on a machine you administer. This page is the installer r
 
 ## Install
 
-### Release one-liner
+### One command
 
-Release `v1.0-rc1` is commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. The download and the Git checkout use that same commit, and the installer verifies it. If the download fails, the installer does not run.
+```bash
+curl -fsSL https://boss.sean.network/install.sh | bash
+```
+
+This installs release `v1.0-rc1` (commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`) into `~/boss`, asking before it uses another directory. Pass installer flags after `bash -s --`, for example `| bash -s -- --console-origin https://boss.example.com`. The script only downloads `install.sh` from that release commit on GitHub and runs it with the same commit pinned, so reruns stay on the release. To read it first, download it with `curl -fsSL https://boss.sean.network/install.sh -o install.sh`.
+
+### Straight from GitHub
+
+The same install without the website. The download and the Git checkout use the same commit, the installer verifies it, and a failed download stops before anything runs:
 
 ```bash
 BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-> [!WARNING]
-> Do not point the download URL at another host.
-
-The installer asks where to install, defaulting to `~/boss`. Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
+Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
 
 ### From a local checkout
 
@@ -53,13 +58,19 @@ The installer reads prompts from the terminal even when `bash` runs the download
 
 The installer refuses API keys and tokens as arguments, because the shell would save them in history and process listings. Export `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `BOSS_GITHUB_TOKEN` for the installer process instead.
 
-For a scripted install, pass the key through the environment and add `--yes` after the final `_` in the pinned command. Or, from the checkout you already have:
+For a scripted install, pass the key through the environment and add `--yes`:
+
+```bash
+curl -fsSL https://boss.sean.network/install.sh | OPENAI_API_KEY="$OPENAI_API_KEY" bash -s -- --yes
+```
+
+Or, from the checkout you already have:
 
 ```bash
 OPENAI_API_KEY="$OPENAI_API_KEY" ./install.sh --dir "$PWD" --yes
 ```
 
-To start without a model key, add `--yes --skip-model-key` after the final `_`, or run:
+To start without a model key, add `--yes --skip-model-key` to either command, for example:
 
 ```bash
 ./install.sh --dir "$PWD" --yes --skip-model-key

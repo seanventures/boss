@@ -19,7 +19,7 @@ During install you can enter a model key you already have, or press Enter to con
 !!! warning
     Never put a key on the command line. Use the installer's hidden prompt or the process environment instead.
 
-To install a release instead of a checkout, use the GitHub one-liner in the [quickstart](QUICKSTART.md#install-from-a-release). It installs release `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, directly from GitHub; do not point the download at any other host.
+To install without a checkout, run `curl -fsSL https://boss.sean.network/install.sh | bash`. It installs release `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, into `~/boss`; see [install without git](QUICKSTART.md#install-without-git).
 
 ### Sign in
 
