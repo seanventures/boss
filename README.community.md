@@ -66,7 +66,7 @@ The installer prints the install location and a command that shows the console p
 
 ## Get help
 
-When this repository is public, use the bug, installation, or feature form. The [feedback process](docs/community/FEEDBACK_LOOP.md) is how a report becomes a reviewed change. A docs or code proposal starts at [Contributing](CONTRIBUTING.community.md). The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. The [guide index](docs/community/README.md) lists the next page for install, a first goal, a model, the terminal, feedback, and security.
+When this repository is public, use the bug, installation, or feature form. The [feedback process](docs/community/FEEDBACK_LOOP.md) is how a report becomes a reviewed change. A docs or code proposal starts at [Contributing](CONTRIBUTING.md). The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. The [guide index](docs/community/README.md) lists the next page for install, a first goal, a model, the terminal, feedback, and security.
 
 Report a vulnerability privately to [boss@sean.net](mailto:boss@sean.net). Do not open a public issue for a vulnerability. See [SECURITY.md](SECURITY.md).
 

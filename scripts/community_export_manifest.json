@@ -221,12 +221,12 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "9a90c2ebab309d08b4e8b32fa4b9d85796f4832632154ccf1e4379f9f0921116"
+    "sha256": "85a336486d7b601caaf6fca35a4cd21df2b3e92315dc99bd6133d9e6fa31ae60"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
     "destination": "CONTRIBUTING.md",
-    "sha256": "746cdd021bb648c9d04643a708d6ebf0039e619d400ed7385ea45c6d036df613"
+    "sha256": "d77a8bae3bc631d46307e724b0b2ecdb8f04f374e59db9ecae22eb22470415e1"
   },
   "makefile_export_rewrite": {
     "source": "Makefile.community",

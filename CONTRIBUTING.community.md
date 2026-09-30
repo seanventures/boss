@@ -19,4 +19,4 @@ Spend and external writes need a reservation and a receipt. Reserve budget befor
 
 Installing agent definitions or example workflows starts no work. Do not describe a change as if installing them launches a run.
 
-Maintainers review scope, safety, tests, and documentation before merging. An issue acknowledgement or a draft plan does not authorize that work. The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. Product behavior for someone installing BOSS is in [README.community.md](README.community.md), and the page list is the [guide index](docs/community/README.md).
+Maintainers review scope, safety, tests, and documentation before merging. An issue acknowledgement or a draft plan does not authorize that work. The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. Product behavior for someone installing BOSS is in [README.md](README.md), and the page list is the [guide index](docs/community/README.md).
