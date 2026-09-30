@@ -1,6 +1,6 @@
 # Publishing the docs
 
-The site has two parts, both published to GitHub Pages. The landing page at <https://seanventures.github.io/boss/> is static HTML, CSS, and JavaScript in `docs/site/`. The manual at <https://seanventures.github.io/boss/docs/> is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) from `docs/community/`. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
+The site has two parts, both published to GitHub Pages. The landing page at <https://seanventures.github.io/boss/> is static HTML, CSS, and JavaScript in `docs/landing/`. The manual at <https://seanventures.github.io/boss/docs/> is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) from `docs/community/`. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
 
 ## Build locally
 
@@ -10,7 +10,7 @@ From the repository root, install `mkdocs` and `mkdocs-material`, then run:
 mkdocs build -f mkdocs.community.yml --strict
 ```
 
-Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit. The landing page is plain HTML; open `docs/site/index.html` in a browser, or serve the combined build with `python3 -m http.server`.
+Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit. The landing page is plain HTML; open `docs/landing/index.html` in a browser, or serve the combined build with `python3 -m http.server`.
 
 ## Deploy
 

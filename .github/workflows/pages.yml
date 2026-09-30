@@ -4,14 +4,14 @@ on:
   pull_request:
     paths:
       - "docs/community/**"
-      - "docs/site/**"
+      - "docs/landing/**"
       - "mkdocs.community.yml"
       - ".github/workflows/pages.yml"
   push:
     branches: [main]
     paths:
       - "docs/community/**"
-      - "docs/site/**"
+      - "docs/landing/**"
       - "mkdocs.community.yml"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
       - name: Build the docs strictly
         run: mkdocs build -f mkdocs.community.yml --strict -d _site/docs
       - name: Add the landing page
-        run: cp -R docs/site/. _site/
+        run: cp -R docs/landing/. _site/
       - if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
       - if: github.event_name != 'pull_request'

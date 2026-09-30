@@ -39,7 +39,7 @@ def test_pages_workflow_deploys_only_from_the_public_repo() -> None:
     assert "https://seanventures.github.io/boss/" in text
     workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     assert "mkdocs build -f mkdocs.community.yml --strict -d _site/docs" in workflow
-    assert "cp -R docs/site/. _site/" in workflow
+    assert "cp -R docs/landing/. _site/" in workflow
     assert workflow.count("github.repository == 'seanventures/boss'") == 2
 
 
@@ -47,7 +47,7 @@ def test_landing_page_links_resolve_and_count_is_redacted_on_export() -> None:
     import re
     import sys
 
-    site = ROOT / "docs" / "site"
+    site = ROOT / "docs" / "landing"
     page = (site / "index.html").read_text(encoding="utf-8")
     for local in re.findall(r'(?:href|src)="((?:assets/|styles|app)[^"#]*)"', page):
         assert (site / local).exists(), local
@@ -58,6 +58,6 @@ def test_landing_page_links_resolve_and_count_is_redacted_on_export() -> None:
     sys.path.insert(0, str(ROOT / "scripts"))
     import community_private_host as private_host
 
-    public = private_host.redact_private_host("docs/site/index.html", page.encode()).decode()
+    public = private_host.redact_private_host("docs/landing/index.html", page.encode()).decode()
     assert '<b data-count="api">982</b>' in public
     assert "993" not in public

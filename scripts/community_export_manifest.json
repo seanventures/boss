@@ -60,7 +60,7 @@
     "scripts/tests/test_community_examples.py",
     "tools/",
     "docs/community/",
-    "docs/site/",
+    "docs/landing/",
     "mkdocs.community.yml",
     "examples/",
     "docs/product/V1_FEATURE_LOCK.md",
@@ -220,7 +220,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "ba9911dc5a6c581cd24ea28a67acb4ff9106c39fb2883a236c8e5856d4b300c4"
+    "sha256": "f7b71b874b617e43393451c5d130c40214454f748c5586b2d2fe459771203873"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
