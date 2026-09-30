@@ -120,7 +120,6 @@ local_api_url() {
 # ---- defaults / flags ------------------------------------------------------
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 BACKUP_DIR=""
-ASSUME_YES=0
 WITH_WEB=1
 WEB_EXPLICIT=0
 NONINTERACTIVE=0
@@ -276,7 +275,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) INSTALL_DIR="$2"; shift 2 ;;
-    --yes|-y) ASSUME_YES=1; NONINTERACTIVE=1; shift ;;
+    --yes|-y) NONINTERACTIVE=1; shift ;;
     --no-install-deps) INSTALL_DEPS=0; shift ;;
     --discover-subscriptions) DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --install-coding-clis) INSTALL_CODING_CLIS=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
@@ -365,7 +364,6 @@ fi
 # In unattended shells, choose safe defaults rather than reading the rest of install.sh.
 if [[ "$NONINTERACTIVE" -eq 0 ]] && ! (: </dev/tty) 2>/dev/null; then
   NONINTERACTIVE=1
-  ASSUME_YES=1
 fi
 if [[ "$CONNECT_CLAUDE" -eq 1 && "$NONINTERACTIVE" -eq 1 && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
   die "No Claude setup token was provided. Set CLAUDE_CODE_OAUTH_TOKEN for this command, or run it in a terminal and paste the token from \`claude setup-token\`. Nothing was stored."
@@ -803,7 +801,9 @@ if [[ -z "$REF_SOURCE" ]]; then
       BOSS_REPO_REF="main"
       REF_SOURCE="default"
     fi
-  elif [[ -f "$INSTALL_DIR/.boss-shipped-commit" ]]; then
+  elif [[ -f "$INSTALL_DIR/.boss-shipped-commit" ]] ||
+       { [[ -d "$INSTALL_DIR" ]] && [[ -n "$(ls -A "$INSTALL_DIR")" ]]; }; then
+    # A shipped tree has its source already; any other nonempty directory is refused below.
     BOSS_REPO_REF="main"
     REF_SOURCE="default"
   elif [[ "$REPO_URL_EXPLICIT" -eq 0 ]] && _src_tree="$(local_installer_tree)"; then
@@ -1342,7 +1342,11 @@ rm -f "$EDITION_BODY"
 # --connect-found. Claude Code and Grok sign in inside the BOSS container, so a host login is
 # reported with the command that connects it rather than copied.
 MODEL_NOTES=()
-[[ -z "$_exported_keys" ]] || MODEL_NOTES+=("✓ saved:${_exported_keys}")
+_env_keys=""
+for _key in OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY XAI_API_KEY OPENROUTER_API_KEY; do
+  [[ -z "$(env_value "$_key")" ]] || _env_keys="$_env_keys $_key"
+done
+[[ -z "$_env_keys" ]] || MODEL_NOTES+=("✓ API keys in .env (values not shown):${_env_keys}")
 CODEX_FROM_DISCOVERY=0
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   ui_step "Looking for models and subscriptions on this machine (read only)"
