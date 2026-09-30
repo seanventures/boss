@@ -207,6 +207,14 @@ def _http():
 #: Where a project's own OAuth client lives in the secret store. One entry holding both halves,
 #: because they are only ever used together and a project with half a client is not a state
 #: worth being able to represent.
+def _is_loopback_http(redirect: str) -> bool:
+    """http:// to this machine only — localhost, 127.0.0.1 or [::1], any port."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(redirect)
+    return parts.scheme == "http" and (parts.hostname or "") in ("localhost", "127.0.0.1", "::1")
+
+
 def _client_ref_key(project_id: str) -> str:
     """The key this client is stored under, in the same shape as every other secret.
 
@@ -258,10 +266,17 @@ def save_oauth_client(
     if not cid or not csec or not redirect:
         raise ChannelOAuthError(
             "client_id, client_secret and redirect_uri are all required.")
-    if not redirect.startswith("https://"):
-        # Google refuses plain http for web clients anyway; refusing here says why, before the
-        # operator has pasted it into the Cloud Console and waited for a cryptic rejection.
-        raise ChannelOAuthError("redirect_uri must be https.")
+    if not redirect.startswith("https://") and not _is_loopback_http(redirect):
+        # Google refuses plain http for web clients on a real domain; refusing here says why,
+        # before the operator has pasted it into the Cloud Console and waited for a cryptic
+        # rejection.
+        #
+        # EXCEPT LOOPBACK. Google accepts http://localhost for exactly this: a BOSS on a private
+        # VM, reached through an SSH tunnel, where the browser's only way to the API IS
+        # localhost. Refusing it left a tunnelled install no way to connect a channel at all.
+        raise ChannelOAuthError(
+            "redirect_uri must be https, or http://localhost:<port>/… for an install you reach "
+            "through a tunnel.")
 
     # DURABLE, NOT MERELY PROTECTED. The console writes this and a WORKER reads it back
     # days later, through a redeploy. See durable_secret_backend for what that cost.
