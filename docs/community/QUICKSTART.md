@@ -86,16 +86,15 @@ Each command should complete without an error:
 
 Now run the task command a second time. The API rejects the repeated `dedupe_key` instead of creating a duplicate task. Every effect in BOSS carries a dedupe key for exactly this reason.
 
-## Install from a release
+## Install without git
 
-The release one-liner installs `v1.0-rc1` from a pinned commit. It downloads `install.sh` at that exact commit and refuses to run unless `BOSS_RELEASE_COMMIT` is a full 40-character SHA:
+On a machine without a checkout, the website installer does the same thing in one command. It installs the `v1.0-rc1` release into `~/boss` and keeps reruns on that release:
 
 ```bash
-BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+curl -fsSL https://boss.sean.network/install.sh | bash
 ```
 
-!!! tip
-    Only use a commit SHA published for a release; never substitute one you have not reviewed. If you are installing from a checkout, you do not need this command.
+Pass installer flags after `bash -s --`, for example `| bash -s -- --skip-model-key`.
 
 ## Next steps
 

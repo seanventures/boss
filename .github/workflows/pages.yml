@@ -1,5 +1,7 @@
 name: Docs site
 
+# Build-only check. The site is served from https://boss.sean.network/ (landing)
+# and https://boss.sean.network/docs/ (manual); this workflow never deploys.
 on:
   pull_request:
     paths:
@@ -17,12 +19,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pages-${{ github.ref }}
+  group: docs-site-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    # The private source repository publishes its own manual; only the public repository deploys this site.
+    # The private source repository has its own manual; only the public repository checks this site.
     if: github.repository == 'seanventures/boss'
     runs-on: ubuntu-latest
     permissions:
@@ -38,24 +40,5 @@ jobs:
         run: mkdocs build -f mkdocs.community.yml --strict -d _site/docs
       - name: Add the landing page
         run: cp -R docs/landing/. _site/
-      - if: github.event_name != 'pull_request'
-        uses: actions/configure-pages@v5
-      - if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    if: github.repository == 'seanventures/boss' && github.event_name != 'pull_request'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Check the site layout
+        run: test -f _site/index.html && test -f _site/docs/index.html

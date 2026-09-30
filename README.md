@@ -15,9 +15,10 @@
 </p>
 
 <p align="center">
+  <a href="https://boss.sean.network">Website</a> ·
   <a href="#deploy">Deploy</a> ·
   <a href="docs/community/QUICKSTART.md">Quickstart</a> ·
-  <a href="docs/community/README.md">Documentation</a> ·
+  <a href="https://boss.sean.network/docs/">Documentation</a> ·
   <a href="docs/community/FEATURES.md">Features</a> ·
   <a href="examples/README.md">Examples</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -66,13 +67,13 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 
-**2. Install the `v1.0-rc1` release** on the server. This one command downloads the installer, checks out the same pinned commit into `~/boss` (it asks before using another directory), and walks you through setup:
+**2. Install BOSS** on the server:
 
 ```sh
-BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --console-origin https://boss.example.com
 ```
 
-Add installer flags after the final `_`, such as `_ --console-origin https://boss.example.com` for a domain or `_ --console-origin https://192.168.1.50` for a private IP.
+Use your own domain, or `https://192.168.1.50` for a private IP. The installer checks the machine, sets up Docker if needed, asks for an optional model key, and installs the `v1.0-rc1` release into `~/boss`. It pins the reviewed release commit, so running the same command again keeps you on the release. Want to read it first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
 
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on the release instead of moving it to `main`:
 
