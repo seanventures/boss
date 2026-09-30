@@ -15,9 +15,19 @@ BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[
 > [!WARNING]
 > Do not point the download URL at another host.
 
+The installer asks where to install, defaulting to `~/boss`. Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
+
 ### From a local checkout
 
-From a checkout you already have:
+Clone the release and install it in place:
+
+```bash
+git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+cd boss
+./install.sh --dir "$PWD" --ref v1.0-rc1
+```
+
+Without `--ref`, the installer fast-forwards the checkout to `main`. From a checkout you already have on the branch you want:
 
 ```bash
 ./install.sh --dir "$PWD"
@@ -72,6 +82,7 @@ You can add a key to the private `.env` later. See [model connections](../../doc
 A rerun retains both API credentials and any operator-added API keys, the database password, model keys, the secret-store encryption key, the console login, public URL, console origin, API bind, port settings, the Mission Control choice, and the secret-store choice, unless this run sets the console origin or API bind again.
 
 - Use the lifecycle [upgrade command](#upgrade--recover) to back up state before updating a long-lived install.
+- A rerun does not remember which release you installed. Without `--ref`, it moves the checkout forward to `main`. To change a setting and stay on a release, pass the same ref again, for example `./install.sh --dir "$PWD" --ref v1.0-rc1 --install-coding-clis`.
 - Pasting the installer line again also backs up an existing running install before switching to a newer source revision. A stopped database container is started from its existing image ID for that snapshot, then returned to its stopped state. If that container is missing, cannot start, or backup fails, the source and configuration stay untouched. The backup path is printed; keep it private.
 - For an older headless install, pass `--no-web` once to record that choice; use `--web` to enable the console later.
 - If you choose Infisical and it cannot be provisioned, the installer reports an incomplete install. The next rerun keeps that choice and retries it rather than silently switching to database credential storage.
