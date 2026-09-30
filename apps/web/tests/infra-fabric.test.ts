@@ -21,12 +21,10 @@ describe("Infra fabric fetch helpers", async () => {
   const {
     fetchMultiCloudCatalog,
     fetchElasticStatus,
-    fetchShared-serverStatus,
     fetchProviderUsageSummary,
     fetchInfraFabricFeed,
     emptyMultiCloudCatalog,
     emptyElasticStatus,
-    emptyShared-serverStatus,
     emptyProviderUsageSummary,
   } = await import("../lib/infra-fabric");
 
@@ -187,51 +185,8 @@ describe("Infra fabric fetch helpers", async () => {
     expect(feed.instanceCounts.total).toBe(0);
   });
 
-  it("maps shared-server fleet status including kit modular flag", async () => {
-    const fetchMock = mockFetchJson(200, {
-      project_id: "boss-dogfood",
-      product: "shared-server",
-      node_count: 2,
-      app_count: 1,
-      package_install_count: 4,
-      ready_nodes: 1,
-      real_host_effects: false,
-      kit: {
-        version: "0.2.0",
-        modular: true,
-        package_count: 12,
-      },
-    });
-
-    const feed = await fetchShared-serverStatus("boss-dogfood");
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://boss-api.test/v1/shared-server/status?project_id=boss-dogfood",
-      expect.objectContaining({ cache: "no-store" }),
-    );
-    expect(feed.apiReachable).toBe(true);
-    expect(feed.product).toBe("shared-server");
-    expect(feed.nodeCount).toBe(2);
-    expect(feed.appCount).toBe(1);
-    expect(feed.packageInstallCount).toBe(4);
-    expect(feed.readyNodes).toBe(1);
-    expect(feed.realHostEffects).toBe(false);
-    expect(feed.kitVersion).toBe("0.2.0");
-    expect(feed.modular).toBe(true);
-    expect(feed.packageCount).toBe(12);
-  });
-
-  it("returns empty shared-server status on network error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
-    );
-    const feed = await fetchShared-serverStatus();
-    expect(feed.apiReachable).toBe(false);
-    expect(feed.blockedReason).toContain("ECONNREFUSED");
-    expect(feed.nodeCount).toBe(0);
-  });
-
+  
+  
   it("maps provider usage summary rollups", async () => {
     vi.mocked(client.getProviderUsageSummary).mockResolvedValueOnce({
       project_id: "boss-dogfood",
@@ -343,13 +298,6 @@ describe("Infra fabric fetch helpers", async () => {
           }),
         };
       }
-      if (String(url).includes("/v1/shared-server/status")) {
-        return {
-          ok: false,
-          status: 503,
-          json: async () => ({ detail: "Required database relation is not applied on this runtime." }),
-        };
-      }
       return { ok: false, status: 404, json: async () => ({}) };
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -377,8 +325,6 @@ describe("Infra fabric fetch helpers", async () => {
     expect(feed.elastic.apiReachable).toBe(true);
     expect(feed.elastic.status).toBe("not_configured");
     expect(feed.elastic.hostConnected).toBe(false);
-    expect(feed.shared-server.status).toBe("not_configured");
-    expect(feed.shared-server.hostConnected).toBe(false);
     expect(feed.providerUsage.status).toBe("not_configured");
     expect(feed.partialFailures).toEqual([]);
     expect(feed.refreshedAt).toBeTruthy();
@@ -387,7 +333,6 @@ describe("Infra fabric fetch helpers", async () => {
   it("empty helpers start Community-safe (real host effects off)", () => {
     expect(emptyMultiCloudCatalog("x").apiReachable).toBe(false);
     expect(emptyElasticStatus("x").realHostEffects).toBe(false);
-    expect(emptyShared-serverStatus("x").realHostEffects).toBe(false);
     expect(emptyProviderUsageSummary("x").providers).toEqual([]);
   });
 });
@@ -406,14 +351,10 @@ describe("Infra fabric UI wiring", () => {
     expect(page).toContain("fetchInfraFabricFeed");
     expect(page).toContain("<InfraFabricPanel");
     expect(ui).toContain("docs/api/MULTI_CLOUD.md");
-    expect(ui).toContain("docs/api/SHARED_SERVER.md");
     expect(ui).toContain("BYOK");
     expect(ui).toContain("managed fleets");
-    expect(ui).toContain("Real host effects");
     expect(ui).toContain("aria-label=\"Multi-cloud providers\"");
     expect(ui).toContain("aria-label=\"Elastic fabric\"");
-    expect(ui).toContain("aria-label=\"Shared-server PaaS\"");
     expect(ui).toContain('data-empty-state="elastic-not-configured"');
-    expect(ui).toContain('data-empty-state="shared-server-not-configured"');
   });
 });

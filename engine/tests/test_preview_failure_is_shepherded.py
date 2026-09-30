@@ -27,7 +27,7 @@ from boss_engine.services.task_shepherd import (
     classify,
 )
 
-# Verbatim from shared-server — prev_3bcf128c3a3a4d128c95, one of five identical failures.
+# Verbatim from the private host — prev_3bcf128c3a3a4d128c95, one of five identical failures.
 REAL_FAILURE = (
     "app did not serve HTTP within timeout. log tail: tmp/boss-previews/"
     "prev_3bcf128c3a3a4d128c95-x8685xbv/node_modules/rollup/dist/es/shared/parseAst.js:313:42)"

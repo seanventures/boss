@@ -1,4 +1,4 @@
-"""Control-plane HTTP surface: meta catalog, multi-cloud, shared-server, new engine routes.
+"""Control-plane HTTP surface: meta catalog, multi-cloud, reference host, new engine routes.
 
 Covers discovery endpoints plus Community-safe surfaces added for iac_verify,
 oncall_notify, pdf_render, multi-cloud skill describe, and secrets get.
@@ -49,11 +49,6 @@ def test_multi_cloud_catalog(client):
     assert {"aws", "azure", "digitalocean", "ovhcloud"} <= keys
 
 
-def test_shared_server_packages(client):
-    response = client.get("/v1/shared-server/packages")
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert "items" in body or "packages" in body or isinstance(body, dict)
 
 
 def test_multi_cloud_skills_describe(client):

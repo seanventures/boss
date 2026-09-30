@@ -73,7 +73,6 @@ Skip all of these on the first path.
 
 - A model you already have: [model connections](MODEL_CONNECTIONS.md). Saving a key does not call the provider.
 - Host copies of Claude Code, Codex CLI, and Grok Build: `./install.sh --dir "$PWD" --install-coding-clis`. That does not sign you in. A Grok subscription you already have is in [Grok CLI](GROK_CLI.md).
-- The [Shared-server kit](https://github.com/seanventures/boss/blob/main/docs/product/SHARED_SERVER_PAAS.md). It is optional software you run locally. It is not access to a server operated by someone else.
 - The [five example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing them starts no work.
 - Upgrade and uninstall: [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md#upgrade--recover).
 

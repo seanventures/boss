@@ -1,7 +1,7 @@
 /**
  * The console was DDoSing its own API.
  *
- * Measured on shared-server: `/v1/code-tasks?limit=200` returns **1.41 MB**, while every other feed
+ * Measured on reference host: `/v1/code-tasks?limit=200` returns **1.41 MB**, while every other feed
  * on the page combined is ~130 KB — 91% of the payload for one list. `page.tsx` fetches it on
  * EVERY area and renders it across ~30 sections regardless of `?area=`.
  *
@@ -36,7 +36,7 @@ describe("codeTaskLimitFor", () => {
   });
 
   it("covers every task on-area, because 200 did not", () => {
-    // The cap above was set to bound a payload, and the bound was measured wrong. On shared-server,
+    // The cap above was set to bound a payload, and the bound was measured wrong. On reference host,
     // with 244 real tasks:
     //     limit=200 -> 1,481,518 bytes in 0.885s   (44 invisible)
     //     limit=400 -> 1,707,102 bytes in 1.025s   (all of them)

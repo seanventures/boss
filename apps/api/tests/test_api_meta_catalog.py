@@ -12,7 +12,7 @@ def test_meta_api_catalog_lists_domains_and_many_routes(client):
     assert body["domain_count"] >= 5
     ids = {d["id"] for d in body["domains"]}
     assert "core" in ids or "meta" in ids
-    # shared-server and multi-cloud routes should be classified when present
+    # the private host and multi-cloud routes should be classified when present
     all_paths = [
         r["path"]
         for d in body["domains"]
@@ -50,11 +50,3 @@ def test_openapi_coverage_endpoint(client):
     assert body["openapi_json"] == "/openapi.json"
 
 
-def test_multi_cloud_and_shared_server_reachable(client):
-    mc = client.get("/v1/multi-cloud/catalog")
-    assert mc.status_code == 200, mc.text
-    assert mc.json()["provider_count"] >= 4
-
-    ge = client.get("/v1/shared-server/packages")
-    assert ge.status_code == 200, ge.text
-    assert "items" in ge.json()

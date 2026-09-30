@@ -764,8 +764,8 @@ def test_catalog_search_and_describe_use_live_capabilities():
 
 def test_project_list_shows_available_ids_before_switching():
     opener = FakeOpener([(200, {"items": [
-        {"id": "boss-dogfood", "name": "BOSS", "org_name": "Shared-server", "workspace_name": "Ops"},
-        {"id": "partner-one", "name": "Partner One", "org_name": "Shared-server", "workspace_name": "Ops"},
+        {"id": "boss-dogfood", "name": "BOSS", "org_name": "reference host", "workspace_name": "Ops"},
+        {"id": "partner-one", "name": "Partner One", "org_name": "reference host", "workspace_name": "Ops"},
     ]})])
     client = tui.MetatronClient(_config(), urlopen=opener)
     command = tui.parse_line("/projects")
@@ -989,16 +989,16 @@ def test_community_snapshot_maps_every_operator_operation():
     contract = community_path if community_path.exists() else ROOT / "api" / "openapi.yaml"
     document = yaml.safe_load(contract.read_text(encoding="utf-8"))
     records = tui.operation_records(document)
-    assert len(records) == 993
+    assert len(records) == 982
     operator_records = [record for record in records if record["path"].startswith("/v1/")]
-    assert len(operator_records) == 980
+    assert len(operator_records) == 969
     assert all(record["addressable"] for record in operator_records)
     assert len({record["operation_id"] for record in records}) == len(records)
     assert all(record["operation_id"] == record["runtime_operation_id"] for record in records)
     features = (ROOT / "docs/community/FEATURES.md").read_text(encoding="utf-8")
     terminal = (ROOT / "docs/community/TERMINAL_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
-    assert "993" in features and "986" not in features
-    assert "993" in terminal and "980" in terminal and "986" not in terminal
+    assert "982" in features and "986" not in features
+    assert "982" in terminal and "969" in terminal and "986" not in terminal
 
 
 def test_private_snapshot_maps_every_operator_operation_except_inbound_callbacks():
@@ -1047,7 +1047,7 @@ print(json.dumps({'openapi': len(records), 'operator': len(operator)}))
     )
     assert result.returncode == 0, result.stderr
     counts = json.loads(result.stdout)
-    assert counts == {"openapi": 993, "operator": 980}
+    assert counts == {"openapi": 982, "operator": 969}
 
 
 def test_schedule_edit_uses_typed_op_input_and_returns_the_api_result():

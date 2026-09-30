@@ -351,7 +351,7 @@ def test_boss_never_stores_a_subscription_credential() -> None:
 # Detection answers "is the CLI on the machine BOSS is running on". For a self-hosted install
 # that is the whole answer. For a deployed one it is no answer at all: the operator's login is
 # on their laptop and the pipeline runs in a container. Measured on the real deployment — the
-# shared-server API reported `codex installed=False` while the same check on the laptop said ready,
+# the private host API reported `codex installed=False` while the same check on the laptop said ready,
 # which is correct and useless at the same time.
 #
 # So what matters for a shipped product is whether the subscription can TRAVEL.

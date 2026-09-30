@@ -317,7 +317,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                 <label>Base URL (Jira)<input name="base_url" placeholder="https://x.atlassian.net" /></label>
               </div>
               <div className="wo-form-pair">
-                <label>Workspace slug (Plane)<input name="workspace_slug" placeholder="shared-server" /></label>
+                <label>Workspace slug (Plane)<input name="workspace_slug" placeholder="workspace" /></label>
                 <label>Plane project UUID<input name="project_id_external" placeholder="3f2a9c1e-…" /></label>
               </div>
               <div className="wo-form-pair">

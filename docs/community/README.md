@@ -91,8 +91,6 @@ The release one-liner is pinned to `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, t
 
 `user@your-vm` in these guides means a VM you administer. No page requires Plane, an ops token, a private registry, or SSH to a machine you do not administer.
 
-The optional [Shared-server kit](https://github.com/seanventures/boss/blob/main/docs/product/SHARED_SERVER_PAAS.md) is software you run locally. It is not access to a server operated by someone else.
-
 ## Names in the console
 
 Mission Control is the console. Inside it:

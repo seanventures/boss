@@ -254,17 +254,6 @@ def test_pipeline_hot_paths_have_no_direct_database_imports_or_text_calls():
         assert "sf.budget" not in source
 
 
-#: A named integration may say its own name, the way an AWS adapter says "AWS". Anything else
-#: mentioning the operator's platform is a leak of where BOSS happens to run.
-_MAY_NAME_THE_PLATFORM = {
-    "services/shared_server_paas.py",      # the adapter itself; the name IS the integration
-    "services/api_catalog.py",         # catalogues that integration's API surface
-    "services/agent_kms.py",           # speaks that integration's ops-agent secret protocol
-    "services/console_v2.py",          # matches BOSS's own run titles, which contain the word
-    "mcp/curated_request_bodies.json", # names public Shared-server adapter routes in API schemas
-}
-
-
 def _engine_sources():
     package_root = ROOT / "engine" / "boss_engine"
     for path in package_root.rglob("*"):
@@ -307,35 +296,6 @@ def test_engine_shipped_files_do_not_contain_internal_hostnames():
     for rel, source in _engine_sources():
         for host in _private_host_denylist():
             assert host not in source, f"{rel} ships the hostname {host!r}"
-
-
-def test_only_the_platform_integration_names_the_platform():
-    """The other half, which was NOT unambiguous and had this test permanently red.
-
-    The old rule forbade the string "shared-server" anywhere in the engine — including in
-    shared_server_paas.py, a module whose entire purpose is integrating with it and which says the
-    word 68 times. That is not a leak; it is the module's identity, exactly as an AWS adapter
-    says "AWS".
-
-    So the rule is split. Hostnames are forbidden outright, above. The platform's NAME is
-    allowed only where naming it is the point, and the allowlist is small and explicit so a new
-    mention has to be argued for rather than absorbed.
-    """
-    offenders = sorted(
-        rel for rel, source in _engine_sources()
-        if "shared-server" in source and rel not in _MAY_NAME_THE_PLATFORM
-    )
-    assert not offenders, (
-        "these name the operator's platform without being an integration with it: "
-        f"{offenders}"
-    )
-
-
-def test_the_platform_allowlist_has_no_dead_entries():
-    """An allowlist that outlives its reason silently widens the rule."""
-    present = {rel for rel, source in _engine_sources() if "shared-server" in source}
-    stale = sorted(_MAY_NAME_THE_PLATFORM - present)
-    assert not stale, f"allowlisted but no longer mention it: {stale}"
 
 
 def test_default_classes_are_the_documented_oss_implementations():

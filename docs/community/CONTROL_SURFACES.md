@@ -36,11 +36,11 @@ project when it starts; its dedicated key must see exactly that project. Read
 the returned task and event history to verify the result. Other operations may
 require a reservation, decision, or separate approval before they can proceed.
 
-The [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) maps all 993
-mounted Community HTTP operations; 980 `/v1/` operator operations are
+The [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) maps all 982
+mounted Community HTTP operations; 969 `/v1/` operator operations are
 addressable by `/op`. The [MCP operation matrix](mcp-api-capability-matrix.json)
-accounts for all 993: 860 are eligible for API policy checks, 64 sensitive
-actions require separate human approval of an exact request, 2 remain held
+accounts for all 982: 851 are eligible for API policy checks, 64 sensitive
+actions require separate human approval of an exact request, none remain held
 for route-specific safety gaps, and 67 protocol or internal routes are excluded. The API
 and terminal can submit operator requests, but existing server checks can
 deny or hold an action. A mapped operation does not imply that an edition

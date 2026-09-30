@@ -126,7 +126,7 @@ describe("a document type is never a product name", () => {
 
 describe("a titled PRD is not an Untitled app", () => {
   /**
-   * Verbatim titles from shared-server, from cards the operator photographed reading "Untitled
+   * Verbatim titles from reference host, from cards the operator photographed reading "Untitled
    * app" — with their own names rendered directly above them as the descriptor chip.
    *
    * The head/tail split did its job and the last gate did its job: "PRD" is a document type

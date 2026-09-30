@@ -1,6 +1,6 @@
 """Waiting for a model lane is not the same as doing the work.
 
-Measured across 70 real runs on shared-server: 2,227 minutes of wall time against 652 minutes of
+Measured across 70 real runs on reference host: 2,227 minutes of wall time against 652 minutes of
 model latency — 71% of it was something other than the model thinking. The phase timings could
 not say what: a stage that queued four minutes for a slot and then ran for one is recorded
 identically to a stage that worked for five, and those two have opposite fixes.

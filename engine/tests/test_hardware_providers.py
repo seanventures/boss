@@ -174,7 +174,7 @@ def test_unknown_provider_key_is_rejected():
     with pytest.raises(ValueError, match="unknown provider"):
         _register(connection, provider_key="azure")
     with pytest.raises(ValueError, match="unknown provider"):
-        _register(connection, provider_key="shared-server")
+        _register(connection, provider_key="reference host")
     assert connection.rows == []
 
 
@@ -513,7 +513,7 @@ def test_provider_module_does_not_reference_a_live_provider_client():
         "urllib",
         "requests",
         "socket",
-        "shared-server",
+        "reference host",
         "digitalocean_adapter",
         "aws_metal",
     ):

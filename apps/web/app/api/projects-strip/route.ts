@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }
   try {
-    // 100, not the endpoint's default of 40. shared-server has 59 apps and the strip was showing
+    // 100, not the endpoint's default of 40. reference host has 59 apps and the strip was showing
     // the first 40 as though that were all of them — the same false absence this strip exists
     // to prevent. 100 is the endpoint's own ceiling and the rows are small (the response is
     // trimmed to six fields below), so this costs far less than the list feeds do.

@@ -47,7 +47,7 @@ def test_a_vm_reading_explains_itself_in_the_operators_terms():
 
 
 def test_a_server_reading_is_not_hedged():
-    """On a Linux server /proc/meminfo IS the host. Those installs -- shared-server, any Hetzner
+    """On a Linux server /proc/meminfo IS the host. Those installs -- reference host, any Hetzner
     box -- must keep an unqualified reading, or the hedge becomes noise everywhere."""
     server = dict(THE_MISLEADING_READING, host_is_the_machine=True)
     result = pressure(server, HEALTHY_CPU, HEALTHY_DISK)

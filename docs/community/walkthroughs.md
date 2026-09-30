@@ -58,9 +58,6 @@ python3 scripts/install/console_password.py show
 Run it in a terminal so the password is not piped into a log. Do not paste
 the password or the API key into a ticket.
 
-The optional Shared-server kit is software you can run on this same machine. It
-is not access to someone else's server. You do not need it to sign in.
-
 Self-hosted SSO against an identity provider you run is a later setup. The
 first sign-in is the owner password created on this machine.
 

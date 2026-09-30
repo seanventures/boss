@@ -6,7 +6,7 @@ import { API_URL, authHeaders } from "../../../lib/client";
  * The code-task list, on demand.
  *
  * The page renders the newest 200 server-side, which is a deliberate ceiling: measured on
- * shared-server, `/v1/code-tasks?limit=200` is 1.41 MB while every other feed on the page combined
+ * reference host, `/v1/code-tasks?limit=200` is 1.41 MB while every other feed on the page combined
  * is ~130 KB, and one load took 111 seconds and starved the API's healthcheck until Traefik
  * evicted the container. Paying that on every render to cover the tail is the wrong trade.
  *

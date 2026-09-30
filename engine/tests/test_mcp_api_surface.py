@@ -679,7 +679,7 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
                 }},
             }}},
         }},
-        "/v1/shared-server/apps/deploy": {"post": {"summary": "Deploy directly"}},
+        "/v1/workspace/apps/deploy": {"post": {"summary": "Deploy directly"}},
         "/v1/decisions/{decision_id}/reject": {"post": {}},
     }}
     seen = []
@@ -696,7 +696,7 @@ def test_sensitive_mcp_request_needs_exact_separate_confirmation():
     surface = ApiSurface(schema, client=client, principal="mcp-member",
                          pinned_project_id="alpha")
     alias = operation_alias("POST", "/v1/members")
-    held = operation_alias("POST", "/v1/shared-server/apps/deploy")
+    held = operation_alias("POST", "/v1/workspace/apps/deploy")
     reviewed_decision = operation_alias("POST", "/v1/decisions/{decision_id}/reject")
     assert surface.describe(alias)["availability"] == "confirmation_required"
     assert "confirmation_id" in surface.describe(alias)["inputSchema"]["properties"]

@@ -28,7 +28,7 @@ This is the Community feature checklist. A status here describes the implementat
 |---|---|
 | HTTP control-plane API (OpenAPI) | ✅ |
 | CLI | ✅ |
-| MCP server for agent clients | ◐ All 993 mounted Community operations are mapped: 860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work, and 67 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
+| MCP server for agent clients | ◐ All 982 mounted Community operations are mapped: 851 use API policy, 64 need separate exact-request human confirmation, none remain held, and 67 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
 | Self-hosted Mission Control console | ✅ |
 | API-first clients (`packages/api-client`) | ✅ |
 

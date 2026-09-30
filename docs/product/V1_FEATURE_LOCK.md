@@ -124,9 +124,8 @@ These must not be marked Community v1 shipped.
 | V1-OUT-005 | CI/CD pipeline | after_v1 | out | ◐ | /v1/cicd | Catalog exists; live poll credential-gated |
 | V1-OUT-006 | Agent key management (KMS depth) | after_v1 | out | ◐ | Agent KMS | SecretRefs stay in v1 |
 | V1-OUT-007 | Autonomous feedback loop | after_v1 | out | ◐ | learning_loop | No silent self-mod; automation routes are CE |
-| V1-OUT-008 | Infra management (elastic / Shared-server) | after_v1 | out | ◐ | elastic fabric | ProviderOps kernel is in v1 |
+| V1-OUT-008 | Infra management (elastic fabric) | after_v1 | out | ◐ | elastic fabric | ProviderOps kernel is in v1 |
 | V1-OUT-009 | UI simplification v1 | after_v1 | out | ○ | UI simplification | Needs cut list |
-| V1-OUT-010 | Shared-server features / metrics | isolated | out | ○ | shared_server_nodes | Live 500 / missing table is not E2E |
 | V1-OUT-011 | Signals analysis | isolated | out | ◐ | telemetry_mining | Exists; not v1 lock-in |
 | V1-OUT-012 | Complete CI/CD | isolated | out | ◐ | security-scan gate | Provenance yes; live Actions gated |
 | V1-OUT-013 | Security vuln scanning (OS/code) | isolated | out | ◐ | security-scan | Scanners 200; latest may be empty |

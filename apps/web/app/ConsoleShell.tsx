@@ -373,13 +373,13 @@ export default function ConsoleShell({
   useEffect(() => {
     // UNTIL THE PAGE HAS ACTUALLY ARRIVED, NOT FOR A FIXED 1.2 SECONDS.
     //
-    // Measured on shared-server: the Factory page is 9.2 MB and streams for 10.4 seconds. The bar
+    // Measured on reference host: the Factory page is 9.2 MB and streams for 10.4 seconds. The bar
     // was cleared 1200ms after hydration, which happens early in that stream — so for the
     // remaining ~9 seconds cards kept appearing with nothing on screen saying so. A list that
     // is still arriving looks exactly like a list that is short, and the honest conclusion
     // from a page that has stopped saying it is busy is that the rest is not coming.
     //
-    // `load` IS NOT THE END OF THE PAGE FILLING UP. Measured on shared-server:
+    // `load` IS NOT THE END OF THE PAGE FILLING UP. Measured on reference host:
     //
     //     loading fallback   0.3s      (the route skeleton)
     //     content streams    6.8s -> 7.95s

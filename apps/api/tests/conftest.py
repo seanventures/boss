@@ -186,10 +186,6 @@ def clean_tables(engine):
             "provider_slo_definitions",
             "provider_usage_events",
             "worker_instances",
-            "shared_server_deploys",
-            "shared_server_apps",
-            "shared_server_package_installs",
-            "shared_server_nodes",
             "scale_plans",
             "worker_pools",
             # Health samples hold an FK onto deployment_targets and were missing from this

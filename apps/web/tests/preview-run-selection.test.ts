@@ -9,7 +9,7 @@ import { describeApiFailure } from "@boss/api-client";
  * previewing the same app from inside its code task worked. Two independent defects.
  */
 describe("pickBuiltRun", () => {
-  // The real shape from shared-server: newest attempt is a blocked follow-up, the one before it
+  // The real shape from reference host: newest attempt is a blocked follow-up, the one before it
   // completed and opened PR #83.
   const bugbox = [
     { id: "crun_f91b0c5528d240798ec2", status: "blocked", pull_request_url: null },
@@ -179,7 +179,7 @@ describe("card renders a failed preview as failed", () => {
  * The Discovery "Send to PRD meeting" button sat on "Convening…" indefinitely. The action was
  * written correctly — try/catch, returning {taskId} or {error} either way — but it was never
  * reached, because the fetch underneath had no timeout. When the API went cold (a first query
- * on shared-server measured 28.9s) the await simply never returned and `pending` never cleared.
+ * on reference host measured 28.9s) the await simply never returned and `pending` never cleared.
  */
 describe("api client request deadline", () => {
   const source = readFileSync(

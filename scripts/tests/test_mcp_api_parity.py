@@ -63,7 +63,7 @@ def test_mcp_capability_matrix_matches_both_live_openapi_compositions():
 def test_community_curated_request_fields_are_audited_and_never_paid_only():
     overlay = json.loads((ROOT / "engine/boss_engine/mcp/curated_request_bodies.json").read_text())
     assert overlay["version"] == 1
-    assert len(overlay["operations"]) == 19
+    assert len(overlay["operations"]) == 14
     community = json.loads(COMMUNITY_MATRIX.read_text())
     rows = {(row["method"], row["path"]): row for row in community["operations"]}
     assert sum(row["mounted_input_schema_quality"] == "loose_json_body"
@@ -135,9 +135,6 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     assert rows[("POST", "/v1/delivery/deploy")]["mcp_status"] == (
         "human_confirmation_gated"
     )
-    assert rows[("POST", "/v1/shared-server/apps/deploy")]["mcp_status"] == (
-        "operator_only_unavailable"
-    )
     assert rows[("POST", "/v1/activity/retention/prune")]["mcp_status"] == "excluded"
     assert rows[("POST", "/v1/platform-standards/apply")]["mcp_status"] == (
         "api_policy_gated"
@@ -145,4 +142,4 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     assert sum(row["mcp_status"] == "human_confirmation_gated"
                for row in community["operations"]) == 64
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 2
+               for row in community["operations"]) == 0

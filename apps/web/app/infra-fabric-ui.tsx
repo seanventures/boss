@@ -1,5 +1,5 @@
 /**
- * Infra Fabric panel — multi-cloud catalog, elastic fabric, Shared-server PaaS,
+ * Infra Fabric panel — multi-cloud catalog, elastic fabric, reference host PaaS,
  * and provider usage rollups for Mission Control ProviderOps.
  *
  * Community honesty: catalog discovery + BYOK self-managed fleets only.
@@ -31,22 +31,20 @@ function statusClass(status: string): string {
 }
 
 export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
-  const { multiCloud, elastic, shared-server, providerUsage, partialFailures } = feed;
+  const { multiCloud, elastic, providerUsage, partialFailures } = feed;
   const anyReachable =
     multiCloud.apiReachable ||
     elastic.apiReachable ||
-    shared-server.apiReachable ||
     providerUsage.apiReachable;
 
   return (
     <article className="stack-card" id="infra-fabric" aria-label="Infra fabric">
       <h3>Infra Fabric</h3>
       <p className="detail">
-        Multi-cloud catalog, elastic worker fabric, Shared-server bare-metal PaaS, and
+        Multi-cloud catalog, elastic worker fabric, and
         per-provider usage. Community is BYOK + self-managed only — no hosted fleets
         or silent real-host writes. Operator docs:{" "}
         <code className="mono">docs/api/MULTI_CLOUD.md</code> ·{" "}
-        <code className="mono">docs/api/SHARED_SERVER.md</code>
       </p>
 
       {partialFailures.length > 0 ? (
@@ -59,8 +57,7 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
         <p className="detail" role="alert">
           Infra fabric APIs are unreachable. Confirm the control plane is up and
           routes <code className="mono">/v1/multi-cloud/*</code>,{" "}
-          <code className="mono">/v1/elastic/*</code>,{" "}
-          <code className="mono">/v1/shared-server/*</code>, and{" "}
+          <code className="mono">/v1/elastic/*</code>, and{" "}
           <code className="mono">/v1/provider-usage/*</code> are mounted.
         </p>
       ) : null}
@@ -193,63 +190,6 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
               {elastic.message ? (
                 <p className="detail">{elastic.message}</p>
               ) : null}
-            </>
-          )}
-        </section>
-
-        {/* Shared-server */}
-        <section aria-label="Shared-server PaaS" data-fabric-status={shared-server.status}>
-          <h4>Shared-server PaaS</h4>
-          {shared-server.status === "not_configured" || !shared-server.configured ? (
-            <p className="detail" data-empty-state="shared-server-not-configured">
-              Shared-server is not configured. No registered nodes and
-              host.connected=false — this is not a managed BOSS fleet.
-              {shared-server.blockedReason ? ` ${shared-server.blockedReason}` : ""}
-            </p>
-          ) : shared-server.status === "error" ? (
-            <p className="detail">
-              Shared-server status unavailable
-              {shared-server.blockedReason ? `: ${shared-server.blockedReason}` : "."}
-            </p>
-          ) : (
-            <>
-              <div className="provider-suite-summary" aria-label="Shared-server fleet summary">
-                <div>
-                  <span>Nodes</span>
-                  <strong>{shared-server.nodeCount}</strong>
-                  <small>{shared-server.readyNodes} ready</small>
-                </div>
-                <div>
-                  <span>Apps</span>
-                  <strong>{shared-server.appCount}</strong>
-                  <small>{shared-server.packageInstallCount} package installs</small>
-                </div>
-                <div>
-                  <span>Kit</span>
-                  <strong className="mono">{shared-server.kitVersion || "—"}</strong>
-                  <small>
-                    {shared-server.modular ? "modular" : "monolithic"} ·{" "}
-                    {shared-server.packageCount} packages
-                  </small>
-                </div>
-                <div>
-                  <span>Real host effects</span>
-                  <strong
-                    className={shared-server.realHostEffects ? "tone-warn" : "tone-good"}
-                  >
-                    {shared-server.realHostEffects ? "allowed" : "off"}
-                  </strong>
-                  <small>
-                    {shared-server.realHostEffects
-                      ? "SSH/host writes gated on"
-                      : "plan-only; no silent host writes"}
-                  </small>
-                </div>
-              </div>
-              <p className="detail">
-                Bare-metal / self-hosted nodes you register — not a managed BOSS
-                fleet. See <code className="mono">docs/api/SHARED_SERVER.md</code>.
-              </p>
             </>
           )}
         </section>

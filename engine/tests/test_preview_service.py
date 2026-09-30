@@ -3,7 +3,7 @@
 def test_finished_previews_are_eventually_forgotten():
     """Expiring marked rows but never removed them, so the table only grew.
 
-    Measured on shared-server: 50 rows, 47 of them expired. That is not merely untidy — the list
+    Measured on reference host: 50 rows, 47 of them expired. That is not merely untidy — the list
     returns the newest N rows WHATEVER their status and callers filter for live ones after, so
     a window that is 94% dead can push a genuinely running preview for an older app out of it.
     The preview exists and the app's card cannot see it.

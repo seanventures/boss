@@ -7,7 +7,7 @@ import { join } from "node:path";
  * reported this multiple times before."
  *
  * Reported repeatedly and fixed repeatedly, because every fix was in the wrong place. Measured
- * on shared-server against the URL an operator bookmarks:
+ * on reference host against the URL an operator bookmarks:
  *
  *     https://boss.local.example.test/?org=org_boss&area=code_tasks
  *     time_to_first_byte: 6.549s   total: 7.373s   size: 5.6 MB
@@ -97,7 +97,7 @@ describe("the bar stays up while the page is still filling", () => {
   const SHELL = readFileSync(join(APP, "ConsoleShell.tsx"), "utf8");
 
   it("it waits for the DOM to stop changing, not just for the document to finish", () => {
-    // Measured on shared-server: the stream ends at 7.95s and `load` fires — and React then
+    // Measured on reference host: the stream ends at 7.95s and `load` fires — and React then
     // hydrates a 6 MB payload, which is when sections visibly appear. The indicator went off
     // at exactly the moment the expensive part began.
     expect(SHELL).toContain("new MutationObserver");

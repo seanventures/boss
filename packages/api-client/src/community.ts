@@ -5176,7 +5176,7 @@ export function createBossRequest(config: BossApiClientConfig) {
   ): Promise<T> {
     // A REQUEST WITH NO DEADLINE IS A SPINNER WITH NO END.
     //
-    // Nothing bounded these fetches. When the API went cold — a first query on shared-server took
+    // Nothing bounded these fetches. When the API went cold — a first query on reference host took
     // 28.9 seconds — a server action simply never returned, so `pending` never cleared and the
     // operator watched "Convening…" forever for a promote that was still in flight. The action
     // itself was written correctly, with try/catch returning an error either way; it was never

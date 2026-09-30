@@ -1,6 +1,6 @@
 """An unbound deployment target must be bindable by the control that binds targets.
 
-Found on shared-server: BugBox had a `deployment_targets` row with host_id NULL — created by an
+Found on reference host: BugBox had a `deployment_targets` row with host_id NULL — created by an
 earlier "Set target" attempt that died on the run-status guard before it could attach. Every
 later attempt then hit
 

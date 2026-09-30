@@ -7,7 +7,7 @@ from apps.api.app.services.plane_client import PlaneClient
 
 
 def _client(**over):
-    s = SimpleNamespace(plane_base_url="https://plane.local.example.test", plane_workspace="shared-server",
+    s = SimpleNamespace(plane_base_url="https://plane.local.example.test", plane_workspace="reference host",
                         plane_project_url="", plane_api_token="tok")
     for k, v in over.items():
         setattr(s, k, v)
@@ -58,9 +58,9 @@ def test_tls_private_ca_and_explicit_local_opt_out(monkeypatch):
 
 def test_ctx_derives_from_project_url_when_base_unset():
     c = _client(plane_base_url="", plane_workspace="",
-                plane_project_url="https://plane.local.example.test/shared-server/projects/abc/issues")
+                plane_project_url="https://plane.local.example.test/workspace/projects/abc/issues")
     base, ws, token = c._ctx()
-    assert base == "https://plane.local.example.test" and ws == "shared-server"
+    assert base == "https://plane.local.example.test" and ws == "reference host"
 
 
 def test_set_state_patches_resolved_id(monkeypatch):
