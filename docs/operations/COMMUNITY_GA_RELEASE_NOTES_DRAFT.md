@@ -115,8 +115,9 @@ Do not describe `1f4176e6` as qualified, deployed, or public GA. These are
 still not evidenced for this product source:
 
 - Clean VM of this SHA.
-- Public installer URL. The one-liner still stops on
-  `REPLACE_WITH_REVIEWED_40_CHARACTER_SHA`.
+- Public installer URL. The guides pin
+  `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, and a clean VM has not
+  fetched that URL.
 - Image publication. Helm and Kubernetes tags remain `0.14.0`.
 - Image-license counsel.
 - Secret-rotation receipts.
