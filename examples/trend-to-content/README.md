@@ -1,20 +1,16 @@
 # Trend to content
 
-**Give it a trend. Get an honest verdict on whether it is yours to talk about — and a script,
-if it is.**
+**Give it a trend. Get an honest verdict on whether it is yours to talk about — and a script, if
+it is.**
 
 ---
 
-## The use case
+## What it does
 
-Something is happening and everyone is posting about it. The question is not *"can we make a
-video"* — you can always make a video. It is **"do we have anything to say that isn't what
-everyone else is saying"**, and the honest answer is usually no.
-
-So this does the research, then makes that call explicitly, and only writes a script if the
-answer was yes.
-
-### What happens
+Something is happening and everyone is posting about it. The useful question is not *"can we
+make a video"* — you always can. It is **"do we have anything to say that isn't what everyone
+else is saying"**, and the honest answer is usually no. This workflow does the research, makes
+that call explicitly, and writes a script only if the answer is yes.
 
 | # | Step | What it does |
 |---|------|--------------|
@@ -23,93 +19,91 @@ answer was yes.
 | 3 | **Script** | A 45-second vertical script — written from the *assessment* |
 | 4 | **Review** | Emails it to you. **Stops and waits** |
 
-### The part that makes it useful
-
-Step 3 reads the **assessment**, not the raw research. So a trend judged *"not ours"* produces
-one honest line rather than a polished script for a video nobody should make.
-
-The brief says so directly: *"Do not manufacture relevance. Most trends are not ours, and
-saying so saves a video."* A tool that always produces a script is a tool that will talk you
-into things.
-
-### You supply the trend
-
-The sketch everyone draws starts with **detect trend**, which needs a feed from X, TikTok or
-Google Trends. BOSS connects to none of them, and pretending otherwise would make this a demo
-of something that does not work.
-
-Detection is also the part you probably want a human doing — you know which trends are yours.
-
-### It chains into the video workflow
-
-It ends at a **script**, deliberately. Paste that into
-[video-workflow](../video-workflow/)'s editing instructions and the two connect: trend in here,
-edited video out of there, both stopping for you.
+Step 3 reads the **assessment**, not the raw research. A trend judged *"not ours"* therefore
+produces one honest line rather than a polished script for a video nobody should make. The
+default brief says so directly: *"Do not manufacture relevance. Most trends are not ours, and
+saying so saves a video."*
 
 ---
 
-## Before you run it
+## What you need
 
-- **A model** connected.
+- **A connected model.**
 - **Email configured** — Settings → Email, or the `BOSS_EMAIL_*` variables.
 
 ---
 
-## Running the setup script
+## Run it
+
+1. Set `BOSS_API_KEY` as described in [examples/README.md](../README.md).
+2. Install the workflow. Start with `--dry-run`; re-running is safe.
 
 ```bash
 python3 examples/trend-to-content/setup.py --api http://127.0.0.1:8000
 ```
 
-`--dry-run` first; safe to re-run.
+3. Open **Delivery → Workflows → "Trend to content" → Start one** and fill in:
+   - `trend` — *"everyone is posting their AI coding setup"*
+   - `to` — who reads the script
+   - `assess_brief` / `script_brief` — leave blank to use the defaults
 
 ---
 
-## Running it
+## What you'll review
 
-**Delivery → Workflows → "Trend to content" → Start one.**
-
-- `trend` — *"everyone is posting their AI coding setup"*
-- `to` — who reads the script
-- `assess_brief` / `script_brief` — leave blank for the defaults
+The review step emails you the script — or, for a trend that is not yours, the single line saying
+so — and stops for your approval.
 
 ---
 
-## Doing it by hand
+## How it stays safe
 
-**Skills → Enable:** `model.generate_text`, `email.send_real_guarded`
-
-**Your steps →** *Assess the trend* and *Write the script* (`model.generate_text`, input
-`prompt`), and *Send it for review* (`email.send_real_guarded`, inputs `to`, `body`).
-
-**Wire the inputs:**
-
-| Step | Input | Source |
-|---|---|---|
-| Research | `seed` | run input → `trend` |
-| Assess | `prompt` | run input → `assess_brief` |
-| Assess | `context` | **from an earlier step** → Research → `dossier` |
-| Script | `prompt` | run input → `script_brief` |
-| Script | `context` | **from an earlier step** → **Assess** → `text` |
-| Review | `to` | run input → `to` |
-| Review | `body` | **from an earlier step** → Script → `text` |
-
-That Script→`context`←**Assess** wiring is the point of the example. Pointing it at Research
-instead gives you a script for every trend, which is the thing worth avoiding.
+The workflow ends with a **script** in your inbox, and the final step waits for a person. Nothing
+is published; turning the script into a video is a separate workflow with its own approval.
 
 ---
 
-## When something goes wrong
+## Build it by hand
+
+1. **Skills → Enable:** `model.generate_text`, `email.send_real_guarded`
+2. **Your steps →** *Assess the trend* and *Write the script* (`model.generate_text`, input
+   `prompt`), and *Send it for review* (`email.send_real_guarded`, inputs `to`, `body`).
+3. **Wire the inputs:**
+
+   | Step | Input | Source |
+   |---|---|---|
+   | Research | `seed` | run input → `trend` |
+   | Assess | `prompt` | run input → `assess_brief` |
+   | Assess | `context` | **from an earlier step** → Research → `dossier` |
+   | Script | `prompt` | run input → `script_brief` |
+   | Script | `context` | **from an earlier step** → **Assess** → `text` |
+   | Review | `to` | run input → `to` |
+   | Review | `body` | **from an earlier step** → Script → `text` |
+
+The Script → `context` ← **Assess** wiring is the point of the example. Pointing it at Research
+instead gives you a script for every trend, which is exactly what this workflow is meant to avoid.
+
+---
+
+## Troubleshooting
 
 | What you see | What it means |
 |---|---|
-| The script is one line saying there is no angle | Working as intended. The assessment said this is not yours |
-| The assessment says "ours or not: not ours" | Also the answer. Most trends are not |
+| The script is one line saying there is no angle | Working as intended. The assessment said this trend is not yours |
+| The assessment says "ours or not: not ours" | Also an answer. Most trends are not |
 | *"BOSS_EMAIL_SMTP_HOST is not configured"* | Set up email first |
 
 ---
 
-## What ships with BOSS, and what does not
+## Customize
+
+**Chain it into the video workflow.** The output is a script, deliberately. Paste it into
+[video-workflow](../video-workflow/)'s editing instructions and the two connect: a trend goes in
+here, an edited video comes out there, and both stop for you.
+
+**Supply the trend yourself.** Automatic trend detection would need a feed from X, TikTok or
+Google Trends, and BOSS connects to none of them. Detection is also the part you probably want a
+person doing, since you know which trends are yours.
 
 **BOSS ships** the `research` capability, `model.generate_text` and `email.send_real_guarded`.
-**BOSS does not ship this workflow** — it is data in your project.
+**The workflow itself is not part of BOSS** — it is data in your project.

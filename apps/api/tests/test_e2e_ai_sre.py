@@ -226,4 +226,4 @@ def test_features_ai_sre_stays_partial_not_ga():
     row = next(line for line in text.splitlines() if "AI SRE kernel" in line)
     assert "◐" in row
     assert "✅" not in row
-    assert "Not public GA" in row
+    assert "Preview" in row

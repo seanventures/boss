@@ -1,9 +1,29 @@
-# Security
+# Security policy
 
-Report a suspected vulnerability privately to **boss@sean.net**. Do not open a public GitHub issue for a vulnerability. Do not include credentials, customer data, or production access details in the report.
+BOSS governs agents that can spend money, change code, and act on infrastructure, so we take security reports seriously and appreciate responsible disclosure.
 
-Include the affected version or commit, the impact, and reproduction steps that do not harm someone else's system. Mention any mitigation you already tried. Say if the issue involves tenant boundaries, approvals, receipts, budgets, secrets, or provider actions.
+## Reporting a vulnerability
 
-Maintainers will acknowledge the report, assess severity, and coordinate a fix and any advisory with you. No response-time guarantee is published. This repository has not been published.
+Email **[boss@sean.net](mailto:boss@sean.net)**. Please do not open a public GitHub issue, discussion, or pull request for a suspected vulnerability.
 
-For a bug that is not a vulnerability, use the issue forms described in [feedback](docs/community/FEEDBACK_LOOP.md).
+A useful report includes:
+
+- the affected version or commit
+- the impact, and who could exploit it
+- reproduction steps that do not touch anyone else's systems
+- any mitigation you have already tried
+- whether it involves tenant boundaries, approvals, receipts, budgets, secrets, or provider actions
+
+Leave credentials, customer data, and production access details out of the report.
+
+## What happens next
+
+Maintainers acknowledge the report, assess severity, and work with you on a fix and, where appropriate, a coordinated advisory. We do not publish a guaranteed response time, but reports that affect spend controls, approvals, or secrets are prioritized.
+
+## Supported versions
+
+Security fixes land on `main` and in the latest release.
+
+## Not a vulnerability?
+
+For ordinary bugs, use the issue forms described in the [feedback process](docs/community/FEEDBACK_LOOP.md).

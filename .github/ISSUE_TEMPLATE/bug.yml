@@ -1,15 +1,15 @@
 name: Bug report
-description: Something in BOSS Community did not do what you expected.
+description: Something in BOSS didn't do what you expected.
 title: "[Bug] "
 body:
   - type: markdown
     attributes:
       value: |
-        Tell us what you were doing and what you expected. Do not paste secrets.
+        Thanks for taking the time to report a bug. Tell us what you were doing and what you expected.
 
-        Do not paste `.env`, API keys, tokens, passwords, private keys, or customer data. Redact hostnames you do not want public.
+        Never paste `.env`, API keys, tokens, passwords, private keys, or customer data, and redact any hostnames you want kept private.
 
-        If this is a vulnerability, stop. Email boss@sean.net. Do not open a public issue for a vulnerability.
+        **Security vulnerability?** Please don't file it here. Email boss@sean.net instead.
   - type: textarea
     id: doing
     attributes:
@@ -36,7 +36,7 @@ body:
       label: How did you install?
       options:
         - 'Local checkout (./install.sh --dir "$PWD")'
-        - Pinned one-liner, after a reviewed commit replaced the placeholder
+        - Release one-liner (pinned commit)
         - Upgrade of an existing install
         - Not sure
     validations:
@@ -53,7 +53,7 @@ body:
     id: version
     attributes:
       label: BOSS version or commit
-      placeholder: v0.14.0 or the full commit SHA from your checkout
+      placeholder: v1.0-rc1, or the full commit SHA from your checkout
     validations:
       required: true
   - type: textarea

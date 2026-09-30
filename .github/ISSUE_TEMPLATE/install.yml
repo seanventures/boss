@@ -1,15 +1,15 @@
 name: Install or setup problem
-description: The installer, model connection, or startup did not finish as you expected.
+description: The installer, a model connection, or startup didn't finish as expected.
 title: "[Installation] "
 body:
   - type: markdown
     attributes:
       value: |
-        Say where setup stopped and what you expected to see. Do not paste secrets.
+        Sorry setup didn't go smoothly. Tell us where it stopped and what you expected to see.
 
-        Do not paste `.env`, API keys, model tokens, passwords, or private logs. Redact hostnames and customer data.
+        Never paste `.env`, API keys, model tokens, passwords, or private logs, and redact hostnames and customer data.
 
-        If this is a vulnerability, stop. Email boss@sean.net. Do not open a public issue for a vulnerability.
+        **Security vulnerability?** Please don't file it here. Email boss@sean.net instead.
   - type: textarea
     id: doing
     attributes:
@@ -37,7 +37,7 @@ body:
       label: How did you install?
       options:
         - 'Local checkout (./install.sh --dir "$PWD")'
-        - Pinned one-liner, after a reviewed commit replaced the placeholder
+        - Release one-liner (pinned commit)
         - Upgrade of an existing install
         - Not sure
     validations:
@@ -61,7 +61,8 @@ body:
     id: version
     attributes:
       label: BOSS version or commit
-      description: The checkout commit, or "not published yet" if you have not replaced the install placeholder.
+      description: The release (for example v1.0-rc1) or the full commit SHA from your checkout.
+      placeholder: v1.0-rc1
     validations:
       required: true
   - type: textarea

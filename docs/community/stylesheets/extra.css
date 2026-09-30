@@ -281,3 +281,140 @@
     animation: none;
   }
 }
+
+/* Landing page */
+
+.boss-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 2rem;
+  align-items: center;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(26, 168, 154, 0.22), transparent 42%),
+    #101820;
+  color: #f4f7fb;
+  border-radius: 22px;
+  padding: 2.4rem 2.2rem;
+  margin: 0 0 2.4rem;
+}
+
+.md-typeset .boss-hero h1 {
+  color: #f4f7fb;
+  font-size: 2.5rem;
+  line-height: 1.1;
+  margin: 0 0 1rem;
+}
+
+.boss-hero__copy > p {
+  color: #c9d6e2;
+  font-size: 1.05rem;
+  max-width: 36rem;
+}
+
+.md-typeset .boss-eyebrow {
+  font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #3ddec8;
+  margin: 0 0 0.8rem;
+}
+
+.md-typeset .boss-hero .md-button {
+  color: #f4f7fb;
+  border-color: rgba(244, 247, 251, 0.35);
+  margin: 0.4rem 0.4rem 0 0;
+}
+
+.md-typeset .boss-hero .md-button--primary {
+  background: var(--boss-lamp-lit);
+  border-color: var(--boss-lamp-lit);
+  color: #0c141b;
+}
+
+.md-typeset .boss-hero .md-button:hover {
+  background: #3ddec8;
+  border-color: #3ddec8;
+  color: #0c141b;
+}
+
+.boss-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0 0 2rem;
+}
+
+.boss-card {
+  background: var(--boss-plate);
+  border: 1px solid var(--boss-rule);
+  border-radius: 14px;
+  padding: 0.2rem 1.1rem 0.6rem;
+}
+
+.md-typeset .boss-card h3 {
+  margin-top: 0.9rem;
+  font-size: 1rem;
+}
+
+.boss-card p {
+  font-size: 0.88rem;
+  color: var(--boss-mute);
+}
+
+[data-md-color-scheme="slate"] .boss-card {
+  background: #1b242e;
+  border-color: #2a3542;
+}
+
+[data-md-color-scheme="slate"] .boss-card p {
+  color: #b7c2ce;
+}
+
+@media (max-width: 60rem) {
+  .boss-hero {
+    grid-template-columns: 1fr;
+    padding: 1.6rem 1.2rem;
+  }
+
+  .boss-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .md-typeset .boss-hero h1 {
+    font-size: 1.9rem;
+  }
+}
+
+.boss-hero .boss-receipt thead {
+  display: none;
+}
+
+.boss-hero .boss-receipt table,
+.md-typeset .boss-hero .boss-receipt th,
+.md-typeset .boss-hero .boss-receipt td {
+  background: transparent;
+  color: #15202b;
+  border-color: #d5dde4;
+  box-shadow: none;
+}
+
+.md-typeset .boss-hero .boss-receipt td:first-child {
+  color: var(--boss-mute);
+  white-space: nowrap;
+}
+
+.md-typeset .boss-hero .boss-receipt code {
+  background: #e4e8ee;
+  color: #15202b;
+}
+
+.boss-hero {
+  border: 1px solid rgba(61, 222, 200, 0.14);
+}
+
+.md-typeset .boss-hero .md-button {
+  font-size: 0.78rem;
+  padding: 0.55em 1.3em;
+  border-radius: 8px;
+}

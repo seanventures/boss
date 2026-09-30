@@ -1,68 +1,46 @@
 # Meeting to tickets
 
-**Paste a transcript. Read what BOSS heard. Approve it, and the tickets appear in your tracker.**
+**Paste a transcript, read what BOSS heard, approve it, and the tickets appear in your tracker.**
 
 ---
 
-## The use case
+## What it does
 
-Every team has the same leak. A meeting produces six decisions and four things somebody has to
-do, and within a day two of them exist only in one person's memory. The notes, if anyone took
-them, are a wall of text nobody converts into work.
-
-Converting them is mechanical. Deciding *what was actually agreed* is not — which is the same
-split the video workflow makes, and the reason this is two steps rather than one.
+A meeting produces decisions and action items, and within a day some of them exist only in one
+person's memory. Turning notes into tickets is mechanical; deciding *what was actually agreed* is
+not. This workflow separates the two.
 
 You paste the transcript. BOSS writes down what was decided and what somebody has to do, with
-the owner **as named** and the timing **as said**. You read that as a list of sentences. If it
-is right, the tickets are created in Plane — or Jira, Linear, GitHub Issues or Azure DevOps,
-whichever you have connected.
-
-### What happens
+the owner **as named** and the timing **as said**. You review that as a list of sentences. If it
+is right, you approve and the tickets are created in Plane, Jira, Linear, GitHub Issues or Azure
+DevOps — whichever you have connected.
 
 | # | Step | Agent | What it does |
 |---|------|-------|--------------|
 | 1 | **Read the meeting** | `program_manager` | Transcript → decisions + actions. Creates nothing |
 | 2 | **Create the tickets** | `program_manager` | Creates them in your tracker. **Stops and waits for you** |
 
-### Why the split matters
+The extraction brief holds three rules, each guarding against a failure that would otherwise
+look plausible:
 
-Step 1 is **risk tier 0** — it reads text and returns a list. Step 2 is **tier 2**, which is
-BOSS's approval floor, so it stops whatever the workflow asks for.
+- **No invented owners.** If nobody was named, the ticket is unassigned. Every tracker has an
+  unassigned state; none has a "the model guessed" state, and the person a guessed ticket lands on
+  will not know why it is theirs.
+- **No invented due dates.** Timing is recorded in the speakers' words, or not at all.
+- **A meeting that decided nothing produces nothing.** An empty list is a valid outcome. Two
+  conjured action items would be the hardest failure to catch.
 
-That gap is the product. You approve *a list of sentences you can read* — "Draft three pricing
-options [Ravi, before Wednesday]" — not "run a step and find out what landed in the tracker
-other people work from".
-
-### Three rules it holds, because each is a plausible-looking failure
-
-**It will not invent an owner.** If nobody was named, the ticket is unassigned. Every tracker
-has an unassigned state; none has a "the model guessed" state, and the person it lands on will
-not know why it is theirs.
-
-**It will not invent a due date.** What was said about timing, in their words, or nothing.
-
-**A meeting that decided nothing produces nothing.** Empty lists are a real outcome. A model
-conjuring two action items to look useful is the worst failure available here, and the one
-you would not catch.
-
-It also reports what it heard and **could not place** — that list is where a missed action
-item will be.
+It also reports what it heard but **could not place** — that list is where a missed action item
+will turn up.
 
 ---
 
-## Before you run it
+## What you need
 
-### 1. A model must be connected
+**A connected model.** Step 1 asks a model to read the transcript. Connect one in Settings.
 
-Step 1 asks a model to read the transcript. Settings → connect one.
-
-### 2. A work tracker must be connected
-
-Step 2 needs somewhere to create tickets. **Plane** is BOSS's default; Jira, Linear, GitHub
-Issues and Azure DevOps work the same way.
-
-For Plane you will need:
+**A connected work tracker.** Step 2 needs somewhere to create tickets. **Plane** is BOSS's
+default; Jira, Linear, GitHub Issues and Azure DevOps work the same way. For Plane you need:
 
 | Field | Where it comes from |
 |---|---|
@@ -71,11 +49,14 @@ For Plane you will need:
 | Project ID | the project's UUID |
 | API key | Plane → Settings → API tokens (the `X-API-Key` value) |
 
-Without one, step 2 refuses with a message saying so rather than pretending to file anything.
+Without a tracker, step 2 refuses with a message that says so.
 
 ---
 
-## Running the setup script
+## Run it
+
+1. Set `BOSS_API_KEY` as described in [examples/README.md](../README.md).
+2. Install the workflow. Start with `--dry-run`; re-running is safe.
 
 ```bash
 python3 examples/meeting-to-tickets/setup.py \
@@ -84,54 +65,17 @@ python3 examples/meeting-to-tickets/setup.py \
     --actor   ceo
 ```
 
-Same parameters as every example — see [examples/README.md](../README.md). Start with
-`--dry-run`. Re-running is safe.
+   The parameters are the same for every example — see [examples/README.md](../README.md).
+3. Open **Delivery → Workflows → "Meeting to tickets" → Start one** and fill in:
+   - `transcript` — paste the notes or transcript
+   - `context` — optional: who the team are, what the project is called, anything the transcript
+     assumes
 
 ---
 
-## Doing it by hand instead
+## What you'll review
 
-### 1. Enable the skills — **first**
-
-**Skills → Enable:** `meeting.extract_actions`, `tracker.issues.create`
-
-A skill BOSS ships is *available*, not *installed*. Until it is enabled, binding a step to it
-fails with *"not registered in this project"*.
-
-### 2. Define two steps
-
-**Delivery → Build your own → Your steps → Define a step.**
-
-| Name | Skill | Inputs |
-|---|---|---|
-| Read the meeting | `meeting.extract_actions` | `transcript` |
-| Create the tickets | `tracker.issues.create` | `actions` |
-
-The second will show **always needs a person**.
-
-### 3. Create the workflow, wire it, assign the agents
-
-**Create a new workflow** → drag both steps on → open each step's **inputs**:
-
-| Step | Input | Source |
-|---|---|---|
-| Read the meeting | `transcript` | **asked when the run starts** → `transcript` |
-| Read the meeting | `context` | **asked when the run starts** → `context` *(optional)* |
-| Create the tickets | `actions` | **from an earlier step** → Read the meeting → `actions` |
-
-Set both agents to `program_manager`. Save.
-
----
-
-## Running it
-
-**Delivery → Workflows → "Meeting to tickets" → Start one.**
-
-- `transcript` — paste the notes or transcript
-- `context` — optional: who the team are, what the project is called, anything the transcript
-  assumes
-
-The second step stops. Open it and you will see:
+The second step stops for approval. Open it to see:
 
 ```
 Decided:
@@ -145,24 +89,68 @@ Could not place:
   · a discussion about the logo that reached no conclusion
 ```
 
-Approve, and those become tickets. Each carries what was actually said, so the person who
-reads it was not required to be in the room.
+Approve, and those become tickets. Each one carries what was actually said, so the person who
+picks it up does not need to have been in the room.
 
 ---
 
-## When something goes wrong
+## How it stays safe
+
+Step 1 is **risk tier 0**: it reads text and returns a list. Step 2 is **tier 2**, which is BOSS's
+approval floor, so it stops for a person regardless of what the workflow asks for.
+
+That split is the point of the example. You approve *a list of sentences you can read* — "Draft
+three pricing options [Ravi, before Wednesday]" — rather than running a step and finding out
+afterwards what landed in a tracker other people work from.
+
+---
+
+## Build it by hand
+
+The script only calls the public API; every step below does the same thing in the console.
+
+1. **Enable the skills first.** **Skills → Enable:** `meeting.extract_actions`,
+   `tracker.issues.create`.
+
+   A skill BOSS ships is *available*, not *installed*. Until it is enabled, binding a step to it
+   fails with *"not registered in this project"*.
+
+2. **Define two steps.** **Delivery → Build your own → Your steps → Define a step.**
+
+   | Name | Skill | Inputs |
+   |---|---|---|
+   | Read the meeting | `meeting.extract_actions` | `transcript` |
+   | Create the tickets | `tracker.issues.create` | `actions` |
+
+   The second step will show **always needs a person**.
+
+3. **Create the workflow, wire it, and assign the agents.** **Create a new workflow** → drag both
+   steps on → open each step's **inputs**:
+
+   | Step | Input | Source |
+   |---|---|---|
+   | Read the meeting | `transcript` | **asked when the run starts** → `transcript` |
+   | Read the meeting | `context` | **asked when the run starts** → `context` *(optional)* |
+   | Create the tickets | `actions` | **from an earlier step** → Read the meeting → `actions` |
+
+   Set both agents to `program_manager`, then save.
+
+---
+
+## Troubleshooting
 
 | What you see | What it means |
 |---|---|
 | *"skill 'x' is not registered in this project"* | Enable it in Skills first |
-| *"this project has no active work tracker configured"* | Connect Plane (or another) |
+| *"this project has no active work tracker configured"* | Connect Plane (or another tracker) |
 | *"no transcript was given"* | The run started with an empty `transcript` |
-| *Partial* — some tickets created, some failed | Reported per ticket, not hidden. The ones that succeeded are real; the `failed` list says why the others did not |
+| *Partial* — some tickets created, some failed | Results are reported per ticket. The ones that succeeded are real; the `failed` list says why the others did not |
 
 ---
 
-## What ships with BOSS, and what does not
+## Customize
 
 **BOSS ships** `meeting.extract_actions` and `tracker.issues.create`, the tracker adapters, and
-the `program_manager` role. **BOSS does not ship this workflow** — it is data in your project,
-created through the public API, yours to change or delete.
+the `program_manager` role. **The workflow itself is not part of BOSS** — it is data in your
+project, created through the public API, and yours to change or delete. Use `context` to tell the
+reading step about your team and project; step 2 files into whichever tracker is active.
