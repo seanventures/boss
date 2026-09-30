@@ -1,6 +1,6 @@
 site_name: BOSS
 site_description: The self-hosted control plane for AI software work
-# site_url is filled in when GitHub Pages is enabled. The site has not been published.
+site_url: https://seanventures.github.io/boss/
 repo_url: https://github.com/seanventures/boss
 repo_name: seanventures/boss
 docs_dir: docs/community
@@ -14,11 +14,16 @@ theme:
   logo: assets/mark.svg
   favicon: assets/mark.svg
   features:
+    - navigation.tabs
     - navigation.sections
+    - navigation.instant
+    - navigation.tracking
     - navigation.footer
     - navigation.top
+    - search.suggest
     - search.highlight
     - content.code.copy
+    - toc.follow
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -53,28 +58,28 @@ markdown_extensions:
 
 nav:
   - Home: README.md
-  - Start:
+  - Get started:
       - Quickstart: QUICKSTART.md
+      - Deploy: hostname.md
+      - Sign in: CONSOLE_AUTH.md
+      - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
       - Walkthroughs: walkthroughs.md
-      - Interfaces: interfaces.md
-      - Connect models: MODEL_CONNECTIONS.md
-      - Mission Control: CONSOLE_AUTH.md
-      - Hostname: hostname.md
-      - Terminal: terminal.md
-      - CLI: cli.md
-  - Control plane:
-      - Control surfaces: CONTROL_SURFACES.md
-      - Terminal and API: TERMINAL_API.md
-      - Remote API: remote-api.md
-      - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+  - Interfaces:
+      - Overview: interfaces.md
+      - Metatron terminal: terminal.md
+      - Terminal and API reference: TERMINAL_API.md
       - MCP: MCP.md
+      - CLI: cli.md
+      - Remote API: remote-api.md
       - Grok CLI: GROK_CLI.md
-  - Product:
+  - Reference:
       - Features: FEATURES.md
+      - Control surfaces: CONTROL_SURFACES.md
+      - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+  - Community:
       - Feedback: FEEDBACK_LOOP.md
-  - Maintainers:
-      - Publishing: publishing.md
+      - Publishing the docs: publishing.md
 
 plugins:
   - search

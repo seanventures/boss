@@ -1,4 +1,4 @@
-"""The community docs site stays unpublished and names only the public repo."""
+"""The community docs site publishes from the public repo to its GitHub Pages host."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ COMMUNITY = ROOT / "docs" / "community"
 CONFIG = ROOT / "mkdocs.community.yml"
 
 
-def test_community_mkdocs_uses_the_public_repo_and_no_pages_host() -> None:
+def test_community_mkdocs_uses_the_public_repo_and_its_pages_host() -> None:
     text = CONFIG.read_text(encoding="utf-8")
     manifest = (ROOT / "scripts" / "community_export_manifest.json").read_text(encoding="utf-8")
     assert "mkdocs.community.yml" in manifest
     assert "https://github.com/seanventures/boss" in text
-    assert "github.io" not in text
+    assert "site_url: https://seanventures.github.io/boss/" in text
     private_owner = "seanheiney"
     assert private_owner not in text
 
@@ -34,6 +34,9 @@ def test_home_page_uses_the_receipt_and_local_stylesheet() -> None:
     assert "127.0.0.1:3000" in home
 
 
-def test_publishing_notes_say_the_docs_have_not_been_published() -> None:
+def test_pages_workflow_deploys_only_from_the_public_repo() -> None:
     text = (COMMUNITY / "publishing.md").read_text(encoding="utf-8")
-    assert "The docs have not been published" in text
+    assert "https://seanventures.github.io/boss/" in text
+    workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+    assert "mkdocs build -f mkdocs.community.yml --strict" in workflow
+    assert workflow.count("github.repository == 'seanventures/boss'") == 2

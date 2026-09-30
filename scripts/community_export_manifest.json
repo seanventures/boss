@@ -9,6 +9,7 @@
     ".github/ISSUE_TEMPLATE/feature.yml",
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/pull_request_template.md",
+    ".github/workflows/pages.yml",
     "README.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
@@ -218,12 +219,12 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "b5412935b4f6bea0e582b06b8a4baeeb95e0e9407728d7914006e24f2e290f85"
+    "sha256": "ba9911dc5a6c581cd24ea28a67acb4ff9106c39fb2883a236c8e5856d4b300c4"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
     "destination": "CONTRIBUTING.md",
-    "sha256": "d77a8bae3bc631d46307e724b0b2ecdb8f04f374e59db9ecae22eb22470415e1"
+    "sha256": "6fd534299c0e6762fce546c6626d2984d64eccec8e254b84940f9d39415edcac"
   },
   "makefile_export_rewrite": {
     "source": "Makefile.community",

@@ -23,9 +23,9 @@
     <text x="822" y="214" fill="#8ea0b3" font-size="13" letter-spacing="2">TERMINAL</text>
     <text x="822" y="240" fill="#f4f7fb" font-size="22">make metatron</text>
     <rect x="760" y="282" width="360" height="86" rx="16" fill="#1a2633"/>
-    <circle cx="798" cy="325" r="7" fill="#f0b429"/>
-    <text x="822" y="316" fill="#8ea0b3" font-size="13" letter-spacing="2">CLI</text>
-    <text x="822" y="342" fill="#f4f7fb" font-size="22">boss-community.env.sh</text>
+    <circle cx="798" cy="325" r="7" fill="#3ddec8"/>
+    <text x="822" y="316" fill="#8ea0b3" font-size="13" letter-spacing="2">MCP · AGENTS</text>
+    <text x="822" y="342" fill="#f4f7fb" font-size="22">make mcp</text>
   </g>
   <text x="80" y="422" fill="#7e92a4" font-family="Avenir Next, Segoe UI, sans-serif" font-size="16">Plan · Budget · Approve · Receipt.  Loopback by default. Credentials stay on your machine.</text>
 </svg>

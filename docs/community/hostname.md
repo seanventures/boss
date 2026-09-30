@@ -1,10 +1,10 @@
-# Put the console behind HTTPS
+# Deploy on your domain or network
 
-Serve Mission Control on a hostname you control, such as `https://console.example`, by running a TLS proxy on the install machine. The console listener itself never leaves loopback: on the install machine it stays at `http://127.0.0.1:3000` (or your `BOSS_WEB_PORT`), and remote browsers reach it only through the proxy.
+Serve Mission Control to your team over HTTPS, on a domain such as `https://console.example` or on the server's private IP. BOSS services listen only on the server itself; a TLS proxy you run on the same machine is the one thing that faces the network, so nothing is exposed until you put it in place.
 
 This page also covers publishing the API port for remote clients.
 
-## 1. Point a hostname at the machine
+## 1. Choose an address
 
 Point a DNS hostname you control at the install machine, or add a hosts entry on each computer that will open the console:
 
@@ -12,7 +12,7 @@ Point a DNS hostname you control at the install machine, or add a hosts entry on
 203.0.113.10 console.example
 ```
 
-The installer rejects loopback names such as `localhost` and `127.0.0.1`, so use a real hostname. Never put the API key in the URL.
+You can also use the server's private IPv4 address, such as `https://192.168.1.50`; see [On a private network](#on-a-private-network). The installer rejects loopback names such as `localhost` and `127.0.0.1`. Never put the API key in the URL.
 
 ## 2. Install with the console origin
 
@@ -32,7 +32,38 @@ The web port, Postgres, and Infisical (if you use it) all remain bound to `127.0
 
 ## 3. Run a TLS proxy
 
-Run the proxy on the install machine. This nginx server block is the minimum the console needs; replace the hostname and supply your own certificate files.
+Run the proxy on the install machine. [Caddy](https://caddyserver.com) is the quickest option because it obtains and renews certificates automatically:
+
+```caddy
+console.example {
+    reverse_proxy 127.0.0.1:3000 {
+        header_up Host console.example
+        header_up X-Forwarded-Host console.example
+        header_up X-Forwarded-Proto https
+    }
+}
+```
+
+### On a private network
+
+For a server your team reaches by private IP, use the IP as the site address and in the headers, and let Caddy issue the certificate from its local authority with `tls internal`:
+
+```caddy
+https://192.168.1.50 {
+    tls internal
+    reverse_proxy 127.0.0.1:3000 {
+        header_up Host 192.168.1.50
+        header_up X-Forwarded-Host 192.168.1.50
+        header_up X-Forwarded-Proto https
+    }
+}
+```
+
+Install with `--console-origin https://192.168.1.50`. Browsers warn until they trust Caddy's local root certificate. Install it on each device from Caddy's data directory (`pki/authorities/local/root.crt`), or push it through your usual device management.
+
+### Using nginx
+
+This nginx server block is the minimum the console needs; replace the hostname and supply your own certificate files.
 
 ```nginx
 server {

@@ -1,11 +1,8 @@
 # Features
 
-The complete BOSS Community feature list, grouped by area. Each row shows its implementation status in Community; Cloud and Enterprise capabilities are marked so the open-core boundary is explicit.
+Everything in BOSS Community as of `v1.0-rc1`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
 
-!!! note "Status describes implementation scope"
-    A status on this page records what is implemented in Community. It is not a public release claim: Community v1 is **Not public GA**. The v1 scope (in, out, and Cloud/Enterprise only) is locked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md). Rows marked ✦ remain Cloud or Enterprise and never ship in Community.
-
-**Legend:** ✅ shipped in Community · ◐ partial · ○ planned · ✦ Cloud / Enterprise only
+**Legend:** ✅ Stable · ◐ Preview: works today, still being hardened · ○ Planned · ✦ Cloud / Enterprise only
 
 ## Control plane
 
@@ -13,10 +10,10 @@ The complete BOSS Community feature list, grouped by area. Each row shows its im
 |---|---|
 | Durable tasks, plans, jobs (Postgres) | ✅ |
 | Job leases, heartbeat, fencing | ✅ |
-| Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
+| Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. |
 | Event / audit feed | ✅ |
-| Global activity log | ◐ Searchable, sortable Mission Control area (status, kind, actor, stuck banner). **Not GA.** |
-| Decision inbox (approve / reject / escalate) | ✅ Hold `reason` and `default_action` on the card; GET `/v1/decisions/{id}`. **Not GA.** |
+| Global activity log | ◐ Searchable, sortable Mission Control area (status, kind, actor, stuck banner). |
+| Decision inbox (approve / reject / escalate) | ✅ Hold `reason` and `default_action` on the card; GET `/v1/decisions/{id}`. |
 | Receipts with unique dedupe keys | ✅ |
 | Budget quote → reserve → consume / release | ✅ |
 | Artifacts and evidence packets | ✅ |
@@ -43,12 +40,12 @@ Every interface goes through the same HTTP API, so server-side policy and audit 
 | Feature | Status |
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
-| SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: a bound, usable ref wins; env is a last resort only when no ref is bound. Unresolvable bound refs never fall back. **Not GA.** |
-| Official QA /reports v1.1 | ◐ Honesty helper, inspect gate, and Mission Control scorecard island. Missing UI/UX stays `not_scored`; scores are never invented. Live official POSTs may still be in flight. **Not GA.** |
+| SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: a bound, usable ref wins; env is a last resort only when no ref is bound. Unresolvable bound refs never fall back. |
+| Official QA /reports v1.1 | ◐ Honesty helper, inspect gate, and Mission Control scorecard island. Missing UI/UX stays `not_scored`; scores are never invented. Live official POSTs may still be in flight. |
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |
-| Agent Studio starter catalog | ◐ First-run seed installs 34 agents (including the mobile template), 3 panels, and specpack workflows. Templates default to side-effect-free briefs; mobile device execution requires a separate governed runner. A2A reports `not_configured` when Redis is unset rather than a false-red degraded state. **Not GA.** |
+| Agent Studio starter catalog | ◐ First-run seed installs 34 agents (including the mobile template), 3 panels, and specpack workflows. Templates default to side-effect-free briefs; mobile device execution requires a separate governed runner. A2A reports `not_configured` when Redis is unset rather than a false-red degraded state. |
 | Pack YAML import / export in Mission Control | ✅ |
 | Managed multi-tenant model gateway | ✦ Cloud |
 | Hosted skill marketplace | ✦ Cloud |
@@ -73,7 +70,7 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 | Evidence-backed completion | ✅ |
 | Discovery web research | ◐ Saved dossiers are readable. New and deeper research is paused until leased model jobs and spend reconciliation are complete. |
 | Live debugging investigations | ◐ Past results remain readable. New Claude CLI investigations and legacy queued execution are paused until leased, budgeted model calls and governed host/database effects are complete. |
-| Factory quality pass after green verify | ◐ One improve pass when UI/UX evidence is thin. Frozen tests stay frozen, and a failed pass restores the last green implementation. Unknown JTBD / `a11y_violations` stay `not_scored`. Stays partial. **Not public GA.** |
+| Factory quality pass after green verify | ◐ One improve pass when UI/UX evidence is thin. Frozen tests stay frozen, and a failed pass restores the last green implementation. Unknown JTBD / `a11y_violations` stay `not_scored`. Stays partial. |
 | PR / review packets (with GitHub) | ✅ |
 | Browser / automated test evidence | ✅ |
 | Deployment target metadata and recorded history | ✅ |
@@ -109,13 +106,13 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 | Feature | Status |
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
-| Focused always-on agents | ◐ Builder and duty loop (`/v1/focused-agents`). The worker ticks due always-on and hybrid agents every 60s; **Wake now** runs on-demand agents. Same validate-then-apply gates as the captain. **Not GA** until proven in live operation. |
-| Metatron captain (persistent session / goals / watch) | ◐ Worker overwatch follows observe → measure → validate → apply-safe → verify. Decisions and deadletters stay human. **Not public GA.** |
-| AI SRE kernel (awesome-ai-sre map) | ◐ Capability ledger at `GET /v1/ai-sre/capabilities` plus a Mission Control island. MCP adds list / diagnose / capabilities / verify / page. Observe-only worker tick at `POST /v1/ai-sre/overwatch` (scan / diagnose / dry-run page). Runbooks at `/v1/ai-sre/runbooks` (validate + Decision hold; `page_oncall` is dry-run only). Noise view at `GET /v1/ai-sre/noise` (clustered vs. raw, no invented percentages). `POST /v1/ai-sre/ask` returns a query plan only. Evidence-only incident postmortem at `POST/GET /v1/reliability/incidents/{id}/postmortem` (uses existing evidence only, never invents an RCA, never auto-resolves). Deterministic `GET /v1/ai-sre/bench` (InvestigationEngine fixtures). Never remediates, auto-applies Decisions, or merges PRs. **Not public GA.** |
+| Focused always-on agents | ◐ Builder and duty loop (`/v1/focused-agents`). The worker ticks due always-on and hybrid agents every 60s; **Wake now** runs on-demand agents. Same validate-then-apply gates as the captain. until proven in live operation. |
+| Metatron captain (persistent session / goals / watch) | ◐ Worker overwatch follows observe → measure → validate → apply-safe → verify. Decisions and deadletters stay human. |
+| AI SRE kernel (awesome-ai-sre map) | ◐ Capability ledger at `GET /v1/ai-sre/capabilities` plus a Mission Control island. MCP adds list / diagnose / capabilities / verify / page. Observe-only worker tick at `POST /v1/ai-sre/overwatch` (scan / diagnose / dry-run page). Runbooks at `/v1/ai-sre/runbooks` (validate + Decision hold; `page_oncall` is dry-run only). Noise view at `GET /v1/ai-sre/noise` (clustered vs. raw, no invented percentages). `POST /v1/ai-sre/ask` returns a query plan only. Evidence-only incident postmortem at `POST/GET /v1/reliability/incidents/{id}/postmortem` (uses existing evidence only, never invents an RCA, never auto-resolves). Deterministic `GET /v1/ai-sre/bench` (InvestigationEngine fixtures). Never remediates, auto-applies Decisions, or merges PRs. **Preview.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
-| Agent process handoffs | ◐ Authorable role sequences (natural-language compile, manual builder, Metatron/chat). Default sequence: PRD → architect/CTO/VP-PM review → improve → captain build → QA → UI/UX → captain verify → panel certify → captain accept. Simulated runs complete without spend. **Not GA.** |
-| Project Manager steward | ◐ Operates, tests, validates, and proposes changes over process runs (`/v1/process-manager`, worker every 60s). Metrics are evidence-only; templates are never silently rewritten. **Not GA.** |
+| Agent process handoffs | ◐ Authorable role sequences (natural-language compile, manual builder, Metatron/chat). Default sequence: PRD → architect/CTO/VP-PM review → improve → captain build → QA → UI/UX → captain verify → panel certify → captain accept. Simulated runs complete without spend. |
+| Project Manager steward | ◐ Operates, tests, validates, and proposes changes over process runs (`/v1/process-manager`, worker every 60s). Metrics are evidence-only; templates are never silently rewritten. |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 
@@ -131,7 +128,7 @@ Endpoints: one-shot `POST /v1/metatron/query`, plus `/v1/metatron/session|goals|
 | Changes to BOSS itself | Opened as a PR, never written silently |
 
 !!! note
-    The captain is **Not GA** until a validated apply has been proven in live operation on the shared release tag.
+    The captain stays in preview until a validated apply has been proven in live operation on a release tag.
 
 ## Open-core boundary
 

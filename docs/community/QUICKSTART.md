@@ -1,6 +1,6 @@
 # Quickstart
 
-Go from a checkout of this repository to a running Mission Control console on `127.0.0.1`, then create your first task through the API. The whole path runs on your own machine.
+Get BOSS running and create your first task in about ten minutes. This guide installs on a single machine, such as a laptop, dev box, or VM, and opens Mission Control on that machine. When you are ready to share it with your team, see [Deploy](hostname.md).
 
 ## Before you begin
 
