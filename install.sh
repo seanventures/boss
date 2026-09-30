@@ -161,6 +161,11 @@ WEB_PORT_EXPLICIT=0
 PG_PORT="${BOSS_POSTGRES_PORT:-5432}"
 PG_PORT_EXPLICIT=0
 [[ -n "${BOSS_POSTGRES_PORT:-}" ]] && PG_PORT_EXPLICIT=1
+# THE BUNDLED SECRET STORE'S HOST PORT. Compose and bootstrap_infisical.sh already read
+# INFISICAL_PORT from .env, and a re-run already preserves it — but nothing ever WROTE it, so a
+# machine with anything on 8080 (a laptop running any other web app) could not use
+# --secret-store infisical: bootstrap probed 8080 and reached the other app.
+INFISICAL_PORT="${INFISICAL_PORT:-8080}"
 BIND_ADDRESS="127.0.0.1"
 COMPOSE_PROFILES=""
 # WHERE THIS INSTALL KEEPS ITS SECRETS. Both options stay inside your own infrastructure; the
@@ -201,6 +206,7 @@ Options:
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
   --postgres-port N       Host port for Postgres (default 5432)
+  --infisical-port N      Host port for the bundled secret store (default 8080)
   --ref REF               Git ref or full commit SHA to install (default main)
   --backup-dir PATH       Private recovery backup location for an upgrade
   --skip-model-key        Allow empty model key (API starts; model calls fail closed)
@@ -279,6 +285,7 @@ while [[ $# -gt 0 ]]; do
     --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
     --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
     --postgres-port) PG_PORT="$2"; PG_PORT_EXPLICIT=1; shift 2 ;;
+    --infisical-port) INFISICAL_PORT="$2"; shift 2 ;;
     --ref) BOSS_REPO_REF="$2"; REF_EXPLICIT=1; shift 2 ;;
     --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
@@ -491,6 +498,9 @@ for p in "$API_PORT" "$WEB_PORT" "$PG_PORT"; do
     ui_warn "Port $p is already in use — installer will still try; override with --api-port / --web-port / --postgres-port if needed."
   fi
 done
+if [[ "$SECRET_STORE" == "infisical" ]] && port_in_use "$INFISICAL_PORT"; then
+  ui_warn "Port $INFISICAL_PORT (secret store) is already in use — choose another with --infisical-port."
+fi
 
 # ---- prompts ---------------------------------------------------------------
 ui_step "A few quick questions"
@@ -875,6 +885,7 @@ BOSS_API_PORT=${API_PORT}
 BOSS_API_BIND=${API_BIND}
 BOSS_WEB_PORT=${WEB_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
+INFISICAL_PORT=${INFISICAL_PORT}
 BOSS_COMMUNITY_WEB_ENABLED=${WITH_WEB}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
