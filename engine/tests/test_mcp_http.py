@@ -9,6 +9,8 @@ import json
 import re
 import shutil
 import subprocess
+import sys
+import types
 
 import pytest
 
@@ -158,29 +160,105 @@ def test_write_capable_http_requires_token_and_authenticates_every_rpc():
     assert response.json()["result"]["isError"] is False
 
 
-def test_write_http_cli_refuses_missing_token_and_public_bind(monkeypatch, capsys):
-    from boss_engine.__main__ import _cmd_serve_mcp, build_parser
-
+def _prepare_http_cli(monkeypatch):
+    """Context and registry doubles, and a uvicorn that records instead of binding."""
     monkeypatch.setattr(
         "boss_engine.__main__._ctx",
         lambda: type("Context", (), {"durable_workspace_configured": True})(),
     )
+
+    def build_registry():
+        reg = ToolRegistry()
+        reg.register(ToolSpec(
+            "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read",
+        ))
+        reg.register(ToolSpec(
+            "write_x", "w", {"type": "object"},
+            lambda ctx, **k: {"done": True}, kind="write",
+        ))
+        return reg
+
+    monkeypatch.setattr("boss_engine.mcp.server.build_default_registry", build_registry)
+    served: list[dict] = []
+    module = types.ModuleType("uvicorn")
+
+    def run(app, host="127.0.0.1", port=8791, **kwargs):
+        served.append({"app": app, "host": host, "port": port})
+
+    module.run = run
+    monkeypatch.setitem(sys.modules, "uvicorn", module)
+    return served
+
+
+def test_write_http_cli_refuses_missing_token_and_public_bind(monkeypatch, capsys):
+    from boss_engine.__main__ import _cmd_serve_mcp, build_parser
+
+    served = _prepare_http_cli(monkeypatch)
     parser = build_parser()
     monkeypatch.delenv("BOSS_MCP_HTTP_TOKEN", raising=False)
     public_read = parser.parse_args(["serve-mcp", "--http", "--host", "0.0.0.0"])
     assert _cmd_serve_mcp(public_read) == 2
     assert "read tools can expose project data" in capsys.readouterr().err
 
+    public_write = parser.parse_args([
+        "serve-mcp", "--http", "--allow-writes", "--host", "0.0.0.0",
+    ])
+    assert _cmd_serve_mcp(public_write) == 2
+    assert "BOSS_MCP_HTTP_TOKEN" in capsys.readouterr().err
+
     args = parser.parse_args(["serve-mcp", "--http", "--allow-writes"])
     assert _cmd_serve_mcp(args) == 2
     assert "BOSS_MCP_HTTP_TOKEN" in capsys.readouterr().err
+    assert served == []
 
+
+def test_token_allows_non_loopback_http_without_listening(monkeypatch, capsys):
+    """Authenticated non-loopback HTTP passes the guard and does not open a socket."""
+    from boss_engine.__main__ import _cmd_serve_mcp, build_parser
+
+    served = _prepare_http_cli(monkeypatch)
+    parser = build_parser()
     monkeypatch.setenv("BOSS_MCP_HTTP_TOKEN", "secret-token")
-    args = parser.parse_args([
-        "serve-mcp", "--http", "--allow-writes", "--host", "0.0.0.0"
+    bearer = {"Authorization": "Bearer secret-token"}
+
+    read_only = parser.parse_args(["serve-mcp", "--http", "--host", "0.0.0.0"])
+    assert _cmd_serve_mcp(read_only) == 0
+    assert "loopback" not in capsys.readouterr().err
+    assert served[-1]["host"] == "0.0.0.0"
+    read_client = TestClient(served[-1]["app"])
+    assert read_client.get("/health").status_code == 401
+    assert read_client.get(
+        "/health", headers={"Authorization": "Bearer wrong"}
+    ).status_code == 401
+    read_health = read_client.get("/health", headers=bearer)
+    assert read_health.status_code == 200
+    assert read_health.json()["tools"] == ["read_x"]
+
+    writes = parser.parse_args([
+        "serve-mcp", "--http", "--allow-writes", "--host", "0.0.0.0",
     ])
-    assert _cmd_serve_mcp(args) == 2
-    assert "loopback" in capsys.readouterr().err
+    assert _cmd_serve_mcp(writes) == 0
+    assert "loopback" not in capsys.readouterr().err
+    assert served[-1]["host"] == "0.0.0.0"
+    write_client = TestClient(served[-1]["app"])
+    rpc = {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+           "params": {"name": "write_x", "arguments": {}}}
+    assert write_client.post("/mcp", json=rpc).status_code == 401
+    assert write_client.post(
+        "/mcp", json=rpc, headers={"Authorization": "Bearer wrong"}
+    ).status_code == 401
+    accepted = write_client.post("/mcp", json=rpc, headers=bearer)
+    assert accepted.status_code == 200
+    assert accepted.json()["result"]["isError"] is False
+    assert write_client.get("/health", headers=bearer).json()["tools"] == [
+        "read_x", "write_x",
+    ]
+
+    loopback = parser.parse_args([
+        "serve-mcp", "--http", "--allow-writes", "--host", "127.0.0.1",
+    ])
+    assert _cmd_serve_mcp(loopback) == 0
+    assert served[-1]["host"] == "127.0.0.1"
 
 
 def test_read_only_http_can_require_authentication():

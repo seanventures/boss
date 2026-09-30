@@ -203,8 +203,8 @@ def _cmd_chat(args) -> int:
 
 
 def _serve_mcp_read_only(args) -> bool:
-    """HTTP has no transport auth, so it defaults to read-only unless
-    ``--allow-writes`` is set. Stdio stays write-capable by default."""
+    """HTTP defaults to read-only unless ``--allow-writes`` is set.
+    Stdio stays write-capable by default. Bearer auth is a separate guard."""
     if args.read_only:
         return True
     if args.http and not args.allow_writes:
@@ -228,21 +228,13 @@ def _cmd_serve_mcp(args) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.http and not read_only:
-        if args.host not in ("127.0.0.1", "localhost", "::1"):
-            print(
-                "boss-engine: write-capable HTTP MCP must bind loopback; "
-                "use an SSH tunnel for remote clients.",
-                file=sys.stderr,
-            )
-            return 2
-        if not http_token:
-            print(
-                "boss-engine: --allow-writes requires BOSS_MCP_HTTP_TOKEN "
-                "for HTTP MCP authentication.",
-                file=sys.stderr,
-            )
-            return 2
+    if args.http and not read_only and not http_token:
+        print(
+            "boss-engine: --allow-writes requires BOSS_MCP_HTTP_TOKEN "
+            "for HTTP MCP authentication.",
+            file=sys.stderr,
+        )
+        return 2
 
     api_surface = None
     api_url = args.api_url or os.environ.get("BOSS_MCP_API_URL", "")
@@ -459,7 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument(
         "--allow-writes",
         action="store_true",
-        help="HTTP only: expose write tools on loopback with BOSS_MCP_HTTP_TOKEN",
+        help="HTTP only: expose write tools; requires BOSS_MCP_HTTP_TOKEN",
     )
     m.set_defaults(func=_cmd_serve_mcp)
     return p

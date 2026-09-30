@@ -62,18 +62,15 @@ Configure the install directory as your MCP client's working directory.
 
 For a separately configured Python process with `DATABASE_URL`, an HTTP MCP
 server starts read-only. The stock Community Compose file does not publish an
-MCP HTTP port, so this is a separate operator-managed listener. A non-loopback
-bind also requires `BOSS_MCP_HTTP_TOKEN`, because read tools can expose project
-data:
+MCP HTTP port, so this is a separate operator-managed listener. On loopback,
+read-only HTTP does not require a token:
 
 ```bash
 python -m boss_engine --project boss-dogfood serve-mcp --http --host 127.0.0.1
 ```
 
 For a local HTTP agent that must create or steer work, set a private token and
-opt into writes. BOSS refuses to start write-capable HTTP on a non-loopback
-address or without the token. Use an SSH tunnel to reach a VM from another
-machine.
+opt into writes. Writes require the token on every bind, including loopback.
 
 ```bash
 export BOSS_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
@@ -85,6 +82,27 @@ HTTP clients send `Authorization: Bearer <BOSS_MCP_HTTP_TOKEN>` to `/mcp` and
 the HTTP server requires it. Keep the token out of logs, command-line arguments,
 and repository files. Use TLS or a tunnel for any connection that leaves the
 host so the bearer token is not sent over cleartext.
+
+## Remote MCP
+
+A non-loopback HTTP bind requires `BOSS_MCP_HTTP_TOKEN`. Without that token,
+BOSS exits before it opens the socket, because read tools can expose project
+data. A request with a missing or wrong bearer is still rejected.
+
+Read-only stays the default off loopback, so write tools stay hidden. Pass
+`--allow-writes` as well as the token to expose writes. Loopback HTTP is
+unchanged: reads need no token, and writes still need the token and
+`--allow-writes`.
+
+`make mcp-setup` only provisions a member and key for the local API. Leave
+that helper, and the API it calls, on loopback. The HTTP MCP listener is
+separate and is not published by the stock Compose file.
+
+```bash
+export BOSS_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+python -m boss_engine --project boss-dogfood serve-mcp --http --host 0.0.0.0
+python -m boss_engine --project boss-dogfood serve-mcp --http --allow-writes --host 0.0.0.0
+```
 
 ## What agents can do
 
