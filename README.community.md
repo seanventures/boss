@@ -15,9 +15,10 @@
 </p>
 
 <p align="center">
+  <a href="https://boss.sean.network">Website</a> ·
   <a href="#deploy">Deploy</a> ·
   <a href="docs/community/QUICKSTART.md">Quickstart</a> ·
-  <a href="docs/community/README.md">Documentation</a> ·
+  <a href="https://boss.sean.network/docs/">Documentation</a> ·
   <a href="docs/community/FEATURES.md">Features</a> ·
   <a href="examples/README.md">Examples</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -69,20 +70,12 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 **2. Install** on the server with one command. It installs the newest published release into `~/boss`, needs no answers, and finishes by installing the `boss` command:
 
 ```sh
-curl -fsSL https://seanventures.github.io/boss/install.sh | bash -s -- --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --console-origin https://boss.example.com
 ```
 
-Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer records the release, so reruns and `boss upgrade` never move it to `main`.
+Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
 
-To pin the reviewed `v1.0-rc1` commit instead, this command downloads the installer and checks out that same commit:
-
-```sh
-BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
-```
-
-Add installer flags after the final `_`, such as `_ --console-origin https://boss.example.com` for a domain or `_ --console-origin https://192.168.1.50` for a private IP.
-
-Prefer git? Clone the release and install it in place. `--ref` keeps the install on the release instead of moving it to `main`:
+Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
 ```sh
 git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
@@ -90,7 +83,7 @@ cd boss
 ./install.sh --dir "$PWD" --ref v1.0-rc1 --console-origin https://boss.example.com
 ```
 
-Run `make metatron` from the install directory. The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
+The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
 
 **3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
 

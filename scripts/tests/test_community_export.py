@@ -1460,3 +1460,15 @@ def test_community_main_rewrite_removes_exact_paid_composition(tmp_path: Path) -
     report, candidate = export.analyze(repo, sha, changed)
     assert "main-export-output-changed" in {blocker["kind"] for blocker in report["blockers"]}
     assert "apps/api/app/main.py" not in candidate
+
+
+def test_only_the_reviewed_public_site_url_is_allowed_under_a_private_domain() -> None:
+    assert not export.has_private_marker(b'<a href="https://boss.sean.network/">BOSS</a>')
+    assert not export.has_private_marker(b"site_url: https://boss.sean.network/docs/\n")
+    assert not export.has_private_marker(b"[Website](https://boss.sean.network)")
+    assert export.has_private_marker(b"https://plane.local.sean.network/api/v1")
+    assert export.has_private_marker(b"https://boss-api.local.sean.network")
+    assert export.has_private_marker(b"https://boss.sean.network.example/")
+    assert export.has_private_marker(b"https://boss.sean.networks/")
+    assert export.has_private_marker(b"https://boss.sean.network/ and https://analytics.sean.network/")
+    assert export.has_private_marker(b"http://boss.sean.network/")

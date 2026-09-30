@@ -8,7 +8,8 @@
 <meta property="og:title" content="BOSS: an open source software factory you run yourself">
 <meta property="og:description" content="Governed AI software work on your own infrastructure. Plans, budgets, approvals, and receipts. Apache 2.0.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://seanventures.github.io/boss/">
+<meta property="og:url" content="https://boss.sean.network/">
+<link rel="canonical" href="https://boss.sean.network/">
 <meta name="theme-color" content="#0B0F17">
 <link rel="icon" href="assets/boss-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -447,15 +448,12 @@ export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'</pre>
       <div>
         <div class="terminal">
           <div class="terminal-bar">
-            <span>Install the v1.0-rc1 release</span>
+            <span>Install v1.0-rc1</span>
             <button class="copy" type="button" data-copy>Copy</button>
           </div>
-<pre data-copy-source>git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
-cd boss
-./install.sh --dir &quot;$PWD&quot; --ref v1.0-rc1 \
-  --console-origin https://boss.example.com</pre>
+<pre data-copy-source>curl -fsSL https://boss.sean.network/install.sh | bash</pre>
         </div>
-        <p class="cta-note">Use your domain or the server's private IP as the console origin, then put Caddy or nginx in front for HTTPS. The <a href="docs/hostname/">deploy guide</a> has both configs, and the <a href="docs/QUICKSTART/">quickstart</a> covers a single-machine trial.</p>
+        <p class="cta-note">For your team, add <span class="mono">-s -- --console-origin https://boss.example.com</span> after <span class="mono">bash</span> with your domain or the server's private IP, then put Caddy or nginx in front for HTTPS. The <a href="docs/hostname/">deploy guide</a> has both configs. Prefer git? <a href="https://github.com/seanventures/boss/blob/main/scripts/install/README.md">Clone the release</a> instead.</p>
       </div>
     </div>
   </section>

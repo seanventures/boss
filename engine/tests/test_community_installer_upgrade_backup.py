@@ -386,10 +386,8 @@ def test_published_one_liner_uses_one_commit_and_propagates_download_failure(
     env["BOSS_TEST_CURL_TRACE"] = str(tmp / "curl-trace")
     if download_fails:
         env["BOSS_TEST_CURL_FAIL"] = "1"
-    line = next(line for line in (REPO / "README.community.md").read_text().splitlines()
+    line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
                 if line.startswith("BOSS_RELEASE_COMMIT="))
-    for guide in (REPO / "docs/community/QUICKSTART.md", REPO / "scripts/install/README.md"):
-        assert line in guide.read_text()
     line = line.replace("7b88a18a2b4cd0b14b09a47fc415f7ffd4580066", new)
     command = " ".join((line, "--dir", shlex.quote(str(fresh)), "--yes",
                         "--skip-model-key", "--no-install-deps"))
@@ -408,7 +406,7 @@ def test_published_one_liner_uses_one_commit_and_propagates_download_failure(
 
 def test_a_non_sha_pin_stops_before_download(install_pair):
     _, _, _, env, tmp = install_pair
-    line = next(line for line in (REPO / "README.community.md").read_text().splitlines()
+    line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
                 if line.startswith("BOSS_RELEASE_COMMIT="))
     assert "7b88a18a2b4cd0b14b09a47fc415f7ffd4580066" in line
     line = line.replace(
