@@ -63,6 +63,7 @@ nav:
   - Control plane:
       - Control surfaces: CONTROL_SURFACES.md
       - Terminal and API: TERMINAL_API.md
+      - Remote API: remote-api.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
       - MCP: MCP.md
       - Grok CLI: GROK_CLI.md
