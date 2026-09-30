@@ -49,7 +49,7 @@ const wf = (over: Partial<WorkflowsView> = {}): WorkflowsView => ({
 
 const infra = (over: Partial<InfraView> = {}): InfraView => ({
   project_id: "boss-dogfood",
-  hosts: [{ id: "h1", name: "goldeneye", address: "10.0.0.1", arch: "arm64", status: "verified", verified: true }],
+  hosts: [{ id: "h1", name: "reference host", address: "10.0.0.1", arch: "arm64", status: "verified", verified: true }],
   targets: [],
   models: [{ model: "claude-opus-5", calls: 12, tokens: 90000, spend_usd: 4.5, estimated: false }],
   integrations: [],

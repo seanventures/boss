@@ -990,7 +990,6 @@ break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 resource_topology = ResourceTopologyService(settings)
 from boss_engine.services.elastic_fabric import ElasticFabricService
-from boss_engine.services.goldeneye_paas import GoldeneyePaasService
 from boss_engine.services.feature_catalog import FeatureCatalog
 from boss_engine.services.capability_manifest import build_manifest
 from boss_engine.services.learning_loop import LearningLoopService
@@ -1003,7 +1002,6 @@ from boss_engine.services.multi_cloud_catalog import (
 )
 
 elastic_fabric = ElasticFabricService(settings, resource_plane=resource_plane)
-goldeneye_paas = GoldeneyePaasService(settings)
 feature_catalog = FeatureCatalog(settings)
 learning_loop = LearningLoopService(settings)
 intent_router = IntentRouter(settings)
@@ -1165,7 +1163,7 @@ def _enforce_high_cost_rate_limit(
 def _warm_read_paths() -> None:
     """Pay the cold-cache cost at boot, in the background, instead of on someone's first click.
 
-    Measured on goldeneye, the SAME dashboard request three times in a row:
+    Measured on reference host, the SAME dashboard request three times in a row:
     28.9s, then 4.9s, then 0.44s. Nothing is inherently slow — the first query reads the large
     tables off disk and later ones hit Postgres' shared buffers.
 
@@ -3470,7 +3468,7 @@ def get_meta_api_catalog() -> dict[str, Any]:
 
 @app.get("/v1/meta/api-catalog/{domain}")
 def get_meta_api_catalog_domain(domain: str) -> dict[str, Any]:
-    """Single domain slice of the API catalog (e.g. goldeneye, providers, core)."""
+    """Single domain slice of the API catalog (e.g. reference host, providers, core)."""
     full = get_meta_api_catalog()
     for item in full.get("domains") or []:
         if item.get("id") == domain:
@@ -8705,7 +8703,7 @@ def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] 
         except (SecretUnavailable, ValueError, RuntimeError) as exc:
             # RuntimeError too: `generate_keypair` raises it when ssh-keygen fails or is not
             # installed, and catching only the first two is what turned a missing binary into
-            # an opaque HTTP 500 on goldeneye. The message already names the cause; the only
+            # an opaque HTTP 500 on the private host. The message already names the cause; the only
             # job here is to let it through.
             #
             # 422 with the reason, not a bare 500. An unconfigured secret backend is an
@@ -10358,7 +10356,7 @@ def without_internal_bulk(run: dict) -> dict:
     engine needs it. A browser never does — and it was being serialized into the console on
     every page load.
 
-    Measured on goldeneye: 11.4 MB of HTML and 18-67 seconds per page, including EIGHT complete
+    Measured on reference host: 11.4 MB of HTML and 18-67 seconds per page, including EIGHT complete
     package-lock.json files at ~139-176 KB each. The console looked broken because it was
     shipping the repair loop's scratch space to the browser.
 
@@ -10394,7 +10392,7 @@ def trim_for_list(value: Any, _depth: int = 0) -> Any:
     """Shrink a run to what a LIST can possibly render.
 
     /v1/code-tasks returns 200 rows, each carrying the full row: design plans, written specs,
-    security and review narratives, and the ratchet's file snapshots. Measured on goldeneye
+    security and review narratives, and the ratchet's file snapshots. Measured on reference host
     that was 3.75 MB from the endpoint and ~10 MB of HTML in the console, at 18-22s a page.
 
     Deliberately a RULE, not a list of field names. Stripping `pending_diff` by name shaved
@@ -10566,7 +10564,7 @@ def bakeoff_report_endpoint(batch_id: str):
     """Aggregate a VAG bake-off batch (spec §8) server-side: gate pass-rate, retries,
     wall-clock, $/verified-outcome and false-pass per model config, from
     code_task_runs ⋈ quality_gates ⋈ llm_calls. Lets the driver report without
-    direct DB access (goldeneye's DATABASE_URL is not exposed to operators)."""
+    direct DB access (reference host's DATABASE_URL is not exposed to operators)."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.bakeoff import aggregate_batch, render_markdown
@@ -19289,197 +19287,30 @@ def describe_multi_cloud_skills(
 
 
 # ---------------------------------------------------------------------------
-# Goldeneye bare-metal PaaS — nodes, packages, app deploys
+# the private host bare-metal PaaS — nodes, packages, app deploys
 # ---------------------------------------------------------------------------
 
 
-@app.get("/v1/goldeneye/packages")
-def goldeneye_package_catalog() -> dict[str, Any]:
-    """Built-in package manager catalog (host → edge → optional services)."""
-    return goldeneye_paas.package_catalog()
 
 
-@app.get("/v1/goldeneye/catalog/bootstrap")
-def goldeneye_catalog_bootstrap() -> dict[str, Any]:
-    """Default bootstrap install order from the kit catalog (no DB)."""
-    return goldeneye_paas.catalog_bootstrap()
 
 
-@app.get("/v1/goldeneye/status")
-def goldeneye_fleet_status(project_id: str) -> dict[str, Any]:
-    """Fleet overview: nodes, apps, package installs, kit catalog."""
-    with begin(engine) as connection:
-        return goldeneye_paas.fleet_status(connection, project_id)
 
 
-@app.get("/v1/goldeneye/nodes")
-def list_goldeneye_nodes(project_id: str) -> dict[str, Any]:
-    with begin(engine) as connection:
-        items = goldeneye_paas.list_nodes(connection, project_id)
-        return {"project_id": project_id, "items": items, "count": len(items)}
 
 
-@app.post("/v1/goldeneye/nodes", status_code=201)
-def register_goldeneye_node(payload: open_bodies.GoldeneyeNodeBody) -> dict[str, Any]:
-    """Register or update a bare-metal Goldeneye node."""
-    payload = payload.payload()
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    name = str(payload.get("name") or "").strip()
-    if not project_id or not name:
-        raise HTTPException(status_code=422, detail="project_id and name are required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return goldeneye_paas.register_node(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                name=name,
-                roles=payload.get("roles")
-                if isinstance(payload.get("roles"), list)
-                else None,
-                public_ip=payload.get("public_ip"),
-                tailnet_ip=payload.get("tailnet_ip"),
-                ssh_host=payload.get("ssh_host"),
-                ssh_user=str(payload.get("ssh_user") or "root"),
-                ssh_port=int(payload.get("ssh_port") or 22),
-                kit_version=payload.get("kit_version"),
-                site_config=payload.get("site_config")
-                if isinstance(payload.get("site_config"), dict)
-                else None,
-                labels=payload.get("labels")
-                if isinstance(payload.get("labels"), dict)
-                else None,
-                display_name=payload.get("display_name"),
-                metadata=payload.get("metadata")
-                if isinstance(payload.get("metadata"), dict)
-                else None,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.post("/v1/goldeneye/nodes/{node_id}/heartbeat")
-def heartbeat_goldeneye_node(node_id: str, payload: open_bodies.GoldeneyeHeartbeatBody) -> dict[str, Any]:
-    payload = payload.payload()
-    project_id = str(payload.get("project_id") or "").strip()
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        try:
-            return goldeneye_paas.heartbeat_node(
-                connection,
-                project_id=project_id,
-                node_id=node_id,
-                status=payload.get("status"),
-                kit_version=payload.get("kit_version"),
-                metadata=payload.get("metadata")
-                if isinstance(payload.get("metadata"), dict)
-                else None,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
 
 
-@app.get("/v1/goldeneye/package-installs")
-def list_goldeneye_package_installs(
-    project_id: str, node_id: Optional[str] = None
-) -> dict[str, Any]:
-    with begin(engine) as connection:
-        items = goldeneye_paas.list_package_installs(
-            connection, project_id, node_id=node_id
-        )
-        return {"project_id": project_id, "items": items, "count": len(items)}
 
 
-@app.post("/v1/goldeneye/packages/install", status_code=201)
-def install_goldeneye_package(payload: open_bodies.GoldeneyePackageInstallBody) -> dict[str, Any]:
-    """Plan/simulate (or gate real) package install on a node."""
-    payload = payload.payload()
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    package_id = str(payload.get("package_id") or "").strip()
-    if not project_id or not package_id:
-        raise HTTPException(
-            status_code=422, detail="project_id and package_id are required"
-        )
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return goldeneye_paas.install_package(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                package_id=package_id,
-                node_id=payload.get("node_id"),
-                node_name=payload.get("node_name"),
-                force=bool(payload.get("force", False)),
-                metadata=payload.get("metadata")
-                if isinstance(payload.get("metadata"), dict)
-                else None,
-            )
-        except PermissionError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.get("/v1/goldeneye/apps")
-def list_goldeneye_apps(project_id: str) -> dict[str, Any]:
-    with begin(engine) as connection:
-        items = goldeneye_paas.list_apps(connection, project_id)
-        return {"project_id": project_id, "items": items, "count": len(items)}
 
 
-@app.post("/v1/goldeneye/apps/deploy", status_code=201)
-def deploy_goldeneye_app(payload: open_bodies.GoldeneyeAppDeployBody) -> dict[str, Any]:
-    """Deploy (or simulate) an app onto a Goldeneye node."""
-    payload = payload.payload()
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    name = str(payload.get("name") or "").strip()
-    if not project_id or not name:
-        raise HTTPException(status_code=422, detail="project_id and name are required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return goldeneye_paas.deploy_app(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                name=name,
-                node_id=payload.get("node_id"),
-                node_name=payload.get("node_name"),
-                image_ref=payload.get("image_ref") or payload.get("image"),
-                compose_ref=payload.get("compose_ref") or payload.get("compose"),
-                domain=payload.get("domain"),
-                metadata=payload.get("metadata")
-                if isinstance(payload.get("metadata"), dict)
-                else None,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.post("/v1/goldeneye/apps/{name}/rollback")
-def rollback_goldeneye_app(name: str, payload: open_bodies.GoldeneyeAppRollbackBody) -> dict[str, Any]:
-    payload = payload.payload()
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "ceo").strip()
-    if not project_id:
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "providerops_manage")
-        try:
-            return goldeneye_paas.rollback_app(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                name=name,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/v1/resource-janitor/run", response_model=ResourceJanitorRunResponse)

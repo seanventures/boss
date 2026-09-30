@@ -304,46 +304,6 @@ def test_multi_cloud_and_provider_e2e(client):
     assert providers.status_code == 200
 
 
-def test_goldeneye_and_elastic_e2e(client):
-    packages = client.get("/v1/goldeneye/packages")
-    assert packages.status_code == 200
-    assert packages.json().get("items")
-
-    bootstrap = client.get("/v1/goldeneye/catalog/bootstrap")
-    # may 404 if route not present on older images — on this branch should work
-    assert bootstrap.status_code in (200, 404), bootstrap.text
-
-    status = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
-    assert status.status_code == 200
-
-    # register node + simulated package install
-    reg = client.post(
-        "/v1/goldeneye/nodes",
-        json={
-            "project_id": PROJECT_ID,
-            "actor": ACTOR,
-            "name": "e2e-smoke-node",
-            "roles": ["apps"],
-            "public_ip": "203.0.113.50",
-        },
-    )
-    assert reg.status_code in (200, 201), reg.text
-    node_id = reg.json()["id"]
-
-    inst = client.post(
-        "/v1/goldeneye/packages/install",
-        json={
-            "project_id": PROJECT_ID,
-            "actor": ACTOR,
-            "package_id": "layer0-host",
-            "node_id": node_id,
-        },
-    )
-    assert inst.status_code in (200, 201), inst.text
-    assert inst.json()["status"] in ("simulated", "planned", "installed")
-
-    elastic = client.get("/v1/elastic/status", params={"project_id": PROJECT_ID})
-    assert elastic.status_code == 200, elastic.text
 
 
 def test_work_trackers_and_scoring_e2e(client):
@@ -454,7 +414,7 @@ def test_edition_and_cloud_catalog_e2e(client):
 
 def test_mutating_without_actor_fails_closed(client):
     """Mutations without proper actor/project should not 500."""
-    bad = client.post("/v1/goldeneye/nodes", json={"name": "x"})
+    bad = client.post("/v1/workspace/nodes", json={"name": "x"})
     assert bad.status_code in (401, 403, 422), bad.text
 
     bad2 = client.post(

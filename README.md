@@ -44,8 +44,6 @@ The installer sets up Docker and the Community services on that machine, creates
 
 No step requires Plane, an ops token, a private registry, or SSH to a machine you do not administer.
 
-The optional [Goldeneye kit](docs/product/GOLDENEYE_PAAS.md) is software you run locally. It is not access to a server operated by someone else.
-
 Do not pass API keys or tokens as arguments. Paste an OpenAI key at the installer's hidden prompt, or skip it and [connect a model](docs/community/MODEL_CONNECTIONS.md) later. Ports, recovery, and subscription import are in the [installer guide](scripts/install/README.md). One path from this checkout to a first task is the [quickstart](docs/community/QUICKSTART.md).
 
 Host copies of the official Claude Code, Codex CLI, and Grok Build binaries are optional:

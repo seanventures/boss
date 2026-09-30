@@ -1,6 +1,6 @@
 """V1 infra honesty: missing-schema empty-200, fail-closed real provision.
 
-Live dogfood 500'd GET /v1/elastic/status, /v1/goldeneye/status, and
+Live dogfood 500'd GET /v1/elastic/status, /v1/workspace/status, and
 /v1/provider-usage/summary with UndefinedTable. Status must ensure_tables
 and return honest empty — never invent host.connected=true.
 
@@ -61,21 +61,6 @@ def test_provider_usage_summary_ensure_tables_honest_empty_when_missing(client, 
     assert body.get("status", "not_configured") in {"not_configured", "ok"}
 
 
-def test_goldeneye_status_ensure_tables_never_fakes_host(client, engine):
-    with engine.begin() as connection:
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_deploys CASCADE"))
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_apps CASCADE"))
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_package_installs CASCADE"))
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_nodes CASCADE"))
-
-    response = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["node_count"] == 0
-    assert body["app_count"] == 0
-    assert body["host"]["connected"] is False
-    assert body["status"] == "not_configured"
-    assert body["real_host_effects"] is False
 
 
 def test_infra_create_droplet_fail_closed_without_real_provision_flag(

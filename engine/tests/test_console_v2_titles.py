@@ -192,7 +192,7 @@ def test_an_explicit_id_is_never_overridden_by_a_matching_name():
 # --------------------------------------------------------------------------- #
 # The name is inside the document, not the document's name
 #
-# The real shape on goldeneye: the run title is a generic category, an em-dash, and then the
+# The real shape on the private host: the run title is a generic category, an em-dash, and then the
 # ENTIRE PRD markdown pasted in. 30 runs looked like this, and taking the head of the dash gave
 # eight rows all called "Web app".
 #

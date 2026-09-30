@@ -369,7 +369,7 @@ describe("the task list is about the operator's work", () => {
     // The filter moved into the grouping call when the identity chain was replaced; what
     // matters is that housekeeping runs never reach the grid, not the line that removes them.
     expect(src).toMatch(/isInternalRun\(c\)/);
-    for (const marker of ["captain:", "quality improve pass", "goldeneye profile check"]) {
+    for (const marker of ["captain:", "quality improve pass"]) {
       expect(src.toLowerCase()).toContain(marker);
     }
     // A follow-up is the operator's OWN work — an earlier filter caught it and took the list

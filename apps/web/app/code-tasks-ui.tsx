@@ -674,14 +674,14 @@ function startAProjectHref(): string {
  * where the spec comes from.
  *
  * Disabled while submitting, and it says so. The benchmark buttons are plain form submits with
- * no feedback, and goldeneye currently holds four HookWatch runs and two BugBox runs queued —
+ * no feedback, and reference host currently holds four HookWatch runs and two BugBox runs queued —
  * a button that looks inert gets pressed again, and here every press costs budget.
  */
 /** Launch a benchmark, once.
  *
  * The button was a bare form submit: pressing it navigated nowhere, changed nothing on screen,
  * and the new run only appeared after the page happened to refresh. So it got pressed again —
- * goldeneye is holding four HookWatch runs and two BugBox runs, queued and identical. Every
+ * reference host is holding four HookWatch runs and two BugBox runs, queued and identical. Every
  * one of those is a budgeted governed pipeline. Disabling on submit and saying "Starting…" is
  * the whole fix, and it is the same fix the delivery buttons needed.
  */
@@ -2677,7 +2677,7 @@ function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: P
 //  cut the card count from 48 to 2 — those are REAL work (the run that gave ApproveIt its
 //  backend was one of them). Hiding the operator's own follow-ups to reduce clutter defeats
 //  the point of the list.
-const INTERNAL_RUN = /^(captain:|quality improve pass|goldeneye profile check)/i;
+const INTERNAL_RUN = /^(captain:|quality improve pass)/i;
 
 /** What KIND of attempt this is, so a stack of them reads as a story rather than repetition. */
 function attemptKind(run: CodeTaskRun): string {

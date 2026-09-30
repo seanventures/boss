@@ -2,7 +2,7 @@
 
 `finalize_ctx.pending_diff` is how the verifier ratchet re-applies a change after a gate
 failure: {path, content} for every file the agent wrote. The engine needs it; a browser never
-does. It was being serialized into the console on every page load — measured on goldeneye at
+does. It was being serialized into the console on every page load — measured on reference host at
 11.4 MB of HTML and 18-67 seconds per page, including EIGHT complete package-lock.json files
 at 139-176 KB each. The console looked broken because it was shipping engine internals.
 """
@@ -13,7 +13,7 @@ import json
 
 from apps.api.app.main import without_internal_bulk
 
-LOCKFILE = "x" * 176_100  # the real size measured on goldeneye
+LOCKFILE = "x" * 176_100  # the real size measured on the private host
 
 
 def _run() -> dict:

@@ -110,9 +110,7 @@ the planned layout starts empty. Moving a role does not route tasks. **Agent
 work** lists recent activity by role. It is not a workforce that woke up at
 install.
 
-The optional Goldeneye kit is software you run on your own machine. It is not
-access to a server operated by someone else. Install does not need Plane, an
-ops token, or a private registry.
+Install does not need Plane, an ops token, or a private registry.
 
 Report a suspected vulnerability to [boss@sean.net](mailto:boss@sean.net). Do
 not open a public issue. See [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md).

@@ -114,7 +114,7 @@ const CODE_TASK_AREAS = new Set(["code_tasks", "delivery", "overview", undefined
 /**
  * How many runs this page needs.
  *
- * Measured on goldeneye: /v1/code-tasks?limit=200 returns **1.41 MB** while every other feed
+ * Measured on reference host: /v1/code-tasks?limit=200 returns **1.41 MB** while every other feed
  * on the page combined is ~130 KB — 91% of the payload for one list. The page then renders it
  * across ~30 area sections whatever area you asked for, and a single load took 111 seconds and
  * starved the API's healthcheck twice, so Traefik evicted the container and the console showed
@@ -126,7 +126,7 @@ const CODE_TASK_AREAS = new Set(["code_tasks", "delivery", "overview", undefined
 export function codeTaskLimitFor(area?: string): number {
   // 600 WHERE THE LIST IS ACTUALLY SHOWN.
   //
-  // 200 was set to bound a payload, and the bound was measured wrong. On goldeneye today,
+  // 200 was set to bound a payload, and the bound was measured wrong. On reference host today,
   // where 244 real tasks exist:
   //
   //     limit=200 -> 1,481,518 bytes in 0.885s   (44 tasks invisible)

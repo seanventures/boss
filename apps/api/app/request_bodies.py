@@ -858,63 +858,10 @@ class ElasticTerminateBody(OpenRequestBody):
     reason: SkipValidation[str | None] = None
     destroy_provider_resource: SkipValidation[bool | None] = None
 
-class GoldeneyeNodeBody(OpenRequestBody):
-    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'name']})
 
-    project_id: SkipValidation[str | None] = None
-    actor: SkipValidation[str | None] = None
-    name: SkipValidation[str | None] = None
-    roles: SkipValidation[list[str] | None] = None
-    public_ip: SkipValidation[str | None] = None
-    tailnet_ip: SkipValidation[str | None] = None
-    ssh_host: SkipValidation[str | None] = None
-    ssh_user: SkipValidation[str | None] = None
-    ssh_port: SkipValidation[int | str | None] = None
-    kit_version: SkipValidation[str | None] = None
-    site_config: SkipValidation[dict[str, Any] | None] = None
-    labels: SkipValidation[dict[str, Any] | None] = None
-    display_name: SkipValidation[str | None] = None
-    metadata: SkipValidation[dict[str, Any] | None] = None
 
-class GoldeneyeHeartbeatBody(OpenRequestBody):
-    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
 
-    project_id: SkipValidation[str | None] = None
-    status: SkipValidation[str | None] = None
-    kit_version: SkipValidation[str | None] = None
-    metadata: SkipValidation[dict[str, Any] | None] = None
 
-class GoldeneyePackageInstallBody(OpenRequestBody):
-    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'package_id']})
-
-    project_id: SkipValidation[str | None] = None
-    actor: SkipValidation[str | None] = None
-    package_id: SkipValidation[str | None] = None
-    node_id: SkipValidation[str | None] = None
-    node_name: SkipValidation[str | None] = None
-    force: SkipValidation[bool | None] = None
-    metadata: SkipValidation[dict[str, Any] | None] = None
-
-class GoldeneyeAppDeployBody(OpenRequestBody):
-    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'name']})
-
-    project_id: SkipValidation[str | None] = None
-    actor: SkipValidation[str | None] = None
-    name: SkipValidation[str | None] = None
-    node_id: SkipValidation[str | None] = None
-    node_name: SkipValidation[str | None] = None
-    image_ref: SkipValidation[str | None] = None
-    image: SkipValidation[str | None] = None
-    compose_ref: SkipValidation[str | None] = None
-    compose: SkipValidation[str | None] = None
-    domain: SkipValidation[str | None] = None
-    metadata: SkipValidation[dict[str, Any] | None] = None
-
-class GoldeneyeAppRollbackBody(OpenRequestBody):
-    model_config = ConfigDict(json_schema_extra={"required": ['project_id']})
-
-    project_id: SkipValidation[str | None] = None
-    actor: SkipValidation[str | None] = None
 
 class EmailConfigBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id']})

@@ -5,7 +5,7 @@ and they are among the most parallel workloads there are. Linux CFS shares CPU r
 per runnable thread at equal priority, so the API's few threads compete with dozens of build
 processes. The API does not need more CPU — it cannot get SCHEDULED.
 
-Measured on goldeneye:
+Measured on reference host:
 
     /v1/code-tasks?limit=5   quiet box          0.37s  (p50, n=6)
     /v1/code-tasks?limit=5   code task running  47.1s, then 39.5s, then a Traefik 404

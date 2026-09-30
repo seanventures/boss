@@ -131,7 +131,7 @@ describe("the console says when it is still filling up", () => {
 /**
  * Three caps stacked between the database and the header, and none of them said so.
  *
- * Measured on goldeneye: 474 code-task runs, of which 244 are real work and 59 group into
+ * Measured on reference host: 474 code-task runs, of which 244 are real work and 59 group into
  * apps. The strip asked for the endpoint's default of 40 and drew 40 as though that were all
  * of them; the overview only ever read the newest 400 runs, so apps beyond that window could
  * not be returned at any limit; and the Factory heading read "200 code tasks" for a project
@@ -246,7 +246,7 @@ describe("the loading bar stays up until the page has actually arrived", () => {
   const SHELL2 = codeOnly("app/ConsoleShell.tsx");
 
   it("waits for the document, not a fixed 1.2 seconds", () => {
-    // Measured on goldeneye: the Factory page is 9.2 MB and streams for 10.4s. The bar cleared
+    // Measured on reference host: the Factory page is 9.2 MB and streams for 10.4s. The bar cleared
     // 1200ms after hydration — early in that stream — so for the remaining ~9 seconds cards
     // kept appearing with nothing saying so. A list still arriving looks exactly like a list
     // that is short.

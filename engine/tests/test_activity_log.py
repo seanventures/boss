@@ -732,7 +732,7 @@ def _deployment(
         "environment": environment,
         "status": status,
         "target_kind": "docker",
-        "target_ref": "goldeneye",
+        "target_ref": "reference host",
         "commit_ref": "abc1234",
         "repo": "acme/checkout",
         "failure_reason": failure_reason,

@@ -597,7 +597,7 @@ def test_the_model_shown_is_the_one_the_agent_mostly_used():
 
 
 def test_the_score_looks_further_back_than_the_live_status():
-    """Live on goldeneye: 26 agent cards, ONE with a scoreboard, because only one stage had run
+    """Live on reference host: 26 agent cards, ONE with a scoreboard, because only one stage had run
     that day. A card reading "no calls recorded" for an agent that reviewed a hundred changes
     this month is not a quiet day, it is a wrong answer.
 

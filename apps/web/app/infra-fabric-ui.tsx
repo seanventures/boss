@@ -1,5 +1,5 @@
 /**
- * Infra Fabric panel — multi-cloud catalog, elastic fabric, Goldeneye PaaS,
+ * Infra Fabric panel — multi-cloud catalog, elastic fabric, reference host PaaS,
  * and provider usage rollups for Mission Control ProviderOps.
  *
  * Community honesty: catalog discovery + BYOK self-managed fleets only.
@@ -31,22 +31,20 @@ function statusClass(status: string): string {
 }
 
 export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
-  const { multiCloud, elastic, goldeneye, providerUsage, partialFailures } = feed;
+  const { multiCloud, elastic, providerUsage, partialFailures } = feed;
   const anyReachable =
     multiCloud.apiReachable ||
     elastic.apiReachable ||
-    goldeneye.apiReachable ||
     providerUsage.apiReachable;
 
   return (
     <article className="stack-card" id="infra-fabric" aria-label="Infra fabric">
       <h3>Infra Fabric</h3>
       <p className="detail">
-        Multi-cloud catalog, elastic worker fabric, Goldeneye bare-metal PaaS, and
+        Multi-cloud catalog, elastic worker fabric, and
         per-provider usage. Community is BYOK + self-managed only — no hosted fleets
         or silent real-host writes. Operator docs:{" "}
         <code className="mono">docs/api/MULTI_CLOUD.md</code> ·{" "}
-        <code className="mono">docs/api/GOLDENEYE.md</code>
       </p>
 
       {partialFailures.length > 0 ? (
@@ -59,8 +57,7 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
         <p className="detail" role="alert">
           Infra fabric APIs are unreachable. Confirm the control plane is up and
           routes <code className="mono">/v1/multi-cloud/*</code>,{" "}
-          <code className="mono">/v1/elastic/*</code>,{" "}
-          <code className="mono">/v1/goldeneye/*</code>, and{" "}
+          <code className="mono">/v1/elastic/*</code>, and{" "}
           <code className="mono">/v1/provider-usage/*</code> are mounted.
         </p>
       ) : null}
@@ -193,63 +190,6 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
               {elastic.message ? (
                 <p className="detail">{elastic.message}</p>
               ) : null}
-            </>
-          )}
-        </section>
-
-        {/* Goldeneye */}
-        <section aria-label="Goldeneye PaaS" data-fabric-status={goldeneye.status}>
-          <h4>Goldeneye PaaS</h4>
-          {goldeneye.status === "not_configured" || !goldeneye.configured ? (
-            <p className="detail" data-empty-state="goldeneye-not-configured">
-              Goldeneye is not configured. No registered nodes and
-              host.connected=false — this is not a managed BOSS fleet.
-              {goldeneye.blockedReason ? ` ${goldeneye.blockedReason}` : ""}
-            </p>
-          ) : goldeneye.status === "error" ? (
-            <p className="detail">
-              Goldeneye status unavailable
-              {goldeneye.blockedReason ? `: ${goldeneye.blockedReason}` : "."}
-            </p>
-          ) : (
-            <>
-              <div className="provider-suite-summary" aria-label="Goldeneye fleet summary">
-                <div>
-                  <span>Nodes</span>
-                  <strong>{goldeneye.nodeCount}</strong>
-                  <small>{goldeneye.readyNodes} ready</small>
-                </div>
-                <div>
-                  <span>Apps</span>
-                  <strong>{goldeneye.appCount}</strong>
-                  <small>{goldeneye.packageInstallCount} package installs</small>
-                </div>
-                <div>
-                  <span>Kit</span>
-                  <strong className="mono">{goldeneye.kitVersion || "—"}</strong>
-                  <small>
-                    {goldeneye.modular ? "modular" : "monolithic"} ·{" "}
-                    {goldeneye.packageCount} packages
-                  </small>
-                </div>
-                <div>
-                  <span>Real host effects</span>
-                  <strong
-                    className={goldeneye.realHostEffects ? "tone-warn" : "tone-good"}
-                  >
-                    {goldeneye.realHostEffects ? "allowed" : "off"}
-                  </strong>
-                  <small>
-                    {goldeneye.realHostEffects
-                      ? "SSH/host writes gated on"
-                      : "plan-only; no silent host writes"}
-                  </small>
-                </div>
-              </div>
-              <p className="detail">
-                Bare-metal / self-hosted nodes you register — not a managed BOSS
-                fleet. See <code className="mono">docs/api/GOLDENEYE.md</code>.
-              </p>
             </>
           )}
         </section>

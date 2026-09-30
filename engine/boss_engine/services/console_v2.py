@@ -63,7 +63,7 @@ _FAILED_STATES = ("failed", "error")
 # extended from what was actually on screen, not from what seemed likely.
 _INTERNAL_TITLE = re.compile(
     r"^\s*[\[(]?\s*(?:"
-    r"captain:|quality improve pass|goldeneye profile check|follow-up:\s*deferred review"
+    r"captain:|quality improve pass|follow-up:\s*deferred review"
     r"|list the exact names|ceo command:|boss-\d+"
     # BOSS's own model bakeoffs and end-to-end exercises: "[bakeoff:qwen_all#1] URL slug
     # generator", "[boss:coding e2e test] Add a greet() helper", "QA benchmark: BugBox".
@@ -396,7 +396,7 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
     # WHAT WAS TRIMMED, SAID OUT LOUD.
     #
     # Two caps stack here and neither used to be visible. The row window above decides which
-    # apps EXIST at all — at 400 rows, goldeneye's 474 runs meant whole apps never entered the
+    # apps EXIST at all — at 400 rows, the private host's 474 runs meant whole apps never entered the
     # grouping, and no `limit` the caller passed could bring them back. That one is now wide
     # enough to hold the project rather than a page of it.
     #

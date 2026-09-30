@@ -226,7 +226,7 @@ def test_render_markdown_smoke(engine):
 
 
 def test_report_endpoint_aggregates_server_side(client, engine):
-    """GET /v1/bakeoff/{batch}/report — the driver's no-DB-access path (goldeneye)."""
+    """GET /v1/bakeoff/{batch}/report — the driver's no-DB-access path (reference host)."""
     project_id = get_settings().default_project_id
     batch_id = f"bake_{uuid.uuid4().hex[:8]}"
     with engine.begin() as c:

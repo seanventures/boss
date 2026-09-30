@@ -61,4 +61,4 @@ def test_both_build_paths_pass_the_project_through():
 
 def test_nothing_here_names_the_operator_platform():
     """This ships as open source. The engine must not say where anybody's boxes are."""
-    assert "goldeneye" not in inspect.getsource(github_app_adapter).lower()
+    assert "reference host" not in inspect.getsource(github_app_adapter).lower()

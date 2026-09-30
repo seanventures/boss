@@ -5,7 +5,7 @@ that list sits in .env with no effect: the operator sets BOSS_CODE_AGENT_MAX_CON
 identical behaviour, and reasonably concludes BOSS ignores its own settings -- while the
 long-lived install, whose .env is applied by a different mechanism, honours the same key.
 
-"I tested these very thoroughly in goldeneye why if I change to different VM or local it is
+"I tested these very thoroughly in reference host why if I change to different VM or local it is
 not working and you have to fix - what is this, we cant keep fixing like this for ever!"
 
 That asymmetry is the answer. These tests keep the list honest.

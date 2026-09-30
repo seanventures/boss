@@ -106,7 +106,7 @@ def test_autonomy_reports_only_modes_that_exist():
 @pytest.mark.parametrize("title", [
     "Captain: QUALITY IMPROVE PASS. Measure again",
     "quality improve pass",
-    "Goldeneye profile check",
+    "reference host profile check",
     "Follow-up: deferred review findings — Web app",
     "List the exact names of the tools you can call",
     "CEO command: run these with query_db",

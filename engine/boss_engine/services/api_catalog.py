@@ -120,11 +120,6 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
         "description": "The local machine, connected machines, the hardware agent, and provider proposals.",
         "prefixes": ["/v1/hardware"],
     },
-    "goldeneye": {
-        "title": "Goldeneye bare-metal PaaS",
-        "description": "Nodes, modules/packages, app deploys, fleet status.",
-        "prefixes": ["/v1/goldeneye"],
-    },
     "work": {
         "title": "Work orchestration & trackers",
         "description": "Work items, trackers (Plane/Jira/Linear/GitHub/ADO), allocations.",

@@ -21,8 +21,8 @@ declared and omitted; an explicit value is preserved for API authorization.
 from OpenAPI. Both invocation paths use the same API key, project scope, and
 server enforcement as direct HTTP clients.
 
-The static Community contract contains **993** HTTP operations:
-**980** operator `/v1/` operations, each with a unique stable operation ID and
+The static Community contract contains **982** HTTP operations:
+**969** operator `/v1/` operations, each with a unique stable operation ID and
 a JSON/path/query shape addressable by `/op`; **13** health, SAML, and SCIM
 protocol routes remain outside the authenticated `/v1/` operator command.
 In the published Community repository, this contract is `api/openapi.yaml`;
@@ -53,11 +53,10 @@ available even if a live server uses a different runtime ID.
 | Auth | 18 | Sessions, members, roles, and org membership |
 | Console | 17 | Executive console and coordination read models |
 | Workspace | 12 | Organizations, projects and departments |
-| Goldeneye | 11 | Goldeneye service integration |
 | Setup | 9 | Bootstrap and first-run setup |
 | Hardware | 7 | Local machine, connected places, and the hardware agent |
 | Identity | 5 | Identity provider catalog and configuration |
-| **Total** | **980** | All mounted `/v1/` operations are searchable by method/path/summary |
+| **Total** | **969** | All mounted `/v1/` operations are searchable by method/path/summary |
 
 The table classifies the static Community contract with the BOSS-416 API
 catalog taxonomy. Live domain counts may differ by image and edition; `/ops`
@@ -104,7 +103,7 @@ transition legality, and audit events. Other decision transitions use `/op`.
 
 ## Verification and limits
 
-- `scripts/tests/test_metatron_tui.py` checks all 993 Community snapshot
+- `scripts/tests/test_metatron_tui.py` checks all 982 Community snapshot
   operations and verifies every `/v1/` operation has a unique, addressable
   terminal alias. It checks project discovery/selection, paged operation
   search, typed-body project defaults, parameter validation, duplicate FastAPI

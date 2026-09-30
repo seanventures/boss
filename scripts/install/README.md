@@ -295,7 +295,7 @@ Warnings name what to fix first — running anyway wastes real money reaching a 
 ### When a run is slower than expected
 
 ```bash
-curl -s "$BOSS_API_URL/v1/code-tasks/<run_id>/retrospective"
+curl -s "$BOSS_API_URL/v1/code-tasks/${RUN_ID:?the code task run id, from the console}/retrospective"
 ```
 
 Returns three separate grades — delivery, efficiency, host — deterministically, with no model

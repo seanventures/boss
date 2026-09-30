@@ -67,7 +67,7 @@ def test_test_connection_returns_account_summary(monkeypatch):
                     "uuid": "acct-uuid",
                     "status": "active",
                     "droplet_limit": 10,
-                    "team": {"name": "goldeneye"},
+                    "team": {"name": "reference host"},
                 }
             }
         )
@@ -80,7 +80,7 @@ def test_test_connection_returns_account_summary(monkeypatch):
     assert result["provider"] == "digitalocean"
     assert result["summary"]["email"] == "ops@example.com"
     assert result["summary"]["uuid"] == "acct-uuid"
-    assert result["summary"]["team"] == "goldeneye"
+    assert result["summary"]["team"] == "reference host"
 
 
 def test_test_connection_requires_token_not_provision_flag(monkeypatch):

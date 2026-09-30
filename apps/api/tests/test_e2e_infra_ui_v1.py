@@ -1,6 +1,6 @@
 """Isolated E2E: infra honesty + fail-closed create_droplet.
 
-GET /v1/elastic/status, /v1/goldeneye/status, /v1/provider-usage/summary
+GET /v1/elastic/status, /v1/provider-usage/summary
 must return 200 not_configured when empty, with host.connected=false and
 no invented metrics. POST /v1/infra/droplets without
 BOSS_INFRA_REAL_PROVISION_ALLOWED is blocked and writes a failed Receipt.
@@ -50,16 +50,6 @@ def test_e2e_elastic_status_empty_is_200_not_configured(client):
     _assert_no_invented_metrics(body)
 
 
-def test_e2e_goldeneye_status_empty_is_200_not_configured(client):
-    response = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "not_configured"
-    assert body["host"]["connected"] is False
-    assert body["node_count"] == 0
-    assert body["app_count"] == 0
-    assert body["real_host_effects"] is False
-    _assert_no_invented_metrics(body)
 
 
 def test_e2e_provider_usage_summary_empty_is_200_not_configured(client):
@@ -77,20 +67,12 @@ def test_e2e_status_routes_stay_honest_after_missing_schema(client, engine):
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS provider_usage_events CASCADE"))
         connection.execute(text("DROP TABLE IF EXISTS worker_instances CASCADE"))
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_deploys CASCADE"))
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_apps CASCADE"))
-        connection.execute(
-            text("DROP TABLE IF EXISTS goldeneye_package_installs CASCADE")
-        )
-        connection.execute(text("DROP TABLE IF EXISTS goldeneye_nodes CASCADE"))
 
     elastic = client.get("/v1/elastic/status", params={"project_id": PROJECT_ID})
-    goldeneye = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
     usage = client.get("/v1/provider-usage/summary", params={"project_id": PROJECT_ID})
 
     for response, label in (
         (elastic, "elastic"),
-        (goldeneye, "goldeneye"),
         (usage, "provider-usage"),
     ):
         assert response.status_code == 200, f"{label}: {response.text}"

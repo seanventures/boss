@@ -57,7 +57,6 @@ COPY apps/worker ./apps/worker
 COPY api ./api
 COPY db ./db
 COPY engine/boss_engine ./engine/boss_engine
-COPY packages/goldeneye ./packages/goldeneye
 COPY packages/specpack ./packages/specpack
 COPY scripts/metatron_tui.py ./scripts/metatron_tui.py
 COPY scripts/reliability_mcp_server.py ./scripts/reliability_mcp_server.py

@@ -1,6 +1,6 @@
 """One app, two workflow runs, and the operator was shown two projects.
 
-Observed on goldeneye:
+Observed on reference host:
 
     waiting  Interview Scorecard App                        Standard Product Delivery v1
              3 of 8   started 5 Sep 23:40Z   Research skipped, spec approved in 0s

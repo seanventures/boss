@@ -172,7 +172,7 @@ describe("Mission Control Previews honesty", () => {
     // It described itself accurately — "Operator Views — fixture HTML is not a customer app",
     // "Create fixture View (not a customer app)" — and that is the point: a harness for
     // proving the View gateway without a microVM does not belong on the page a customer opens
-    // to look at their apps. On goldeneye it had become 47 expired rows, each repeating
+    // to look at their apps. On reference host it had become 47 expired rows, each repeating
     // "cannot approve: preview status is 'expired'", under a heading about fixtures.
     //
     // Preview itself is untouched. Open preview, the status chip, Startup logs and Rebuild

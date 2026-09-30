@@ -1,6 +1,6 @@
 """What ships must survive the smallest machine the install docs tell people to use.
 
-"I tested these very thoroughly in goldeneye why if I change to different VM or local it is
+"I tested these very thoroughly in reference host why if I change to different VM or local it is
 not working... we are not doing the SaaS product we are actually going to do OSS, it should
 work for all developers properly."
 
@@ -44,13 +44,13 @@ def test_one_agent_at_a_time_by_default(shipped):
     """Each concurrent slot is a coding-agent process inside the api container. On the 4 GB VM
     the install docs describe, three of them exhaust the box -- and the operator reads the
     resulting stall as BOSS being broken, which is the misattribution the host-stall work
-    exists to prevent. goldeneye, the only install with months of evidence behind it, runs 1.
+    exists to prevent. reference host, the only install with months of evidence behind it, runs 1.
     """
     assert shipped.code_agent_max_concurrency == 1
 
 
 def test_a_shell_on_the_host_is_not_the_default(shipped):
-    """goldeneye enables it deliberately. Shipping it on would hand every fresh install a
+    """reference host enables it deliberately. Shipping it on would hand every fresh install a
     capability its operator never asked for."""
     assert shipped.agent_host_shell is False
 

@@ -49,33 +49,6 @@ def test_create_droplet_fail_closes_before_adapter_when_flag_off():
     assert 'status="failed"' in blocked or "status='failed'" in blocked
 
 
-def test_fabric_and_goldeneye_status_ensure_tables_and_never_invent_host():
-    elastic = (ROOT / "engine/boss_engine/services/elastic_fabric.py").read_text(
-        encoding="utf-8"
-    )
-    goldeneye = (ROOT / "engine/boss_engine/services/goldeneye_paas.py").read_text(
-        encoding="utf-8"
-    )
-    import re as _re
-
-    for name, source in (("elastic_fabric", elastic), ("goldeneye_paas", goldeneye)):
-        # The tables must exist before they are read, or "no hosts" and "no table yet" are the
-        # same empty answer.
-        assert "def ensure_tables" in source, name
-        assert "self.ensure_tables(connection)" in source, name
-        # A store that was never set up must say so rather than report an empty, healthy world.
-        assert '"not_configured"' in source, name
-
-        # NEVER INVENT A HOST.
-        #
-        # This used to assert the literal string '"connected": bool(live)' in both files, which
-        # is a variable NAME: goldeneye_paas calls its liveness flag `connected`, spells the
-        # same behaviour correctly, and failed the test for it. The property is that
-        # `connected` is DERIVED from a liveness signal and never asserted true outright.
-        assert _re.search(r'"connected":\s*bool\(', source), (
-            f"{name}: connected must be derived from a liveness check")
-        assert _re.search(r'"connected":\s*True', source) is None, (
-            f"{name}: connected must never be hardcoded true — that invents a host")
 
 
 def test_firecracker_claims_stay_frozen_by_default():

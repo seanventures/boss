@@ -111,7 +111,7 @@ def test_only_a_verified_host_is_marked_verified():
     """An unverified host offered as a destination fails at deploy time, far from the choice
     that caused it."""
     out = infra(FakeConn(hosts=[
-        {"id": "h1", "name": "goldeneye", "address": "10.0.0.1", "arch": "arm64",
+        {"id": "h1", "name": "reference host", "address": "10.0.0.1", "arch": "arm64",
          "status": "verified", "labels": {}, "created_at": NOW},
         {"id": "h2", "name": "spare", "address": "10.0.0.2", "arch": "x86",
          "status": "pending", "labels": {}, "created_at": NOW},
@@ -127,7 +127,7 @@ def test_fleet_load_is_absent_rather_than_invented():
     # against a version that DID invent a load, which is the failure mode of a test written
     # against no data.
     out = infra(FakeConn(hosts=[
-        {"id": "h1", "name": "goldeneye", "address": "10.0.0.1", "arch": "arm64",
+        {"id": "h1", "name": "reference host", "address": "10.0.0.1", "arch": "arm64",
          "status": "verified", "labels": {}, "created_at": NOW},
     ]), "p")
     assert out["load_recorded"] is False

@@ -1,6 +1,6 @@
 """Interactive work must outrank work the system chose to do by itself.
 
-The defect this locks down, measured on goldeneye:
+The defect this locks down, measured on reference host:
 
     code.task     priority = 46   (batch build work)
     meeting.step  priority = 48   (an operator watching the screen)

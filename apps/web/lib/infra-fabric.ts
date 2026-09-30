@@ -1,6 +1,6 @@
 /**
  * Mission Control surfaces for multi-cloud catalog, elastic fabric,
- * Goldeneye PaaS, and provider usage ledger.
+ * and provider usage ledger.
  *
  * Community-safe: catalog + BYOK self-managed fleets only. No fake managed
  * capacity — real host effects and real provision flags are reported truthfully.
@@ -76,24 +76,7 @@ export type ElasticStatusFeed = {
   }>;
 };
 
-export type GoldeneyeStatusFeed = {
-  projectId: string;
-  apiReachable: boolean;
-  blockedReason?: string;
-  status: "ok" | "not_configured" | "error";
-  configured: boolean;
-  hostConnected: boolean;
-  product?: string;
-  nodeCount: number;
-  appCount: number;
-  packageInstallCount: number;
-  readyNodes: number;
-  /** True only when real SSH/host deploy is allowed — Community default is false. */
-  realHostEffects: boolean;
-  kitVersion: string;
-  modular: boolean;
-  packageCount: number;
-};
+;
 
 export type ProviderUsageProviderRollup = {
   provider: string;
@@ -126,7 +109,6 @@ export type InfraFabricFeed = {
   projectId: string;
   multiCloud: MultiCloudCatalogFeed;
   elastic: ElasticStatusFeed;
-  goldeneye: GoldeneyeStatusFeed;
   providerUsage: ProviderUsageSummaryFeed;
   partialFailures: string[];
   refreshedAt: string;
@@ -219,28 +201,6 @@ export function emptyElasticStatus(
   };
 }
 
-export function emptyGoldeneyeStatus(
-  reason?: string,
-  projectId = PROJECT_ID,
-  status: GoldeneyeStatusFeed["status"] = "not_configured",
-): GoldeneyeStatusFeed {
-  return {
-    projectId: resolveProjectId(projectId),
-    apiReachable: status !== "error",
-    blockedReason: reason,
-    status,
-    configured: false,
-    hostConnected: false,
-    nodeCount: 0,
-    appCount: 0,
-    packageInstallCount: 0,
-    readyNodes: 0,
-    realHostEffects: false,
-    kitVersion: "",
-    modular: false,
-    packageCount: 0,
-  };
-}
 
 export function emptyProviderUsageSummary(
   reason?: string,
@@ -416,52 +376,6 @@ export async function fetchElasticStatus(
   }
 }
 
-/**
- * GET /v1/goldeneye/status — bare-metal PaaS fleet overview.
- */
-export async function fetchGoldeneyeStatus(
-  projectId = PROJECT_ID,
-): Promise<GoldeneyeStatusFeed> {
-  const resolved = resolveProjectId(projectId);
-  try {
-    const response = await fetch(
-      `${API_URL}/v1/goldeneye/status?project_id=${encodeURIComponent(resolved)}`,
-      { headers: authHeaders(), cache: "no-store" },
-    );
-    if (!response.ok) {
-      const schemaMiss = response.status === 500 || response.status === 503;
-      return emptyGoldeneyeStatus(
-        schemaMiss
-          ? "Goldeneye fleet is not configured on this runtime."
-          : `Goldeneye status returned HTTP ${response.status}`,
-        resolved,
-        schemaMiss ? "not_configured" : "error",
-      );
-    }
-    const payload = asRecord(await response.json());
-    const kit = asRecord(payload.kit);
-    const host = asRecord(payload.host);
-    const nodeCount = asNumber(payload.node_count);
-    return {
-      projectId: asString(payload.project_id, resolved),
-      apiReachable: true,
-      status: nodeCount > 0 ? "ok" : "not_configured",
-      configured: nodeCount > 0,
-      hostConnected: asBool(host.connected, false),
-      product: asString(payload.product) || undefined,
-      nodeCount,
-      appCount: asNumber(payload.app_count),
-      packageInstallCount: asNumber(payload.package_install_count),
-      readyNodes: asNumber(payload.ready_nodes),
-      realHostEffects: asBool(payload.real_host_effects, false),
-      kitVersion: asString(kit.version, "unknown"),
-      modular: asBool(kit.modular, true),
-      packageCount: asNumber(kit.package_count),
-    };
-  } catch (error) {
-    return emptyGoldeneyeStatus(failureReason(error), resolved, "error");
-  }
-}
 
 /**
  * GET /v1/provider-usage/summary — aggregated usage + billing per provider.
@@ -509,16 +423,14 @@ export async function fetchInfraFabricFeed(
       projectId: resolved,
       multiCloud: emptyMultiCloudCatalog("not requested"),
       elastic: emptyElasticStatus("not requested", resolved),
-      goldeneye: emptyGoldeneyeStatus("not requested", resolved),
       providerUsage: emptyProviderUsageSummary("not requested", resolved),
       partialFailures: [],
       refreshedAt: "",
     };
   }
-  const [multiCloud, elastic, goldeneye, providerUsage] = await Promise.all([
+  const [multiCloud, elastic, providerUsage] = await Promise.all([
     fetchMultiCloudCatalog(),
     fetchElasticStatus(resolved),
-    fetchGoldeneyeStatus(resolved),
     fetchProviderUsageSummary(resolved),
   ]);
 
@@ -529,9 +441,6 @@ export async function fetchInfraFabricFeed(
   if (elastic.status === "error" && elastic.blockedReason) {
     partialFailures.push(`Elastic: ${elastic.blockedReason}`);
   }
-  if (goldeneye.status === "error" && goldeneye.blockedReason) {
-    partialFailures.push(`Goldeneye: ${goldeneye.blockedReason}`);
-  }
   if (providerUsage.status === "error" && providerUsage.blockedReason) {
     partialFailures.push(`Provider usage: ${providerUsage.blockedReason}`);
   }
@@ -540,7 +449,6 @@ export async function fetchInfraFabricFeed(
     projectId: resolved,
     multiCloud,
     elastic,
-    goldeneye,
     providerUsage,
     partialFailures,
     refreshedAt: new Date().toISOString(),
