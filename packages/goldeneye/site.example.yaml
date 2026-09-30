@@ -1,0 +1,63 @@
+# Goldeneye site configuration — copy to /etc/goldeneye/site.yaml and edit.
+# No operator host, mailbox, or site name is filled in. Everything the kit needs to parameterise lives here.
+
+site:
+  name: goldeneye                    # short node / fleet name
+  role: control                      # control | edge | apps | data | mixed
+
+network:
+  public_ip: "203.0.113.10"          # this node's public IP (end-user traffic)
+  tailnet_ip: ""                     # filled by installer from `tailscale ip -4` if empty
+  tailnet_hostname: ""               # MagicDNS name if known
+  operator_cidrs:                    # extra SSH allow sources (beyond tailnet)
+    - "10.0.0.0/8"
+  # Optional L2 private fabric (provider-specific; leave empty if unused)
+  private_cidr: ""
+
+dns:
+  # Apex used for the single canonical A record pattern
+  public_apex: "example.com"
+  # Wildcard / public app domain
+  public_domain: "apps.example.com"
+  # Admin / ops domain (must resolve over tailnet only in production)
+  local_domain: "local.example.com"
+  # Optional Cloudflare for DNS-01 (tailnet hostnames) + automatic A records
+  cloudflare_zone: ""
+
+tls:
+  acme_email: "ops@example.com"
+  # resolvers: le (HTTP-01 public) + optional cf (DNS-01 for local_domain)
+
+registry:
+  # Prefer a DNS name that survives node moves — never a raw IP in app compose
+  host: "registry.local.example.com"
+  port: 5000
+
+paths:
+  data_root: /data                   # large storage (docker data-root, /srv, backups)
+  apps_root: /srv/apps
+  infra_root: /opt/goldeneye
+  state_root: /var/lib/goldeneye
+
+alerts:
+  # Single sink URL (Mattermost/Slack webhook, etc.). Empty = log only.
+  webhook_url: ""
+
+features:
+  enable_crowdsec: true
+  enable_hubcache: true
+  enable_restore_drill: true
+  enable_peer_mirror: false
+
+# Optional control-plane integrations (kit runs fine with none)
+integrations:
+  boss:
+    api_url: ""                      # e.g. https://boss.local.example.com
+    project_id: ""
+    node_token_env: BOSS_GOLDENEYE_NODE_TOKEN
+
+# Legacy alias (still documented for older site files):
+# boss:
+#   api_url: ""
+#   project_id: ""
+

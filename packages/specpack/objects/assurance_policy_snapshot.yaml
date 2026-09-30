@@ -1,0 +1,39 @@
+kind: ObjectSpec
+id: AssurancePolicySnapshot
+version: 0.1.0
+description: >
+  Immutable, content-addressed composition of all rules applicable to one
+  Assurance Case evaluation.
+fields:
+  - { name: id, type: string, required: true }
+  - { name: org_id, type: string, required: true }
+  - { name: workspace_id, type: string, required: true }
+  - { name: project_id, type: string, required: true }
+  - { name: assurance_case_id, type: string, required: true }
+  - { name: source_policy_refs, type: array, required: true }
+  - { name: scope_precedence, type: array, required: true }
+  - { name: risk_tier, type: integer, required: true }
+  - { name: claim_type, type: string, required: true }
+  - { name: evidence_contract_ref, type: string, required: true }
+  - { name: settled_conclusion_refs, type: array, required: true }
+  - { name: surface_ownership_rule, type: object, required: true }
+  - { name: verifier_requirement, type: object, required: true }
+  - { name: budget_requirement, type: object, required: true }
+  - { name: effective_rules, type: object, required: true }
+  - { name: conflicts, type: array, required: true }
+  - name: composition_result
+    type: enum
+    values: [applicable, blocked, decision_required]
+    required: true
+  - { name: decision_id, type: string, required: false }
+  - { name: snapshot_hash, type: string, required: true }
+  - { name: created_by, type: string, required: true }
+  - { name: created_at, type: datetime, required: true }
+rules:
+  snapshot_is_immutable: true
+  org_rules_precede_workspace_and_project_rules: true
+  lower_scope_cannot_weaken_evidence_safety_ownership_or_budget: true
+  conflict_creates_actionable_decision: true
+constraints:
+  unique:
+    - [project_id, snapshot_hash]

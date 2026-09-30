@@ -1,0 +1,19 @@
+kind: ObjectSpec
+id: ResourcePolicy
+version: 0.1.0
+description: Deterministic rules for provider actuation, reconciliation, cleanup, and autoscaling.
+fields:
+  - name: id
+    type: string
+  - name: scope_type
+    type: enum
+    values: [org, workspace, project, provider_account]
+  - name: scope_id
+    type: string
+  - name: rules
+    type: object
+  - name: version
+    type: integer
+  - name: status
+    type: enum
+    values: [draft, active, superseded, disabled]

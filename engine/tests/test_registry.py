@@ -1,0 +1,452 @@
+"""Tool registry + built-in tool-set tests (no DB)."""
+from __future__ import annotations
+
+import pytest
+
+from boss_engine.tools import build_default_registry, build_discuss_read_registry
+from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
+
+
+#: Every tool the default registry is expected to carry. Present so a count mismatch can name
+#: what changed instead of reporting two integers.
+_EXPECTED_TOOLS: set[str] = {
+    # Setup, answered and repaired rather than described. `diagnose_setup` is the whole
+    # picture in one call; the other two are the actions that used to be instructions.
+    "diagnose_setup",
+    "test_github_access",
+    "set_project_setting",
+    # A SUBSCRIPTION HAS NOTHING TO PASTE. A Codex or Cursor plan is an OAuth session the CLI
+    # holds, so BOSS finds the CLI the customer already uses, proves it answers, and records
+    # the entitlement — rather than asking an operator to transcribe a credential that does
+    # not exist.
+    "detect_coding_agents", "connect_coding_agent",
+    # PROVIDER AGNOSTICISM YOU CAN CHECK. Config says what was asked for; the llm_calls
+    # ledger says what happened, and only the second one is evidence. `list_harnesses` says
+    # which of them a governed task has actually completed on — wired is not proven.
+    "provider_audit", "list_harnesses",
+    # REVIEW IS A CONVERSATION ABOUT A LINE, not a verdict on a run. A reviewer that can only
+    # say "not safe" gives the implementer nothing to act on; these three are how a finding
+    # gets a file and a line, and how a person adds one of their own.
+    "add_review_comment", "list_review_comments", "resolve_review_comment",
+    # Rules the WORKFORCE mandates, as opposed to the ones the platform hardcodes. Security
+    # concluding in a panel that ports must be checked for public exposure used to change
+    # nothing — the conclusion lived in minutes no build ever read. `check_port_exposure` is
+    # here for the same reason: a role that mandates a check it cannot itself run has filed a
+    # request, not applied a control.
+    "mandate_standard", "list_standards", "check_port_exposure",
+    # The turn-by-turn record of what a build DID. 101 rows existed for a run reported as
+    # "stuck" and nothing could read them: get_run_activity reads llm_calls, which was empty.
+    # So a question about progress got answered from queue statistics, and the build was
+    # cancelled on the strength of it.
+    "read_run_turns",
+    # The whole investigation as one call, in the right order, with the comparison that
+    # makes a duration mean something. A prompt can be skipped under pressure; a routine
+    # cannot.
+    "diagnose_run",
+    # Choosing a port without guessing. BOSS worked out "8000 is in use, 8001 is free" by
+    # reading raw socket output; the next number up is a guess that happened to be right.
+    "find_free_port",
+    # The spec an app was built from — PRD, criteria, review notes. BOSS could read
+    # its own source, its logs and its hosts, and could not read the one document
+    # that says what an app was FOR.
+    "read_spec",
+    # The machines BOSS deploys onto. The agent could describe every build and had no way
+    # to answer "is 192.0.2.202 healthy" or "where would this ship" — so the Deployment
+    # Manager role had nothing to read. Read-only: the governed path still does the deploy.
+    "list_deployment_hosts", "describe_deployment_host", "list_deployments",
+    # A shell on a registered host. Two gates, not one: BOSS_AGENT_HOST_SHELL must be on, and
+    # the model cannot call it directly — it proposes, the operator clicks, and only the
+    # accept-action path supplies the confirmation the tool requires.
+    "read_pull_request",
+    "run_on_host",
+    "redeploy", "preflight_deployment_target",
+
+    "cancel_code_task",
+    # The first deployment. BOSS could create hosts and targets and could redeploy, and had
+    # nothing that performs a deployment which never happened — so "deploy it" had no
+    # executable action at all.
+    "deploy_app",
+    "cancel_job",
+    "close_orphaned_runs",
+    "consistency_report",
+    "create_code_task",
+    # Somewhere to deploy TO. Its absence sent BOSS to write_db with a hand-composed INSERT
+    # against a table name it guessed wrong.
+    "create_deployment_target",
+    # A real debugging session — a shell, the repo, read-only SQL and the fleet — for the
+    # questions a registry of fixed shapes cannot answer.
+    "investigate",
+    "get_investigation",
+    # Reconciling a run with a world that has moved on: re-test what stopped each step and put
+    # back only the ones whose blocker has actually cleared.
+    "recheck_workflow_run",
+    # A WORKFLOW RUN HAD NO READ TOOL AT ALL, so "what is the status?" about a wfr_ was
+    # answered with hand-written SQL — seven failed guesses at table and column names in one
+    # turn, and no answer for the operator. This also computes the way OUT of a failed run,
+    # because reporting `deadlettered` and stopping is what "it drops the ball" means.
+    "describe_workflow_run",
+    # THE MEMORY PLANE (Kiro gap A0). BOSS had 249 tables and none of them remembered anything
+    # an agent was told: every thread started cold and every correction was spent the moment it
+    # was given. `remember` is the write, `recall` the read, `forget` the retirement, and
+    # `update_ledger` is the session's memory of its own goal across compaction.
+    # WORK THAT STARTS WITHOUT ANYBODY TYPING (Kiro gaps A1.2/A1.3). BOSS could only act when
+    # someone asked: "keep an eye on this PR" had no answer but the operator remembering to
+    # come back. Every wake spends budget, so each carries a cap and stops itself.
+    "watch",
+    "schedule_work",
+    "stop_watching",
+    "list_watches",
+    "remember",
+    "recall",
+    "forget",
+    "update_ledger",
+    # THE RECOVERY THE AGENT COULD DIAGNOSE AND COULD NOT PERFORM. It traced a failed panel
+    # step to its root cause and then said "tell me to go ahead", offering no button, because
+    # the console's "Try … again" had no tool behind it. A correct diagnosis you cannot act on
+    # is still a dead end.
+    "retry_workflow_step",
+    # THE PLAN, BEFORE THE RUN. The builder drew four labels and four dropdowns; what each
+    # step does, what it produces, and which agent captains it were all known and none of it
+    # was shown. "I want to see the workflow and its definition, what it will do."
+    "describe_workflow",
+    # The whole factory in one read, so an open question does not become six lookups.
+    "factory_briefing",
+    "create_discovery",
+    "decide",
+    "describe_schema",
+    "explain_run",
+    "extend_code_task",
+    "find_starved_work",
+    "get_code_task",
+    "get_config",
+    "get_costs",
+    "get_meeting",
+    "get_run_activity",
+    "get_task_preview",
+    "git_history",
+    "http_probe",
+    "inspect_host",
+    "inspect_self",
+    "link_run_origin",
+    "list_code_tasks",
+    "list_decisions",
+    "list_discovery",
+    "list_github_connections",
+    "list_meetings",
+    "list_previews",
+    "list_repositories",
+    "list_running_work",
+    "microvm_status",
+    "project_status",
+    "propose_action",
+    "write_db",
+    "query_db",
+    "read_code",
+    "list_source",
+    "find_split_apps",
+    "merge_apps",
+    "generate_image",
+    "describe_deployment_target",
+    "retarget_app",
+    "recall_role_experience",
+    "describe_role",
+    "read_logs",
+    "read_preview_log",
+    "register_repository",
+    "repo_activity",
+    "request_meeting",
+    "retry_code_task",
+    "search_code",
+    "send_feedback",
+    "set_job_priority",
+    "start_preview",
+    # Authoring the PATH, as opposed to starting work on it.
+    "draft_workflow",
+    "draft_custom_step",
+    "delete_workflow",
+    # Authoring the unit of doing, so an operator can get a skill by describing one in the
+    # conversation rather than filling in a form about behaviour kinds and digest pinning.
+    "draft_skill",
+    "list_capabilities",
+    "list_skills",
+    "start_workflow",
+    "steer_code_task",
+    "stop_preview",
+    "waive_gates",
+    "watch_code_task",
+}
+
+
+def test_default_registry_shape():
+    reg = build_default_registry()
+    # The governed catalog has expanded since the original Phase 1 tool layer;
+    # keep this explicit so accidental tool removal is visible in OSS CI.
+    #
+    # Counts are a tripwire, not a specification — and a bare `== 46` fails saying only
+    # "47 == 46", which does not name the tool that appeared or vanished. Adding
+    # `inspect_self` broke this and the message pointed at neither the tool nor the change.
+    # The set difference below does say, so a legitimate addition is a one-line edit and an
+    # accidental REMOVAL still fails loudly, which is what the tripwire is for.
+    read = {s.name for s in reg.specs(kind="read")}
+    write = {s.name for s in reg.specs(kind="write")}
+    assert read | write == set(reg.names())
+    assert len(reg.names()) == 106, (
+        f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
+        f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
+    assert len(read) == 61
+    assert len(write) == 45
+    # the capabilities the user explicitly asked the agent to cover
+    for name in (
+        "project_status", "list_running_work", "get_task_preview",
+        "microvm_status", "query_db", "create_code_task", "retry_code_task",
+        "extend_code_task", "cancel_code_task", "waive_gates", "decide", "get_costs",
+        "steer_code_task", "watch_code_task",
+        # Investigation: the console is meant to answer any question about the running
+        # system, not only the ones somebody wrote a report for. Data, code (BOSS's own
+        # and the customer's), logs, live hosts, live HTTP, history, config.
+        "describe_schema", "search_code", "read_code", "read_logs", "explain_run",
+        "inspect_host", "http_probe", "git_history", "get_config",
+        # Operations: BOSS running BOSS. Reading its own stuck queue and being unable to
+        # touch it is not operating anything.
+        "find_starved_work", "cancel_job", "set_job_priority", "close_orphaned_runs",
+        "consistency_report",
+        # The spec: what an app was supposed to do, and what it actually got.
+        "read_spec",
+    ):
+        assert name in reg.names()
+
+
+def test_schema_shapes():
+    reg = build_default_registry()
+    for s in reg.openai_schema():
+        assert s["type"] == "function"
+        assert set(s["function"]) >= {"name", "description", "parameters"}
+    for s in reg.mcp_schema():
+        assert set(s) >= {"name", "description", "inputSchema"}
+
+
+def test_read_only_schema_excludes_writes():
+    reg = build_default_registry()
+    read_names = {s["name"] for s in reg.mcp_schema(kind="read")}
+    assert "create_code_task" not in read_names
+    assert "project_status" in read_names
+
+
+def test_invoke_normalizes_result_and_defaults():
+    reg = ToolRegistry()
+    reg.register(ToolSpec("echo", "echo", {"type": "object"}, lambda ctx, **k: {"v": k["args"].get("x")}))
+    out = reg.invoke("echo", None, project_id="p", actor="a", args={"x": 7})
+    assert out == {"v": 7, "ok": True, "tool": "echo"}
+
+
+def test_invoke_wraps_handler_exception():
+    reg = ToolRegistry()
+
+    def boom(ctx, **k):
+        raise ValueError("nope")
+
+    reg.register(ToolSpec("boom", "boom", {"type": "object"}, boom))
+    out = reg.invoke("boom", None, project_id="p", actor="a", args={})
+    assert out["ok"] is False and "ValueError" in out["error"]
+
+
+def test_write_tools_fail_closed_without_a_durable_workspace():
+    reg = ToolRegistry()
+    called = False
+
+    def write(_ctx, **_kwargs):
+        nonlocal called
+        called = True
+        return {"created": True}
+
+    reg.register(ToolSpec("create_work", "write", {"type": "object"}, write, kind="write"))
+    ctx = type("CatalogOnlyContext", (), {"durable_workspace_configured": False})()
+
+    out = reg.invoke("create_work", ctx, project_id="p", actor="a", args={})
+
+    assert out["ok"] is False
+    assert out["status"] == "blocked"
+    assert out["error"] == "durable_workspace_required"
+    assert "DATABASE_URL" in out["message"]
+    assert called is False
+
+
+def test_unknown_tool_raises():
+    reg = ToolRegistry()
+    with pytest.raises(ToolError):
+        reg.get("missing")
+
+
+def test_duplicate_registration_rejected():
+    reg = ToolRegistry()
+    reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
+    with pytest.raises(ValueError):
+        reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
+
+
+def test_discuss_read_registry_exposes_scoped_reads_and_hides_project_override():
+    """Chat admits project-scoped tools; raw SQL cannot enforce that project boundary."""
+    reg = build_discuss_read_registry()
+    assert "query_db" not in reg.names()
+    assert "write_db" not in reg.names()
+    assert "project_status" in reg.names()
+    assert "get_code_task" in reg.names()
+    assert "get_costs" in reg.names()
+    # Every other read tool remains available to the conversation.
+    default_reads = {s.name for s in build_default_registry().specs(kind="read")}
+    discuss_reads = {s.name for s in reg.specs(kind="read")}
+    assert default_reads - discuss_reads == {"query_db"}, (
+        f"these read tools cannot be reached from a question: "
+        f"{sorted(default_reads - discuss_reads)}")
+    assert "inspect_self" in discuss_reads
+    # …plus the operational writes. BOSS could describe its own stuck queue and not touch it;
+    # an operator had to reach in from outside to cancel a job. The line is OPERATIONAL STATE
+    # (a priority, a wedged job, an orphaned run) versus CREATING WORK that spends money.
+    # Compared against the CONSTANT, not a copy of it: a hardcoded list here meant that
+    # widening what BOSS may do required editing the policy in two places, and the test would
+    # fail describing a difference it was itself creating.
+    from boss_engine.tools.builtin import _DISCUSS_OPERATIONS_TOOLS
+    assert {s.name for s in reg.specs(kind="write")} == set(_DISCUSS_OPERATIONS_TOOLS)
+    # create_code_task IS reachable now, deliberately: a bug in a customer's app is repaired by
+    # writing code, so withholding it meant BOSS could diagnose an app bug and had no way to fix
+    # it. The only thing BOSS does not do is patch its OWN foundation, and that is enforced by
+    # there being no tool for it plus an explicit instruction in the prompt — not by disarming
+    # the tools that fix customer work.
+    assert "create_code_task" in reg.names(), "BOSS must be able to write the fix"
+    for schema in reg.openai_schema():
+        props = schema["function"]["parameters"].get("properties") or {}
+        assert "project_id" not in props, schema["function"]["name"]
+
+
+def test_discuss_read_registry_drops_project_id_override_from_args():
+    """Pinned discuss handlers must ignore a model-supplied project_id arg."""
+    seen: dict = {}
+
+    def spy(ctx, *, project_id, actor, args):
+        seen["project_id"] = project_id
+        seen["args"] = dict(args)
+        return {"ok": True}
+
+    def _pin(inner):
+        def handler(ctx, *, project_id, actor, args):
+            safe_args = dict(args or {})
+            safe_args.pop("project_id", None)
+            return inner(ctx, project_id=project_id, actor=actor, args=safe_args)
+
+        return handler
+
+    # Same pin helper shape as build_discuss_read_registry.
+    wrapped = _pin(spy)
+    wrapped(
+        None,
+        project_id="project-a",
+        actor="a",
+        args={"project_id": "project-b", "limit": 3},
+    )
+    assert seen["project_id"] == "project-a"
+    assert "project_id" not in seen["args"]
+    assert seen["args"]["limit"] == 3
+
+
+def test_every_write_declares_what_pressing_it_costs():
+    """A new destructive tool must not be able to arrive as an ordinary write.
+
+    `cancel_job` was exactly that — a write like any other until it threw away twenty-seven
+    minutes of a build to answer a question. The membership lived in a hand-maintained name set
+    inside the agent, so anything added later was silently in neither set.
+
+    The declaration is now on the tool. This test is what stops the default from quietly
+    covering the next one: every write names its reversibility, and adding a write means
+    choosing.
+    """
+    from boss_engine.tools.registry import Reversibility  # noqa: F401 — documents the values
+
+    allowed = {"safe", "costs_money", "destroys_work", "irreversible"}
+    reg = build_default_registry()
+    undeclared = []
+    for spec in reg.specs(kind="write"):
+        assert spec.reversibility in allowed, f"{spec.name}: {spec.reversibility!r}"
+        if spec.reversibility == "safe":
+            undeclared.append(spec.name)
+    # `safe` is a real answer AND the default, so it is the one that can be reached by
+    # accident. Pinning the set means a new write landing on the default has to be added here
+    # deliberately, in front of a reviewer.
+    assert sorted(undeclared) == sorted(_SAFE_WRITES), (
+        "a write is relying on the `safe` default. Declare its reversibility explicitly, then "
+        f"add it here: {sorted(set(undeclared) - set(_SAFE_WRITES))}")
+
+
+#: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
+#: means, and they stay one-shot when the operator asks for them.
+_SAFE_WRITES = [
+    # RE-ASKING GITHUB A QUESTION whose answer has changed. It updates the connection's test
+    # state and nothing else; running it twice asks twice. This is what "fix it" means after
+    # an operator widens a token's repository access — and BOSS telling them to go and press
+    # the button themselves is what it replaced.
+    "test_github_access",
+    # TURNING A DIAL BACK IS SETTING IT AGAIN. Which model fills which role, how many agents
+    # run at once; an empty value hands it back to the deployment default. Nothing starts.
+    "set_project_setting",
+    # CONNECTING A SUBSCRIPTION READS. It probes a CLI the operator already installed, makes
+    # it answer once in a read-only sandbox, and records an entitlement row. It stores no
+    # credential (there is none to store) and changes no code.
+    "connect_coding_agent",
+    # A REVIEW COMMENT IS A NOTE, NOT AN ACT. Leaving one appends to a run's comment list and
+    # resolving one flips its status; neither starts work, spends a model budget, or changes a
+    # line of code. The implementer reads them at its next repair round. Nothing here is harder
+    # to undo than saying it again.
+    "add_review_comment",
+    "resolve_review_comment",
+    "close_orphaned_runs",
+    # AUTHORING A PATH IS NOT WALKING IT. Both write a definition and neither starts a run or
+    # spends a model budget: a workflow that exists but is not mapped to a class of work changes
+    # no behaviour until somebody chooses it, and a custom step is inert until a workflow places
+    # it. Publishing a new VERSION is also additive — the previous one is still there. The
+    # destructive sibling, delete_workflow, declares destroys_work and is press-only.
+    "draft_custom_step",
+    # Same act, one level down: a skill is the unit a custom step runs. Saving one is
+    # idempotent on (project, skill_key) and nothing executes until a step binds it and a
+    # workflow places that step.
+    "draft_skill",
+    "draft_workflow",
+    # Read-only by default and one at a time per project. The FIXING variant is not a separate
+    # tool but a separate permission: it returns requires_confirmation, so only an operator's
+    # click gets a writable shell on a host.
+    "investigate",
+    # Creating a DESTINATION, not shipping to one. It writes a row that can be retired, and an
+    # app that already has a target for the environment adopts it rather than growing a second.
+    "create_deployment_target", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
+    # Re-queues only steps whose recorded blocker has actually cleared — each one something the
+    # operator could have retried by hand from the same screen.
+    "recheck_workflow_run",
+    "redeploy", "register_repository", "retarget_app", "send_feedback", "set_job_priority",
+    "start_preview", "steer_code_task", "stop_preview",
+    # Re-queues ONE already-failed step and keeps everything the run produced. It can only
+    # move a step out of failed/deadlettered/cancelled, so it cannot start live work twice.
+    "retry_workflow_step",
+    # Memory writes. `remember` cannot bind a rule on its own — a lesson lands `proposed` and
+    # inert — and `forget`/`update_ledger` retire or annotate rather than destroy.
+    "remember",
+    "forget",
+    "update_ledger",
+    # Arming a loop writes one row and spends nothing until its first wake; stopping one
+    # spends nothing at all.
+    "watch",
+    "schedule_work",
+    "stop_watching",
+]
+
+
+def test_the_tools_that_are_never_pressed_by_the_model():
+    """The other half: what the operator must click for themselves."""
+    reg = build_default_registry()
+    never = sorted(s.name for s in reg.specs(kind="write") if not s.self_executable)
+    assert never == [
+        "cancel_code_task",   # throws away a build in flight
+        "cancel_job",         # the one that caused this
+        "decide",             # approves a gate; an agent that approves its own gates is ungated
+        "delete_workflow",    # removes a path a person authored
+        "run_on_host",        # arbitrary command on a live machine
+        "waive_gates",        # removes a check somebody put there
+        "write_db",           # arbitrary mutation of any table
+    ]

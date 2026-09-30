@@ -1,0 +1,40 @@
+kind: ObjectSpec
+id: CommsChannelPolicy
+version: 0.1.0
+description: Project-scoped rollout policy that governs whether real Slack or email sends are permitted.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: provider
+    type: enum
+    values: [slack, email]
+  - name: delivery_mode
+    type: enum
+    values: [disabled, draft_only, real_send_allowed]
+  - name: allowed_data_boundaries
+    type: array
+    items:
+      type: enum
+      values: [public, internal, confidential, restricted, local-only]
+  - name: rollout_notes
+    type: string
+  - name: status
+    type: enum
+    values: [active, disabled]
+  - name: created_by
+    type: string
+  - name: metadata
+    type: object
+  - name: created_at
+    type: datetime
+  - name: updated_at
+    type: datetime
+constraints:
+  unique:
+    - [project_id, provider]
+rules:
+  real_send_requires_mode: real_send_allowed
+  provider_write_requires_receipt: true
+  policy_change_emits_event: true

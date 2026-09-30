@@ -1,0 +1,21 @@
+boto3==1.43.51
+fastapi==0.115.12
+# Account Connect form routes are imported by the API suite; FastAPI Form needs this.
+python-multipart==0.0.32
+httpx==0.28.1
+openai==1.93.0
+pydantic-settings==2.10.1
+PyJWT[crypto]==2.13.0
+cryptography==50.0.0
+PyYAML==6.0.2
+psycopg[binary]==3.2.9
+pytest==8.4.1
+ruff==0.12.0
+sqlalchemy==2.0.41
+uvicorn[standard]==0.34.3
+websockets==15.0.1
+reportlab==4.5.1
+markdown==3.9
+redis==5.2.1
+playwright==1.60.0  # one-time browser fetch: python -m playwright install chromium
+pypdf==5.9.0

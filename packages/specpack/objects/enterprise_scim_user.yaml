@@ -1,0 +1,35 @@
+kind: ObjectSpec
+id: EnterpriseScimUser
+version: 0.1.0
+description: Enterprise SCIM user provisioned into BOSS org membership with explicit RBAC permissions.
+fields:
+  - name: id
+    type: string
+  - name: org_id
+    type: string
+  - name: project_id
+    type: string
+  - name: external_id
+    type: string
+  - name: user_name
+    type: string
+  - name: display_name
+    type: string
+  - name: member_id
+    type: string
+  - name: role_keys
+    type: array
+  - name: permissions
+    type: array
+  - name: groups
+    type: array
+  - name: raw_profile
+    type: object
+  - name: status
+    type: enum
+    values: [active, inactive]
+rules:
+  enterprise_manage_permission_required: true
+  active_users_map_to_org_members: true
+  inactive_users_remove_effective_org_member_access: true
+  permissions_remain_explicit_and_auditable: true

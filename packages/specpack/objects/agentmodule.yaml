@@ -1,0 +1,49 @@
+kind: AgentModule
+version: v1
+required_fields:
+  - id
+  - version
+  - display_name
+  - description
+  - publisher
+  - category
+  - status
+  - role
+  - prompt_bundle
+  - runtime
+  - marketplace
+fields:
+  id: string
+  version: string
+  display_name: string
+  description: string
+  publisher: string
+  category: string
+  status: { enum: [draft, active, deprecated] }
+  role:
+    type: object
+    required:
+      - role_key
+      - display_name
+      - mission
+      - primary_outcomes
+      - boundaries
+      - permissions
+      - output_contracts
+      - autonomy
+  prompt_bundle:
+    type: object
+    required:
+      - system
+  runtime:
+    type: object
+    required:
+      - job_kinds
+      - default_skill_ids
+      - configuration_schema
+  marketplace:
+    type: object
+    required:
+      - price_model
+      - price_usd_micros
+      - tags

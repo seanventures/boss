@@ -1,0 +1,221 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { AgentStudioFeed } from "../lib/agent-studio";
+import { codeOnly } from "./_helpers/source";
+
+/**
+ * BOSS-347 — Agent Studio empty/error honesty.
+ *
+ * An unseeded library must be a setup page with an install CTA, not a dead
+ * "live system" workbench. Schema/API failures must surface the real reason.
+ */
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+}));
+
+vi.mock("../lib/client", () => ({
+  API_URL: "https://boss-api.test",
+  API_KEY: undefined,
+  PROJECT_ID: "boss-dogfood",
+  resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
+  authHeaders: () => ({}) as Record<string, string>,
+}));
+
+const { AgentStudio } = await import("../app/agent-studio-ui");
+const { fetchAgentStudioFeed } = await import("../lib/agent-studio");
+const actionsSource = readFileSync(
+  resolve(__dirname, "../app/agent-studio-actions.ts"),
+  "utf8",
+);
+
+function emptyLibrary(overrides: Partial<AgentStudioFeed> = {}): AgentStudioFeed {
+  return {
+    projectId: "boss-dogfood",
+    apiReachable: true,
+    agents: [],
+    panels: [],
+    workflows: [],
+    agentRuns: [],
+    panelRuns: [],
+    workflowRuns: [],
+    tests: [],
+    a2a: {
+      channels: [],
+      messages: [],
+      health: { status: "unknown" },
+    },
+    ...overrides,
+  };
+}
+
+function html(feed: AgentStudioFeed): string {
+  return renderToStaticMarkup(
+    <AgentStudio feed={feed} roles={[]} skills={[]} />,
+  );
+}
+
+describe("Agent Studio empty library is a setup page, not a live workbench", () => {
+  it("names the missing starter catalog and offers the no-spend install CTA", () => {
+    const markup = html(emptyLibrary());
+
+    expect(markup).toContain("Add your first agents");
+    expect(markup).toContain("Install BOSS starter catalog");
+    expect(markup).toContain("as-first-run");
+    expect(markup).toContain("does not start a run or spend budget");
+    expect(markup).not.toContain("Build and run agents");
+    expect(markup).not.toContain("as-workbench");
+    expect(markup).not.toContain("as-metrics");
+    expect(markup).not.toContain("Live coordination");
+    expect(markup).not.toContain("Test all");
+    expect(markup).not.toContain("has no Studio definition");
+  });
+
+  it("names a linked role that has no Studio definition without dropping the catalog install", () => {
+    // The empty library returns before the workbench, so the canvas sentence
+    // "No agent definition for …" never mounts. A studio_role on that branch
+    // still has to name the role and keep the install action.
+    const src = codeOnly("app/agent-studio-ui.tsx");
+    const firstRun = src.slice(src.indexOf("if (libraryEmpty)"), src.indexOf("as-workbench"));
+    expect(firstRun).toContain("requestedRole");
+    expect(firstRun).toContain("No agent definition for {compact(requestedRole)}");
+    expect(firstRun).toContain("This role has no Studio definition.");
+    expect(firstRun).toContain("Install BOSS starter catalog");
+    expect(firstRun).toContain('data-testid="as-missing-definition"');
+  });
+
+  it("keeps the workbench only after specialists exist", () => {
+    const markup = html(
+      emptyLibrary({
+        agents: [
+          {
+            id: "agt_1",
+            agent_key: "ux_engineer",
+            name: "UX Engineer",
+            owner: "vp_agents",
+            status: "active",
+            active_run_count: 0,
+            active_version: {
+              id: "agv_1",
+              version: 1,
+              role_key: "ux_engineer",
+              model_policy: { execution_mode: "deterministic_brief" },
+              requested_skills: [],
+              scopes: { data_boundary: "internal" },
+              validation: { valid: true, errors: [], warnings: [] },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(markup).toContain("Build and run agents");
+    expect(markup).toContain("as-workbench");
+    expect(markup).toContain("UX Engineer");
+    expect(markup).toContain("Requested skills");
+    expect(markup).toContain("Data boundary");
+    expect(markup).not.toContain("as-agent-graph");
+    expect(markup).toContain("Test all 1 agent");
+    expect(markup).not.toContain("Add your first agents");
+  });
+
+  it("treats unconfigured A2A as quiet honesty, not a red outage", () => {
+    const markup = html(
+      emptyLibrary({
+        agents: [
+          {
+            id: "agt_1",
+            agent_key: "ux_engineer",
+            name: "UX Engineer",
+            owner: "vp_agents",
+            status: "active",
+            active_run_count: 0,
+          },
+        ],
+        a2a: {
+          channels: [],
+          messages: [],
+          health: {
+            status: "not_configured",
+            transport: { configured: false, status: "not_configured" },
+          },
+        },
+      }),
+    );
+    expect(markup).toContain("No active version. This agent cannot run yet.");
+    expect(markup).toContain("Not configured");
+    expect(markup).toContain("as-beacon quiet");
+    expect(markup).not.toContain("as-beacon bad");
+  });
+
+  it("shows an honest unavailable state instead of a seed CTA that cannot work", () => {
+    const markup = html(
+      emptyLibrary({
+        apiReachable: false,
+        blockedReason:
+          "Agent Studio schema is not applied: agent_definitions",
+      }),
+    );
+
+    expect(markup).toContain("Agent Studio control plane is unavailable");
+    expect(markup).toContain("Agent Studio schema is not applied: agent_definitions");
+    expect(markup).not.toContain("Install BOSS starter catalog");
+    expect(markup).not.toContain("as-workbench");
+  });
+});
+
+describe("Agent Studio catalog feed error honesty", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("surfaces schema-missing 503 detail instead of a generic status code", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 503,
+        json: async () => ({
+          detail: "Agent Studio schema is not applied: agent_definitions",
+        }),
+      })),
+    );
+
+    const feed = await fetchAgentStudioFeed("boss-dogfood");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.agents).toEqual([]);
+    expect(feed.blockedReason).toBe(
+      "Agent Studio schema is not applied: agent_definitions",
+    );
+    expect(feed.blockedReason).not.toBe("Agent Studio API returned 503.");
+  });
+
+  it("falls back to the status code when the error body has no detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({}),
+      })),
+    );
+
+    const feed = await fetchAgentStudioFeed("boss-dogfood");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.blockedReason).toBe("Agent Studio API returned 500.");
+  });
+});
+
+describe("starter catalog seed action maps schema failures", () => {
+  it("treats HTTP 503 as a schema-not-applied operator message", () => {
+    expect(actionsSource).toContain("response.status === 503");
+    expect(actionsSource).toContain("schema is not applied");
+  });
+});

@@ -1,0 +1,23 @@
+id: RolePack
+version: 1
+description: Product-facing role pack backed by PackSpec and pack installation records.
+backing_runtime:
+  primary_tables: [pack_installs, roles]
+  spec_alias: PackSpec
+fields:
+  - name: pack_id
+    type: string
+    required: true
+  - name: pack_version
+    type: string
+    required: true
+  - name: roles
+    type: array
+    items: string
+    required: true
+  - name: installed_by
+    type: string
+    required: true
+invariants:
+  - Installed role packs create or update RoleSpec-backed roles.
+  - Role pack changes must be auditable through pack_installs and events.

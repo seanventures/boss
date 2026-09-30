@@ -1,0 +1,537 @@
+"""Drives a live console and records what each control actually does.
+
+This is the half of the test agent that touches a browser. The comparison logic lives in
+`console_test_agent` and is deliberately pure, so the judgement can be tested without
+Playwright and cannot be quietly influenced by what the browser happened to do.
+
+WHAT COUNTS AS "WHAT IT DOES"
+-----------------------------
+Three kinds of traffic, because in this stack no single one tells the whole story:
+
+  * ``/v1/*`` on any origin — a direct browser-to-control-plane call.
+  * ``/api/*`` on the console's own origin — a Next.js route handler. Stable path, so it
+    compares across a redesign.
+  * a Server Action POST — a POST to the page URL carrying a ``next-action`` header.
+
+The third one is recorded as the opaque token ``POST (server-action)`` rather than by its id,
+because the id is a per-build hash: comparing them across v1 and v2 would report every control
+as broken. What IS comparable is that a server action fired at all, and how many.
+
+That distinction earns its keep immediately. The first live run recorded 40 server actions
+fired by *loading* the Factory area with no interaction at all, and 18 invocations of a single
+action on Discovery. Every one re-renders the whole route on the server. Filtering to ``/v1/``
+— which is what this driver did originally — showed none of it, because the v1 console does
+its control-plane calls server-side and the browser never sees them.
+
+WHY THE WALK RE-NAVIGATES
+-------------------------
+The first version inventoried an area once and then clicked down the list. The third click was
+a nav link, so everything after it was recorded from a different page while still labelled with
+the original area: the run reported controls for ``overview`` that were read off ``budget``. A
+baseline that lies about where a control lives is worse than no baseline, so the walk now
+re-establishes the area whenever the URL drifts, and re-queries rather than reusing handles
+that a navigation has invalidated.
+
+TIMING
+------
+Both the control's settle time and its slowest single request are recorded, because the gap
+between them is itself a defect class: "Set target" appeared to hang for 115 seconds while its
+own API call finished in under one. Recording only the total blames the API; recording only the
+request says it was fine.
+
+SAFETY
+------
+Reads are free; writes are not. ``SAFE_METHODS`` is what the driver may trigger unattended, and
+``allow_writes`` is required for anything else. A test harness that deploys something because
+it was curious what a button did is not a test harness.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from urllib.parse import urlsplit, urlunsplit
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:  # imported lazily at runtime (see _observe) to keep the
+    # playwright-dependent module off the import path for callers that never
+    # drive a browser. The annotation still needs the name to resolve.
+    from .console_screen_check import ScreenObservation
+
+from .console_test_agent import Baseline, Control, Request
+
+#: Methods safe to trigger without explicit permission.
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+#: How long to let a control settle before recording what it did. Generous on purpose: the
+#: point is to catch slow controls, not to time out on them and call them broken.
+SETTLE_MS = 25_000
+
+#: How long to wait after loading an area. The live console needed more than 1.5s before its
+#: first control-plane call appeared, and a window that closes early records an empty page load
+#: — which reads exactly like an area that fetches nothing.
+LOAD_SETTLE_MS = 6_000
+
+#: What a Server Action is recorded as. Deliberately not the action id: that is a build hash
+#: and would differ between v1 and v2 even for identical behaviour.
+SERVER_ACTION = "(server-action)"
+
+#: Controls that must never be pressed unattended, whatever the method. Matched on visible
+#: text. Being wrong here costs money or destroys state, so it is a denylist by name as well
+#: as by method.
+NEVER_PRESS = re.compile(
+    r"\b(delete|destroy|purge|teardown|retire|unbind|cancel|reject|approve|waive|deploy|"
+    r"rebuild|retry|merge|publish|send|pay|buy|rotate)\b",
+    re.I,
+)
+
+_CONTROL_SELECTOR = "button, a[href], [role=button], input[type=submit]"
+
+
+@dataclass
+class DriverConfig:
+    base_url: str
+    areas: tuple[str, ...]
+    #: Called with a one-line progress note as the walk proceeds. A tool that goes silent for
+    #: ten minutes is indistinguishable from one that has hung -- the operator made exactly
+    #: this complaint about BOSS ("it says it will monitor and update and I don't see any
+    #: waiting signal"), and this driver had the same defect.
+    on_progress: Optional[Callable[[str], None]] = None
+    allow_writes: bool = False
+    headless: bool = True
+    settle_ms: int = SETTLE_MS
+    load_settle_ms: int = LOAD_SETTLE_MS
+    #: Cap per area. A console area with 200 links would otherwise take an hour to walk.
+    max_controls_per_area: int = 40
+
+
+@dataclass
+class _Seen:
+    """Raw traffic for one window, before it is turned into Requests."""
+
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+    def clear(self) -> None:
+        self.events.clear()
+
+
+def _norm_path(url: str, api_origin: Optional[str]) -> str:
+    """Strip the origin so v1 and v2 recordings compare even on different hosts."""
+    if api_origin and url.startswith(api_origin):
+        return url[len(api_origin):] or "/"
+    return re.sub(r"^https?://[^/]+", "", url) or "/"
+
+
+def _area_url(base_url: str, area: str) -> str:
+    """Where an area lives.
+
+    v1 is a single page switched by ``?area=``; v2 is nine routes. An area given as a path is
+    used as one, keeping the base URL's query (``?org=``). Without this, crawling v2 silently
+    loaded v1's shell nine times and the parity check compared the console against itself.
+    """
+    if area.startswith("/"):
+        split = urlsplit(base_url)
+        return urlunsplit((split.scheme, split.netloc, area, split.query, ""))
+    joiner = "&" if "?" in base_url else "?"
+    return f"{base_url}{joiner}area={area}"
+
+
+def _is_control_safe(label: str) -> bool:
+    return not NEVER_PRESS.search(label or "")
+
+
+def _is_interesting(url: str, is_server_action: bool) -> bool:
+    """Whether this request says something about behaviour.
+
+    Static assets and fonts do not. A control-plane call, a route handler, or a server action
+    do — see the module docstring for why all three are needed.
+    """
+    if is_server_action:
+        return True
+    path = re.sub(r"^https?://[^/]+", "", url)
+    return path.startswith("/v1/") or path.startswith("/api/")
+
+
+def _to_requests(events: list[dict[str, Any]], api_origin: Optional[str]) -> list[Request]:
+    """Responses only: a request that never came back proves nothing about what happened."""
+    out = []
+    for e in events:
+        if e.get("status") is None:
+            continue
+        if not _is_interesting(e["url"], e.get("server_action", False)):
+            continue
+        path = SERVER_ACTION if e.get("server_action") else _norm_path(e["url"], api_origin)
+        out.append(Request(e["method"], path, e.get("status")))
+    return out
+
+
+def _count_server_actions(events: list[dict[str, Any]]) -> int:
+    """How many server actions fired. Kept as a count, not a set.
+
+    The count is the finding: 40 invocations of 13 distinct actions on one page load is a very
+    different fact from 13, and deduping would hide it.
+    """
+    return sum(1 for e in events if e.get("server_action") and e.get("status") is not None)
+
+
+def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
+    """Walk each area, inventory its controls, and record what the safe ones do.
+
+    Raises ImportError with an actionable message if Playwright is missing — the alternative,
+    returning an empty Baseline, would be indistinguishable from "this console has no controls"
+    and would let a migration pass unchecked.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise ImportError(
+            "the console driver needs Playwright: pip install playwright==1.60.0 && "
+            "python -m playwright install chromium"
+        ) from exc
+
+    controls: list[Control] = []
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=config.headless)
+        page = browser.new_page()
+        seen = _Seen()
+
+        def on_request(r):
+            seen.events.append({
+                "method": r.method, "url": r.url, "t": time.time(),
+                "server_action": bool(r.headers.get("next-action")),
+            })
+
+        def on_response(r):
+            seen.events.append({
+                "method": r.request.method, "url": r.url, "status": r.status, "t": time.time(),
+                "server_action": bool(r.request.headers.get("next-action")),
+            })
+
+        page.on("request", on_request)
+        page.on("response", on_response)
+
+        def area_url(area: str) -> str:
+            return _area_url(config.base_url, area)
+
+        def goto_area(area: str) -> None:
+            seen.clear()
+            page.goto(area_url(area), wait_until="domcontentloaded", timeout=config.settle_ms)
+            page.wait_for_timeout(config.load_settle_ms)
+
+        def say(note: str) -> None:
+            if config.on_progress:
+                config.on_progress(note)
+
+        for index, area in enumerate(config.areas, start=1):
+            say(f"[{index}/{len(config.areas)}] {area}: loading")
+            goto_area(area)
+
+            # What the page fetched merely by existing. This is how "one feed costing 13s that
+            # only one area displays" — and "40 server actions before you touch anything" —
+            # become visible.
+            load_requests = _to_requests(seen.events, api_origin)
+            actions = _count_server_actions(seen.events)
+            controls.append(Control(
+                area=area, label="(page load)", kind="load",
+                requests=_dedupe(load_requests),
+                state_after={
+                    "request_count": len(load_requests),
+                    "server_actions": actions,
+                    "slowest_request_ms": _slowest(seen.events),
+                },
+                note=(f"issued by rendering the area, before any interaction; "
+                      f"{actions} server action(s)"),
+            ))
+
+            count = min(len(page.query_selector_all(_CONTROL_SELECTOR)),
+                        config.max_controls_per_area)
+            say(f"[{index}/{len(config.areas)}] {area}: {actions} server action(s) on load, "
+                f"{count} control(s) to walk")
+
+            for idx in range(count):
+                label = "(unknown)"
+                try:
+                    # Re-establish the area if a previous click navigated away, then re-query:
+                    # handles from before a navigation are stale, and reusing them is how the
+                    # first run recorded budget's controls under overview's name.
+                    if not page.url.endswith(f"area={area}"):
+                        goto_area(area)
+                    elements = page.query_selector_all(_CONTROL_SELECTOR)
+                    if idx >= len(elements):
+                        break
+                    el = elements[idx]
+
+                    if not el.is_visible():
+                        continue
+                    label = (el.inner_text() or el.get_attribute("aria-label") or "").strip()
+                    label = re.sub(r"\s+", " ", label)
+                    if not label or len(label) > 80:
+                        continue
+                    testid = el.get_attribute("data-testid")
+                    href = el.get_attribute("href")
+
+                    inventory = Control(
+                        area=area, label=label, testid=testid,
+                        kind="link" if href else "button",
+                    )
+
+                    if href:
+                        # A LINK IS NOT CLICKED. Its destination IS its behaviour, and it is
+                        # readable without navigating — which matters twice over: clicking it
+                        # leaves the area (so the walk had to reload the page, at ten seconds a
+                        # time, to keep the next control's area label honest), and a
+                        # destination compares across the redesign far better than whatever
+                        # the target page happened to fetch.
+                        inventory.requests = [Request("GET", _norm_path(href, api_origin))]
+                        inventory.state_after = {"href": _norm_path(href, api_origin)}
+                        inventory.note = "link: destination recorded, not followed"
+                        controls.append(inventory)
+                        continue
+
+                    if not config.allow_writes and not _is_control_safe(label):
+                        # Recorded as present but not exercised. Its existence is still the
+                        # evidence that matters for MISSING — the Unbind gap was exactly this:
+                        # an API the console never called.
+                        inventory.note = "not pressed: would change state"
+                        controls.append(inventory)
+                        continue
+
+                    seen.clear()
+                    started = time.time()
+                    el.click(timeout=5_000)
+                    page.wait_for_timeout(2_000)
+                    elapsed_ms = int((time.time() - started) * 1000)
+
+                    reqs = _to_requests(seen.events, api_origin)
+                    if not config.allow_writes:
+                        unsafe = [r for r in reqs
+                                  if r.method.upper() not in SAFE_METHODS
+                                  and r.path != SERVER_ACTION]
+                        if unsafe:
+                            # A control that looked read-only and was not. Recorded so the
+                            # denylist can be corrected, and flagged loudly.
+                            inventory.note = (
+                                "UNEXPECTED WRITE: issued "
+                                + ", ".join(sorted({r.key() for r in unsafe}))
+                            )
+                    inventory.requests = _dedupe(reqs)
+                    # Both timings, because the gap between them is itself a defect: "Set
+                    # target" settled in 115s while its own call took under a second.
+                    if elapsed_ms > 5_000:
+                        # Say it as it happens. A slow control is the finding, and waiting
+                        # until the end to mention it wastes the operator's attention.
+                        say(f"    {label[:40]!r} took {elapsed_ms / 1000:.1f}s")
+                    inventory.state_after = {
+                        "elapsed_ms": elapsed_ms,
+                        "slowest_request_ms": _slowest(seen.events),
+                        "server_actions": _count_server_actions(seen.events),
+                        "navigated_to": page.url if not page.url.endswith(f"area={area}") else "",
+                    }
+                    controls.append(inventory)
+                except Exception as exc:  # noqa: BLE001 - one bad control must not end the walk
+                    controls.append(Control(
+                        area=area, label=label,
+                        note=f"could not exercise: {type(exc).__name__}: {str(exc)[:120]}"))
+
+            say(f"[{index}/{len(config.areas)}] {area}: done "
+                f"({len([c for c in controls if c.area == area])} recorded)")
+
+        browser.close()
+
+    return Baseline(
+        console="v2" if "/v2" in config.base_url else "v1",
+        captured_at=datetime.now(timezone.utc).isoformat(),
+        controls=controls,
+    )
+
+
+def _dedupe(requests: list[Request]) -> list[Request]:
+    out, seen_keys = [], set()
+    for r in requests:
+        if r.key() in seen_keys:
+            continue
+        seen_keys.add(r.key())
+        out.append(r)
+    return out
+
+
+def _slowest(events: list[dict[str, Any]]) -> int:
+    """Longest single request in this window, in ms.
+
+    Paired with the control's own elapsed time it separates "the API is slow" from "the UI
+    made you wait for something else" — which is the difference between the 13s audit export
+    and the 115s Save, and they need opposite fixes.
+    """
+    starts: dict[str, float] = {}
+    worst = 0.0
+    for e in events:
+        key = f"{e['method']} {e['url']}"
+        if e.get("status") is None:
+            starts[key] = e["t"]
+        elif key in starts:
+            worst = max(worst, e["t"] - starts.pop(key))
+    return int(worst * 1000)
+
+
+# --------------------------------------------------------------------------- #
+# Screen health
+#
+# The half of the agent that was missing. Everything above records what a control DID; this
+# records whether the screen WORKS — rendered, styled, not crashed, not silently empty, no
+# dead links. The operator found an unstyled screen by looking at it, which is the job this is
+# supposed to take off them.
+# --------------------------------------------------------------------------- #
+
+def observe_screen(page, path: str, base_origin: str, *,
+                   settle_ms: int = 4_000) -> "ScreenObservation":
+    """Load one screen and read back everything the health rules need.
+
+    Pure observation: no judgement here, so the rules stay testable without a browser and
+    cannot be quietly influenced by what the page happened to do.
+    """
+    from .console_screen_check import ScreenObservation
+
+    errors: list[str] = []
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    page.on("pageerror", lambda e: errors.append(str(e)))
+
+    started = time.time()
+    response = page.goto(f"{base_origin}{path}", wait_until="domcontentloaded", timeout=60_000)
+    ttfb_ms = int((time.time() - started) * 1000)
+    page.wait_for_timeout(settle_ms)
+
+    testids = page.eval_on_selector_all(
+        "[data-testid]", "els => els.map(e => e.getAttribute('data-testid'))") or []
+
+    links = page.eval_on_selector_all(
+        "a[href]",
+        "els => els.map(e => [ (e.innerText||'').trim(), e.getAttribute('href') ])") or []
+
+    # The accessible name, not the tag's text: a button labelled only by aria-label is named,
+    # and one labelled by neither is not.
+    buttons = page.eval_on_selector_all(
+        "button, [role=button]",
+        "els => els.map(e => ((e.innerText||'') + ' ' + (e.getAttribute('aria-label')||'')).trim())",
+    ) or []
+
+    text = page.eval_on_selector("body", "e => e.innerText") or ""
+
+    # COMPUTED STYLES FROM THE APP ROOT, NOT FROM BODY.
+    #
+    # This read document.body and reported the wrong font on every screen -- correctly, but
+    # about the wrong element: v2 scopes its styling to .v2-shell, and body still belongs to
+    # v1. The check was measuring the console this app is REPLACING.
+    #
+    # A heading is sampled too, because a global `h1..h6` rule from the other console wins
+    # inside the subtree by being a plain element selector on a later stylesheet -- which is
+    # exactly what was happening, and body alone could never have shown it.
+    computed = page.evaluate(
+        """() => {
+            const root = document.querySelector('.v2-shell') || document.body;
+            const heading = root.querySelector('h1, h2') || root;
+            const s = getComputedStyle(root);
+            const h = getComputedStyle(heading);
+            return {
+              'background-color': s.backgroundColor,
+              'font-family': s.fontFamily,
+              'color': s.color,
+              'heading-font-family': h.fontFamily,
+              'scoped-to': root === document.body ? 'body' : '.v2-shell',
+            };
+        }"""
+    ) or {}
+
+    return ScreenObservation(
+        path=path,
+        status=response.status if response else 0,
+        ttfb_ms=ttfb_ms,
+        html=page.content()[:400_000],
+        testids=[t for t in testids if t],
+        links=[(str(a), str(b)) for a, b in links],
+        buttons=[str(b) for b in buttons],
+        text=text,
+        console_errors=errors[:20],
+        computed={k: str(v) for k, v in computed.items()},
+    )
+
+
+def probe_links(page, observation: "ScreenObservation", base_origin: str,
+                *, limit: int = 25) -> None:
+    """Follow every internal link far enough to know whether it exists.
+
+    Fills observation.link_status in place. External links are skipped: this checks OUR routes,
+    and a flaky third-party site must not fail our run.
+    """
+    seen: dict[str, int] = {}
+    for _label, href in observation.links:
+        if len(seen) >= limit:
+            break
+        if not href.startswith("/"):
+            continue
+        path = href.split("#")[0]
+        if not path or path in seen:
+            continue
+        try:
+            response = page.request.get(f"{base_origin}{path}", timeout=30_000)
+            seen[path] = response.status
+        except Exception:  # noqa: BLE001 - an unreachable link is a finding, not a crash
+            seen[path] = 0
+    observation.link_status = seen
+
+
+def measure_type_scale(page, spec: dict) -> dict[str, dict[str, str]]:
+    """Computed font-size/weight/family for each role in the style spec.
+
+    Reads the FIRST element matching each role's selector. Roles absent from a screen come back
+    missing rather than empty, so the comparison can skip them instead of failing a screen for
+    not having a filter tab.
+    """
+    selectors = {
+        role: rule["selector"]
+        for role, rule in (spec.get("type_scale") or {}).items()
+        if rule.get("selector")
+    }
+    return page.evaluate(
+        """(selectors) => {
+            const out = {};
+            for (const [role, sel] of Object.entries(selectors)) {
+              const el = document.querySelector(sel);
+              if (!el) continue;
+              const s = getComputedStyle(el);
+              out[role] = {
+                font_size: s.fontSize,
+                font_weight: s.fontWeight,
+                font_family: s.fontFamily,
+              };
+            }
+            return out;
+        }""",
+        selectors,
+    ) or {}
+
+
+def measure_structure(page, spec: dict, path: str) -> dict[str, str]:
+    """Computed values for a screen's structural rules.
+
+    Read from the live element rather than from the markup: a stylesheet rule is invisible to a
+    grep, and an earlier version reported dashed edges as undashed for exactly that reason.
+    """
+    rules = ((spec.get("structure") or {}).get(path) or {}).get("computed") or []
+    if not rules:
+        return {}
+    probes = [{"selector": r["selector"], "property": r["property"]} for r in rules]
+    return page.evaluate(
+        """(probes) => {
+            const out = {};
+            for (const {selector, property} of probes) {
+              const el = document.querySelector(selector);
+              if (!el) continue;
+              out[`${selector}::${property}`] = String(getComputedStyle(el)[property] ?? "");
+            }
+            return out;
+        }""",
+        probes,
+    ) or {}

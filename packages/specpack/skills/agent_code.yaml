@@ -1,0 +1,114 @@
+# AN AGENT THAT CAN WRITE CODE WHEN NO SKILL FITS.
+#
+# WHY THIS IS A SKILL AND NOT A CAPABILITY OF THE LOOP
+# ----------------------------------------------------
+# Every other route to "the agent can also do X" in this product has been a branch in BOSS's own
+# code, and that is the thing that does not scale: a customer asks for an ending slide and the
+# planning vocabulary grows a word; the next asks for a fade. An agent that can write and run
+# code answers the whole class at once — but only if it is under the SAME rules as everything
+# else the agent can do.
+#
+# So it is a skill. It is granted through `role_skills` like any other, it is refused if nobody
+# gave it, it carries a risk tier, it is recorded in the invocation trail, and an operator can
+# take it away from an agent that should not have it. There is no special path.
+#
+# WHAT BOUNDS THE CODE
+# --------------------
+# It runs in the container boundary `services/container_runner.py` was written to be: no network,
+# non-root, every capability dropped, no-new-privileges, memory/CPU/PID limits, in a scratch
+# directory that is discarded. It fails closed where that boundary is not configured, rather
+# than degrading to the control plane's own host — which is where an agent's shell reached a
+# production DATABASE_URL and cleared 204 tables on 2026-09-02.
+#
+# It is TIER 2, which means a person approves it. Code an agent wrote a moment ago is not the
+# same thing as a skill a human authored and pinned by digest, and the difference is worth one
+# click. An operator who disagrees can lower it on the project's own copy of the skill.
+skills:
+  - id: code.write_and_run
+    kind: compute
+    risk_tier: 2
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Write a short program and run it in an isolated sandbox, for work no other skill covers.
+      Python or shell. No network, non-root, discarded afterwards. Use this when the thing asked
+      for is a computation or a transformation and no skill you hold does it; do not use it to
+      reach anything outside the sandbox, because nothing outside is reachable.
+    data_boundary: internal
+    input_schema:
+      # WHY THE AGENT MUST SAY WHY. The reason is what a person reads on the approval, and
+      # "approve this code" with no statement of intent is not a decision anybody can make.
+      why: string
+      language: string
+      source: string
+      # Files to place beside the program before it runs, as {filename: contents}. Text only —
+      # this is how the agent feeds its own code the data an earlier skill produced.
+      files: object?
+      timeout_seconds: number?
+    output_schema:
+      exit_code: number
+      stdout: string
+      stderr: string
+      # Whatever the program wrote to stdout AS JSON, when it did. This is the field a later
+      # step wires from, so a program that prints a JSON object becomes a step that produces
+      # named values.
+      result: object
+      timed_out: boolean
+    cost: { estimator: runtime_plus_model, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      # DELIBERATELY EMPTY. Nobody may call this by default — it is reachable only by being
+      # given to an agent on purpose, which is the grant, and that is the whole governance
+      # story for "the agent can write code".
+      allowed_callers: []
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true
+
+  - id: code.remember
+    kind: compute
+    # THE ONE THAT MAKES IT COMPOUND. Without it an agent solves the same problem on every run,
+    # pays a model every time, and produces a slightly different program each time. With it the
+    # first run of a workflow is the expensive one and every run after reuses what worked.
+    #
+    # Saving is the AGENT's decision because only the agent knows whether what it just ran is the
+    # general answer or a hack that happened to fit this input. It lands in `skill_definitions`,
+    # the same table an operator's own skills live in, so it can be read, edited, disabled or
+    # deleted by a person — an agent's program is not a thing that hides.
+    #
+    # SAVING IS NOT GRANTING. This records the program; giving it to an agent stays a separate,
+    # explicit act, so an agent cannot widen its own reach by writing code.
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: >-
+      Keep a program you just ran, so the next run of this workflow reuses it instead of writing
+      it again. Give it a key, a one-line summary and the inputs it expects. Only save something
+      that worked and that would work again on different input.
+    data_boundary: internal
+    input_schema:
+      skill_key: string
+      summary: string
+      language: string
+      source: string
+      label: string?
+      # What the program expects, as [{name, required, description}]. It receives them as
+      # inputs.json beside itself — it cannot take arguments, because it was written against a
+      # shape and the shape is what this declares.
+      inputs: array?
+      produces: array?
+      knowledge: string?
+      timeout_seconds: number?
+      written_for: string?
+      written_in_run: string?
+    output_schema:
+      skill_key: string
+      saved: boolean
+      note: string
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: []
+      required_permissions: [workflow_execute]
+    policy:
+      requires_receipt: true

@@ -1,0 +1,29 @@
+id: EvaluationRun
+version: 1
+description: Evaluation evidence packet for roles, skills, modules, or releases, backed by durable artifacts and review records.
+backing_runtime:
+  primary_tables: [artifacts, role_review_records, agent_module_install_records]
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: subject_type
+    type: enum
+    values: [role, skill, workflow, module, release, model_route]
+    required: true
+  - name: subject_id
+    type: string
+    required: true
+  - name: verdict
+    type: enum
+    values: [passed, failed, blocked, needs_review]
+    required: true
+  - name: evidence_artifact_id
+    type: string
+    required: true
+invariants:
+  - Evaluation results must link to durable evidence.
+  - Evaluation failures must be visible through events, decisions, or review records.

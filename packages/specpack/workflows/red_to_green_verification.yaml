@@ -1,0 +1,58 @@
+kind: WorkflowSpec
+id: red_to_green_verification
+version: 0.1.0
+name: Red-to-green verification
+description: >
+  Prove that the verification contract fails on the real pre-fix condition and
+  passes after the proposed change before accepting a fixed or solved claim.
+entry_step: load_verification_contract
+input_schema:
+  required: [project_id, claim_id, claim_version, evidence_contract_ref, pre_fix_ref, post_change_ref, dedupe_key]
+output_schema:
+  required: [claim_verification_id, result, evidence_refs]
+steps:
+  - id: load_verification_contract
+    kind: task
+    input: { operation: assurance.verification.load_contract }
+    next: [run_pre_fix_check]
+  - id: run_pre_fix_check
+    kind: task
+    input: { operation: assurance.verification.execute_against_pre_fix_condition }
+    next: [pre_fix_is_red]
+  - id: pre_fix_is_red
+    kind: condition
+    expression: { path: context.pre_fix_failed, op: eq, value: true }
+    on_true: run_post_change_check
+    on_false: record_inconclusive
+  - id: run_post_change_check
+    kind: task
+    input: { operation: assurance.verification.execute_against_post_change_condition }
+    next: [post_change_is_green]
+  - id: post_change_is_green
+    kind: condition
+    expression: { path: context.post_change_passed, op: eq, value: true }
+    on_true: record_passed
+    on_false: record_refuted
+  - id: record_passed
+    kind: task
+    input: { operation: assurance.verification.record_red_to_green_pass }
+    next: [emit_verification_event]
+  - id: record_refuted
+    kind: task
+    input: { operation: assurance.verification.record_refuted }
+    next: [emit_verification_event]
+  - id: record_inconclusive
+    kind: task
+    input: { operation: assurance.verification.record_inconclusive }
+    next: [emit_verification_event]
+  - id: emit_verification_event
+    kind: task
+    input: { operation: audit.emit_claim_verification }
+rules:
+  same_contract_and_inputs_except_fix_required: true
+  pre_fix_must_fail_on_real_condition: true
+  post_change_must_pass: true
+  missing_red_phase_is_inconclusive: true
+  artifacts_are_content_addressed: true
+completion:
+  artifacts_required: [ClaimVerification, Evidence]

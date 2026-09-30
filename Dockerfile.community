@@ -1,0 +1,130 @@
+# syntax=docker/dockerfile:1.7
+
+# Build only from a reviewed Community tree. The source export gate verifies
+# that every copied path belongs in that tree before publication.
+# Pin the multi-architecture base indexes reviewed for this release candidate.
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
+
+COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
+RUN python -c 'import json; assert json.load(open("/tmp/community-export-status.json"))["mechanically_complete"], "Community source export is blocked"'
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/engine \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
+    HOME=/home/boss
+WORKDIR /app
+
+# The official Node image supplies Node 20 and npm for coding CLIs and project
+# verification. Debian's nodejs package can lag the CLI minimum Node version.
+COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Keep the Node distribution's license alongside its binary in the API/worker image.
+COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/LICENSE /usr/local/LICENSE
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates git ffmpeg libavfilter-extra fonts-dejavu-core \
+    && addgroup --system boss \
+    && adduser --system --ingroup boss --home /home/boss boss \
+    && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts \
+    && chown -R boss:boss /home/boss /var/lib/boss/artifacts \
+    && chmod 700 /home/boss/.codex /home/boss/.claude \
+    && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
+    && npm cache clean --force \
+    && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
+
+COPY apps/api/requirements.txt /tmp/api-requirements.txt
+COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
+
+# Download the browser revision matched to the pinned Python Playwright package.
+RUN python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/pw-browsers \
+    && rm -rf /var/lib/apt/lists/*
+
+# These are the Community runtime directories. The reviewed export tree omits
+# private modules inside shared directories; the dedicated ignore file also
+# keeps known private paths out of local build contexts.
+COPY apps/__init__.py ./apps/__init__.py
+COPY LICENSE ./LICENSE
+COPY THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md
+COPY third_party/notices ./third_party/notices
+COPY apps/api ./apps/api
+COPY apps/worker ./apps/worker
+COPY api ./api
+COPY db ./db
+COPY engine/boss_engine ./engine/boss_engine
+COPY packages/goldeneye ./packages/goldeneye
+COPY packages/specpack ./packages/specpack
+COPY scripts/metatron_tui.py ./scripts/metatron_tui.py
+COPY scripts/reliability_mcp_server.py ./scripts/reliability_mcp_server.py
+COPY scripts/seed_demo.py ./scripts/seed_demo.py
+COPY scripts/wait_for_postgres.py ./scripts/wait_for_postgres.py
+COPY tools ./tools
+COPY docs/product/V1_FEATURE_LOCK.md ./docs/product/V1_FEATURE_LOCK.md
+COPY docs/product/TRACEABILITY.md ./docs/product/TRACEABILITY.md
+
+ARG BOSS_SOURCE_SHA=unknown
+ARG BOSS_BUILT_AT=unknown
+ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
+    BOSS_BUILT_AT=$BOSS_BUILT_AT
+RUN chown -R boss:boss /app /var/lib/boss/artifacts
+USER boss
+# Fail the build if the installed browser cannot launch as the runtime user.
+RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
+RUN grok --version >/dev/null
+
+FROM python-runtime AS api
+EXPOSE 8000
+CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM python-runtime AS worker
+CMD ["python", "-m", "apps.worker.boss_worker.main"]
+
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web-builder
+WORKDIR /app
+COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
+RUN node -e 'if (!require("/tmp/community-export-status.json").mechanically_complete) throw Error("Community source export is blocked")'
+RUN npm install --global pnpm@9.15.0
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json ./apps/web/package.json
+COPY packages/api-client/package.json ./packages/api-client/package.json
+RUN pnpm install --frozen-lockfile
+
+ARG NEXT_PUBLIC_BOSS_API_URL=
+ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
+ENV NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
+    NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
+COPY apps/web ./apps/web
+COPY packages/api-client ./packages/api-client
+RUN test -n "$NEXT_PUBLIC_BOSS_API_URL" \
+    || { echo 'NEXT_PUBLIC_BOSS_API_URL is required for the Community web build' >&2; exit 1; }
+RUN pnpm --filter boss-web build
+
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
+ARG NEXT_PUBLIC_BOSS_API_URL=
+ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
+ENV NODE_ENV=production \
+    PORT=3000 \
+    NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
+    NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
+WORKDIR /app
+RUN npm install --global pnpm@9.15.0 \
+    && addgroup --system boss \
+    && adduser --system --ingroup boss boss
+COPY --chown=boss:boss LICENSE ./LICENSE
+COPY --chown=boss:boss THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md
+COPY --chown=boss:boss third_party/notices ./third_party/notices
+COPY --from=web-builder --chown=boss:boss /app/package.json ./package.json
+COPY --from=web-builder --chown=boss:boss /app/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --from=web-builder --chown=boss:boss /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=web-builder --chown=boss:boss /app/node_modules ./node_modules
+COPY --from=web-builder --chown=boss:boss /app/apps/web ./apps/web
+COPY --from=web-builder --chown=boss:boss /app/packages/api-client ./packages/api-client
+WORKDIR /app/apps/web
+USER boss
+EXPOSE 3000
+CMD ["pnpm", "start", "-H", "0.0.0.0"]

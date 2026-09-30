@@ -1,0 +1,58 @@
+kind: ObjectSpec
+id: QualityGate
+version: 0.1.0
+description: >
+  Durable, fail-closed evidence record for a coding task's governed pipeline. Aggregates
+  the independent-judgment signals (test author != implementer, adversarial review, mutation
+  grading, security scan) into a single gate that must pass before merge/deploy. Quality is
+  recorded as evidence, never asserted by prompt.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: task_id
+    type: string
+  - name: code_task_run_id
+    type: string
+  - name: risk_tier
+    type: integer
+  - name: required_stages
+    type: array
+    description: Pipeline stages mandatory at this risk tier (from the pipeline policy).
+  - name: test_author_independent
+    type: boolean
+    description: True when tests were authored by a role other than the implementer.
+  - name: coverage_pct
+    type: number
+  - name: mutation_score
+    type: number
+    description: Fraction of injected mutants the test suite caught (0.0-1.0).
+  - name: adversarial_verdict
+    type: enum
+    values: [survived, refuted, not_run]
+  - name: security_scan_status
+    type: enum
+    values: [pass, findings, not_run]
+  - name: gates_passed
+    type: array
+  - name: gates_failed
+    type: array
+  - name: status
+    type: enum
+    values: [pass, fail, waived]
+  - name: fail_closed
+    type: boolean
+    description: When true (default), missing or unavailable evidence counts as fail, not pass.
+  - name: waiver_decision_id
+    type: string
+    description: Required when status=waived; ties the override to an auditable Decision.
+  - name: evidence_refs
+    type: array
+  - name: created_by_job_id
+    type: string
+  - name: created_at
+    type: datetime
+constraints:
+  unique:
+    - [project_id, code_task_run_id]

@@ -1,0 +1,40 @@
+skills:
+  - id: mobile.device.execute
+    kind: local_device
+    system: true
+    load: on_demand
+    risk_tier: 2
+    mock_mode: false
+    description: Run one typed action on an explicitly selected Android emulator or macOS iOS Simulator through the opt-in local device adapter.
+    data_boundary: internal
+    input_schema:
+      target: string
+      device_id: string
+      action: string
+      artifact_id: "string?"
+      test_runner: "string?"
+      bundle_id: "string?"
+      x: "integer?"
+      y: "integer?"
+      end_x: "integer?"
+      end_y: "integer?"
+      text: "string?"
+    output_schema:
+      target: string
+      device_id: string
+      action: string
+      receipt_id: string
+      artifact_id: "string?"
+      sha256: "string?"
+    cost: { estimator: compute_usage_estimate, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [mobile_app_operator]
+      required_permissions: [local_execute]
+    policy:
+      requires_lease: true
+      requires_budget_reservation: true
+      requires_receipt: true
+      explicit_device_selection: true
+      physical_devices_supported: false
+      shell_execution_allowed: false

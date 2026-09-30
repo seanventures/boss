@@ -1,0 +1,49 @@
+skills:
+  - id: digitalocean.droplet.create
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Create a DigitalOcean droplet through ProviderOps ChangeSet execution.
+    data_boundary: internal
+    input_schema: { region: string, size: string, image: string, ttl_minutes: integer, tags: array }
+    output_schema: { droplet_id: string, commitment_id: string, resource_receipt_id: string }
+    cost: { estimator: hourly_commitment, category: infra }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_compute_write] }
+    policy: { requires_changeset: true, requires_budget_reservation: true, requires_approval: [ceo, cto], requires_ttl: true, requires_resource_receipt: true }
+  - id: digitalocean.droplet.destroy
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Destroy a DigitalOcean droplet only from an approved destructive ChangeSet.
+    data_boundary: internal
+    input_schema: { droplet_id: string, reason: string, rollback_plan: string }
+    output_schema: { provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: savings_estimate, category: infra }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_compute_destroy] }
+    policy: { requires_changeset: true, requires_approval: [ceo], destructive: true, requires_resource_receipt: true }
+  - id: digitalocean.app.deploy
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Deploy a DigitalOcean App Platform service through Deployment Registry.
+    data_boundary: internal
+    input_schema: { deployment_target_id: string, image_or_commit: string, environment: string }
+    output_schema: { deployment_id: string, resource_receipt_id: string }
+    cost: { estimator: provider_plan, category: deploy }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_deploy] }
+    policy: { requires_changeset: true, requires_approval: [ceo, release_manager], requires_rollback_plan: true }
+  - id: digitalocean.billing.sync
+    kind: provider
+    risk_tier: 1
+    mock_mode: false
+    description: Read DigitalOcean billing and convert provider data into CostEvents.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string, period_start: string, period_end: string }
+    output_schema: { cost_event_ids: array, confidence: string }
+    cost: { estimator: fixed, category: provider }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel, finops_sentinel], required_permissions: [provider_billing_read] }
+    policy: { read_only: true, writes_cost_events_only: true }

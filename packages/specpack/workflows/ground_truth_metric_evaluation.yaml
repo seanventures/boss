@@ -1,0 +1,56 @@
+kind: WorkflowSpec
+id: ground_truth_metric_evaluation
+version: 0.1.0
+name: Ground-truth metric evaluation
+description: >
+  Lease and evaluate one exact GroundTruthMetricDefinition version, persist the
+  evidence-backed observation, and make a breach or evaluator failure visible.
+entry_step: load_definition
+input_schema:
+  required: [project_id, metric_definition_id, metric_definition_version, dedupe_key]
+output_schema:
+  required: [observation_id, evaluation_status, evidence_refs]
+steps:
+  - id: load_definition
+    kind: task
+    input: { operation: ground_truth.metric.load_exact_version }
+    next: [lease_evaluator]
+  - id: lease_evaluator
+    kind: task
+    input: { operation: ground_truth.evaluator.acquire_lease }
+    max_attempts: 3
+    next: [execute_evidence_query]
+  - id: execute_evidence_query
+    kind: task
+    input: { operation: ground_truth.metric.execute_evidence_query }
+    max_attempts: 3
+    next: [persist_observation]
+  - id: persist_observation
+    kind: task
+    input: { operation: ground_truth.observation.persist_idempotently }
+    next: [threshold_breached]
+  - id: threshold_breached
+    kind: condition
+    expression: { path: context.threshold_breached, op: eq, value: true }
+    on_true: open_regression_signal
+    on_false: record_healthy_result
+  - id: open_regression_signal
+    kind: task
+    input: { operation: ground_truth.regression.open_or_update }
+    next: [emit_evaluation_event]
+  - id: record_healthy_result
+    kind: task
+    input: { operation: ground_truth.metric.record_last_good }
+    next: [emit_evaluation_event]
+  - id: emit_evaluation_event
+    kind: task
+    input: { operation: audit.emit_metric_evaluation }
+rules:
+  exact_metric_version_required: true
+  evaluator_requires_lease_and_heartbeat: true
+  replay_returns_existing_observation: true
+  missing_query_or_evidence_is_not_healthy: true
+  breach_opens_deduplicated_signal: true
+completion:
+  artifacts_required: [GroundTruthObservation, Evidence]
+  failure: retry_or_deadletter

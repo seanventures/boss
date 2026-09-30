@@ -1,0 +1,155 @@
+/* THE FONTS, ACTUALLY FETCHED.
+   --v2-font-display named Space Grotesk and nothing ever loaded it, so every v2
+   screen silently rendered in v1's Manrope. Declaring a font is not loading one,
+   and the difference is invisible to anything that only checks which requests a
+   page made -- which is how it survived to production. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+/*
+ * Console v2 design tokens.
+ *
+ * Read from the Autonomous Company Builder artifact (docs/product/console-v2-reference/),
+ * not eyeballed from a screenshot. Every value here appears in that source.
+ *
+ * Two things carry most of the v2 look, and both are easy to lose by accident:
+ *
+ *   1. THE MONO/SANS SPLIT. Space Grotesk for prose and headings; IBM Plex Mono for every
+ *      piece of machine data — status, counts, ids, percentages, money, timestamps. The
+ *      artifact is rigorous about this and it is most of why it does not read like v1.
+ *
+ *   2. STATUS IS A DOT PLUS A WORD. Never colour alone. `RUNNING` is a mint dot AND the word,
+ *      so the state survives a colourblind reader, a screenshot, and a greyscale print.
+ */
+
+:root,
+[data-console="v2"] {
+  /* Surfaces, darkest to lightest */
+  --v2-canvas: #090D17;
+  --v2-panel: #0E1422;
+  --v2-surface: #141B2B;
+  --v2-border: #1E2940;
+  --v2-border-strong: #2C3A55;
+  --v2-edge: #253350;
+
+  /* Accents. Each has one meaning; do not reuse them decoratively. */
+  --v2-mint: #4FE3C1;         /* primary · RUNNING · active nav · focus */
+  --v2-green: #58D68A;        /* DONE · APPROVED · stance FOR · integration ok */
+  --v2-amber: #F5B14C;        /* GATED · AT GATE · load >80% · budget >75% */
+  --v2-red: #F26D6D;          /* STUCK · REJECTED · stance AGAINST */
+  --v2-purple: #A78BFA;       /* panel LIVE · stage kind PANEL */
+
+  /* Text, brightest to dimmest */
+  --v2-ink: #E6EDF5;
+  --v2-muted: #8D9AB5;
+  --v2-dim: #5A6785;
+  --v2-idle: #3E4D6B;
+
+  /* Type */
+  --v2-font-display: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --v2-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Metrics */
+  --v2-radius: 8px;
+  --v2-radius-sm: 6px;
+  --v2-topbar-h: 52px;
+  --v2-strip-h: 34px;
+  --v2-sidebar-w: 190px;
+}
+
+/* ── Motion ───────────────────────────────────────────────────────────────
+   Exactly two animations exist in the artifact, and both mean something:
+   a pulse is work in progress, a blink is work that is stuck. Adding a third
+   for decoration would make the first two stop reading as signals.          */
+@keyframes v2-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .45; transform: scale(.86); }
+}
+@keyframes v2-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .2; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The dot stays, the movement goes — the status is in the colour and the
+     label, so nothing is lost by holding still. */
+  .v2-dot { animation: none !important; }
+}
+
+/* ── Primitives ─────────────────────────────────────────────────────────── */
+
+.v2-root {
+  background: var(--v2-canvas);
+  color: var(--v2-ink);
+  font-family: var(--v2-font-display);
+  min-height: 100vh;
+}
+
+/* Machine data. Applied to anything the operator reads as a value rather than
+   as prose: counts, ids, money, percentages, status words, timestamps. */
+.v2-mono {
+  font-family: var(--v2-font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.v2-label {
+  font-family: var(--v2-font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-dim);
+}
+
+.v2-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;          /* square-ish, as the artifact draws them */
+  flex: 0 0 auto;
+}
+.v2-dot[data-status="RUNNING"] { background: var(--v2-mint);  animation: v2-pulse 2s infinite; }
+.v2-dot[data-status="WORKING"] { background: var(--v2-mint);  animation: v2-pulse 2s infinite; }
+.v2-dot[data-status="GATED"]   { background: var(--v2-amber); }
+.v2-dot[data-status="AT GATE"] { background: var(--v2-amber); }
+.v2-dot[data-status="IN PANEL"]{ background: var(--v2-purple); }
+.v2-dot[data-status="DONE"]    { background: var(--v2-green); }
+.v2-dot[data-status="SHIPPED"] { background: var(--v2-green); }
+.v2-dot[data-status="STUCK"]   { background: var(--v2-red);   animation: v2-blink 1s infinite; }
+.v2-dot[data-status="IDLE"]    { background: var(--v2-idle); }
+
+/* Status chip: dot + word. The word is not optional. */
+.v2-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--v2-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+}
+.v2-status[data-status="RUNNING"], .v2-status[data-status="WORKING"] { color: var(--v2-mint); }
+.v2-status[data-status="GATED"], .v2-status[data-status="AT GATE"]   { color: var(--v2-amber); }
+.v2-status[data-status="IN PANEL"]                                    { color: var(--v2-purple); }
+.v2-status[data-status="DONE"], .v2-status[data-status="SHIPPED"]     { color: var(--v2-green); }
+.v2-status[data-status="STUCK"]                                       { color: var(--v2-red); }
+.v2-status[data-status="IDLE"]                                        { color: var(--v2-dim); }
+
+/* Progress bar. Colour follows status, so a gated project's bar is amber. */
+.v2-bar {
+  height: 2px;
+  background: var(--v2-border);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.v2-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--v2-mint);
+  transition: width 400ms ease;
+}
+.v2-bar[data-status="GATED"] > span  { background: var(--v2-amber); }
+.v2-bar[data-status="DONE"] > span,
+.v2-bar[data-status="SHIPPED"] > span { background: var(--v2-green); }
+.v2-bar[data-status="STUCK"] > span   { background: var(--v2-red); }
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-bar > span { transition: none; }
+}

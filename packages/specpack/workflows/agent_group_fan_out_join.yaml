@@ -1,0 +1,71 @@
+kind: WorkflowSpec
+id: agent_group_fan_out_join
+version: 0.1.0
+name: Fan-out/join Agent Group protocol
+description: >
+  Partition bounded scopes, execute them concurrently, make partial failures
+  visible, and join only under an explicit evidence sufficiency rule.
+entry_step: pin_group_context
+input_schema:
+  required: [project_id, agent_group_spec_id, agent_group_spec_version, task_ref, dedupe_key]
+output_schema:
+  required: [agent_group_run_id, disposition, result_refs, failure_refs, receipt_refs]
+steps:
+  - id: pin_group_context
+    kind: task
+    input: { operation: agent_group.fanout.pin_roles_policy_and_inputs }
+    next: [partition_non_overlapping_scopes]
+  - id: partition_non_overlapping_scopes
+    kind: task
+    input: { operation: agent_group.fanout.partition_scopes_deterministically }
+    next: [execute_scopes]
+  - id: execute_scopes
+    kind: parallel
+    branches: [scope_worker_a, scope_worker_b, scope_worker_c]
+    join: join_scope_results
+  - id: scope_worker_a
+    kind: task
+    input: { operation: agent_group.fanout.execute_scope, scope_slot: scope_a }
+    next: [join_scope_results]
+  - id: scope_worker_b
+    kind: task
+    input: { operation: agent_group.fanout.execute_scope, scope_slot: scope_b }
+    next: [join_scope_results]
+  - id: scope_worker_c
+    kind: task
+    input: { operation: agent_group.fanout.execute_scope, scope_slot: scope_c }
+    next: [join_scope_results]
+  - id: join_scope_results
+    kind: join
+    wait_for: [scope_worker_a, scope_worker_b, scope_worker_c]
+    success_policy: any
+    next: [record_results_and_failures]
+  - id: record_results_and_failures
+    kind: task
+    input: { operation: agent_group.fanout.persist_results_failures_and_provenance }
+    next: [evidence_sufficient]
+  - id: evidence_sufficient
+    kind: condition
+    expression: { path: context.evidence_sufficient, op: eq, value: true }
+    on_true: issue_joined_disposition
+    on_false: escalate_incomplete_join
+  - id: issue_joined_disposition
+    kind: task
+    input: { operation: agent_group.fanout.issue_governed_disposition }
+    next: [emit_group_event]
+  - id: escalate_incomplete_join
+    kind: decision
+    question: Should failed scopes be retried, reassigned, or held before this group can conclude?
+    input: { default_action: hold, partial_failures_visible: true }
+    next: [emit_group_event]
+  - id: emit_group_event
+    kind: task
+    input: { operation: audit.emit_agent_group_fan_out_join_run }
+rules:
+  scopes_are_bounded_non_overlapping_and_attributed: true
+  partial_failures_are_preserved_and_visible: true
+  join_uses_explicit_evidence_sufficiency: true
+  consensus_never_bypasses_evidence_policy_budget_or_approval: true
+  every_member_effect_has_receipt_and_dedupe_key: true
+completion:
+  artifacts_required: [AgentGroupRun, ScopeResult, Receipt, Event]

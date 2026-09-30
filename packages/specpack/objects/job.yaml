@@ -1,0 +1,30 @@
+kind: ObjectSchema
+object: Job
+version: 0.1.0
+fields:
+  id: { type: string, required: true, example: JOB-000001 }
+  project_id: { type: string, required: true }
+  task_id: { type: string, required: false }
+  kind: { type: string, required: true, example: plan.generate }
+  priority: { type: integer, default: 100 }
+  status:
+    type: enum
+    values: [queued, leased, running, succeeded, failed_retryable, failed_final, deadlettered, cancelled]
+  payload: { type: object }
+  max_attempts: { type: integer, default: 3 }
+  attempt: { type: integer, default: 0 }
+  lease_owner: { type: string, required: false }
+  lease_expires_at: { type: datetime, required: false }
+  heartbeat_at: { type: datetime, required: false }
+  last_error: { type: object, required: false }
+  created_at: { type: datetime }
+  updated_at: { type: datetime }
+state_machine:
+  queued: [leased, cancelled]
+  leased: [running, queued, cancelled]
+  running: [succeeded, failed_retryable, failed_final, cancelled]
+  failed_retryable: [queued, deadlettered]
+  failed_final: [deadlettered]
+  succeeded: []
+  deadlettered: []
+  cancelled: []

@@ -1,0 +1,18 @@
+kind: ObjectSpec
+id: Capability
+version: 0.1.0
+description: Provider account or adapter capability detected by ProviderOps.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: capability_key
+    type: string
+  - name: status
+    type: enum
+    values: [available, missing_permission, disabled, unknown]
+  - name: risk_tier
+    type: integer
+  - name: detected_at
+    type: datetime

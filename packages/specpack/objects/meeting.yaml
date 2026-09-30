@@ -1,0 +1,25 @@
+kind: ObjectSchema
+object: Meeting
+version: 0.1.0
+fields:
+  id: string
+  topic: string
+  project_id: string
+  participant_role_ids: { array: string }
+  phases:
+    type: array
+    items: { enum: [propose, critique, revise, vote] }
+  status: { enum: [scheduled, running, completed, blocked, deadlettered, cancelled] }
+  transcript_artifact_id: string?
+  minutes_artifact_id: string?
+  decision_ids: { array: string }
+  action_task_ids: { array: string }
+  blocked_state: object?
+  dissent_records: { array: object }
+  consensus_reached: boolean
+  timeout_minutes_by_phase: object
+rules:
+  no_phase_can_run_unbounded: true
+  every_meeting_must_emit_minutes: true
+  blocked_meetings_must_record_blocked_state: true
+  failed_consensus_must_record_dissent: true

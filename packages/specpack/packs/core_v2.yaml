@@ -1,0 +1,74 @@
+id: core_v2
+version: 2.0.0
+description: Core Pack v2 planning catalog for the full BOSS virtual company role system.
+requires:
+  - default_safety
+  - budget_governor_policy
+  - model_entitlement_policy
+  - resource_plane_policy
+  - work_orchestration_policy
+installs:
+  roles:
+    - metatron
+    - coo
+    - cao
+    - cto
+    - pm
+    - qa
+    - release_manager
+    - program_manager
+    - vp_agents
+    - providerops_manager
+    - finops_sentinel
+    - resource_janitor
+    - infra_steward
+    - deployment_manager
+    - secrets_steward
+    - model_spend_analyst
+    - adversarial_reviewer
+    - design_critic
+    - security_reviewer
+    - integration_validator
+    - docs_writer
+    # OWNS THE PUBLIC CHANNELS. Captain for the `social_publish` step, and the role a
+    # per-platform publishing agent reports to — a credential that reaches a real audience
+    # belongs to somebody whose remit is the audience, not to whichever step needed it.
+    - media_publisher
+    # Assembles the file the publisher then puts out. Split from media_publisher so an editing
+    # mistake is caught by somebody who did not make it.
+    - video_editor
+  workflows:
+    - ceo_command_to_pr
+    - decision_inbox
+    - budget_gated_job
+    - providerops_readonly_sync
+    - changeset_apply_with_receipts
+    - deployment_run
+    - budget_governed_scale_plan
+    - model_entitlement_routing
+    - governed_coding_pipeline
+  policies:
+    - default_safety
+    - budget_governor_policy
+    - model_entitlement_policy
+    - autonomy_ladder
+    - resource_plane_policy
+    - governed_coding_pipeline_policy
+    - work_orchestration_policy
+  skills:
+    - model_gateway
+    - github
+    - software_factory
+    - cloudflare
+    - digitalocean
+    - supabase
+    - aws
+    - model_providers
+    - providerops
+    - deployment
+    - ssh_host
+    - coding_pipeline
+    - work_tracker
+    - mattermost
+  canaries: []
+status: planned

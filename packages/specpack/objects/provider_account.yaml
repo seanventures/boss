@@ -1,0 +1,40 @@
+kind: ObjectSpec
+id: ProviderAccount
+version: 0.1.0
+description: Scoped connection to an external provider account managed by the Resource Plane Kernel.
+fields:
+  - name: id
+    type: string
+  - name: provider
+    type: enum
+    values: [digitalocean, cloudflare, supabase, openai, anthropic, google_ai, xai, github_actions, stripe, aws, gcp, azure, local, ssh_host]
+  - name: scope_type
+    type: enum
+    values: [org, workspace, project]
+  - name: scope_id
+    type: string
+  - name: credential_ref
+    type: string
+  - name: status
+    type: enum
+    values: [active, read_only, disabled, error]
+  - name: capabilities
+    type: array
+  - name: missing_permissions
+    type: array
+  - name: flags
+    type: object
+    example:
+      read_only: true
+      deploy_capable: false
+      billing_readable: true
+      destructive_actions_disabled: true
+  - name: last_tested_at
+    type: datetime
+  - name: created_at
+    type: datetime
+  - name: updated_at
+    type: datetime
+rules:
+  raw_secrets_forbidden_in_object: true
+  all_access_audited: true

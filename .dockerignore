@@ -1,0 +1,25 @@
+.DS_Store
+.git
+.github
+.env
+.env.*
+!.env.example
+app.env
+# A developer's local env must never enter an image. `.env` only matches the repo root, so
+# apps/web/.env.local was being copied in and loaded by the Next build — pointing the console
+# at http://localhost:8000. It happened to be harmless only because the Dockerfile ENV takes
+# precedence; without the build arg it would have baked a laptop address into production.
+**/.env.local
+**/.env.*.local
+.pytest_cache
+.ruff_cache
+.venv
+artifacts
+node_modules
+tmp
+apps/web/.next
+apps/web/node_modules
+packages/*/node_modules
+*.log
+*.zip
+image.png

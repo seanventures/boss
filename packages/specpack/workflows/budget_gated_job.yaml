@@ -1,0 +1,26 @@
+kind: WorkflowSpec
+id: budget_gated_job
+version: 0.1.0
+phases:
+  - id: quote
+    actor: budget_governor
+    outputs: [CostEstimate]
+  - id: reserve
+    actor: budget_governor
+    outputs: [BudgetReservation]
+    failure: create_decision_card
+  - id: lease_job
+    actor: worker
+    requires: [BudgetReservation]
+    outputs: [JobLease]
+  - id: execute
+    actor: worker
+    requires: [JobLease]
+    outputs: [Artifact, "Receipt?"]
+  - id: settle_budget
+    actor: budget_governor
+    outputs: [CostReceipt]
+rules:
+  no_reservation_no_execution: true
+  denied_reservation_must_not_lease_job: true
+  reservation_expires_if_job_not_started: true

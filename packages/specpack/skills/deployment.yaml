@@ -1,0 +1,39 @@
+skills:
+  - id: deployment.target.register
+    kind: deployment
+    risk_tier: 1
+    mock_mode: false
+    description: Register or update a DeploymentTarget with required resources, domains, health checks, and rollback refs.
+    data_boundary: internal
+    input_schema: { app_id: string, repo: string, environment: string, provider: string }
+    output_schema: { deployment_target_id: string }
+    cost: { estimator: fixed, category: deploy }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [deployment_manager, release_manager], required_permissions: [deployment_target_write] }
+    policy: { material_change_emits_event: true }
+  - id: deployment.run.plan
+    kind: deployment
+    risk_tier: 2
+    mock_mode: false
+    description: Plan a DeploymentRun and linked ChangeSet from a release packet.
+    data_boundary: internal
+    input_schema: { deployment_target_id: string, release_packet_artifact_id: string, environment: string }
+    output_schema: { deployment_run_id: string, changeset_id: string }
+    cost: { estimator: deployment_quote, category: deploy }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [deployment_manager, release_manager], required_permissions: [deployment_plan] }
+    policy: { staging_or_production_requires_approval: true, requires_rollback_plan: true }
+  - id: deployment.health.check
+    kind: deployment
+    risk_tier: 1
+    mock_mode: false
+    system: true
+    load: eager
+    description: Execute configured health checks and write deployment health artifacts.
+    data_boundary: internal
+    input_schema: { deployment_run_id: string }
+    output_schema: { artifact_id: string, health_status: string }
+    cost: { estimator: fixed, category: deploy }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [deployment_manager, resource_health_monitor], required_permissions: [deployment_read] }
+    policy: { health_failure_creates_decision: true }

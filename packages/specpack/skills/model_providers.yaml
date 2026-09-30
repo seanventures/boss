@@ -1,0 +1,49 @@
+skills:
+  - id: openai.costs.sync
+    kind: provider
+    risk_tier: 1
+    mock_mode: false
+    description: Sync OpenAI usage/cost data into CostEvents where official APIs permit.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string, period_start: string, period_end: string }
+    output_schema: { cost_event_ids: array, confidence: string }
+    cost: { estimator: fixed, category: model }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel, model_spend_analyst], required_permissions: [provider_billing_read] }
+    policy: { read_only: true, provider_rules_required: true }
+  - id: anthropic.usage_cost.sync
+    kind: provider
+    risk_tier: 1
+    mock_mode: false
+    description: Sync Anthropic usage and cost evidence into CostEvents.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string, period_start: string, period_end: string }
+    output_schema: { cost_event_ids: array, confidence: string }
+    cost: { estimator: fixed, category: model }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel, model_spend_analyst], required_permissions: [provider_billing_read] }
+    policy: { read_only: true, provider_rules_required: true }
+  - id: gemini.rate_limits.sync
+    kind: provider
+    risk_tier: 1
+    mock_mode: false
+    description: Sync Gemini or Google AI quota/rate-limit status into ProviderHealth.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string }
+    output_schema: { provider_health_id: string }
+    cost: { estimator: fixed, category: model }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_quota_read] }
+    policy: { read_only: true }
+  - id: xai.rate_limits.sync
+    kind: provider
+    risk_tier: 1
+    mock_mode: false
+    description: Sync xAI API rate-limit status into ProviderHealth.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string }
+    output_schema: { provider_health_id: string }
+    cost: { estimator: fixed, category: model }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_quota_read] }
+    policy: { read_only: true }

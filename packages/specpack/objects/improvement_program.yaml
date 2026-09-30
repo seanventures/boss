@@ -1,0 +1,21 @@
+kind: ObjectSpec
+id: improvement_program
+version: 0.1.0
+name: Improvement Program
+description: >
+  A durable, project-scoped feedback loop that pins a baseline QA evaluation,
+  measurement contract, evidence floor, comparison thresholds, and hard gates.
+storage:
+  table: improvement_programs
+required_fields:
+  - project_id
+  - benchmark_id
+  - baseline_evaluation_id
+  - metric_contract_hash
+  - minimum_evidence_weight
+  - hard_gates
+rules:
+  baseline_is_immutable_during_trial: true
+  candidate_cannot_apply_itself: true
+  baseline_moves_only_after_governed_rollout: true
+  every_transition_emits_event: true

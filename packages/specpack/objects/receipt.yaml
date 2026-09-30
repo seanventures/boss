@@ -1,0 +1,24 @@
+kind: ObjectSchema
+object: Receipt
+version: 0.1.0
+fields:
+  id: { type: string, required: true, example: RCT-000001 }
+  org_id: { type: string, required: true }
+  workspace_id: { type: string, required: true }
+  project_id: { type: string, required: true }
+  dedupe_key: { type: string, required: true }
+  effect_kind: { type: string, required: true, example: github.create_pr }
+  effect_scope: { type: object, required: true }
+  payload_hash: { type: string, required: true }
+  status:
+    type: enum
+    values: [in_progress, succeeded, failed, cancelled]
+  provider_ref: { type: string, required: false }
+  result: { type: object }
+  error: { type: object }
+  created_by_job_id: { type: string, required: false }
+  created_at: { type: datetime }
+  updated_at: { type: datetime }
+constraints:
+  unique:
+    - [org_id, dedupe_key]

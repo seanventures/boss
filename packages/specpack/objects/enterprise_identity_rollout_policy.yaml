@@ -1,0 +1,39 @@
+kind: ObjectSpec
+id: EnterpriseIdentityRolloutPolicy
+version: 0.1.0
+description: Project-scoped rollout policy that governs when OIDC, SAML, or SCIM runtime paths may be used.
+fields:
+  - name: id
+    type: string
+  - name: org_id
+    type: string
+  - name: project_id
+    type: string
+  - name: provider_type
+    type: enum
+    values: [oidc, saml, scim]
+  - name: runtime_mode
+    type: enum
+    values: [disabled, metadata_only, auth_allowed, provisioning_allowed]
+  - name: allowed_domains
+    type: array
+  - name: rollout_notes
+    type: string
+  - name: status
+    type: enum
+    values: [active, disabled]
+  - name: created_by
+    type: string
+  - name: metadata
+    type: object
+  - name: created_at
+    type: datetime
+  - name: updated_at
+    type: datetime
+constraints:
+  unique:
+    - [project_id, provider_type]
+rules:
+  saml_login_requires_mode: auth_allowed
+  scim_provisioning_requires_mode: provisioning_allowed
+  rollout_change_emits_event: true

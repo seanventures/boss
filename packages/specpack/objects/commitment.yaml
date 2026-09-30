@@ -1,0 +1,25 @@
+kind: ObjectSpec
+id: Commitment
+version: 0.1.0
+description: Minimum spend or reserved provider/resource obligation.
+fields:
+  - name: id
+    type: string
+  - name: external_resource_id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: amount_usd_micros
+    type: integer
+  - name: period
+    type: enum
+    values: [hourly, daily, monthly, annual, one_time]
+  - name: starts_at
+    type: datetime
+  - name: ends_at
+    type: datetime
+  - name: ttl_at
+    type: datetime
+  - name: status
+    type: enum
+    values: [active, expired, released, reconciled]

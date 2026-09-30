@@ -1,0 +1,71 @@
+kind: WorkflowSpec
+id: causal_isolation_verification
+version: 0.1.0
+name: Causal isolation verification
+description: >
+  Test a caused-by claim by changing only the claimed variable while preserving
+  a comparable control; correlation alone remains inconclusive.
+entry_step: load_causal_claim
+input_schema:
+  required: [project_id, claim_id, claim_version, claimed_variable, control_plan, intervention_plan, dedupe_key]
+output_schema:
+  required: [claim_verification_id, result, evidence_refs]
+steps:
+  - id: load_causal_claim
+    kind: task
+    input: { operation: assurance.claim.load_causal_claim }
+    next: [validate_isolation_plan]
+  - id: validate_isolation_plan
+    kind: task
+    input: { operation: assurance.verification.validate_single_variable_plan }
+    next: [plan_is_isolated]
+  - id: plan_is_isolated
+    kind: condition
+    expression: { path: context.single_changed_variable, op: eq, value: true }
+    on_true: execute_experiment
+    on_false: record_inconclusive
+  - id: execute_experiment
+    kind: parallel
+    branches: [run_control, run_intervention]
+    join: join_experiment
+  - id: run_control
+    kind: task
+    input: { operation: assurance.verification.execute_control }
+    next: [join_experiment]
+  - id: run_intervention
+    kind: task
+    input: { operation: assurance.verification.execute_single_variable_intervention }
+    next: [join_experiment]
+  - id: join_experiment
+    kind: join
+    wait_for: [run_control, run_intervention]
+    success_policy: all
+    next: [compare_results]
+  - id: compare_results
+    kind: task
+    input: { operation: assurance.verification.compare_control_and_intervention }
+    next: [causal_effect_reproduced]
+  - id: causal_effect_reproduced
+    kind: condition
+    expression: { path: context.causal_effect_reproduced, op: eq, value: true }
+    on_true: record_passed
+    on_false: record_inconclusive
+  - id: record_passed
+    kind: task
+    input: { operation: assurance.verification.record_isolation_pass }
+    next: [emit_isolation_event]
+  - id: record_inconclusive
+    kind: task
+    input: { operation: assurance.verification.record_inconclusive }
+    next: [emit_isolation_event]
+  - id: emit_isolation_event
+    kind: task
+    input: { operation: audit.emit_causal_verification }
+rules:
+  exactly_one_claimed_variable_changes: true
+  control_and_intervention_are_comparable: true
+  correlation_only_is_inconclusive: true
+  conflicting_results_cannot_pass: true
+  experiment_inputs_and_outputs_are_hashed: true
+completion:
+  artifacts_required: [ClaimVerification, Evidence]

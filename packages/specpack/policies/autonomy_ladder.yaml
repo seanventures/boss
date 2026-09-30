@@ -1,0 +1,36 @@
+kind: Policy
+id: autonomy_ladder_v0
+version: 0.2.0
+levels:
+  0:
+    name: observe_only
+    allowed: [read, summarize, draft]
+  1:
+    name: propose
+    allowed: [read, summarize, draft, create_task, create_decision, create_artifact]
+  2:
+    name: execute_low_risk
+    allowed: [level_1, execute_tier0, execute_tier1_sandbox]
+  3:
+    name: execute_guarded
+    allowed: [level_2, execute_tier1_real, propose_tier2]
+  4:
+    name: high_trust
+    allowed: [level_3, execute_tier2_with_policy_approval]
+# G2 — trust_score gates allowed risk tiers (fail-closed).
+trust_risk_tiers:
+  0: 0
+  1: 40
+  2: 60
+  3: 80
+upgrade_requires:
+  min_successful_runs: 30
+  policy_violations: 0
+  duplicate_effects: 0
+  rollback_rate_below: 0.02
+  explicit_decision_required: true
+downgrade_triggers:
+  - policy_violation
+  - duplicate_effect_attempt
+  - hidden_failure
+  - repeated_low_quality_output

@@ -1,0 +1,38 @@
+kind: Policy
+id: entitlement_broker_v0
+version: 0.1.0
+scope:
+  type: org
+rules:
+  source_kinds_allowed:
+    - official_cli
+    - official_coding_agent
+    - official_api
+    - approved_local_model
+  routing:
+    optimize_for:
+      - task_fit
+      - observed_capacity
+      - provider_rules
+      - cost
+      - quality
+      - risk
+    fail_closed_on:
+      - missing_credentials
+      - no_active_budget_reservation
+      - disallowed_workload_class
+      - exhausted_capacity
+      - provider_rule_conflict
+  prohibited:
+    consumer_surface_scraping: true
+    private_endpoint_use: true
+    credential_sharing: true
+    rate_limit_evasion: true
+    account_pooling_across_tenants: true
+    personal_subscription_for_multi_tenant_workloads: true
+  audit:
+    require_route_decision_log: true
+    require_rejected_source_reasons: true
+    require_capacity_snapshot: true
+    require_provider_rule_reference: true
+

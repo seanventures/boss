@@ -1,0 +1,52 @@
+kind: WorkflowSpec
+id: ground_truth_baseline_change
+version: 0.1.0
+name: Ground-truth baseline change approval
+description: >
+  Prevent a degraded producer from silently normalizing its baseline by
+  requiring permission, reason, evidence, an explicit Decision, and a new
+  metric-definition version.
+entry_step: load_current_baseline
+input_schema:
+  required: [project_id, metric_definition_id, expected_version, proposed_baseline, reason, evidence_refs, dedupe_key]
+output_schema:
+  required: [status, metric_definition_version, audit_event_ref]
+steps:
+  - id: load_current_baseline
+    kind: task
+    input: { operation: ground_truth.metric.load_current_baseline }
+    next: [validate_proposal]
+  - id: validate_proposal
+    kind: task
+    input: { operation: ground_truth.metric.validate_baseline_proposal }
+    next: [actor_authorized]
+  - id: actor_authorized
+    kind: condition
+    expression: { path: context.actor_authorized, op: eq, value: true }
+    on_true: approve_baseline_change
+    on_false: reject_unauthorized_change
+  - id: approve_baseline_change
+    kind: decision
+    question: Approve this evidence-backed ground-truth baseline change?
+    input: { default_action: hold, required_refs: [reason, evidence_refs, current_baseline, proposed_baseline] }
+    next: [publish_new_version]
+  - id: reject_unauthorized_change
+    kind: task
+    input: { operation: ground_truth.metric.reject_baseline_change }
+    next: [emit_baseline_event]
+  - id: publish_new_version
+    kind: task
+    input: { operation: ground_truth.metric.compare_and_publish_version }
+    next: [emit_baseline_event]
+  - id: emit_baseline_event
+    kind: task
+    input: { operation: audit.emit_baseline_change_result }
+rules:
+  degraded_observation_cannot_change_baseline: true
+  expected_version_compare_and_swap_required: true
+  decision_defaults_to_hold: true
+  reason_and_evidence_required: true
+  every_attempt_is_audited: true
+completion:
+  artifacts_required: [GroundTruthMetricDefinition, Decision]
+  unauthorized_result: rejected

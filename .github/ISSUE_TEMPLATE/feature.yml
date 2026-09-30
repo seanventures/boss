@@ -1,0 +1,65 @@
+name: Feature request
+description: Suggest a change to a Community workflow you actually run.
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the outcome you need. Opening this request does not start work, spend money, or approve anything.
+
+        Do not paste secrets. If this is a vulnerability, email boss@sean.net instead. Do not open a public issue for a vulnerability.
+  - type: textarea
+    id: doing
+    attributes:
+      label: What were you doing?
+      description: Who needs this, and in which part of the product.
+      placeholder: When I review a run in Approvals...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to be able to do?
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How did you install?
+      options:
+        - 'Local checkout (./install.sh --dir "$PWD")'
+        - Pinned one-liner, after a reviewed commit replaced the placeholder
+        - Upgrade of an existing install
+        - Not installed yet
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: edition
+    attributes:
+      label: Edition
+      description: Community, or the edition you are running. Say if you have not installed yet.
+      placeholder: Community
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How would you know it works?
+      description: One thing you could see or check.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround
+      description: Optional. What you do instead today.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. Only if a log shows the gap. Do not paste secrets, tokens, passwords, or the contents of .env.
+    validations:
+      required: false

@@ -1,0 +1,504 @@
+"""Knobs an operator can turn without a deploy.
+
+How hard BOSS runs — how many agents at once, how much it may spend — lived entirely in
+environment variables. That is the right home for a secret and the wrong home for a dial
+somebody wants to try at 20 and then at 5: changing one meant an ops action and a container
+restart, so in practice nobody changed them and the defaults became the product.
+
+A project setting overrides the environment; the environment remains the default. Nothing here
+invents a value: a knob nobody has touched reads exactly as it did before this existed.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Optional
+
+from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
+
+#: The knobs the console may set, with the settings attribute each one overrides and the
+#: bounds a value has to fall inside. An unlisted key is refused rather than stored: a settings
+#: table that accepts anything becomes a place where typos live forever.
+KNOBS: dict[str, dict[str, Any]] = {
+    "code_agent_max_concurrency": {
+        "attr": "code_agent_max_concurrency",
+        "label": "Agents at once",
+        "help": "How many coding agents may run in parallel on this project.",
+        "kind": "int", "min": 1, "max": 16,
+    },
+    "code_agent_max_turns": {
+        "attr": "code_agent_max_turns",
+        "label": "Turn budget per agent",
+        "help": "How long one agent may keep working before it must hand back.",
+        "kind": "int", "min": 10, "max": 200,
+    },
+    "captain_leads_projects": {
+        "attr": "captain_leads_projects",
+        "label": "Captain leads every project",
+        "help": "Attach the Engineering Captain — PRD, QA, UX, certification panel — to every "
+                "project, not only benchmark runs. 1 to lead, 0 to leave builds unled.",
+        "kind": "int", "min": 0, "max": 1,
+    },
+    "code_review_inrun_max_rounds": {
+        "attr": "code_review_inrun_max_rounds",
+        "label": "Review rounds",
+        "help": "How many times reviewers and the implementer may converse before the run "
+                "falls back to a colder path.",
+        "kind": "int", "min": 0, "max": 5,
+    },
+    # WHICH MODEL BUILDS, as a dial rather than a deployment. Choosing a provider meant editing
+    # an environment variable and recreating the containers — so an installation that had
+    # connected three subscriptions could still only use the one it was deployed with, and
+    # "switch to Codex for this project" was an ops task. The credentials are already stored;
+    # only the choice was missing.
+    "code_agent_engine": {
+        "attr": "code_agent_engine",
+        "label": "Implementer",
+        "help": "Which harness writes the code on this project.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    "code_review_engine": {
+        "attr": "code_review_engine",
+        "label": "Adversarial reviewer",
+        "help": "Which harness reviews the code and writes the line-by-line findings. Worth "
+                "differing from the implementer — a reviewer that is the same model rarely "
+                "disagrees with itself. Empty means the implementer reviews its own work.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    # A MODEL FOR EACH LANE, beside the harness picker for that lane. Until now the lanes chose
+    # a harness and the CLASSES chose a model, so "review with Opus" was inexpressible: the
+    # reviewer got whatever its step's class routed to. Choosing claude_code as the reviewer when
+    # the builder is also claude_code therefore gave the SAME MODEL on both sides — exactly what
+    # the reviewer setting exists to prevent.
+    "code_review_model": {
+        "attr": "code_review_model",
+        "label": "Model for the reviewer",
+        "help": "Which model the adversarial reviewer uses. Worth differing from the "
+                "implementer's — the point of a second reviewer is a second opinion, and the "
+                "same model on both sides rarely disagrees with itself. Empty means whatever "
+                "the reviewer's lane would otherwise use.",
+        "kind": "choice", "choices": "models_for:code_review_engine",
+    },
+    "code_agent_model": {
+        "attr": "code_agent_model",
+        "label": "Model for the implementer",
+        "help": "Which model writes the code. Empty means the engine's own default, or the "
+                "per-lane model below if one is set.",
+        "kind": "choice", "choices": "models_for:code_agent_engine",
+    },
+    "code_agent_strong_engine": {
+        "attr": "code_agent_strong_engine",
+        "label": "Hard problems",
+        "help": "Used when a task escalates — a repair after repeated failure, or work the "
+                "router judges difficult. Empty means the implementer handles it.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    "code_agent_low_cost_engine": {
+        "attr": "code_agent_low_cost_engine",
+        "label": "Routine work",
+        "help": "Used for the cheap end — small, well-specified changes. Empty means the "
+                "implementer handles those too.",
+        "kind": "choice", "choices": "harnesses",
+    },
+    # WHICH MODEL, not just which provider. The engine pickers above say Claude Code; they
+    # cannot say Opus for review and Sonnet for routine work, so every lane ran whatever the
+    # CLI defaulted to. The settings existed — code_agent_strong_model, code_agent_low_cost_model
+    # and claude_cli_model — and none was reachable from the console, which is the same "built
+    # and unwired" shape as the rest of this file's history.
+    "code_agent_strong_model": {
+        "attr": "code_agent_strong_model",
+        "label": "Model for hard problems",
+        "help": "Which model the hard-problems lane uses — adversarial review, security and "
+                "consistency checks all run here. Opus is the one worth paying for on review. "
+                "Empty means the engine's own default.",
+        # THE LANE'S OWN HARNESS'S MODELS, not Claude's. This was hard-wired to claude_models,
+        # so pointing the lane at codex still offered opus/sonnet/fable/haiku beside it.
+        "kind": "choice", "choices": "models_for:code_agent_strong_engine",
+    },
+    "code_agent_low_cost_model": {
+        "attr": "code_agent_low_cost_model",
+        "label": "Model for routine work",
+        "help": "Which model the routine lane uses — implement, write_tests and the design "
+                "stages. Sonnet is the measured default; Haiku is cheaper and weaker. "
+                "Empty means the engine's own default.",
+        "kind": "choice", "choices": "models_for:code_agent_low_cost_engine",
+    },
+    # WIRED INTO THE ADAPTER FOR A LONG TIME AND REACHABLE FROM NOWHERE. codex_cli_adapter
+    # reads settings.codex_cli_model on every call; the console never offered it, so an operator
+    # running codex could choose the harness and not the model. Same "built and unwired" shape
+    # as the rest of this file's history.
+    "codex_cli_model": {
+        "attr": "codex_cli_model",
+        "label": "Codex model",
+        "help": "Which model the Codex CLI uses when BOSS drives it. `codex --model` takes any "
+                "name OpenAI offers, so the list is a suggestion rather than a limit. Empty "
+                "means the CLI's own default.",
+        "kind": "choice", "choices": "models_for_harness:codex",
+    },
+    "claude_cli_model": {
+        "attr": "claude_cli_model",
+        "label": "Model for chat and meetings",
+        "help": "Which model answers in the console, agent chat and panels. Empty means the "
+                "engine's own default.",
+        "kind": "choice", "choices": "claude_models",
+    },
+    # AND THE MODEL THAT TALKS. Separate from the four above because it is a separate
+    # question: an operator who connected a subscription for BUILDS was told "OPENAI_API_KEY
+    # is not configured" by the chat, which is true and unhelpful — the subscription they had
+    # just connected can answer perfectly well, nothing had selected it.
+    "chat_llm_engine": {
+        "attr": "chat_llm_engine",
+        "label": "Console chat, agents and meetings",
+        "help": "Which model answers in the chat, runs the agent panels and speaks in "
+                "meetings. Empty means BOSS uses whichever subscription is connected, and "
+                "the API key from this install's environment when one is set.",
+        "kind": "choice", "choices": "chat_engines",
+    },
+    # Saved preference for typed decisions. Live workflow decisions are held by
+    # BOSS-451 until every model call has committed budget and receipt evidence.
+    "decision_backend": {
+        "attr": "decision_backend",
+        "label": "Decision model",
+        "help": "Saved preference for workflow choice decisions. A live decision spends "
+                "only after a budget reservation, model lease, and receipt commit (BOSS-451).",
+        "kind": "choice", "choices": ("claude", "typesafe"),
+    },
+    "decision_model": {
+        "attr": "decision_model",
+        "label": "Claude model for decisions",
+        "help": "Saved Claude model for decisions. The call still waits for a committed "
+                "reservation, lease, and receipt (BOSS-451).",
+        "kind": "choice", "choices": "claude_models",
+    },
+}
+
+#: Each lane's engine knob and the model knob that belongs to it. When the engine changes, a model
+#: chosen for the old one is cleared (see PUT /v1/settings) rather than left paired with a
+#: harness that cannot run it.
+MODEL_FOR_ENGINE = {
+    "code_agent_engine": "code_agent_model",
+    "code_review_engine": "code_review_model",
+    "code_agent_strong_engine": "code_agent_strong_model",
+    "code_agent_low_cost_engine": "code_agent_low_cost_model",
+}
+
+#: Engines that can hold a CONVERSATION, as opposed to drive a coding CLI.
+#:
+#: Not the same set as the harnesses, and offering the harness list here would be a green tick
+#: over nothing: `make_agent_chat_adapter` honours exactly these three and sends everything
+#: else to the OpenAI adapter, so "openrouter" in this box would silently mean "OpenAI".
+CHAT_ENGINES = ("claude_code", "codex", "native")
+
+#: Model aliases the Claude CLI resolves to its current release, verified against the binary
+#: rather than written from memory: `claude --help` documents "an alias for the latest model
+#: (e.g. 'fable', 'opus', or 'sonnet')", and each was confirmed through BOSS's own adapter —
+#: opus -> claude-opus-5, sonnet -> claude-sonnet-5, fable -> claude-fable-5-1,
+#: haiku -> claude-haiku-4-5-20251001.
+#:
+#: Aliases, deliberately, not pinned ids. A pinned id is a decision that rots: it keeps a
+#: project on last quarter's model until somebody notices, and the noticing is the part that
+#: never happens. "" means the engine's own default, which is what every install had before
+#: this knob existed.
+CLAUDE_MODELS = ("", "opus", "sonnet", "fable", "haiku")
+
+
+def _harness_names() -> list[str]:
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        return sorted(BUILTIN_CLI_HARNESSES)
+    except Exception:  # noqa: BLE001 — a knob must not break because a registry did
+        return []
+
+
+def _models_of(harness: str) -> tuple[str, ...]:
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        spec = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
+        return tuple(spec.models) if spec else ()
+    except Exception:  # noqa: BLE001
+        return ()
+
+
+def model_choice_is_open(spec: dict[str, Any], harness: str) -> bool:
+    """Whether this model knob accepts a name outside its offered list.
+
+    True for a harness that does not enumerate. `codex --model` takes any name OpenAI offers,
+    and a closed list would reject a model that works the week after it ships — so the list is
+    shown as a suggestion and free text is kept. Claude's four aliases ARE the complete set,
+    because BOSS resolves them itself and a name outside it has nothing to resolve to.
+    """
+    if not str(spec.get("choices") or "").startswith(
+            ("models_for:", "models_for_harness:")):
+        return False
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        spec = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
+        return not (spec and spec.models_exhaustive)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def model_is_compatible_with_harness(model: Any, harness: str) -> bool:
+    """Keep a known model for its harness; open harnesses also accept new model names.
+
+    Claude aliases are specific to Claude Code. An open harness may accept a new name that
+    BOSS has not catalogued yet, but it must not inherit one of those known Claude aliases.
+    """
+    name = str(model or "").strip().lower()
+    if not name:
+        return True
+    try:
+        from .cli_harness import BUILTIN_CLI_HARNESSES
+
+        active = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
+        if active is not None and name in active.models:
+            return True
+        if active is not None and active.models_exhaustive:
+            return False
+        if active is None:
+            # Native/provider harnesses are in the coding registry rather than the CLI model
+            # registry. Their model ids are open text, but the harness itself must exist.
+            from .harness_registry import get_harness
+
+            get_harness(harness)
+        closed_names = {
+            known for candidate in BUILTIN_CLI_HARNESSES.values()
+            if candidate.models_exhaustive for known in candidate.models
+        }
+        return name not in closed_names
+    except Exception:  # noqa: BLE001 — an unknown pairing must not reach a model call
+        logger.exception("Could not verify model and harness compatibility")
+        return False
+
+
+def harness_for_model_knob(spec: dict[str, Any], settings: Any) -> str:
+    """Which harness a model knob's list should come from.
+
+    `models_for_harness:codex` names one outright. `models_for:code_review_engine` follows the
+    lane's harness setting, falling back to the implementer's when that lane has none — which is
+    what an empty reviewer means: the implementer reviews its own work.
+    """
+    choice = str(spec.get("choices") or "")
+    if choice.startswith("models_for_harness:"):
+        return choice.split(":", 1)[1]
+    if not choice.startswith("models_for:"):
+        return ""
+    attr = choice.split(":", 1)[1]
+    return (str(getattr(settings, attr, "") or "")
+            or str(getattr(settings, "code_agent_engine", "") or ""))
+
+
+def _allowed_choices(spec: dict[str, Any]) -> list[str]:
+    """The values a choice knob will accept, asked of the registry rather than hardcoded.
+
+    A list written here would drift the moment a harness was added, and the failure would be a
+    provider the operator has connected and cannot select.
+    """
+    if spec.get("choices") == "chat_engines":
+        return list(CHAT_ENGINES)
+    if spec.get("choices") == "claude_models":
+        return list(CLAUDE_MODELS)
+    # MODELS, AS THE ACCEPT BOUND. Which harness this lane runs is a per-project question and
+    # this function has no project — that split is the one the file already draws, so the
+    # narrowing happens in `offered_choices` and what is ACCEPTED here is every harness's
+    # models. A knob whose harness does not enumerate its models accepts anything: see
+    # `model_choice_is_open`.
+    if str(spec.get("choices") or "").startswith(("models_for:", "models_for_harness:")):
+        every: list[str] = [""]
+        for name in _harness_names():
+            for model in _models_of(name):
+                if model not in every:
+                    every.append(model)
+        return every
+    if spec.get("choices") != "harnesses":
+        return list(spec.get("choices") or [])
+    try:
+        from .harness_registry import available_harnesses
+
+        return sorted(h["name"] for h in available_harnesses())
+    except Exception:  # noqa: BLE001 — a knob must not break because a registry did
+        return []
+
+
+def offered_choices(connection, settings, project_id: str,
+                    spec: dict[str, Any], current: Any = None) -> list[str]:
+    """The values worth OFFERING for this knob on this project, as opposed to accepting.
+
+    Two different questions, and conflating them is what made the role pickers useless:
+    `_allowed_choices` answers "could BOSS drive this at all", which is the right bound for
+    validation and the wrong list for a dropdown. A picker should show what this project has
+    actually connected — otherwise ten of its eleven options are credentials the operator
+    does not have, and choosing one fails later, inside a build, looking like a bad model.
+
+    `current` is always included. A model can be un-connected after being chosen, and a
+    picker that silently drops the value it is displaying rewrites the operator's setting the
+    next time they touch anything else on the form.
+    """
+    allowed = _allowed_choices(spec)
+    if str(spec.get("choices") or "").startswith(("models_for:", "models_for_harness:")):
+        # The models of the harness this lane actually runs — not every harness's, which is the
+        # accept bound and the wrong list for a dropdown.
+        harness = harness_for_model_knob(spec, settings)
+        offered = ["", *_models_of(harness)]
+        if current and str(current) not in offered:
+            offered.append(str(current))
+        return offered
+    if spec.get("choices") not in ("harnesses", "chat_engines") or not allowed:
+        return allowed
+    try:
+        from .setup_service import connected_engines
+
+        connected = set(connected_engines(connection, settings, project_id))
+    except Exception:  # noqa: BLE001 — a knob must not break because a lookup did
+        return allowed
+    offered = [name for name in allowed if name in connected]
+    if current and current not in offered and current in allowed:
+        offered.append(str(current))
+    # Nothing connected yet: show everything rather than an empty dropdown, which would read
+    # as "this install cannot do it" instead of "connect a model first".
+    return sorted(offered) or allowed
+
+
+class UnknownKnob(ValueError):
+    """The key is not one of ours. Refused rather than stored."""
+
+
+def coerce(key: str, value: Any) -> Any:
+    """The value this knob will actually take, or an error saying why it will not.
+
+    Bounds are enforced HERE rather than at the edge, so every caller — console, API, a script
+    — gets the same answer. A concurrency of 400 is not a preference, it is an outage.
+    """
+    spec = KNOBS.get(key)
+    if spec is None:
+        raise UnknownKnob(f"'{key}' is not a setting BOSS knows about.")
+    if spec["kind"] == "int":
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{spec['label']} has to be a whole number.") from error
+        if not (spec["min"] <= number <= spec["max"]):
+            raise ValueError(
+                f"{spec['label']} has to be between {spec['min']} and {spec['max']}.")
+        return number
+    if spec["kind"] == "choice":
+        name = str(value or "").strip().lower()
+        allowed = _allowed_choices(spec)
+        # A MODEL KNOB WHOSE HARNESS DOES NOT ENUMERATE ACCEPTS ANYTHING. `codex --model` takes
+        # any name OpenAI offers, so validating against a list BOSS wrote would reject a model
+        # that works the week after it ships — and the operator would read "BOSS cannot drive
+        # that" about a model their CLI runs fine.
+        if str(spec.get("choices") or "").startswith(
+                ("models_for:", "models_for_harness:")):
+            if not name:
+                return ""
+            for harness in _harness_names():
+                if name in _models_of(harness):
+                    return name
+            if any(model_choice_is_open(spec, harness) for harness in _harness_names()):
+                return name
+            raise ValueError(
+                f"{spec['label']}: '{name}' is not a model any connected harness offers. "
+                f"Available: {', '.join(x for x in allowed if x)}.")
+        if allowed and name not in allowed:
+            # Name what IS available. "Invalid value" sends somebody to the source to find out
+            # what the valid ones are, and the answer changes as harnesses are registered.
+            raise ValueError(
+                f"{spec['label']}: '{name}' is not a harness BOSS can drive. "
+                f"Available: {', '.join(allowed)}.")
+        return name
+    return value
+
+
+def get_all(connection, project_id: str) -> dict[str, Any]:
+    """Every knob this project has set. Absent keys are not defaults — they are silence."""
+    rows = connection.execute(
+        text("SELECT key, value FROM project_settings WHERE project_id = :p"),
+        {"p": project_id},
+    ).mappings().all()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def set_one(connection, project_id: str, key: str, value: Any, actor: str = "operator") -> Any:
+    clean = coerce(key, value)
+    connection.execute(
+        text("INSERT INTO project_settings (project_id, key, value, updated_by, updated_at) "
+             "VALUES (:p, :k, CAST(:v AS JSONB), :by, now()) "
+             "ON CONFLICT (project_id, key) DO UPDATE "
+             "SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, "
+             "    updated_at = now()"),
+        {"p": project_id, "k": key, "v": json.dumps(clean), "by": actor},
+    )
+    return clean
+
+
+def clear_one(connection, project_id: str, key: str) -> None:
+    """Hand the knob back to the environment. Deleting is how a project says 'use the default'
+    — storing the current default instead would freeze it against a later change."""
+    connection.execute(
+        text("DELETE FROM project_settings WHERE project_id = :p AND key = :k"),
+        {"p": project_id, "k": key},
+    )
+
+
+def applied(connection, project_id: Optional[str], settings: Any) -> Any:
+    """`settings` with this project's choices layered on top.
+
+    One place, rather than a lookup at each use. The alternative is threading `effective(...)`
+    through every read of every knob — `code_agent_strong_engine` alone is read in four
+    different functions — and the reads that got missed would be the ones that quietly kept
+    using the deployment default while the console showed the operator's choice.
+
+    A settings lookup failure falls back to deployment values. The compatibility check still
+    runs: even a deployment-wide Codex/Claude-model mismatch must not reach a model call.
+    """
+    chosen = {}
+    if project_id:
+        try:
+            chosen = get_all(connection, project_id)
+        except Exception:  # noqa: BLE001 — a DB outage must not expose an unsafe model pair
+            logger.exception("Could not load project settings; using deployment settings")
+    overrides = {}
+    for key, value in chosen.items():
+        spec = KNOBS.get(key)
+        if spec and value not in (None, ""):
+            overrides[spec["attr"]] = value
+    layered = settings.model_copy(update=overrides) if overrides else settings
+    compatible = {}
+    for model_key in MODEL_FOR_ENGINE.values():
+        spec = KNOBS[model_key]
+        model_attr = spec["attr"]
+        model = getattr(layered, model_attr, "")
+        harness = harness_for_model_knob(spec, layered)
+        if model and not model_is_compatible_with_harness(model, harness):
+            # A project engine override can expose a deployment model chosen for the old
+            # engine even after its project model was cleared. Never send that pairing to
+            # a run. An explicit compatible project choice remains untouched.
+            compatible[model_attr] = ""
+    return layered.model_copy(update=compatible) if compatible else layered
+
+
+def effective(connection, project_id: Optional[str], settings: Any, key: str) -> Any:
+    """What this knob is worth right now: the project's value, else the environment's.
+
+    Never raises. A settings table that is unreachable must not stop work — the environment is
+    a complete answer on its own, and was the only answer until this existed.
+    """
+    spec = KNOBS.get(key)
+    fallback = getattr(settings, spec["attr"], None) if spec else None
+    if not project_id or spec is None:
+        return fallback
+    try:
+        row = connection.execute(
+            text("SELECT value FROM project_settings WHERE project_id = :p AND key = :k"),
+            {"p": project_id, "k": key},
+        ).scalar()
+    except Exception:  # noqa: BLE001 — the environment is a complete answer
+        return fallback
+    return fallback if row is None else row

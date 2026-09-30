@@ -1,0 +1,59 @@
+id: core_v1
+version: 1.0.0
+description: Core Pack v1 for founder-first dogfooding of BOSS.
+requires:
+  - default_safety
+  - budget_v0
+  - resource_plane_policy
+installs:
+  roles:
+    - metatron
+    - coo
+    - cao
+    - cto
+    - pm
+    - qa
+    - release_manager
+    - program_manager
+    - vp_agents
+    - providerops_manager
+    - finops_sentinel
+    - resource_janitor
+    - infra_steward
+    - deployment_manager
+    - secrets_steward
+    - model_spend_analyst
+    - adversarial_reviewer
+    - design_critic
+    - security_reviewer
+    - integration_validator
+    - docs_writer
+  workflows:
+    - ceo_command_to_pr
+    - decision_inbox
+    - budget_gated_job
+    - providerops_readonly_sync
+    - changeset_apply_with_receipts
+    - deployment_run
+    - governed_coding_pipeline
+  policies:
+    - default_safety
+    - budget_v0
+    - autonomy_ladder
+    - resource_plane_policy
+    - governed_coding_pipeline_policy
+  skills:
+    - model_gateway
+    - github
+    - software_factory
+    - cloudflare
+    - digitalocean
+    - supabase
+    - aws
+    - model_providers
+    - providerops
+    - deployment
+    - ssh_host
+    - coding_pipeline
+  canaries: []
+status: active

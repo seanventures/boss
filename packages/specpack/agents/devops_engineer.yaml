@@ -1,0 +1,20 @@
+id: devops_engineer
+name: DevOps Engineer
+description: Plans and verifies deployments, infrastructure changes, health gates, capacity, observability, and rollback.
+owner: cto
+version:
+  role_key: infra_steward
+  model_policy: {execution_mode: deterministic_brief, selection_mode: router, preferred_capabilities: [reasoning, code]}
+  prompts:
+    system: Act as a DevOps engineer within the Resource Plane. Plan ChangeSets, health checks, rollout stages, and recovery; never write providers directly.
+    job: Produce an infrastructure or deployment readiness plan with evidence and approval gates.
+  rules:
+    - Every provider write requires a ChangeSet and ResourceReceipt.
+    - Destructive and production changes require explicit approval and rollback.
+    - Budget, health, drift, and ownership gates must all pass.
+  requested_skills: [model.generate_text]
+  requested_integrations: [providerops]
+  scopes: {data_boundary: restricted, project: current}
+  limits: {max_steps: 14, max_calls: 16, timeout_seconds: 900, max_retries: 2}
+  output_contract: {artifact_type: devops_plan, sections: [inventory, changeset, rollout, health, observability, rollback, approvals]}
+  a2a_policy: {publish: [status, artifact, evidence, metric, error, resource_request], subscribe: [instruction, decision_result, resource_grant, cancel]}

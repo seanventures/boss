@@ -1,0 +1,85 @@
+skills:
+  - id: aws.ec2.instance.create
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Create an AWS EC2 instance through ProviderOps ChangeSet execution.
+    data_boundary: internal
+    input_schema: { image_id: string, instance_type: string, subnet_id: "string?", key_name: "string?", security_group_ids: array, tags: array }
+    output_schema: { instance_id: string, provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: hourly_commitment, category: infra }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_compute_write] }
+    policy: { requires_changeset: true, requires_budget_reservation: true, requires_approval: [ceo, cto], requires_resource_receipt: true }
+  - id: aws.ec2.instance.destroy
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Terminate an AWS EC2 instance only from an approved destructive ChangeSet.
+    data_boundary: internal
+    input_schema: { instance_id: string, reason: string, rollback_plan: string }
+    output_schema: { provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: savings_estimate, category: infra }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_compute_destroy] }
+    policy: { requires_changeset: true, requires_approval: [ceo], destructive: true, requires_resource_receipt: true }
+  - id: aws.s3.bucket.create
+    kind: provider
+    risk_tier: 2
+    mock_mode: false
+    description: Create an S3 bucket after budget, policy, and ChangeSet checks.
+    data_boundary: internal
+    input_schema: { bucket_name: string, versioning: "boolean?", encryption: "string?" }
+    output_schema: { provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: storage_usage_estimate, category: storage }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_storage_write] }
+    policy: { requires_changeset: true, requires_budget_reservation: true, requires_resource_receipt: true }
+  - id: aws.rds.instance.create
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Create an AWS RDS instance (SecretRef-only master password) through a ChangeSet.
+    data_boundary: internal
+    input_schema: { db_instance_identifier: string, engine: string, db_instance_class: string, allocated_storage_gb: integer, master_username: string, master_password_secret_ref: string }
+    output_schema: { provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: hourly_commitment, category: infra }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_database_write] }
+    policy: { requires_changeset: true, requires_budget_reservation: true, requires_approval: [ceo, cto], requires_resource_receipt: true }
+  - id: aws.iam.role.upsert
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Create or update an IAM role and attached policies through a ChangeSet.
+    data_boundary: internal
+    input_schema: { role_name: string, assume_role_policy_document: object, attach_policy_arns: array }
+    output_schema: { provider_ref: string, role_arn: string, resource_receipt_id: string }
+    cost: { estimator: fixed, category: provider }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_identity_write] }
+    policy: { requires_changeset: true, requires_approval: [ceo, cto], requires_resource_receipt: true }
+  - id: aws.route53.record.upsert
+    kind: provider
+    risk_tier: 2
+    mock_mode: false
+    description: Upsert a Route53 record set through a ChangeSet and ResourceReceipt.
+    data_boundary: internal
+    input_schema: { hosted_zone_id: string, name: string, record_type: string, values: array, ttl: "integer?" }
+    output_schema: { provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: fixed, category: provider }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_dns_write] }
+    policy: { requires_changeset: true, requires_resource_receipt: true, production_requires_approval: true, production_requires_rollback_plan: true }
+  - id: aws.costs.sync
+    kind: provider
+    risk_tier: 1
+    mock_mode: false
+    description: Read AWS Cost Explorer and convert provider data into CostEvents.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string, period_start: string, period_end: string }
+    output_schema: { cost_event_ids: array, confidence: string }
+    cost: { estimator: fixed, category: provider }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel, finops_sentinel], required_permissions: [provider_billing_read] }
+    policy: { read_only: true, writes_cost_events_only: true }

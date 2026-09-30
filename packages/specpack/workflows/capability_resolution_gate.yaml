@@ -1,0 +1,69 @@
+kind: WorkflowSpec
+id: capability_resolution_gate
+version: 0.1.0
+name: Capability resolution gate
+description: >
+  Resolve effective capability as the deterministic intersection of role,
+  group, workflow, integration, policy, risk, approval, and data boundaries
+  before any executor invocation.
+entry_step: load_invocation_request
+input_schema:
+  required: [project_id, actor_ref, workflow_run_ref, integration_connection_id, requested_capability, target_ref, dedupe_key]
+output_schema:
+  required: [capability_resolution_id, disposition, effective_capability, reason_codes, event_ref]
+steps:
+  - id: load_invocation_request
+    kind: task
+    input: { operation: integration.capability.load_invocation_request }
+    next: [resolve_authority_dimensions]
+  - id: resolve_authority_dimensions
+    kind: parallel
+    branches: [resolve_actor_authority, resolve_connection_authority, resolve_policy_authority]
+    join: join_authority
+  - id: resolve_actor_authority
+    kind: task
+    input: { operation: integration.capability.resolve_role_group_and_workflow_limits }
+    next: [join_authority]
+  - id: resolve_connection_authority
+    kind: task
+    input: { operation: integration.capability.resolve_connection_version_health_and_scopes }
+    next: [join_authority]
+  - id: resolve_policy_authority
+    kind: task
+    input: { operation: integration.capability.resolve_policy_risk_approval_and_data_limits }
+    next: [join_authority]
+  - id: join_authority
+    kind: join
+    wait_for: [resolve_actor_authority, resolve_connection_authority, resolve_policy_authority]
+    success_policy: all
+    next: [intersect_capabilities]
+  - id: intersect_capabilities
+    kind: task
+    input: { operation: integration.capability.compute_deterministic_intersection }
+    next: [capability_allowed]
+  - id: capability_allowed
+    kind: condition
+    expression: { path: context.capability_allowed, op: eq, value: true }
+    on_true: record_allowed_resolution
+    on_false: record_denied_resolution
+  - id: record_allowed_resolution
+    kind: task
+    input: { operation: integration.capability.record_preflight_allowed }
+    next: [emit_resolution_event]
+  - id: record_denied_resolution
+    kind: task
+    input: { operation: integration.capability.record_preflight_denied_with_reason_codes }
+    next: [emit_resolution_event]
+  - id: emit_resolution_event
+    kind: task
+    input: { operation: audit.emit_capability_resolution }
+rules:
+  effective_capability_is_intersection_never_union: true
+  exact_role_group_workflow_connection_and_policy_versions_required: true
+  missing_stale_unhealthy_or_conflicting_authority_fails_closed: true
+  denied_resolution_never_invokes_executor: true
+  resolution_is_persisted_with_explainable_reason_codes: true
+  provider_boundary_must_revalidate_resolution: true
+completion:
+  artifacts_required: [CapabilityResolution, Event]
+  dispositions: [allowed, denied]

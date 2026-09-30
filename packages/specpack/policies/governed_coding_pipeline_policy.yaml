@@ -1,0 +1,68 @@
+kind: Policy
+id: governed_coding_pipeline_policy_v0
+version: 0.1.0
+purpose: >
+  Make the governed coding pipeline the default for every code task, and scale how many steps
+  run to how risky the change is. The agent that writes something never judges it, the final
+  gate fails closed, and the project standards bind every step.
+
+applies_to_skills:
+  - code.task
+  - software_factory.codex_pr_proposal
+  - coding_pipeline.*
+
+# Rules that hold no matter the risk. Quality is evidence, never just a claim.
+always:
+  - follow_the_project_standards
+  - the_planner_does_not_review_the_plan
+  - the_tester_is_not_the_coder
+  - the_reviewer_is_not_the_coder
+  - the_security_reviewer_is_not_the_coder
+  - the_final_gate_fails_closed
+  - every_step_leaves_a_receipt
+  - loops_are_bounded
+  - nothing_merges_without_the_final_gate_passing
+
+# How many steps run, by how risky the change is (same tiers as the autonomy ladder).
+tiers:
+  0:
+    label: trivial            # docs, comments, a refactor already covered by tests
+    steps: [implement, final_gate]
+    must_pass: { tests_pass: true }
+    approval: none
+  1:
+    label: low                # a small internal change
+    steps: [standards, spec, refine, plan, review_plan, tasks, write_tests, implement, final_gate]
+    must_pass: { tests_pass: true, coverage_min: 0.6, plan_clean: true }
+    approval: single
+  2:
+    label: standard           # something users see, or real business logic
+    steps: [standards, spec, refine, plan, review_plan, approve_plan, tasks, write_tests, implement, review_code, security_check, check_tests, run_all_tests, consistency_check, final_gate]
+    must_pass: { tests_pass: true, coverage_min: 0.7, test_strength_min: 0.6, code_safe: true, security_clean: true, nothing_broke: true, consistent: true }
+    approval: single
+  3:
+    label: high               # login, payments, secrets, migrations, deploys
+    steps: [standards, spec, refine, plan, review_plan, approve_plan, tasks, write_tests, implement, review_code, security_check, check_tests, run_all_tests, consistency_check, final_gate]
+    must_pass: { tests_pass: true, coverage_min: 0.8, test_strength_min: 0.75, code_safe: true, security_clean: true, nothing_broke: true, consistent: true }
+    approval: two_approvers   # two different people sign off
+    human_signoffs: [approve_plan, approve]
+
+# When a step fails, never quietly pass.
+on_failure:
+  default: send_findings_back_to_the_coder
+  bounded:
+    max_loops_per_step: 3
+    then: ask_a_human            # a Decision, not endless retries
+  override:
+    allowed: true
+    needs: a_decision            # any override is recorded and approved
+
+# If nobody sets a risk tier, guess one — and treat sensitive areas as high.
+guess_tier:
+  default: 2
+  high_when_change_touches:
+    - login
+    - payment
+    - secrets
+    - migration
+    - deploy

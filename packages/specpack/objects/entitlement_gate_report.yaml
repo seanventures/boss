@@ -1,0 +1,39 @@
+object: EntitlementGateReport
+version: 1.0.0
+description: Durable marketplace entitlement validation output for private or gated agent modules.
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: module_id
+    type: string
+    required: true
+  - name: required_entitlement
+    type: string
+    required: true
+  - name: entitlement_status
+    type: string
+    required: true
+  - name: status
+    type: enum
+    values: [validated, blocked]
+    required: true
+  - name: work_product
+    type: object
+    required: true
+  - name: required_decisions
+    type: array
+    required: true
+  - name: evidence_refs
+    type: array
+    required: true
+  - name: created_by_job_id
+    type: string
+    required: true
+invariants:
+  - No private or entitlement-gated module can install without an active required entitlement.
+  - Marketplace validation performs no external effects.
+  - Missing entitlement defaults to HOLD and creates visible audit evidence.

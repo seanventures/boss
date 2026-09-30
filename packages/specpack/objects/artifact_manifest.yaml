@@ -1,0 +1,32 @@
+id: ArtifactManifest
+version: 1
+description: Product-facing artifact manifest backed by the artifacts table and artifact detail API.
+backing_runtime:
+  table: artifacts
+  api: /v1/artifacts
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: artifact_type
+    type: string
+    required: true
+  - name: title
+    type: string
+    required: true
+  - name: uri
+    type: string
+    required: false
+  - name: content_hash
+    type: string
+    required: false
+  - name: data_boundary
+    type: enum
+    values: [public, internal, confidential, restricted, local-only]
+    required: true
+invariants:
+  - Important work must be represented by a durable artifact record.
+  - Artifact detail reads remain project-scoped through task/project ownership.

@@ -1,0 +1,17 @@
+{
+  "name": "@boss/api-client",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "1.0.0-rc.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/community.ts",
+    "./community": "./src/community.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,25 @@
+id: RoutingDecision
+version: 1
+description: General routing decision alias backed by model route decisions and routing logs.
+backing_runtime:
+  primary_tables: [model_route_decisions, routing_logs]
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: routing_kind
+    type: enum
+    values: [model, skill, worker, provider]
+    required: true
+  - name: selected
+    type: boolean
+    required: true
+  - name: rationale
+    type: string
+    required: true
+invariants:
+  - Routing decisions must optimize authorized capacity without bypassing provider limits.
+  - Denied routing decisions must remain queryable for audit.

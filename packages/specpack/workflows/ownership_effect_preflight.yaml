@@ -1,0 +1,60 @@
+kind: WorkflowSpec
+id: ownership_effect_preflight
+version: 0.1.0
+name: Surface ownership effect preflight
+description: >
+  Revalidate the current deploying owner immediately before an external effect
+  and fail closed when the registry is unavailable, stale, or conflicting.
+entry_step: load_effect_target
+input_schema:
+  required: [project_id, surface_ref, actor_ref, expected_ownership_version, effect_ref, dedupe_key]
+output_schema:
+  required: [preflight_id, disposition, ownership_version, event_ref]
+steps:
+  - id: load_effect_target
+    kind: task
+    input: { operation: assurance.ownership.load_effect_target }
+    next: [load_registry_snapshot]
+  - id: load_registry_snapshot
+    kind: task
+    input: { operation: assurance.ownership.load_current_registry_snapshot }
+    next: [registry_available]
+  - id: registry_available
+    kind: condition
+    expression: { path: context.registry_available, op: eq, value: true }
+    on_true: ownership_matches
+    on_false: record_registry_unavailable
+  - id: ownership_matches
+    kind: condition
+    expression: { path: context.owner_and_version_match, op: eq, value: true }
+    on_true: record_allowed_preflight
+    on_false: record_ownership_conflict
+  - id: record_allowed_preflight
+    kind: task
+    input: { operation: assurance.ownership.record_effect_preflight_allowed }
+    next: [emit_preflight_event]
+  - id: record_registry_unavailable
+    kind: task
+    input: { operation: assurance.ownership.record_effect_preflight_blocked }
+    next: [escalate_blocked_effect]
+  - id: record_ownership_conflict
+    kind: task
+    input: { operation: assurance.ownership.record_effect_preflight_conflict }
+    next: [escalate_blocked_effect]
+  - id: escalate_blocked_effect
+    kind: decision
+    question: Who owns this surface, and may the blocked effect be retried after ownership is corrected?
+    input: { default_action: hold, external_effect_allowed: false }
+    next: [emit_preflight_event]
+  - id: emit_preflight_event
+    kind: task
+    input: { operation: audit.emit_ownership_effect_preflight }
+rules:
+  revalidate_immediately_before_provider_boundary: true
+  actor_and_exact_ownership_version_must_match: true
+  registry_unavailable_fails_closed: true
+  denied_preflight_never_invokes_external_effect: true
+  blocked_attempt_is_visible_and_deduplicated: true
+completion:
+  artifacts_required: [OwnershipPreflight, Event]
+  blocked_statuses: [registry_unavailable, ownership_conflict, stale_version]

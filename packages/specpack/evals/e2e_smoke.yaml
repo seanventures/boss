@@ -1,0 +1,18 @@
+kind: EvalSpec
+id: e2e_smoke
+version: 0.1.0
+steps:
+  - create_demo_org_workspace_project
+  - submit_ceo_command
+  - assert_task_created
+  - assert_plan_job_created
+  - worker_claims_job
+  - worker_completes_job
+  - assert_artifact_created
+  - assert_decision_created
+  - approve_decision
+  - assert_event_feed_contains_all_steps
+pass_criteria:
+  duplicate_receipts: 0
+  deadletters: 0
+  tests_pass: true

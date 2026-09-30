@@ -1,0 +1,13 @@
+kind: EvalSpec
+id: budget_governor_hard_cap
+version: 0.1.0
+scenario: Reservation would exceed daily cap.
+steps:
+  - seed_budget_policy_daily_cap_10_dollars
+  - seed_actual_spend_9_95_dollars
+  - request_reservation_1_dollar
+assertions:
+  - reservation_status_denied
+  - job_not_leased
+  - decision_card_created_for_increase_budget_or_defer
+  - event_emitted_budget_denied

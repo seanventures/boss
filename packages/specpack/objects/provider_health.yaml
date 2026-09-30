@@ -1,0 +1,26 @@
+kind: ObjectSpec
+id: ProviderHealth
+version: 0.1.0
+description: Provider API, quota, permission, billing, and sync health snapshot.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: status
+    type: enum
+    values: [healthy, degraded, unavailable, unauthorized, rate_limited, unknown]
+  - name: api_available
+    type: boolean
+  - name: rate_limits
+    type: object
+  - name: usage_caps
+    type: object
+  - name: missing_permissions
+    type: array
+  - name: failed_call_count
+    type: integer
+  - name: last_successful_sync_at
+    type: datetime
+  - name: checked_at
+    type: datetime

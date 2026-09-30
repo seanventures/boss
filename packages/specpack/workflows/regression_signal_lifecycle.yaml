@@ -1,0 +1,62 @@
+kind: WorkflowSpec
+id: regression_signal_lifecycle
+version: 0.1.0
+name: Regression signal lifecycle
+description: >
+  Deduplicate a threshold breach, keep continued degradation visible, and close
+  the signal only after comparable passing recovery evidence.
+entry_step: load_observation
+input_schema:
+  required: [project_id, observation_id, metric_definition_id, metric_definition_version, dedupe_key]
+output_schema:
+  required: [regression_signal_id, status, event_ref]
+steps:
+  - id: load_observation
+    kind: task
+    input: { operation: ground_truth.observation.load }
+    next: [load_signal_window]
+  - id: load_signal_window
+    kind: task
+    input: { operation: ground_truth.regression.load_dedupe_window }
+    next: [observation_is_breach]
+  - id: observation_is_breach
+    kind: condition
+    expression: { path: context.observation_status, op: eq, value: breach }
+    on_true: open_or_update_signal
+    on_false: validate_recovery
+  - id: open_or_update_signal
+    kind: task
+    input: { operation: ground_truth.regression.open_or_update_idempotently }
+    next: [ensure_actionable_route]
+  - id: ensure_actionable_route
+    kind: task
+    input: { operation: ground_truth.regression.ensure_incident_or_decision }
+    next: [emit_signal_event]
+  - id: validate_recovery
+    kind: task
+    input: { operation: ground_truth.regression.validate_comparable_recovery }
+    next: [recovery_proven]
+  - id: recovery_proven
+    kind: condition
+    expression: { path: context.recovery_proven, op: eq, value: true }
+    on_true: close_signal
+    on_false: keep_signal_open
+  - id: close_signal
+    kind: task
+    input: { operation: ground_truth.regression.record_recovery }
+    next: [emit_signal_event]
+  - id: keep_signal_open
+    kind: task
+    input: { operation: ground_truth.regression.record_unproven_recovery }
+    next: [emit_signal_event]
+  - id: emit_signal_event
+    kind: task
+    input: { operation: audit.emit_regression_lifecycle }
+rules:
+  one_open_signal_per_metric_version_and_window: true
+  continued_breach_updates_duration_and_trend: true
+  recovery_requires_comparable_passing_observation: true
+  evaluator_failure_cannot_close_signal: true
+  no_silent_incident_drop: true
+completion:
+  artifacts_required: [RegressionSignal, GroundTruthObservation]
