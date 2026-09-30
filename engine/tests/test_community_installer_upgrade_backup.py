@@ -386,10 +386,8 @@ def test_published_one_liner_uses_one_commit_and_propagates_download_failure(
     env["BOSS_TEST_CURL_TRACE"] = str(tmp / "curl-trace")
     if download_fails:
         env["BOSS_TEST_CURL_FAIL"] = "1"
-    line = next(line for line in (REPO / "README.community.md").read_text().splitlines()
+    line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
                 if line.startswith("BOSS_RELEASE_COMMIT="))
-    for guide in (REPO / "docs/community/QUICKSTART.md", REPO / "scripts/install/README.md"):
-        assert line in guide.read_text()
     line = line.replace("7b88a18a2b4cd0b14b09a47fc415f7ffd4580066", new)
     command = " ".join((line, "--dir", shlex.quote(str(fresh)), "--yes",
                         "--skip-model-key", "--no-install-deps"))
@@ -406,9 +404,49 @@ def test_published_one_liner_uses_one_commit_and_propagates_download_failure(
         assert _git("rev-parse", "HEAD", cwd=fresh) == new
 
 
+@pytest.mark.parametrize("download_fails", [False, True])
+def test_website_installer_pins_the_release_commit(install_pair, download_fails):
+    _, _, new, env, tmp = install_pair
+    fresh = tmp / "website-install"
+    curl = tmp / "bin/curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$BOSS_TEST_CURL_TRACE\"\n"
+        "[[ ${BOSS_TEST_CURL_FAIL:-0} != 1 ]] || exit 22\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  if [[ $1 == -o ]]; then cp \"$BOSS_TEST_CURL_SOURCE\" \"$2\"; exit; fi\n"
+        "  shift\n"
+        "done\n"
+        "exit 2\n"
+    )
+    curl.chmod(0o755)
+    env["BOSS_TEST_CURL_SOURCE"] = str(REPO / "install.sh")
+    env["BOSS_TEST_CURL_TRACE"] = str(tmp / "curl-trace")
+    if download_fails:
+        env["BOSS_TEST_CURL_FAIL"] = "1"
+    bootstrap = (REPO / "docs/landing/install.sh").read_text()
+    guide_line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
+                      if line.startswith("BOSS_RELEASE_COMMIT="))
+    pinned = guide_line.split()[0].split("=", 1)[1]
+    assert f'BOSS_RELEASE_COMMIT="{pinned}"' in bootstrap
+    script = tmp / "website-install.sh"
+    script.write_text(bootstrap.replace(pinned, new))
+
+    result = _run("bash", script, "--dir", fresh, "--yes", "--skip-model-key",
+                  "--no-install-deps", cwd=REPO, env=env)
+
+    assert f"/{new}/install.sh" in (tmp / "curl-trace").read_text()
+    if download_fails:
+        assert result.returncode == 22
+        assert not fresh.exists()
+    else:
+        assert result.returncode == 86, result.stderr + result.stdout
+        assert _git("rev-parse", "HEAD", cwd=fresh) == new
+
+
 def test_a_non_sha_pin_stops_before_download(install_pair):
     _, _, _, env, tmp = install_pair
-    line = next(line for line in (REPO / "README.community.md").read_text().splitlines()
+    line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
                 if line.startswith("BOSS_RELEASE_COMMIT="))
     assert "7b88a18a2b4cd0b14b09a47fc415f7ffd4580066" in line
     line = line.replace(

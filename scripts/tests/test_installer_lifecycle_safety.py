@@ -283,6 +283,9 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
+        # The public website is the one reviewed host under the private domain; the
+        # exporter applies the same exact-origin allowance.
+        text = re.sub(r"https://boss\.sean\.network(?=[/\"'\s)<>\]`]|$)", "", text)
         relative = path.relative_to(ROOT).as_posix()
         offenders.extend(f"{relative}: {needle}" for needle in forbidden if needle in text)
         if private_registry.search(text):

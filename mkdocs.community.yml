@@ -1,6 +1,6 @@
 site_name: BOSS
 site_description: The self-hosted control plane for AI software work
-site_url: https://seanventures.github.io/boss/docs/
+site_url: https://boss.sean.network/docs/
 repo_url: https://github.com/seanventures/boss
 repo_name: seanventures/boss
 docs_dir: docs/community
@@ -42,7 +42,7 @@ theme:
 
 extra:
   generator: false
-  homepage: https://seanventures.github.io/boss/
+  homepage: https://boss.sean.network/
 
 extra_css:
   - stylesheets/extra.css
