@@ -107,9 +107,10 @@ previews, discovery and meetings, rendered straight from the engine's read
 tools over the same `/mcp` JSON-RPC endpoint. HTTP mode defaults to
 **read-only** (loopback needs no transport auth; non-loopback requires a token);
 write tools stay on stdio MCP or require
-`--allow-writes` on loopback with `BOSS_MCP_HTTP_TOKEN`. Authenticated HTTP
-clients send `Authorization: Bearer <token>`; remote clients can use an SSH
-tunnel. The Mission Control page prompts for that token in write-capable mode
+`--allow-writes` and `BOSS_MCP_HTTP_TOKEN` on any host, including a non-loopback
+bind. Authenticated HTTP clients send `Authorization: Bearer <token>`. Use TLS
+or a tunnel when that listener is reachable from other machines. The Mission
+Control page prompts for that token in write-capable mode
 and keeps it in browser memory for the current page session. It is a snapshot
 viewer by design; approvals remain explicit operator actions.
 
