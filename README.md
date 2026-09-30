@@ -1,6 +1,14 @@
+![BOSS Community, release 1.0 rc1](docs/community/assets/masthead.svg)
+
 # BOSS Community
 
-BOSS is a self-hosted control plane for software work. On a machine you administer, you give it a goal and review the plan, decisions, code, tests, costs, and receipts in one console.
+BOSS is a self-hosted control plane for software work. Release [v1.0-rc1](https://github.com/seanventures/boss/releases/tag/v1.0-rc1) is commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. On a machine you administer, you give it a goal and review the plan, decisions, code, tests, costs, and receipts in one console.
+
+| | What you open |
+| --- | --- |
+| Web | `http://127.0.0.1:3000`, or a hostname you terminate TLS for. [Hostname](docs/community/hostname.md). |
+| Terminal | `make metatron` in the install directory. [Terminal](docs/community/terminal.md). |
+| CLI | `source boss-community.env.sh`. The API key is not printed. [CLI](docs/community/cli.md). |
 
 ## What BOSS is
 
@@ -14,19 +22,17 @@ The [five example workflows](examples/README.md) show research, content preparat
 
 ## Who it is for
 
-Use this if you will run BOSS yourself and keep credentials on your own computer or VM. It is not a hosted BOSS account. It does not include a hosted marketplace or managed elastic workers.
-
-This repository has not been published. This is not a public or generally available service. Install from a checkout you already have, or wait until a reviewed commit exists.
+Use this if you will run BOSS yourself and keep credentials on your own computer or VM. It is not a hosted BOSS account. It does not include a hosted marketplace or managed elastic workers. This is not a public or generally available service. The repository is private to its collaborators.
 
 ## Install
 
-Until that reviewed commit exists, the published command cannot succeed. Leave the placeholder as written. Do not invent a SHA, and do not point the URL at another host.
+Release `v1.0-rc1` installs this commit. Do not point the URL at another host.
 
 ```sh
-BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-A failed download stops the command before the installer runs. The script and the checkout use that same commit.
+A failed download stops the command before the installer runs. The script and the checkout use that same commit. The API listens on `127.0.0.1` unless you pass `--api-bind`. A console hostname is `--console-origin`, and the web listener stays on loopback. Remote MCP HTTP requires `BOSS_MCP_HTTP_TOKEN`.
 
 From a checkout you already have, this does not contact a maintainer server:
 
@@ -66,7 +72,7 @@ The installer prints the install location and a command that shows the console p
 
 ## Get help
 
-When this repository is public, use the bug, installation, or feature form. The [feedback process](docs/community/FEEDBACK_LOOP.md) is how a report becomes a reviewed change. A docs or code proposal starts at [Contributing](CONTRIBUTING.md). The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. The [guide index](docs/community/README.md) lists the next page for install, a first goal, a model, the terminal, feedback, and security.
+Use the bug, installation, or feature form when you have access to the repository. The [feedback process](docs/community/FEEDBACK_LOOP.md) is how a report becomes a reviewed change. A docs or code proposal starts at [Contributing](CONTRIBUTING.md). The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. The [guide index](docs/community/README.md) lists the next page for install, a first goal, a model, the terminal, feedback, and security.
 
 Report a vulnerability privately to [boss@sean.net](mailto:boss@sean.net). Do not open a public issue for a vulnerability. See [SECURITY.md](SECURITY.md).
 

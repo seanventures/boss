@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img" aria-label="BOSS Community, release 1.0 rc1">
+  <rect width="1200" height="460" rx="28" fill="#101820"/>
+  <circle cx="168" cy="168" r="92" fill="#1aa89a" opacity="0.16"/>
+  <rect x="112" y="112" width="112" height="112" rx="24" fill="#1c2430" stroke="#1aa89a" stroke-width="3"/>
+  <circle cx="168" cy="168" r="16" fill="#3ddec8"/>
+  <text x="260" y="162" fill="#f4f7fb" font-family="Avenir Next, Segoe UI, sans-serif" font-size="78" font-weight="650" letter-spacing="8">BOSS</text>
+  <text x="264" y="206" fill="#9aafc2" font-family="Avenir Next, Segoe UI, sans-serif" font-size="24">A control plane you run on your own machine.</text>
+  <g font-family="SFMono-Regular, ui-monospace, Menlo, monospace" font-size="16">
+    <rect x="264" y="236" width="168" height="36" rx="18" fill="#1a2633"/>
+    <circle cx="286" cy="254" r="5" fill="#3ddec8"/>
+    <text x="302" y="259" fill="#d5e2ec">v1.0-rc1</text>
+    <rect x="448" y="236" width="196" height="36" rx="18" fill="#1a2633"/>
+    <text x="468" y="259" fill="#d5e2ec">7b88a18</text>
+  </g>
+  <g font-family="Avenir Next, Segoe UI, sans-serif">
+    <rect x="760" y="78" width="360" height="86" rx="16" fill="#1a2633"/>
+    <circle cx="798" cy="121" r="7" fill="#3ddec8"/>
+    <text x="822" y="112" fill="#8ea0b3" font-size="13" letter-spacing="2">WEB</text>
+    <text x="822" y="138" fill="#f4f7fb" font-size="22">127.0.0.1:3000</text>
+    <rect x="760" y="180" width="360" height="86" rx="16" fill="#1a2633"/>
+    <circle cx="798" cy="223" r="7" fill="#3ddec8"/>
+    <text x="822" y="214" fill="#8ea0b3" font-size="13" letter-spacing="2">TERMINAL</text>
+    <text x="822" y="240" fill="#f4f7fb" font-size="22">make metatron</text>
+    <rect x="760" y="282" width="360" height="86" rx="16" fill="#1a2633"/>
+    <circle cx="798" cy="325" r="7" fill="#f0b429"/>
+    <text x="822" y="316" fill="#8ea0b3" font-size="13" letter-spacing="2">CLI</text>
+    <text x="822" y="342" fill="#f4f7fb" font-size="22">boss-community.env.sh</text>
+  </g>
+  <text x="80" y="422" fill="#7e92a4" font-family="Avenir Next, Segoe UI, sans-serif" font-size="16">Loopback until you name a hostname. Credentials stay in a local .env.</text>
+</svg>

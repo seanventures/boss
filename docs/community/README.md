@@ -1,4 +1,10 @@
-# BOSS Community guides
+# BOSS Community
+
+<div class="boss-stage" markdown="1">
+
+![BOSS Community, release 1.0 rc1](assets/masthead.svg)
+
+<p class="boss-markline"><span>BOSS</span> v1.0-rc1</p>
 
 <div class="boss-manual" markdown="1">
 
@@ -12,10 +18,12 @@ The manual for a control plane you run yourself. Give it a goal. Review the plan
 
 | Line | What you have |
 | --- | --- |
-| Machine | Yours. The installer does not call a maintainer server. |
-| Console | `127.0.0.1:3000` on that machine. |
+| Release | `v1.0-rc1`, commit `7b88a18`. |
+| Console | `127.0.0.1:3000` until you give it a hostname. |
 | Credentials | A local `.env`. It is not uploaded. |
-| This site | Not published yet. The installer pin stays a placeholder. |
+| This manual | Ships in the repository. GitHub Pages is not on. |
+
+</div>
 
 </div>
 
@@ -35,15 +43,12 @@ On the install machine, open [http://127.0.0.1:3000](http://127.0.0.1:3000). Sig
 
 ### Terminal
 
-From the install directory, `make metatron` opens the Metatron TUI inside the API container. Commands are in [terminal and API access](TERMINAL_API.md). Setup is on the [terminal](terminal.md) page.
+From the install directory, `make metatron` opens the Metatron TUI inside the API container. Setup is on the [terminal](terminal.md) page. The command reference is [terminal and API access](TERMINAL_API.md).
 
-`/projects` asks the API for the projects returned under the current credentials, prints that list with the active project marked, and does not select a different project.
-
-`/ops` reads the catalog of the API you are connected to so you can find an operation before you inspect or call one.
-
-`/describe` takes one operation id and shows its method, path, parameters, and typed body fields, and it does not call the operation.
-
-`/op` takes that operation id and optional JSON whose only keys are `path`, `query`, and `body`, then sends the call through the authenticated HTTP API.
+- `/projects` lists the projects these credentials can see and marks the active one.
+- `/ops` reads the catalog so you can find an operation.
+- `/describe` shows one operation and does not call it.
+- `/op` calls it. The JSON keys are `path`, `query`, and `body`.
 
 </div>
 
@@ -65,13 +70,13 @@ Pick the page that matches what you are trying to do.
 | See a situation this install is for | [Use cases](use-cases.md) |
 | Follow install, a first goal, and the terminal | [Walkthroughs](walkthroughs.md) |
 | Choose the installer, console, terminal, API, or MCP | [Interfaces](interfaces.md) |
-| See upgrade, uninstall, ports, and the unpublished one-liner | [Installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) |
+| See upgrade, uninstall, ports, and the release one-liner | [Installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) |
 | Connect a model or coding subscription you already have | [Model connections](MODEL_CONNECTIONS.md) |
 | Use the terminal against the HTTP API | [Terminal](TERMINAL_API.md) |
 | Report a bug, a setup problem, or an idea | [Feedback](FEEDBACK_LOOP.md) |
 | Report a vulnerability in private | [Security](https://github.com/seanventures/boss/blob/main/SECURITY.md) |
 
-The install command stays pinned to `REPLACE_WITH_REVIEWED_40_CHARACTER_SHA` until a reviewed commit exists. That command stops before it downloads anything. From a checkout, `./install.sh --dir "$PWD"` does not contact a maintainer server.
+The release one-liner is pinned to `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, the `v1.0-rc1` commit. From a checkout, `./install.sh --dir "$PWD"` does not contact a maintainer server.
 
 ## More pages
 

@@ -30,4 +30,4 @@ These pages are in `mkdocs.community.yml`:
 
 ## Installer pin
 
-The one-line installer still uses `REPLACE_WITH_REVIEWED_40_CHARACTER_SHA`. Do not replace that placeholder as part of publishing these docs.
+The one-line installer is pinned to `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. GitHub Pages is still off. Do not add a Pages workflow from this manual.

@@ -77,10 +77,10 @@ Skip all of these on the first path.
 - The [five example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing them starts no work.
 - Upgrade and uninstall: [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md#upgrade--recover).
 
-The published one-liner is not this path. After a reviewed release commit exists, replace the placeholder with that commit's full 40-character SHA. Until then the command stops before any download:
+The release one-liner installs `v1.0-rc1`. The checkout path above does not use it:
 
 ```bash
-BOSS_RELEASE_COMMIT=REPLACE_WITH_REVIEWED_40_CHARACTER_SHA bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
 Do not invent a SHA. The [guide index](README.md) lists the other pages. Report a problem through [feedback](FEEDBACK_LOOP.md). Report a vulnerability only by email, as [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md) describes.

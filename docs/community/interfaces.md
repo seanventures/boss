@@ -3,8 +3,8 @@
 BOSS Community is software you run on a machine you administer. The installer
 CLI starts that software on the machine. Afterward, the console and the
 Metatron terminal both talk to the authenticated HTTP API. MCP is a separate
-surface for one trusted client on one project. This repository has not been
-published, and nothing on this page is a general-availability claim.
+surface for one trusted client on one project. Release `v1.0-rc1` is the
+snapshot in this repository. Nothing on this page is a general-availability claim.
 
 ## Installer CLI
 
@@ -14,9 +14,9 @@ From a checkout you already have, install in place:
 ./install.sh --dir "$PWD"
 ```
 
-The published one-liner still stops on
-`REPLACE_WITH_REVIEWED_40_CHARACTER_SHA`. Leave that placeholder alone. Do not
-invent a commit. Secrets are not command arguments: the installer refuses API
+The release one-liner is pinned to `v1.0-rc1`, commit
+`7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. Do not point it at another host.
+Secrets are not command arguments: the installer refuses API
 keys and tokens on the command line, because the shell would keep them in
 history and process listings. Use the hidden prompt or the process environment
 instead. The installer binds the API and console to `127.0.0.1` and leaves
