@@ -542,28 +542,111 @@ def test_exported_markdown_links_must_resolve_inside_candidate() -> None:
     ]
 
 
-def test_goldeneye_community_boundary_is_preserved() -> None:
+def test_private_host_kit_stays_out_of_the_community_candidate() -> None:
     manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
     export.validate_manifest(manifest)
     for path in (
         "engine/boss_engine/services/goldeneye_paas.py",
         "packages/goldeneye/install.sh",
         "packages/goldeneye/core/bin/ge",
+        "docs/product/GOLDENEYE_PAAS.md",
     ):
-        assert export.matching_rule(path, manifest["include"])
-        assert not export.matching_rule(path, manifest["exclude"])
-        assert path in manifest["required_runtime"]
-    assert b"GoldeneyePaas" not in export.PAID_SOURCE_MARKERS
-    assert b"goldeneye_paas" not in export.PAID_SOURCE_MARKERS
-    assert manifest["safe_symlinks"] == {
-        "packages/goldeneye/bin": "core/bin",
-        "packages/goldeneye/lib": "core/lib",
-        "packages/goldeneye/packages": "modules",
-    }
+        included = export.matching_rule(path, manifest["include"])
+        excluded = export.matching_rule(path, manifest["exclude"])
+        assert excluded or not included
+        assert path not in manifest["required_runtime"]
+    assert manifest["safe_symlinks"] == {}
     dockerfile = (export.ROOT / "Dockerfile.community").read_bytes()
-    assert b"COPY packages/goldeneye ./packages/goldeneye" in dockerfile
+    assert b"goldeneye" not in dockerfile.lower()
     assert b"COPY LICENSE ./LICENSE" in dockerfile
     assert b"COPY --chown=boss:boss LICENSE ./LICENSE" in dockerfile
+
+
+def test_community_candidate_omits_the_private_host_name() -> None:
+    manifest = json.loads(export.DEFAULT_MANIFEST.read_text())
+    export.validate_manifest(manifest)
+    sha = export.git(export.ROOT, "rev-parse", "HEAD^{commit}").decode().strip()
+    report, selected = export.analyze(export.ROOT, sha, manifest)
+    assert report["blocker_count"] == 0, report["blockers"][:8]
+    leaked = [
+        path for path, data in selected.items()
+        if "goldeneye" in path.lower() or b"goldeneye" in data.lower()
+    ]
+    assert leaked == []
+
+
+def test_private_host_redaction_keeps_shared_infra_status_test_valid() -> None:
+    path = "apps/api/tests/test_e2e_infra_ui_v1.py"
+    source = (export.ROOT / path).read_bytes()
+    redacted = export._private_host.redact_private_host(path, source)
+    assert b"goldeneye" not in redacted.lower()
+    compile(redacted, path, "exec")
+    text = redacted.decode()
+    assert "def test_e2e_elastic_status_empty_is_200_not_configured" in text
+    assert "def test_e2e_provider_usage_summary_empty_is_200_not_configured" in text
+    assert "def test_e2e_status_routes_stay_honest_after_missing_schema" in text
+    assert "def test_e2e_create_droplet_http_blocked_without_provision_flag" in text
+    assert "def test_e2e_goldeneye_status_empty_is_200_not_configured" not in text
+    assert "DROP TABLE IF EXISTS provider_usage_events" in text
+    assert "DROP TABLE IF EXISTS worker_instances" in text
+    assert "connection.execute(\n        )" not in text
+
+
+def test_private_host_redaction_rewrites_published_operation_counts() -> None:
+    features = export._private_host.redact_private_host(
+        "docs/community/FEATURES.md",
+        (export.ROOT / "docs/community/FEATURES.md").read_bytes(),
+    ).decode()
+    assert "All 982 mounted" in features
+    assert "851 use API policy" in features
+    assert "none remain held" in features
+    assert "993" not in features
+    assert "2 remain held" not in features
+    assert "993" in (export.ROOT / "docs/community/FEATURES.md").read_text()
+
+    manual = export._private_host.redact_private_host(
+        "docs/community/MCP.md",
+        (export.ROOT / "docs/community/MCP.md").read_bytes(),
+    ).decode()
+    assert "**982 Community**" in manual
+    assert "**1,034 Enterprise**" in manual
+    assert "| Community | 851 | 64 | 0 | 67 |" in manual
+    assert "| Paid-only additions | 39 | 0 | 2 | 0 |" in manual
+
+    surfaces = export._private_host.redact_private_host(
+        "docs/community/CONTROL_SURFACES.md",
+        (export.ROOT / "docs/community/CONTROL_SURFACES.md").read_bytes(),
+    ).decode()
+    assert "all 982" in surfaces
+    assert "969 `/v1/`" in surfaces
+    assert "851 are eligible" in surfaces
+    assert "993" not in surfaces
+
+    matrix = export._private_host.redact_private_host(
+        "docs/community/TERMINAL_CAPABILITY_MATRIX.md",
+        (export.ROOT / "docs/community/TERMINAL_CAPABILITY_MATRIX.md").read_bytes(),
+    ).decode()
+    assert "| Goldeneye |" not in matrix
+    assert "**982**" in matrix
+    assert "**969**" in matrix
+    assert "all 982" in matrix
+    assert "**1,034**" in matrix
+    assert "993" not in matrix
+
+
+def test_private_host_redaction_keeps_community_main_valid() -> None:
+    path = "apps/api/app/main.py"
+    rewritten = export.rewrite_community_main((export.ROOT / path).read_bytes())
+    assert rewritten is not None
+    redacted = export._private_host.redact_private_host(path, rewritten)
+    assert b"goldeneye" not in redacted.lower()
+    compile(redacted, path, "exec")
+    text = redacted.decode()
+    assert "def run_resource_janitor" in text
+    assert "/v1/goldeneye" not in text
+    assert "def goldeneye_package_catalog" not in text
+    assert "def list_goldeneye_package_installs" not in text
+    assert "GoldeneyePaasService" not in text
 
 
 def test_shared_config_exception_is_exact_and_still_blocks_paid_code() -> None:

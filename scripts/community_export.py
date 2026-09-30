@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import posixpath
 import re
@@ -24,6 +25,13 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path(__file__).with_name("community_export_manifest.json")
+_PRIVATE_HOST_PATH = Path(__file__).with_name("community_private_host.py")
+_private_host_spec = importlib.util.spec_from_file_location(
+    "community_private_host", _PRIVATE_HOST_PATH
+)
+assert _private_host_spec and _private_host_spec.loader
+_private_host = importlib.util.module_from_spec(_private_host_spec)
+_private_host_spec.loader.exec_module(_private_host)
 LOCAL_MODULE_ROOTS = {"apps", "api", "boss_engine", "db", "packages"}
 TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".json", ".css")
 TS_IMPORT_RE = re.compile(
@@ -1088,11 +1096,20 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
             ]
             specpack_rewrites_applied.append(destination)
+    # The private host name is not a Community feature. Rewrite published
+    # bytes after the checksum pins, then reject anything that still names it.
+    for path, data in list(selected.items()):
+        try:
+            selected[path] = _private_host.redact_private_host(path, data)
+        except _private_host.PrivateHostLeak as exc:
+            blockers.append({"kind": "private-host-name", "path": path, "detail": exc.detail})
+            del selected[path]
+            symlink_paths.pop(path, None)
     # Check the final output as well as ordinary source blobs. Checksum-pinned
     # rewrites bypass the ordinary scan, and future rewrite rules must never
     # turn a reviewed source into a candidate containing a private reference.
     for path, data in list(selected.items()):
-        if any(marker in data for marker in PRIVATE_MARKERS):
+        if b"goldeneye" in data.lower() or any(marker in data for marker in PRIVATE_MARKERS):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             del selected[path]
             symlink_paths.pop(path, None)

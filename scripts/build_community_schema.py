@@ -33,6 +33,17 @@ PAID_TABLES = frozenset(
         "hosted_marketplace_pack_listings",
     }
 )
+# The operator's private host is not part of the Community schema. These tables
+# stay in the private source schema and are omitted from the published one.
+PRIVATE_HOST_TABLES = frozenset(
+    {
+        "goldeneye_nodes",
+        "goldeneye_package_installs",
+        "goldeneye_apps",
+        "goldeneye_deploys",
+    }
+)
+OMITTED_TABLES = PAID_TABLES | PRIVATE_HOST_TABLES
 TABLE_START = re.compile(r"(?m)^CREATE TABLE IF NOT EXISTS ([a-z][a-z0-9_]*) \(")
 PAID_MARKERS = (
     "hosted_marketplace",
@@ -59,7 +70,7 @@ def render(source: bytes) -> str:
         seen.add(name)
         end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
         segment = text[match.start() : end]
-        if name in PAID_TABLES:
+        if name in OMITTED_TABLES:
             # Each omitted segment contains only its own table/index DDL and
             # comments. This catches a future shared ALTER hidden in the span.
             altered = set(re.findall(r"(?m)^ALTER TABLE ([a-z][a-z0-9_]*)", segment))
@@ -68,11 +79,18 @@ def render(source: bytes) -> str:
                 raise ValueError(f"paid table span gained shared DDL: {name}")
             continue
         result.append(segment)
-    if not PAID_TABLES <= seen:
-        raise ValueError(f"paid table declarations missing: {sorted(PAID_TABLES - seen)}")
+    if not OMITTED_TABLES <= seen:
+        raise ValueError(f"omitted table declarations missing: {sorted(OMITTED_TABLES - seen)}")
     rendered = "".join(result)
+    rendered = re.sub(
+        r"(?m)^-- -+\n-- Goldeneye bare-metal PaaS \(BOSS control plane\)\n-- -+\n\n",
+        "",
+        rendered,
+    )
     if any(marker in rendered for marker in PAID_MARKERS):
         raise ValueError("paid schema reference survived Community split")
+    if "goldeneye" in rendered.lower():
+        raise ValueError("private host schema reference survived Community split")
     included = set(TABLE_START.findall(rendered))
     for referenced in re.findall(r"\bREFERENCES ([a-z][a-z0-9_]*)\(", rendered):
         if referenced not in included:

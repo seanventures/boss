@@ -186,10 +186,6 @@ def clean_tables(engine):
             "provider_slo_definitions",
             "provider_usage_events",
             "worker_instances",
-            "goldeneye_deploys",
-            "goldeneye_apps",
-            "goldeneye_package_installs",
-            "goldeneye_nodes",
             "scale_plans",
             "worker_pools",
             # Health samples hold an FK onto deployment_targets and were missing from this

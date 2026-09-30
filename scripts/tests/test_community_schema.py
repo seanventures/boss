@@ -30,7 +30,8 @@ class CommunitySchemaTests(unittest.TestCase):
     def test_only_paid_tables_are_removed(self) -> None:
         source_tables = set(MODULE.TABLE_START.findall(self.source.decode("utf-8")))
         community_tables = set(MODULE.TABLE_START.findall(self.community))
-        self.assertEqual(source_tables - community_tables, MODULE.PAID_TABLES)
+        self.assertEqual(source_tables - community_tables, MODULE.OMITTED_TABLES)
+        self.assertNotIn("goldeneye", self.community.lower())
         self.assertTrue(
             {
                 "orgs",

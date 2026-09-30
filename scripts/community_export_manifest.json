@@ -39,7 +39,6 @@
     "engine/requirements.txt",
     "packages/api-client/",
     "packages/create-boss/",
-    "packages/goldeneye/",
     "packages/specpack/",
     "scripts/install/",
     "scripts/metatron_tui.py",
@@ -61,7 +60,6 @@
     "docs/community/",
     "mkdocs.community.yml",
     "examples/",
-    "docs/product/GOLDENEYE_PAAS.md",
     "docs/product/V1_FEATURE_LOCK.md",
     "docs/product/TRACEABILITY.md",
     "docs/product/TRACEABILITY.community.md",
@@ -115,6 +113,11 @@
     "engine/boss_engine/services/cloud_product.py",
     "engine/boss_engine/services/commercial.py",
     "engine/boss_engine/services/enterprise_audit.py",
+    "engine/boss_engine/services/goldeneye_paas.py",
+    "apps/api/tests/test_goldeneye_paas.py",
+    "apps/api/tests/test_e2e_goldeneye_paas.py",
+    "apps/api/tests/test_goldeneye_config.py",
+    "apps/api/tests/test_e2e_goldeneye_sec.py",
     "engine/boss_engine/services/enterprise.py",
     "engine/boss_engine/services/enterprise_gateway.py",
     "engine/tests/test_enterprise_audit_boundary.py",
@@ -157,11 +160,7 @@
     "packages/specpack/skills/software_factory.yaml"
   ],
   "reviewed_license_sha256": "fe847534e6d3ab7e0155d31ae5604d30b4e57030bb7c2c1167356ddba54ed8bd",
-  "safe_symlinks": {
-    "packages/goldeneye/bin": "core/bin",
-    "packages/goldeneye/lib": "core/lib",
-    "packages/goldeneye/packages": "modules"
-  },
+  "safe_symlinks": {},
   "required_runtime": [
     "Dockerfile.community",
     "db/schema.sql",
@@ -175,9 +174,6 @@
     "apps/api/app/main.py",
     "apps/worker/boss_worker/main.py",
     "apps/web/app/page.tsx",
-    "engine/boss_engine/services/goldeneye_paas.py",
-    "packages/goldeneye/install.sh",
-    "packages/goldeneye/core/bin/ge",
     "packages/specpack/packs/community_edition.yaml"
   ],
   "required_release": [
@@ -205,7 +201,7 @@
   "test_conftest_export_rewrite": {
     "source": "apps/api/tests/conftest-community.py",
     "destination": "apps/api/tests/conftest.py",
-    "sha256": "b9def88e799e5327a03584347ee09c2951279b9f8e2c44f4402a8c9242e900e2"
+    "sha256": "0a5f862c88c27a4cda7122a110aebefca6e40ceba9455a241caa5168699624cc"
   },
   "package_export_rewrite": {
     "path": "packages/api-client/package.json",
@@ -221,7 +217,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "b7ccac5bc2e38c0fd6a0b44ca461755265c5b3d1aaadce96119415e1e94e1e49"
+    "sha256": "b5412935b4f6bea0e582b06b8a4baeeb95e0e9407728d7914006e24f2e290f85"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -236,7 +232,7 @@
   "schema_export_rewrite": {
     "source": "db/schema.community.sql",
     "destination": "db/schema.sql",
-    "sha256": "0bf79c107c05c36962d867ff597785d00414ed65fb484a0c5a866e4ee674958b"
+    "sha256": "9a9db3c62591ddedb69ee708055194d093542efad69c10021a88b5587c2e47eb"
   },
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
