@@ -1,33 +1,37 @@
-# BOSS Community
+# BOSS documentation
 
 <div class="boss-stage" markdown="1">
 
-![BOSS Community, release 1.0 rc1](assets/masthead.svg)
+![BOSS: the self-hosted control plane for AI software work](assets/masthead.svg)
 
 <p class="boss-markline"><span>BOSS</span> v1.0-rc1</p>
 
 <div class="boss-manual" markdown="1">
 
-The manual for a control plane you run yourself. Give it a goal. Review the plan, the decision, and the receipt before anything leaves the machine.
+BOSS is the self-hosted control plane for AI software work. Give it a goal, then review the plan, the approvals, the spend, and the receipts before anything leaves your machine.
 
 </div>
 
 <div class="boss-receipt" markdown="1">
 
-<p class="boss-receipt__kicker">On this machine</p>
+<p class="boss-receipt__kicker">Your install at a glance</p>
 
-| Line | What you have |
+| | |
 | --- | --- |
-| Release | `v1.0-rc1`, commit `7b88a18`. |
-| Console | `127.0.0.1:3000` until you give it a hostname. |
-| Credentials | A local `.env`. It is not uploaded. |
-| This manual | Ships in the repository. GitHub Pages is not on. |
+| Release | `v1.0-rc1`, commit `7b88a18` |
+| Console | `127.0.0.1:3000`, or a hostname you choose |
+| Credentials | A local `.env` that never leaves the machine |
+| License | Apache 2.0 |
 
 </div>
 
 </div>
 
-## Three setups
+## Get started
+
+New to BOSS? The [Quickstart](QUICKSTART.md) takes you from a fresh machine to your first reviewed goal. The release one-liner is pinned to `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, the `v1.0-rc1` commit; from a checkout, `./install.sh --dir "$PWD"` installs from that tree.
+
+## Choose your interface
 
 <div class="boss-setups" markdown="1">
 
@@ -35,7 +39,7 @@ The manual for a control plane you run yourself. Give it a goal. Review the plan
 
 ### Web console
 
-On the install machine, open [http://127.0.0.1:3000](http://127.0.0.1:3000). Sign-in is [console access](CONSOLE_AUTH.md). A hostname needs a TLS proxy you run; the steps are on the [hostname](hostname.md) page. The installer flag is `--console-origin`, and the listener stays on loopback.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000) on the install machine and sign in with the [console password](CONSOLE_AUTH.md). To serve Mission Control on a real hostname, put your own TLS proxy in front of it and pass `--console-origin` to the installer. See [Hostname](hostname.md).
 
 </div>
 
@@ -43,12 +47,12 @@ On the install machine, open [http://127.0.0.1:3000](http://127.0.0.1:3000). Sig
 
 ### Terminal
 
-From the install directory, `make metatron` opens the Metatron TUI inside the API container. Setup is on the [terminal](terminal.md) page. The command reference is [terminal and API access](TERMINAL_API.md).
+`make metatron` in the install directory opens the Metatron TUI. See [Terminal](terminal.md) and the [terminal and API reference](TERMINAL_API.md).
 
-- `/projects` lists the projects these credentials can see and marks the active one.
-- `/ops` reads the catalog so you can find an operation.
-- `/describe` shows one operation and does not call it.
-- `/op` calls it. The JSON keys are `path`, `query`, and `body`.
+- `/projects` lists the projects you can see
+- `/ops` searches the operation catalog
+- `/describe` explains an operation without calling it
+- `/op` calls it with `path`, `query`, and `body`
 
 </div>
 
@@ -56,54 +60,50 @@ From the install directory, `make metatron` opens the Metatron TUI inside the AP
 
 ### CLI
 
-Source `boss-community.env.sh` for `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID`. The API key is not printed and is not a command argument. Setup is on the [CLI](cli.md) page. Coding CLIs you already have are in [model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md).
+`source boss-community.env.sh` sets `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` without printing the key. See [CLI](cli.md), plus [Model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md) for the coding CLIs you already use.
 
 </div>
 
 </div>
 
-Pick the page that matches what you are trying to do.
+## Guides
 
-| You want to | Open |
+| I want to | Read |
 | --- | --- |
-| Install from a checkout you already have, then do one first goal | [Quickstart](QUICKSTART.md) |
-| See a situation this install is for | [Use cases](use-cases.md) |
-| Follow install, a first goal, and the terminal | [Walkthroughs](walkthroughs.md) |
-| Choose the installer, console, terminal, API, or MCP | [Interfaces](interfaces.md) |
-| See upgrade, uninstall, ports, and the release one-liner | [Installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) |
-| Connect a model or coding subscription you already have | [Model connections](MODEL_CONNECTIONS.md) |
-| Use the terminal against the HTTP API | [Terminal](TERMINAL_API.md) |
-| Report a bug, a setup problem, or an idea | [Feedback](FEEDBACK_LOOP.md) |
-| Report a vulnerability in private | [Security](https://github.com/seanventures/boss/blob/main/SECURITY.md) |
+| Install and run a first goal | [Quickstart](QUICKSTART.md) |
+| See what a fresh install can do | [Use cases](use-cases.md) |
+| Follow a guided tour | [Walkthroughs](walkthroughs.md) |
+| Pick between web, terminal, API, and MCP | [Interfaces](interfaces.md) |
+| Connect a model or coding subscription | [Model connections](MODEL_CONNECTIONS.md) |
+| Sign in, or add HTTPS in front of the console | [Console access](CONSOLE_AUTH.md) |
+| Upgrade, uninstall, change ports, or recover | [Installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) |
 
-The release one-liner is pinned to `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, the `v1.0-rc1` commit. From a checkout, `./install.sh --dir "$PWD"` does not contact a maintainer server.
+## Reference
 
-## More pages
-
-| You want to | Open |
+| I want to | Read |
 | --- | --- |
-| Sign in, or put HTTPS in front of the loopback console | [Console access](CONSOLE_AUTH.md) |
-| Use a Grok Build subscription you already have | [Grok CLI](GROK_CLI.md) |
-| Propose a docs or code change | [Contributing](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) |
-| See what Community includes | [Features](FEATURES.md) |
+| See everything Community includes, with status | [Features](FEATURES.md) |
+| Understand how the API, terminal, and MCP relate | [Control surfaces](CONTROL_SURFACES.md) |
+| Drive BOSS from the terminal or scripts | [Terminal and API](TERMINAL_API.md) |
 | Call BOSS from a trusted MCP client | [MCP](MCP.md) |
-| See how the API, terminal, and MCP relate | [Control surfaces](CONTROL_SURFACES.md) |
 
-`user@your-vm` in these guides means a VM you administer. No page requires Plane, an ops token, a private registry, or SSH to a machine you do not administer.
+## Mission Control at a glance
 
-## Names in the console
-
-Mission Control is the console. Inside it:
-
-- **Command Center** is where you start.
-- **Approvals** is where a person decides.
-- **Activity log** is where receipts and failures show up.
+- **Command Center** is where you start: ask BOSS for an outcome.
+- **Approvals** is where a person decides on gated steps.
+- **Activity log** shows every receipt and every failure.
 - **Agent work** groups recent activity by role.
-- **Team structure** holds a planned role layout and the handoffs that happened. Moving a role does not change routing.
-- **Agent Studio** holds definitions you can inspect and test. Installing a definition or an example workflow does not start work.
+- **Team structure** shows your planned roles next to the handoffs that actually happened. Rearranging the chart doesn't change how work is routed.
+- **Agent Studio** is where you inspect and test agent definitions. Installing a definition or an example workflow never starts work by itself.
 
-Examples that mention the project id `boss-dogfood` mean the project seeded on your machine, not a shared server.
+Examples throughout these guides use the project id `boss-dogfood`, which is the project the installer seeds on your machine, and `user@your-vm` for a VM you administer.
 
-## License
+## Get involved
 
-Apache License 2.0 applies to the Community source. See the repository `LICENSE`. Third-party components keep their own notices.
+| | |
+| --- | --- |
+| Report a bug or suggest a feature | [Feedback](FEEDBACK_LOOP.md) |
+| Propose a docs or code change | [Contributing](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) |
+| Report a vulnerability privately | [Security](https://github.com/seanventures/boss/blob/main/SECURITY.md) |
+
+BOSS Community is licensed under the Apache License 2.0. Third-party components keep their own notices.

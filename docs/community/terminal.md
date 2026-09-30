@@ -1,6 +1,8 @@
 # Terminal
 
-Metatron is the terminal for an install you run. It runs inside the API container and talks to that install's HTTP API. It does not open a second control plane.
+Metatron is the interactive terminal for your BOSS install. It runs inside the API container and calls the same authenticated HTTP API as the console, so every rule the API enforces applies here too.
+
+## Open the terminal
 
 From the install directory:
 
@@ -8,8 +10,17 @@ From the install directory:
 make metatron
 ```
 
-That opens the Metatron TUI inside the API container. It uses the install's API key and project. The key is not printed.
+This opens the Metatron TUI inside the API container, using the install's API key and project. The key is never printed.
 
-Outside that container, the same program is `python3 scripts/metatron_tui.py` after you set `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID`. Do not put the API key on the command line.
+## Run it outside the container
 
-The operation catalog is in [terminal and API access](TERMINAL_API.md) and the [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md). This page does not copy that matrix.
+Set `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` in your environment, for example by sourcing `boss-community.env.sh`, then run `python3 scripts/metatron_tui.py`.
+
+!!! warning
+    Load the API key from the environment. Never pass it on the command line.
+
+## Learn the commands
+
+- [Terminal and API access](TERMINAL_API.md) is the command reference.
+- The [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) lists the operations the running API exposes.
+- [Ask the terminal](walkthroughs.md#ask-the-terminal) walks through a first session.

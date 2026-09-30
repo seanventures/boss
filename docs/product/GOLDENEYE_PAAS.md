@@ -1,4 +1,4 @@
-# Goldeneye — bare-metal PaaS as a function of BOSS
+# Goldeneye: a bare-metal PaaS kit with an optional BOSS control plane
 
 **Status:** Active (modular kit + optional BOSS control plane)  
 **Kit path:** `packages/goldeneye/` (self-contained; extractable OSS project)  
@@ -11,17 +11,19 @@
 
 ## What it is
 
-**Goldeneye** is a **modular bare-metal PaaS kit** you run on hardware or a VM
-you administer: installer, versioned modules, edge proxy, a mesh you operate,
-a registry you run, deploy CLI, and backups. It is designed to become its own
-open-source repository. BOSS is an **optional** control plane that can register
-nodes, plan module installs and app deploys, emit receipts, and store fleet
-records. The kit does not require BOSS.
+**Goldeneye** is a **modular bare-metal PaaS kit** for hardware or a VM you
+administer. It includes an installer, versioned modules, an edge proxy, a mesh
+you operate, a registry you run, a deploy CLI, and backups. It is designed to
+become its own open-source repository.
 
-It is **not** a managed multi-tenant Cloud fleet, and it is **not** access to a
-server operated by the maintainers. There is no shared host to SSH into.
-Community and self-hosted installs run the kit on **your** metal. No step
-requires Plane, an ops token, or a private registry.
+BOSS is an **optional** control plane on top: it can register nodes, plan module
+installs and app deploys, emit receipts, and store fleet records. The kit runs
+fully without BOSS.
+
+> **Your hardware, your network.** Goldeneye runs on machines you administer.
+> It is not a managed multi-tenant fleet or a hosted service, and there is no
+> shared host to SSH into. No step requires Plane, an ops token, or a registry
+> you do not run.
 
 ### Community vs platform-only
 
@@ -33,10 +35,10 @@ requires Plane, an ops token, or a private registry.
 | Managed multi-tenant Goldeneye fleet / hosted metal as a service | **Platform-only (Cloud)** |
 | Cloud Easy Connect as the node source | **Platform-only (Cloud)** |
 
-`GET /v1/goldeneye/status` is honest: no registered nodes → `status=not_configured`,
-`host.connected=false`, `metrics=null`. It never invents a host as connected
-and it does not fabricate fleet metrics. Missing `goldeneye_nodes` is repaired via
-`ensure_tables` (empty-200), not a 500.
+`GET /v1/goldeneye/status` reports only what exists. With no registered nodes it
+returns `status=not_configured`, `host.connected=false`, and `metrics=null`, and it
+never reports a host as connected or fabricates fleet metrics. A missing
+`goldeneye_nodes` table is created via `ensure_tables` (an empty 200), not a 500.
 
 ### Modular units
 
@@ -64,12 +66,12 @@ Extract plan: `packages/goldeneye/docs/OPEN_SOURCE.md`.
 
 ---
 
-## Design principles (from production kit)
+## Design principles
 
 1. **Tailnet by default, public by exception.** Admin and inter-node traffic stay private; only end-user apps get public hostnames.
 2. **One canonical public A record per node (or fleet apex); everything else CNAMEs.** Hardware/IP moves stay cheap.
 3. **Name things, never hard-code addresses.** Registry, peers, and services resolve by DNS.
-4. **Agents are first-class operators.** Software on your machine can read its own deploy contract. That local handshake is not an ops token from the maintainers.
+4. **Agents are first-class operators.** Software on your machine can read its own deploy contract through a local handshake on that machine.
 5. **Prove it, don’t assert it.** Backups restore-drill; exposure audits; drift detection.
 6. **BOSS hard rules apply.** Every external effect has a `Receipt` + `dedupe_key`. Spendy/real host writes stay policy-gated. Failures are visible.
 
@@ -89,17 +91,19 @@ Extract plan: `packages/goldeneye/docs/OPEN_SOURCE.md`.
 ```
 
 Bootstrap order is fixed; the package manager refuses out-of-order installs
-unless `--force` is set for operators who know the risk. Plane in the optional
-row is a package you may install on your machine. The BOSS Community installer
-does not require this kit, Plane, an ops token, or a registry you do not run.
+unless `--force` is set by an operator who accepts the risk. Plane in the
+optional row is a package you may choose to install on your machine. The BOSS
+Community installer does not require this kit, Plane, an ops token, or a
+registry you do not run.
 
 ---
 
 ## Kit usage (standalone)
 
-The Community GitHub one-liner is not usable until a reviewed commit exists.
-Do not fetch this kit from an unreviewed branch, and do not SSH to a host you
-do not administer. From a checkout you already have, on Ubuntu you control:
+Run the kit from a checkout you already have, on an Ubuntu machine you control.
+There is no GitHub one-liner for the kit yet: it will be offered once a reviewed
+commit exists. Until then, do not fetch the kit from an unreviewed branch, and
+only run it against hosts you administer.
 
 ```bash
 sudo packages/goldeneye/install.sh --site /etc/goldeneye/site.yaml
@@ -112,20 +116,20 @@ ge deploy myapp --image registry.local.example:5000/myapp:abc1234
 ge node status
 ```
 
-`registry.local.example` is a name you configure. The kit can run a registry
-on your machine. It does not log in to a maintainer registry.
+`registry.local.example` is a name you configure; the kit can run that registry
+on your machine and never logs in to a third-party registry.
 
-Site config parameterizes domains, public IP, your own tailnet name, the CIDRs
-you administer, ACME email, and alert sink. Those values describe your machine.
-Tailscale, if you install it, is your tailnet. It is not a network operated
-for you. The generated site file and any env files stay on that machine.
+The site config parameterizes domains, public IP, your tailnet name, the CIDRs
+you administer, ACME email, and alert sink — all values that describe your
+machine. Tailscale, if you install it, is your own tailnet. The generated site
+file and any env files stay on that machine.
 
 ---
 
 ## BOSS control plane usage
 
-Example only. `boss-dogfood` is the project id a local install seeds. The
-addresses are documentation values, not a host to contact.
+The request below is an example. `boss-dogfood` is the project id a local
+install seeds, and the addresses are documentation values.
 
 ```http
 POST /v1/goldeneye/nodes
@@ -161,8 +165,8 @@ agents can walk a fresh node without hard-coding layer sequence.
 | Paid edition + gate on but node has **no** `ssh_host` | Package install is **planned** only (hint: run `ge module install <id>` on the node) |
 | Paid edition + gate on + node `ssh_host` + SSH key | **Real actuation** via SSH host adapter |
 
-This matches ProviderOps honesty: Community can model fleet and prove receipts
-without pretending remote metal was mutated.
+This matches how ProviderOps behaves elsewhere in BOSS: Community can model a
+fleet and produce receipts without claiming that remote machines were changed.
 
 ### Actuation path (package install)
 
@@ -188,8 +192,8 @@ file only for the call).
 Every allowed attempt emits a `Receipt` with a unique `dedupe_key` and a
 `goldeneye.package.install` event. Failures are never silent.
 
-App deploy real actuation remains planned for a follow-on slice; package install
-is the first closed remote loop.
+Real actuation for app deploys is planned but not yet implemented; package
+install is the first operation with a real remote path.
 
 Dependencies: installs refuse missing `depends_on` unless `force=true`. Only
 `installed` / `simulated` rows satisfy dependency checks (`failed` does not).
@@ -227,11 +231,11 @@ See `packages/goldeneye/catalog.yaml`. Core packages:
 - A machine you administer can be bootstrapped with the kit installer to a working edge + deploy path
 - BOSS APIs register nodes and plan package installs / app deploys with receipts
 - Tests cover catalog, node register, simulated install/deploy, rollback record
-- A clean install uses only the parameters in your site file and does not call a maintainer host
+- A clean install uses only the parameters in your site file and contacts no host outside your control
 
 ---
 
 ## Operator docs
 
 - Kit README: `packages/goldeneye/README.md`
-- Run the kit from a checkout on your machine. Do not follow a deploy guide that names a host you do not administer.
+- Run the kit from a checkout on your machine, against hosts you administer.

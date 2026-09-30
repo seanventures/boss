@@ -1,11 +1,11 @@
 site_name: BOSS
-site_description: Self-hosted control plane for software work
+site_description: The self-hosted control plane for AI software work
 # site_url is filled in when GitHub Pages is enabled. The site has not been published.
 repo_url: https://github.com/seanventures/boss
 repo_name: seanventures/boss
 docs_dir: docs/community
 strict: true
-copyright: You run this. The manual is not a hosted service.
+copyright: BOSS Community is licensed under the Apache License 2.0.
 
 theme:
   name: material

@@ -261,6 +261,7 @@ def test_public_issue_forms_are_exact_manifest_paths() -> None:
         ".github/ISSUE_TEMPLATE/install.yml",
         ".github/ISSUE_TEMPLATE/feature.yml",
         ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/pull_request_template.md",
     ])
 
 

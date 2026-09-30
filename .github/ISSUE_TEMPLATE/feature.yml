@@ -1,13 +1,13 @@
 name: Feature request
-description: Suggest a change to a Community workflow you actually run.
+description: Suggest an improvement to a workflow you run in BOSS.
 title: "[Feature] "
 body:
   - type: markdown
     attributes:
       value: |
-        Describe the outcome you need. Opening this request does not start work, spend money, or approve anything.
+        Tell us the outcome you need and how you would know it works.
 
-        Do not paste secrets. If this is a vulnerability, email boss@sean.net instead. Do not open a public issue for a vulnerability.
+        Never paste secrets. **Security vulnerability?** Please don't file it here. Email boss@sean.net instead.
   - type: textarea
     id: doing
     attributes:
@@ -28,7 +28,7 @@ body:
       label: How did you install?
       options:
         - 'Local checkout (./install.sh --dir "$PWD")'
-        - Pinned one-liner, after a reviewed commit replaced the placeholder
+        - Release one-liner (pinned commit)
         - Upgrade of an existing install
         - Not installed yet
         - Not sure

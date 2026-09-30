@@ -1,22 +1,59 @@
-# Contributing to BOSS Community
+# Contributing to BOSS
 
-You can propose a documentation change or a code change without access to a maintainer's machines. This repository has not been published yet. When it is, the work lands through a GitHub issue and a pull request.
+Thanks for helping build BOSS. Bug reports, documentation fixes, and code changes are all welcome, and every one of them lands the same way: through a GitHub issue and a pull request.
 
-## Report it first
+## Start with an issue
 
-Search existing issues before you open another one. For a bug, a setup problem, or a feature idea, follow the [feedback process](docs/community/FEEDBACK_LOOP.md). Say what you were doing, what you expected, how you installed, and which edition you are running. Remove secrets and customer data from logs and screenshots.
+Search existing issues first. If nothing matches, open one with the bug, install, or feature form, and include what you were doing, what you expected, how you installed, and which edition you run. The [feedback process](docs/community/FEEDBACK_LOOP.md) describes how a report moves from triage to a merged change.
 
-A vulnerability goes to [boss@sean.net](mailto:boss@sean.net). Do not open a public issue for a vulnerability. See [Security](SECURITY.md).
+Strip secrets, tokens, and customer data from any logs or screenshots before you post them.
 
-## Propose the change
+> **Found a vulnerability?** Do not open a public issue. Email [boss@sean.net](mailto:boss@sean.net) and see [SECURITY.md](SECURITY.md).
 
-1. Fork the repository when that is available, and use a focused branch. Until the repository is public, a maintainer can still take a patch that follows these rules.
-2. Keep the pull request small. Explain what a user can do differently, which tests you ran, and any migration or compatibility change.
-3. Add tests for state transitions you touch. If the change can spend money or write outside BOSS, test the budget reservation, the receipt, the worker lease, and the tenant boundary as well. Run the relevant tests and lint checks before you ask for review.
-4. Update the user guide or the API contract when behavior changes. A new console action needs a matching API permission check and an audit event.
+## Set up a development environment
 
-Spend and external writes need a reservation and a receipt. Reserve budget before the spend. Record the external effect as a receipt with a dedupe key, through the existing adapter boundary. Do not commit credentials.
+You need Node 20 with pnpm 9, Python 3.11 or newer, and Docker with Compose. The fastest way to a running stack is the installer from your clone:
 
-Installing agent definitions or example workflows starts no work. Do not describe a change as if installing them launches a run.
+```sh
+git clone https://github.com/<you>/boss.git && cd boss
+./install.sh --dir "$PWD"
+```
 
-Maintainers review scope, safety, tests, and documentation before merging. An issue acknowledgement or a draft plan does not authorize that work. The [Code of Conduct](CODE_OF_CONDUCT.md) applies in project spaces. Product behavior for someone installing BOSS is in [README.md](README.md), and the page list is the [guide index](docs/community/README.md).
+`make help` lists the day-to-day targets (`make dev`, `make status`, `make check`, `make stop`). To run the test and lint suites from a local Python virtual environment:
+
+```sh
+python3 -m venv .venv && ./.venv/bin/pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt -r engine/requirements.txt
+pnpm install
+pnpm test
+pnpm lint
+```
+
+## Make the change
+
+1. **Fork and branch.** Use a focused branch per change.
+2. **Keep it small.** A reviewable pull request does one thing. Say what a user can now do differently, which tests you ran, and any migration or compatibility impact.
+3. **Test state changes.** Add a test for every state machine transition you touch.
+4. **Update the docs.** If behavior changes, update the user guide under `docs/community/` or the API contract in the same pull request.
+
+## Ground rules for the control plane
+
+BOSS exists to make agent work safe and auditable, so a few rules are non-negotiable:
+
+- **Spend needs a reservation.** Anything that can cost money reserves budget before it runs.
+- **Effects need a receipt.** Anything that writes outside BOSS goes through the existing adapter boundary and records a receipt with a unique dedupe key.
+- **Work needs a lease.** Worker jobs hold a lease with a TTL and heartbeat.
+- **Failures stay visible.** Retry, dead-letter, or escalate; never swallow an error.
+- **The console follows the API.** A new console action needs a matching API permission check and an audit event.
+- **Scope stays enforced.** Changes that read or write project data respect the tenant boundary.
+
+If your change can spend money or write outside BOSS, include tests that cover the reservation, the receipt, the lease, and the tenant boundary. Never commit credentials.
+
+Installing an agent definition or example workflow starts no work, and docs and code should describe it that way.
+
+## Review
+
+Maintainers review each pull request for scope, safety, tests, and documentation before merging. An acknowledged issue or a draft plan is not approval to start the work, so check in on the issue before a large change.
+
+Everyone in project spaces follows the [Code of Conduct](CODE_OF_CONDUCT.md). For what BOSS does from a user's point of view, see the [README](README.md) and the [documentation home](docs/community/README.md).
+
+By contributing, you agree that your contributions are licensed under the [Apache License 2.0](LICENSE).

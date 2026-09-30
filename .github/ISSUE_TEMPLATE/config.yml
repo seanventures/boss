@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Report a vulnerability
+  - name: Report a security vulnerability
     url: mailto:boss@sean.net
-    about: Do not open a public issue for a vulnerability. Email boss@sean.net.
+    about: Please report vulnerabilities privately by email, not as a public issue.
+  - name: Documentation
+    url: https://github.com/seanventures/boss/blob/main/docs/community/README.md
+    about: Guides for installing, connecting models, and running your first goal.

@@ -1,151 +1,106 @@
 # Walkthroughs
 
-Three walks for someone installing BOSS on a machine they administer. These
-pages use commands and name the console areas. They do not include pictures.
-A later install can add pictures; do not treat a missing picture as a missing
-step.
+Three guided walks through a new BOSS install: getting it running on your machine, submitting a first goal in Command Center, and querying the control plane from the terminal. Each walk uses real commands and names the console areas you will see.
 
-The matching tasks are in [use cases](use-cases.md). Install details that this
-page does not repeat live in the [quickstart](QUICKSTART.md) and the
-[installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
+For the task-oriented view of the same features, see [use cases](use-cases.md). Install details not repeated here are in the [quickstart](QUICKSTART.md) and the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
 
 ## Install from a checkout
 
-The GitHub one-liner installs release `v1.0-rc1`, commit
-`7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. Do not point the download at
-another host.
-
-From a checkout you already have:
+From a checkout on the machine you are installing onto, run:
 
 ```sh
 ./install.sh --dir "$PWD"
 ```
 
-Run it on the machine you are installing onto. It does not SSH to a maintainer
-machine. It does not need Plane, an ops token, or a private registry. It binds
-the API and the console to `127.0.0.1`. It writes `.env` on that machine and
-does not upload it. Keep that file private and do not commit it.
+The installer runs entirely on that machine. It binds the API and the console to `127.0.0.1` and writes credentials to `.env` locally. Keep `.env` private and out of version control.
 
-The installer asks for a model key you already have, or you can press Enter
-and connect one later. Do not put a key on the command line. The host it
-expects is a supported Ubuntu or Debian machine with sudo, as the installer
-guide describes.
+During install you can enter a model key you already have, or press Enter to connect one later. The installer expects a supported Ubuntu or Debian host with `sudo`, as described in the installer guide.
 
-When the installer finishes, open [http://127.0.0.1:3000](http://127.0.0.1:3000)
-on that same machine. You should get the console sign-in, not a hosted
-account page. There is no hosted Account Connect signup.
+!!! warning
+    Never put a key on the command line. Use the installer's hidden prompt or the process environment instead.
 
-Use an SSH tunnel only when BOSS is running on a VM you administer and you are
-sitting at another computer:
+To install a release instead of a checkout, use the GitHub one-liner in the [quickstart](QUICKSTART.md#install-from-a-release). It installs release `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, directly from GitHub; do not point the download at any other host.
+
+### Sign in
+
+When the installer finishes, open [http://127.0.0.1:3000](http://127.0.0.1:3000) on the same machine. You should see the console sign-in page.
+
+If BOSS runs on a VM you administer and you are at another computer, open an SSH tunnel to your VM:
 
 ```sh
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-`user@your-vm` means your account on that VM. It does not mean a maintainer
-machine. Leave the tunnel open and open
-[http://127.0.0.1:3000](http://127.0.0.1:3000) on the computer that started
-it. The ports on the VM stay bound to loopback.
+Leave the tunnel open, then open [http://127.0.0.1:3000](http://127.0.0.1:3000) on the computer that started it. The ports on the VM stay bound to loopback.
 
-The console password is not the API key. The command that shows it is
-documented in [scripts/install/README.md](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
-From the install directory:
+Your first sign-in uses the owner password created on the install machine, which is separate from the API key. From the install directory, show it in a terminal (so it is not piped into a log):
 
 ```sh
 python3 scripts/install/console_password.py show
 ```
 
-Run it in a terminal so the password is not piped into a log. Do not paste
-the password or the API key into a ticket.
+The [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) documents this command and its `reset` counterpart. Never paste the password or the API key into a ticket.
 
-Self-hosted SSO against an identity provider you run is a later setup. The
-first sign-in is the owner password created on this machine.
+Self-hosted SSO against an identity provider you run can be set up later.
 
-## First goal in Command Center
+## Submit a first goal in Command Center
 
-Sign in at [http://127.0.0.1:3000](http://127.0.0.1:3000).
+1. Sign in at [http://127.0.0.1:3000](http://127.0.0.1:3000) and open **Command Center**.
 
-Open **Command Center**. The top of the page is **Ask BOSS**. The title is
-"What do you want to do?" Under it: "Gated actions require your approval."
-The box says "Describe what to build or ask a question…"
+    The top of the page is **Ask BOSS**, titled "What do you want to do?" with the line "Gated actions require your approval." The input reads "Describe what to build or ask a question…"
 
-Type one concrete goal. **Talk to BOSS** answers and starts nothing unless
-you say so. **Build** follows the governed path and still stops for a PRD
-you approve before code. If you have not connected a model, model work stays
-visibly unavailable. The control plane can still be up.
+2. Type one concrete goal and choose a path.
 
-Read the reply as a plan, not as finished work. Software Factory pages and
-APIs may be where a governed code task shows up after you accept that path.
-They do not run unattended. A preview or sandbox record does not mean a live
-app opened.
+    **Talk to BOSS** answers and starts nothing unless you say so. **Build** follows the governed path and stops for a PRD you approve before any code is written. If no model is connected, model work shows as unavailable while the control plane stays up.
 
-Then open **Approvals**. You should see the decision queue headed "Agents
-proposed — you decide." **Needs action** lists pending and delegated cards.
-Each card is the question, not a completed effect. Approve or reject it
-yourself. If nothing is waiting, the queue says "Queue is clear" and
-"Nothing needs your signature." Lower on the same area, approval rules are
-headed "What requires your approval — and why."
+3. Read the reply as a plan.
 
-Then open **Activity log**. The heading is "Activity log" and the line under
-it is "Central log of events, steps, jobs, receipts, and deadletters." You
-should see only rows BOSS recorded for this project. An empty log means those
-records are not there yet. If the log cannot be loaded, it says it is
-unavailable and that no rows were invented. A line here is not proof that
-later work finished.
+    After you accept a build path, the governed code task may appear in Software Factory pages and APIs. They do not run unattended, and a preview or sandbox record does not mean a live app has opened.
 
-**Agent work** lists recent activity by role. On a first goal, that list may
-still be empty. **Team structure** is the planned role layout plus observed
-handoffs. Changing the plan does not route tasks. **Agent Studio** is where
-definitions live so you can test one. Installing a starter template does not
-start work, and it does not give you a workforce. Installing the five example
-workflows under `examples/` also starts nothing. A setup script only writes
-definitions you can change or delete.
+4. Open **Approvals**.
+
+    The decision queue is headed "Agents proposed — you decide." **Needs action** lists pending and delegated cards. Each card is a question, not a completed effect; approve or reject it yourself. When nothing is waiting, the queue shows "Queue is clear" and "Nothing needs your signature." Further down, the approval rules are headed "What requires your approval — and why."
+
+5. Open **Activity log**.
+
+    Under the heading, the page reads "Central log of events, steps, jobs, receipts, and deadletters." It shows only rows BOSS recorded for this project. An empty log means no records exist yet. If the log cannot load, it says so explicitly and shows no placeholder rows. A row here records that something happened; it does not prove later work finished.
+
+### Other areas you will see
+
+- **Agent work** lists recent activity by role. After a first goal it may still be empty.
+- **Team structure** shows the planned role layout and observed handoffs. Changing the plan does not route tasks.
+- **Agent Studio** holds agent definitions you can test. Installing a starter template, or the five example workflows under `examples/`, only writes definitions you can change or delete. It does not start work.
 
 ## Ask the terminal
 
-Two entries open the same Metatron terminal. Neither prints the API key.
+The Metatron terminal gives you command-line access to the same API. There are two ways to open it, and neither prints the API key.
 
-From the install directory, the community terminal entry is:
+From the install directory:
 
 ```sh
 make metatron
 ```
 
-That opens the terminal inside the API container and uses the install's
-configured key and project.
+This opens the terminal inside the API container using the install's configured key and project.
 
-From a checkout where you have already set `BOSS_API_URL`, `BOSS_API_KEY`,
-and `BOSS_PROJECT_ID` in the environment:
+From a checkout where `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` are already set in the environment:
 
 ```sh
 python3 scripts/metatron_tui.py
 ```
 
-The prompt is `metatron>`. The command reference is
-[terminal and API access](TERMINAL_API.md). How this terminal sits next to
-the HTTP API and MCP is [control surfaces](CONTROL_SURFACES.md).
+At the `metatron>` prompt, work through these commands in order:
 
-Use these commands in order:
+1. **`/projects`** lists the projects the API returns on this machine. A standard install seeds a local project named `boss-dogfood`. Select a project with `/project` followed by its id.
+2. **`/ops`** lists the product domains on the running API. `/ops budget` searches budget reads and writes, `/ops receipts` searches receipt reads, and `/ops * --page 1` browses one page of the full list.
+3. **`/describe`** followed by an operation id from that list shows the operation's parameters and body. Copy the id exactly as the terminal printed it.
+4. **`/op`** followed by the same id sends one request. Add JSON only when `/describe` shows that the call needs `path`, `query`, or `body`.
 
-1. `/projects` lists projects returned by the API on this machine. A normal
-   install seeds `boss-dogfood`. That id is your local project, not a shared
-   server. `/project` plus the id selects it.
-2. `/ops` lists product domains on the running API. `/ops budget` searches
-   budget reads and writes. `/ops receipts` searches receipt reads. `/ops *
-   --page 1` browses one page if you are not searching by name.
-3. `/describe` plus an operation id from that list shows the parameters and
-   body. Copy the id the terminal printed. Do not invent one.
-4. `/op` plus that same id sends one request. Add JSON only when `/describe`
-   says the call needs `path`, `query`, or `body`.
+!!! note "What a successful `/op` means"
+    A successful `/op` means the API accepted that one call. It does not confirm that a later job, model turn, deploy, or external send finished, and the API can still deny or hold a call for permission, budget, or approval. After a write, check **Approvals**, **Activity log**, and a budget or receipt read before treating the work as done.
 
-A successful `/op` means the API accepted that one call. It is not proof that
-a later job, model turn, deploy, or external send finished. The API can still
-deny or hold a call for permission, budget, or approval. After a write, look
-again at **Approvals**, **Activity log**, and a budget or receipt read before
-you treat the work as done.
+For the full command reference, see [terminal and API access](TERMINAL_API.md). For how the terminal relates to the HTTP API and MCP, see [control surfaces](CONTROL_SURFACES.md).
 
 ## Report a vulnerability
 
-Report suspected vulnerabilities privately to
-[boss@sean.net](mailto:boss@sean.net). Do not open a public issue, and do not
-include credentials in the report. See [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md).
+Report suspected vulnerabilities privately to [boss@sean.net](mailto:boss@sean.net). Do not open a public issue, and do not include credentials in the report. See [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md).
