@@ -139,6 +139,35 @@
   background: #1b242e;
 }
 
+.boss-setups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin: 0 0 1.6rem;
+}
+
+.boss-setup {
+  border-left: 3px solid var(--boss-lamp);
+  background: var(--boss-plate);
+  padding: 0.15rem 0.9rem 0.7rem;
+  min-width: 0;
+}
+
+.boss-setup h3 {
+  margin-top: 0.85rem;
+  font-size: 1rem;
+}
+
+[data-md-color-scheme="slate"] .boss-setup {
+  background: #1b242e;
+}
+
+@media (max-width: 48rem) {
+  .boss-setups {
+    grid-template-columns: 1fr;
+  }
+}
+
 [data-md-color-scheme="slate"] .boss-receipt__kicker {
   color: var(--boss-lamp-lit);
 }
