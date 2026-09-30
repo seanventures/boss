@@ -19,6 +19,44 @@ The manual for a control plane you run yourself. Give it a goal. Review the plan
 
 </div>
 
+## Three setups
+
+<div class="boss-setups" markdown="1">
+
+<div class="boss-setup" markdown="1">
+
+### Web console
+
+On the install machine, open [http://127.0.0.1:3000](http://127.0.0.1:3000). Sign-in is [console access](CONSOLE_AUTH.md). A hostname needs a TLS proxy you run. The installer flag is `--console-origin`, and the listener stays on loopback.
+
+</div>
+
+<div class="boss-setup" markdown="1">
+
+### Terminal
+
+From the install directory, `make metatron` opens the Metatron TUI inside the API container. Commands are in [terminal and API access](TERMINAL_API.md). Setup is on the [terminal](terminal.md) page.
+
+`/projects` asks the API for the projects returned under the current credentials, prints that list with the active project marked, and does not select a different project.
+
+`/ops` reads the catalog of the API you are connected to so you can find an operation before you inspect or call one.
+
+`/describe` takes one operation id and shows its method, path, parameters, and typed body fields, and it does not call the operation.
+
+`/op` takes that operation id and optional JSON whose only keys are `path`, `query`, and `body`, then sends the call through the authenticated HTTP API.
+
+</div>
+
+<div class="boss-setup" markdown="1">
+
+### CLI
+
+Source `boss-community.env.sh` for `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID`. The API key is not printed and is not a command argument. Setup is on the [CLI](cli.md) page. Coding CLIs you already have are in [model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md).
+
+</div>
+
+</div>
+
 Pick the page that matches what you are trying to do.
 
 | You want to | Open |

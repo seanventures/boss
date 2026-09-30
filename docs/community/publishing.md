@@ -23,6 +23,8 @@ These pages are in `mkdocs.community.yml`:
 - `use-cases.md`
 - `walkthroughs.md`
 - `interfaces.md`
+- `terminal.md`
+- `cli.md`
 
 ## Installer pin
 
