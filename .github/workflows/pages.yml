@@ -1,0 +1,57 @@
+name: Docs site
+
+on:
+  pull_request:
+    paths:
+      - "docs/community/**"
+      - "mkdocs.community.yml"
+      - ".github/workflows/pages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/community/**"
+      - "mkdocs.community.yml"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # The private source repository publishes its own manual; only the public repository deploys this site.
+    if: github.repository == 'seanventures/boss'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install MkDocs
+        run: pip install mkdocs==1.6.1 mkdocs-material==9.6.15
+      - name: Build the site strictly
+        run: mkdocs build -f mkdocs.community.yml --strict
+      - if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.repository == 'seanventures/boss' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

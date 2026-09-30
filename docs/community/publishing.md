@@ -1,8 +1,6 @@
-# Publishing the community docs
+# Publishing the docs
 
-The docs have not been published yet. Pages in this manual link to files in seanventures/boss when those files live outside the manual.
-
-This site config is ready to become GitHub Pages after the repository is public. It does not publish anything now.
+This site is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) from `docs/community/` and published to GitHub Pages at <https://seanventures.github.io/boss/>. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
 
 ## Build locally
 
@@ -12,22 +10,12 @@ From the repository root, install `mkdocs` and `mkdocs-material`, then run:
 mkdocs build -f mkdocs.community.yml --strict
 ```
 
-## GitHub Pages
+Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit.
 
-GitHub Pages is a later step on seanventures/boss. Do not add a workflow that deploys the site now. Leave `site_url` unset until GitHub Pages is enabled, and fill it in only then.
+## Deploy
 
-## Pages in the nav
-
-These pages are in `mkdocs.community.yml`:
-
-- `use-cases.md`
-- `walkthroughs.md`
-- `interfaces.md`
-- `terminal.md`
-- `cli.md`
-- `hostname.md`
-- `remote-api.md`
+The `Docs site` workflow in `.github/workflows/pages.yml` builds the site in strict mode and deploys it to GitHub Pages on every push to `main` that touches the docs. Pull requests build the site without deploying it. Pages must be set to deploy from GitHub Actions in the repository settings.
 
 ## Installer pin
 
-The one-line installer is pinned to `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. GitHub Pages is still off. Do not add a Pages workflow from this manual.
+The one-line installer is pinned to `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. Update the pin in the README, the quickstart, and the installer guide together when a new release is cut.

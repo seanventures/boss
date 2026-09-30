@@ -1,103 +1,86 @@
-# Community interfaces
+# Interfaces
 
-BOSS Community is software you run on a machine you administer. The installer
-CLI starts that software on the machine. Afterward, the console and the
-Metatron terminal both talk to the authenticated HTTP API. MCP is a separate
-surface for one trusted client on one project. Release `v1.0-rc1` is the
-snapshot in this repository. Nothing on this page is a general-availability claim.
+BOSS Community gives you four ways to work with a running install: the installer CLI that sets it up, the Mission Control console, the Metatron terminal, and the authenticated HTTP API, plus MCP for a single trusted client. This page explains what each one is for and how they fit together. It describes release `v1.0-rc1`, a release candidate.
+
+| Interface | Use it to | Reference |
+| --- | --- | --- |
+| Installer CLI | Install, upgrade, and configure BOSS on your machine | [CLI setup](cli.md) |
+| Console | Submit goals, review decisions, and read the activity log | [Console access](CONSOLE_AUTH.md) |
+| Terminal | Query and call API operations interactively | [Terminal](terminal.md) |
+| HTTP API | Script and integrate with BOSS | [Control surfaces](CONTROL_SURFACES.md) |
+| MCP | Connect one trusted client to one project | [MCP access](MCP.md) |
+
+The console and the terminal are both clients of the HTTP API. They are not separate control planes: the API enforces project, edition, permission, budget, approval, and receipt rules on every call, no matter which interface made it.
 
 ## Installer CLI
 
-From a checkout you already have, install in place:
+From a checkout, install in place:
 
 ```bash
 ./install.sh --dir "$PWD"
 ```
 
-The release one-liner is pinned to `v1.0-rc1`, commit
-`7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. Do not point it at another host.
-Secrets are not command arguments: the installer refuses API
-keys and tokens on the command line, because the shell would keep them in
-history and process listings. Use the hidden prompt or the process environment
-instead. The installer binds the API and console to `127.0.0.1` and leaves
-credentials in the private `.env` on that machine. `--api-bind` is the explicit
-way to publish the API port. The default is `127.0.0.1`.
+The installer binds the API and console to `127.0.0.1` and keeps credentials in a private `.env` on that machine. To publish the API port on another address, pass `--api-bind`; the default is `127.0.0.1`.
 
-Source `boss-community.env.sh` from the install directory for `BOSS_API_URL`,
-`BOSS_API_KEY`, and `BOSS_PROJECT_ID`. The API key is not printed and is not a
-command argument. That path is the [CLI setup](cli.md). Coding CLIs you already
-have are in [model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md).
+!!! warning "Secrets never go on the command line"
+    The installer refuses API keys and tokens as arguments, because the shell would keep them in history and process listings. Use the hidden prompt or the process environment instead.
 
-Ports, recovery, and the credential rules are in the
-[installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
+After install, source `boss-community.env.sh` from the install directory to load `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` into your shell without printing the key. See [CLI setup](cli.md) for details, and [model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md) for coding CLIs you already have.
+
+The release one-liner is pinned to `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, and downloads from GitHub; do not point it at another host. Ports, recovery, and credential rules are covered in the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
 
 ## Console
 
-After install, open `http://127.0.0.1:3000` on the install machine. From
-another computer, open an SSH tunnel to a VM you administer, then use that
-same address on your computer:
+On the install machine, open `http://127.0.0.1:3000`. From another computer, open an SSH tunnel to the VM you administer and use the same address locally:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-`user@your-vm` means a VM you administer, not a shared service. In the
-console, **Command Center** is where you submit a goal, **Approvals** is
-where you review decisions, and **Activity log** shows receipts and failures.
-Sign-in and the owner session are in [console access](CONSOLE_AUTH.md). A
-hostname needs a TLS proxy you run. The installer flag is `--console-origin`,
-and the listener stays on loopback. The page for that proxy is not in this
-manual yet.
+The main areas of the console are:
+
+- **Command Center**, where you submit a goal.
+- **Approvals**, where you review decisions.
+- **Activity log**, which shows receipts and failures.
+
+Sign-in and the owner session are covered in [console access](CONSOLE_AUTH.md). To serve the console on a hostname, pass `--console-origin` and run a TLS proxy you operate; the listener itself stays on loopback. See [Console hostname](hostname.md) for the full setup.
 
 ## Terminal
 
-On an installed Community stack, `make metatron` from the install directory
-opens the Metatron TUI inside the API container. The short setup page is
-[Terminal](terminal.md).
+From the install directory, open the Metatron terminal:
 
 ```bash
 make metatron
 ```
 
-That target runs `python scripts/metatron_tui.py` inside the API container
-with the install's configured API key and project. The program never prints
-the API key. Outside that container, the same entrypoint is
-`python3 scripts/metatron_tui.py` after you set `BOSS_API_URL`,
-`BOSS_API_KEY`, and `BOSS_PROJECT_ID`. Command behavior is in
-[terminal and API access](TERMINAL_API.md). What the running API exposes is
-in the [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md).
+This target runs `python scripts/metatron_tui.py` inside the API container with the install's configured API key and project, and never prints the key. Outside the container, run `python3 scripts/metatron_tui.py` after setting `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID`.
 
-`/projects` asks the API for the projects returned under the current
-credentials and prints that list with the terminal's active project marked.
-It does not select a different project.
+The core commands are:
 
-`/ops` reads the catalog of the API you are connected to. With no argument it
-lists product domains. Add a domain or a search term to list matching
-operations, or use `/ops * --page N` to browse the full list in pages. Use it
-to find an operation before you inspect or call one.
+| Command | What it does |
+| --- | --- |
+| `/projects` | Lists the projects available to the current credentials and marks the active one. It does not switch projects. |
+| `/ops` | Reads the operation catalog of the connected API. With no argument it lists product domains; add a domain or search term to filter, or use `/ops * --page N` to browse the full list. |
+| `/describe <id>` | Shows an operation's method, path, parameters, and typed body fields, plus an example of the arguments `/op` expects. It does not call the operation. |
+| `/op <id> [json]` | Sends the call through the authenticated HTTP API. The optional JSON accepts only the keys `path`, `query`, and `body`. |
 
-`/describe` takes one operation id from that list and shows its method, path,
-parameters, and typed body fields, plus an example of the arguments `/op`
-expects. It does not call the operation.
+!!! note
+    A successful `/op` response means the API accepted the call. Errors and denials are not acceptance, and acceptance does not prove that later work finished. Check the resulting status, receipt, and event records before you treat anything as done.
 
-`/op` takes that operation id and optional JSON whose only keys are `path`,
-`query`, and `body`, then sends the call through the authenticated HTTP API.
-A successful response means the API accepted the call. An error or a denial
-is not acceptance, and acceptance is not proof that later work finished.
-Check the resulting status, receipt, and event records before you treat
-anything as done.
+For command behavior, see [terminal and API access](TERMINAL_API.md). For the operations the running API exposes, see the [terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md). The short setup page is [Terminal](terminal.md).
 
 ## HTTP API and MCP
 
-The console and the terminal use the authenticated HTTP API. They are not a
-second control plane. The API enforces project, edition, permission, budget,
-approval, and receipt rules on each call.
+The HTTP API is the single enforcement point for BOSS. The console and terminal use it, and you can call it directly with the API key. To reach it from another machine, see [remote API access](remote-api.md).
 
-MCP is for a trusted client on one project. It is not the same surface as raw
-HTTP. On an installed stack, `make mcp-setup` creates one dedicated project
-credential, and `make mcp` starts that client's session. The credential is
-not printed, and it is not reused for a second project: another project needs
-its own client, credential, and process. The client does not supply its own
-URL, method, headers, or credentials. Remote MCP HTTP requires
-`BOSS_MCP_HTTP_TOKEN`. How this differs from the HTTP API is in
-[MCP access](MCP.md) and [API, terminal, and MCP](CONTROL_SURFACES.md).
+MCP is a separate, narrower surface for one trusted client on one project:
+
+1. On an installed stack, run `make mcp-setup` to create a dedicated project credential. The credential is not printed.
+2. Run `make mcp` to start that client's session.
+
+Each credential is bound to a single project. To use another project, set up a separate client, credential, and process. The MCP client cannot supply its own URL, method, headers, or credentials.
+
+!!! warning
+    Remote MCP over HTTP requires `BOSS_MCP_HTTP_TOKEN`.
+
+For how MCP differs from the HTTP API, see [MCP access](MCP.md) and [API, terminal, and MCP](CONTROL_SURFACES.md).

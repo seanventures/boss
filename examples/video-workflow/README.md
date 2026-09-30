@@ -1,107 +1,79 @@
 # Video editing and publishing
 
-**Paste a link to a video, say what you want done to it in plain English, and get an edited
-video waiting for your approval before it reaches your channel.**
+**Paste a link to a video, say what you want done in plain English, and get an edited video that
+waits for your approval before it reaches your channel.**
 
 ---
 
-## The use case
+## What it does
 
-You record long videos. Most of what you publish is not the recording — it is a cut of it: the
-dead air removed, a vertical crop for phones, a caption over the opening, your logo in the
-corner. The editing itself is mechanical. The judgement is in deciding *what* to cut.
-
-So this workflow splits those apart. You supply a link and an instruction like:
+Most of what you publish from a long recording is a cut of it: dead air removed, a vertical crop
+for phones, a caption over the opening, your logo in the corner. The editing is mechanical; the
+judgement is in deciding *what* to cut. This workflow separates the two. You supply a link and an
+instruction such as:
 
 > Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end.
 
-The editing agent reads that sentence, decides which of its skills to use and in what order,
-does the work, and shows you the result. Nothing reaches YouTube until you say so.
-
-### What happens, step by step
+The editing agent reads that sentence, decides which of its skills to use and in what order, does
+the work, and shows you the result. Nothing reaches YouTube until you approve it.
 
 | # | Step | Agent | What it does |
 |---|------|-------|--------------|
 | 1 | **Let an agent work it out** | `video_editor` | **Binds no skill.** Fetches the link in your instruction and edits with the skills it holds |
 | 2 | **Publish to YouTube** | `media_publisher` | Uploads as **private**. **Stops and waits for you** |
 
-### The one thing worth understanding about the editing step
+### An editing step that binds no skill
 
-**It binds nothing, and that is the point.**
-
-The middle used to be two steps — "plan the edit" and "apply the plan" — with a fixed list of
-operations between them. That shape does not survive contact with real use. The first person to
-ask for an ending slide needed the operation list to grow a word for it; the next asks for a
-fade, the one after that for a lower third. A framework whose answer to every new request is a
-release is not a framework.
-
-So the editing step carries your **instruction**, and `video_editor`'s **skills** are the vocabulary:
+A fixed "plan the edit, then apply the plan" pipeline needs a new release every time someone asks
+for an operation it does not have — an ending slide, a fade, a lower third. Instead, the editing
+step carries your **instruction**, and `video_editor`'s **skills** are the vocabulary:
 
 ```
 media.fetch_link  media.fetch_image  video.trim  video.cut  video.reframe
 video.caption     video.overlay_image  video.watermark  video.bookend
 ```
 
-The agent picks from those and orders them itself. Which means:
-
-**To make this workflow do something new, give the agent another skill.** Agents → `video_editor`
-→ *Give this agent a skill*. The workflow does not change. No step is edited. Nothing is
-released.
-
-**It cannot use a skill nobody gave it.** The tools it is offered are exactly the ones it holds
-in `role_skills`, and the runtime re-checks that on every call — so an instruction asking for
-something it was not granted comes back as "I cannot do that", named, rather than approximated
-with a tool meant for something else.
-
-**It has no shell, no database and no file system.** An ordinary BOSS agent run gets all three,
-because that is the job in the software factory. This kind gets none of them: the skills you gave
-it are the whole of its reach, and that claim has to be true to be worth making.
-
-**Publishing still cannot be made automatic.** `publish_youtube` is risk tier 3, and BOSS
-requires a person at or above that floor whatever a workflow asks for. `video_editor` is
-*forbidden* to publish, and assigning it to that step is refused when you save. That separation
-is enforced, not conventional.
+The agent chooses from those and orders them itself. **To make this workflow do something new,
+give the agent another skill**: Agents → `video_editor` → *Give this agent a skill*. No step is
+edited and nothing needs a new release.
 
 ### The timecode trap
 
 Each operation applies to the result of the one before it. Cut 1:00–2:00 and then caption at
 5:00, and that caption lands at 6:00 of your original recording.
 
-Say which recording your timecodes are from if there is any doubt — "0:28 to 1:48 **of the
+If there is any doubt, say which recording your timecodes refer to — "0:28 to 1:48 **of the
 original**". The agent orders its own operations and is told about this trap, but your sentence
 is the only thing that says what you meant.
 
 ---
 
-## Before you run it
+## What you need
 
-### 1. A model must be connected
+**A connected model.** The editing step is an agent working from your sentence. Connect one in
+Settings if `connected_engines` is empty.
 
-The editing step is an agent working from your sentence, so it needs a model. Settings → connect one, if
-`connected_engines` is empty.
+**A connected YouTube channel** for publishing: **Channels → Connect** in the console. Without a
+channel, publishing refuses. The editing agent can fetch a link you provide; private Google Drive
+source links also need an account that can read them, while a public HTTPS source can be fetched
+without Drive sign-in.
 
-### 2. Connect YouTube for publishing
+*Several channels?* Connect each one; they get their own keys (`youtube_default`, `youtube_2`, …),
+each with its own token. To pin a step to a particular channel, open that step's **inputs** in the
+builder, set `connection_key` to **a fixed value**, and type the key.
 
-The editing agent can fetch a link you provide. Publishing needs a connected YouTube channel.
-
-> **Channels → Connect** in the console.
-
-Without a channel, publishing refuses. Private Google Drive source links also need an account
-that can read them; a public HTTPS source can be fetched without Drive sign-in.
-
-**Several channels?** Connect each one; they get their own keys (`youtube_default`,
-`youtube_2`, …), each with its own token. To pin a step to a particular channel, open that
-step's **inputs** in the builder, set `connection_key` to **a fixed value**, and type the key.
-
-### 3. ffmpeg
-
-Already in the BOSS images. On a hand-built environment, `ffmpeg` needs the
-`libavfilter-extra` package and a font (`fonts-dejavu-core`) — without them captions fail,
-because `drawtext` is not in the base filter set.
+**ffmpeg.** Already in the BOSS images. On a hand-built environment, `ffmpeg` needs the
+`libavfilter-extra` package and a font (`fonts-dejavu-core`); without them captions fail, because
+`drawtext` is not in the base filter set.
 
 ---
 
-## Running the setup script
+## Run it
+
+1. Set `BOSS_API_KEY` as described in [Examples](../README.md).
+2. Preview with `--dry-run`, which reports what it would enable, define and create without
+   touching anything. Then run it for real. Re-running is safe: steps and the workflow are matched
+   by name and reused.
 
 ```bash
 python3 examples/video-workflow/setup.py \
@@ -117,23 +89,54 @@ python3 examples/video-workflow/setup.py \
 | `--project` | Which project to build it in | `boss-dogfood` |
 | `--actor` | Who is doing this. Must be a principal your API key may act as — the API names the right one when it refuses | `ceo` |
 | `--no-agents` | Leave steps unassigned, so each runs as the workflow itself | off |
-| `--dry-run` | Say what would happen and change nothing | off |
+| `--dry-run` | Report what would happen and change nothing | off |
 
-Each also reads from the environment: `BOSS_API`, `BOSS_API_KEY`, `BOSS_PROJECT`, `BOSS_ACTOR`.
+Each option can also come from the environment: `BOSS_API`, `BOSS_API_KEY`, `BOSS_PROJECT`,
+`BOSS_ACTOR`.
 
-**Start with `--dry-run`.** It reports what it would enable, define and create without touching
-anything.
+3. Open **Delivery → Workflows → "Video edit and publish" → Start one** and fill in:
 
-**Re-running is safe.** Steps and the workflow are matched by name and reused.
+| Field | What to put in it |
+|---|---|
+| `video_url` | optional link to your recording; you can put it in the instruction instead |
+| `instructions` | *"Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."* |
+| `asset_url` | optional link to an ending slide, logo, or badge |
+| `title` | optional; overrides the title the editing agent derives from your brief |
+| `description` | optional; overrides the description the editing agent derives |
 
 ---
 
-## Doing it by hand instead
+## What you'll review
 
-The script only calls the public API. Every step below is the same thing in the console, and
+The editing step runs, then **Publish** stops and waits. Open the agent step to see **which skills
+it chose, in what order, and why**. That record answers "what did it actually do", and it is what
+to read before approving.
+
+---
+
+## How it stays safe
+
+**The agent can only use skills it was given.** The tools it is offered are exactly the ones it
+holds in `role_skills`, and the runtime re-checks that on every call. An instruction that asks for
+something it was not granted comes back as a named "I cannot do that", not an approximation with a
+tool meant for something else.
+
+**Its reach is limited to those skills.** An ordinary BOSS agent run in the software factory gets
+a shell, a database and a file system. This kind of agent gets none of them.
+
+**Publishing always needs a person.** `publish_youtube` is risk tier 3, and BOSS requires a person
+at or above that floor whatever a workflow asks for. `video_editor` is *forbidden* to publish, and
+assigning it to the publish step is refused when you save — the separation is enforced, not a
+convention. Videos upload as **private**.
+
+---
+
+## Build it by hand
+
+The script only calls the public API. Every step below does the same thing in the console, and
 doing it once is the fastest way to understand what you have.
 
-### 1. Enable the skills — **do this first**
+### 1. Enable the skills
 
 **Skills → find each → Enable:**
 
@@ -143,40 +146,35 @@ doing it once is the fastest way to understand what you have.
   `video.watermark`, `video.bookend` — what the agent will compose from
 - `publish_youtube`
 
-A skill BOSS ships is *available*, not *installed*. Until it is enabled it lives in the
-catalogue and not in your project. This is the step people miss.
+A skill BOSS ships is *available*, not *installed*: until it is enabled, it lives in the catalogue
+and not in your project. This is the step people most often miss.
 
 ### 2. Give the agents their skills
 
-**This is the step that actually matters, and it is the one that was missing for a long time.**
+Enabling a skill puts it in your project; it does **not** give it to anybody. The runtime checks
+`role_skills` before letting an agent call anything. A role spec's "allowed skills" list reaches
+only the agent's *prompt*, so an agent can be told what it may use while holding nothing, and
+every step naming it is refused at the first call.
 
-Enabling a skill puts it in your project. It does **not** give it to anybody. The runtime checks
-`role_skills` before letting an agent call anything, and a role spec's "allowed skills" list
-reaches the agent's *prompt* and nowhere else — so an agent can be told what it may use and hold
-nothing, and every step naming it is refused at the first call.
+- **Agents → `video_editor` → Give this agent a skill**, once per editing skill above.
+- **Agents → `media_publisher` → Give this agent a skill** → `publish_youtube`.
 
-**Agents → `video_editor` → Give this agent a skill**, once per editing skill above.
+The agent page shows what each agent holds. If that list is empty, the workflow cannot work, and
+the page says so.
 
-**Agents → `media_publisher` → Give this agent a skill** → `publish_youtube`.
+### 3. Define the publishing step
 
-The agent page shows what it holds. If that list is empty, the workflow cannot work, and the page
-says so rather than looking fine.
-
-### 3. Define the publishing step that binds a skill
-
-**Delivery → Build your own → Your steps → Define a step.** For each: a name, choose **Skill**,
-pick the skill, and list its inputs.
+**Delivery → Build your own → Your steps → Define a step.** Give it a name, choose **Skill**, pick
+the skill, and list its inputs.
 
 | Name | Skill | Inputs |
 |---|---|---|
 | Publish to YouTube | `publish_youtube` | `media_artifact_id`, `title`, `description` |
 
-Publish will show **always needs a person**. That comes from its risk tier; you cannot turn it
-off.
+Publish will show **always needs a person**. That comes from its risk tier, and you cannot turn it
+off. The editing step needs no definition; see the next section.
 
-There is no step to define for the editing. That is the next section.
-
-### 4. Create the workflow and put the agent step first
+### 4. Create the workflow with the agent step first
 
 **Create a new workflow** → name it → then, from the palette:
 
@@ -189,8 +187,7 @@ every time.
 
 ### 5. Wire the inputs
 
-This is the part that makes it a workflow rather than two separate steps. Open each step's
-**inputs**:
+Open each step's **inputs**:
 
 | Step | Input | Source |
 |---|---|---|
@@ -201,9 +198,9 @@ This is the part that makes it a workflow rather than two separate steps. Open e
 | Publish to YouTube | `title` | the title you supplied, or **from an earlier step** → Let an agent work it out → `title` |
 | Publish to YouTube | `description` | the description you supplied, or **from an earlier step** → Let an agent work it out → `description` |
 
-Everything the agent step is given other than `instructions` is passed to the agent as **facts it
-must use exactly** — an artifact id it must not invent. The agent step's own output carries
-whatever its skills returned, last one winning, which is why **Publish** can read
+Everything the agent step receives other than `instructions` is passed to the agent as **facts it
+must use exactly**, such as an artifact id it must not invent. The agent step's output carries
+whatever its skills returned, with the last one winning, which is why **Publish** can read
 `media_artifact_id` from it.
 
 ### 6. Assign the agents
@@ -211,37 +208,19 @@ whatever its skills returned, last one winning, which is why **Publish** can rea
 Each step row has an agent dropdown. Set the editing step to `video_editor` and **Publish** to
 `media_publisher`.
 
-On the agent step, leaving it blank is a real choice with a different meaning: **whichever agent
-fits** — BOSS picks, from what each agent is for and what it holds, and records why in the run.
+On the agent step, leaving the dropdown blank means **whichever agent fits**: BOSS picks based on
+what each agent is for and what it holds, and records why in the run.
 
-Try assigning `video_editor` to Publish — it is refused when you save, naming what that skill
-does accept. That is the separation being enforced rather than described.
+Try assigning `video_editor` to Publish: it is refused when you save, and the error names what that
+skill does accept.
 
 ### 7. Save
 
-**Save as a new version.** If anything is wrong the error names the step and why.
+**Save as a new version.** If anything is wrong, the error names the step and the reason.
 
 ---
 
-## Running it
-
-**Delivery → Workflows → "Video edit and publish" → Start one.**
-
-| Field | What to put in it |
-|---|---|
-| `video_url` | optional link to your recording; you can put it in the instruction instead |
-| `instructions` | *"Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."* |
-| `asset_url` | optional link to an ending slide, logo, or badge |
-| `title` | optional; overrides the title the editing agent derives from your brief |
-| `description` | optional; overrides the description the editing agent derives |
-
-Watch the run. The editing step proceeds, then **Publish** stops and waits. Open the
-agent step to see **which skills it chose, in what order, and why** — that record is the answer
-to "what did it actually do", and it is the thing to read before approving.
-
----
-
-## When something goes wrong
+## Troubleshooting
 
 | What you see | What it means |
 |---|---|
@@ -256,12 +235,15 @@ to "what did it actually do", and it is the thing to read before approving.
 
 ---
 
-## What ships with BOSS, and what does not
+## Customize
+
+- **Teach it a new edit** by giving `video_editor` another skill. The workflow does not change.
+- **Pin a channel** by setting the publish step's `connection_key` to a fixed value.
+- **Fix the instruction** with *always do this* on the agent step, for a workflow that does the
+  same job every time.
 
 **BOSS ships the capability**: the video skills, `media.fetch_link`, `publish_youtube`, the
-`video_editor` and `media_publisher` roles, and ffmpeg in the images. All opt-in — nothing is
-forced on a project.
-
-**BOSS does not ship this workflow.** It is an example. The steps and the workflow are
-data in *your* project, created through the public API. Change it, rename it, delete it — none
-of it is part of the product, and a fresh install has the capability and none of this.
+`video_editor` and `media_publisher` roles, and ffmpeg in the images. All of it is opt-in; nothing
+is forced on a project. **The workflow itself is an example**, not part of the product. Its steps
+and definition are data in *your* project, created through the public API, and a fresh install
+has the capability without any of this. Change it, rename it, or delete it.

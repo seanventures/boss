@@ -1,16 +1,21 @@
 # BOSS Community installer
 
-Install BOSS Community on a machine you administer. For one path from a checkout to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md). This page is the installer itself: the `v1.0-rc1` command, a local checkout, loopback, the private `.env`, upgrade, and uninstall.
+Install BOSS Community on a machine you administer. This page is the installer reference: the pinned `v1.0-rc1` command, local checkouts, network and secret defaults, upgrade, recovery, and uninstall. For a single guided path from a checkout to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md).
 
-## Release one-liner
+## Install
 
-Release `v1.0-rc1` is commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. The download and the Git checkout use that same commit, and the installer verifies it. If the download fails, the installer does not run. Do not point the URL at another host.
+### Release one-liner
+
+Release `v1.0-rc1` is commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. The download and the Git checkout use that same commit, and the installer verifies it. If the download fails, the installer does not run.
 
 ```bash
 BOSS_RELEASE_COMMIT=7b88a18a2b4cd0b14b09a47fc415f7ffd4580066 bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
-## Local checkout
+> [!WARNING]
+> Do not point the download URL at another host.
+
+### From a local checkout
 
 From a checkout you already have:
 
@@ -18,15 +23,25 @@ From a checkout you already have:
 ./install.sh --dir "$PWD"
 ```
 
-That installs into the checkout. It does not contact a maintainer server, it does not clone the release URL, and it does not SSH to a maintainer machine. Passing an empty directory as `--dir` fills that directory from this tree instead. A checkout that is ahead of `main`, or whose history has diverged from it, stays on that source. Pass `--ref` to require a different commit. A diverged ref then stops with the checkout unchanged.
+This installs into the checkout itself, from the local tree: it does not clone the release URL or connect to any other machine over SSH.
 
-## Loopback and the private .env
+- Passing an empty directory as `--dir` fills that directory from this tree instead.
+- A checkout that is ahead of `main`, or whose history has diverged from it, stays on that source.
+- Pass `--ref` to require a different commit. A diverged ref then stops with the checkout unchanged.
 
-The installer binds web, Postgres, and Infisical to `127.0.0.1`. The API binds to `127.0.0.1` unless you pass `--api-bind`. It writes credentials only on the machine where it runs. It does not upload `.env`. That file is yours. Keep it private and do not commit it. Nothing in this guide requires Plane, an ops token, or a private registry. `user@your-vm` means a VM you administer, not a shared host and not a machine run by the maintainers.
+## Security defaults
 
-## Secrets stay off the command line
+### Loopback and the private `.env`
 
-The installer reads prompts from the terminal even when `bash` runs the downloaded file. Paste a model key at the hidden prompt, or press Enter and connect one later. It refuses API keys and tokens as arguments. The shell would save them in history and process listings. Export `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `BOSS_GITHUB_TOKEN` for the installer process instead.
+The installer binds web, Postgres, and Infisical to `127.0.0.1`. The API binds to `127.0.0.1` unless you pass `--api-bind`.
+
+Credentials are written only on the machine where the installer runs, into a private `.env` that is never uploaded. That file is yours: keep it private and never commit it. Nothing in this guide requires an ops token, a private registry, or a hosted BOSS account. In examples, `user@your-vm` is a VM you administer.
+
+### Secrets stay off the command line
+
+The installer reads prompts from the terminal even when `bash` runs the downloaded file. Paste a model key at the hidden prompt, or press Enter and connect one later.
+
+The installer refuses API keys and tokens as arguments, because the shell would save them in history and process listings. Export `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `BOSS_GITHUB_TOKEN` for the installer process instead.
 
 For a scripted install, pass the key through the environment and add `--yes` after the final `_` in the pinned command. Or, from the checkout you already have:
 
@@ -40,48 +55,43 @@ To start without a model key, add `--yes --skip-model-key` after the final `_`, 
 ./install.sh --dir "$PWD" --yes --skip-model-key
 ```
 
-Put a key in the private `.env` later if you want one. See [model connections](../../docs/community/MODEL_CONNECTIONS.md).
+You can add a key to the private `.env` later. See [model connections](../../docs/community/MODEL_CONNECTIONS.md).
 
-## What it does
+## What the installer does
 
-1. On a fresh Ubuntu 22.04/24.04 or Debian 12/13 VM, installs `git`, `curl`, OpenSSL, Python 3, Docker Engine, Buildx and Compose from the signed Docker apt repository; leaves existing runtimes untouched if they conflict
-2. Prompts for install directory and **BYOK** model key (optional skip)  
-3. Clones or fast-forwards the BOSS repo without deleting a nonempty directory or overwriting tracked local changes
-4. Writes a private `.env` (separate owner and worker API keys generated, mode 600)
-5. `docker compose` builds and starts **Postgres + API + worker** (+ Mission Control if selected)  
-6. Waits for `/health`, runs DB seed, and fails visibly if seeding or edition verification fails
-7. Verifies Community edition + ProviderOps surface
+1. On a fresh Ubuntu 22.04/24.04 or Debian 12/13 VM, installs `git`, `curl`, OpenSSL, Python 3, Docker Engine, Buildx, and Compose from the signed Docker apt repository. Existing runtimes that conflict are left untouched.
+2. Prompts for the install directory and a **BYOK** model key (optional skip).
+3. Clones or fast-forwards the BOSS repo without deleting a nonempty directory or overwriting tracked local changes.
+4. Writes a private `.env` (separate owner and worker API keys generated, mode 600).
+5. Runs `docker compose` to build and start **Postgres + API + worker** (+ Mission Control if selected).
+6. Waits for `/health`, runs the DB seed, and fails visibly if seeding or edition verification fails.
+7. Verifies the Community edition and ProviderOps surface.
 
-On rerun, both API credentials and any operator-added API keys, the database password,
-model keys, secret-store encryption key, console login, public URL, console origin,
-API bind, port settings, Mission Control choice, and secret-store choice are retained
-unless this run set the console origin or API bind again. Use the lifecycle
-upgrade command below to back up state before updating a long-lived install.
-Pasting the installer line again also backs up an existing running install
-before switching to a newer source revision. A stopped database container is
-started from its existing image ID for that snapshot, then returned to its
-stopped state. If that container is missing, cannot start, or backup fails,
-the source and configuration stay untouched. The backup path is printed; keep it
-private.
-For an older headless install, pass `--no-web` once to record that choice;
-use `--web` to enable it later.
-If you choose Infisical and it cannot be provisioned, the installer reports an
-incomplete install. The next rerun keeps that choice and retries it rather than
-silently switching to database credential storage.
+### Reruns
 
-The owner key (`BOSS_API_KEY`) is bound to the `ceo` member and powers Mission
-Control and local CLI commands. The worker key (`BOSS_WORKER_API_KEY`) is bound
-to the seeded `system` member. Keep it private to the worker container; it can
-claim and settle leased jobs. Existing single-key installs receive a new worker
-key on the next installer rerun or upgrade without rotating the owner key.
+A rerun retains both API credentials and any operator-added API keys, the database password, model keys, the secret-store encryption key, the console login, public URL, console origin, API bind, port settings, the Mission Control choice, and the secret-store choice, unless this run sets the console origin or API bind again.
 
-The installer does not add your account to the root-equivalent Docker group.
-On a Linux host where only the administrator can access Docker, run Compose
-with `sudo` or grant Docker access deliberately through your host policy.
+- Use the lifecycle [upgrade command](#upgrade--recover) to back up state before updating a long-lived install.
+- Pasting the installer line again also backs up an existing running install before switching to a newer source revision. A stopped database container is started from its existing image ID for that snapshot, then returned to its stopped state. If that container is missing, cannot start, or backup fails, the source and configuration stay untouched. The backup path is printed; keep it private.
+- For an older headless install, pass `--no-web` once to record that choice; use `--web` to enable the console later.
+- If you choose Infisical and it cannot be provisioned, the installer reports an incomplete install. The next rerun keeps that choice and retries it rather than silently switching to database credential storage.
 
-Mission Control has a separate single-operator password and signed session secret,
-generated on first install and stored only in the private `.env`. The password is
-never the BOSS API key. On the VM, retrieve or rotate it deliberately:
+### API keys
+
+| Key | Bound to | Used by |
+|---|---|---|
+| `BOSS_API_KEY` (owner) | `ceo` member | Mission Control and local CLI commands |
+| `BOSS_WORKER_API_KEY` (worker) | Seeded `system` member | The worker container only; it can claim and settle leased jobs, so never expose it elsewhere |
+
+Existing single-key installs receive a new worker key on the next installer rerun or upgrade, without rotating the owner key.
+
+### Docker access
+
+The installer does not add your account to the root-equivalent Docker group. On a Linux host where only the administrator can access Docker, run Compose with `sudo` or grant Docker access deliberately through your host policy.
+
+## Mission Control access
+
+Mission Control has its own single-operator password and signed session secret, generated on first install and stored only in the private `.env`. The password is never the BOSS API key. On the VM, retrieve or rotate it deliberately:
 
 ```bash
 cd ~/boss
@@ -90,58 +100,55 @@ python3 scripts/install/console_password.py reset
 # After reset, run the web recreate command printed by the helper.
 ```
 
-`show` requires a terminal so the password is not piped into logs. The worked
-path for a hostname is [docs/community/hostname.md](../../docs/community/hostname.md).
-Pass `--console-origin https://console.example` on install, or set
-`BOSS_CONSOLE_PUBLIC_ORIGIN=https://console.example` in `.env` on an install
-that is already running and recreate web without rebuilding:
+`show` requires a terminal so the password is not piped into logs.
+
+### Serve the console on a hostname
+
+The worked path for a hostname is [docs/community/hostname.md](../../docs/community/hostname.md). Pass `--console-origin https://console.example` on install, or, on an install that is already running, set `BOSS_CONSOLE_PUBLIC_ORIGIN=https://console.example` in `.env` and recreate web without rebuilding:
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env --profile web up -d --force-recreate --no-deps web
 ```
 
-The TLS proxy on this machine must **overwrite** `Host`, `X-Forwarded-Host`, and
-`X-Forwarded-Proto` with the external HTTPS host and scheme; passing through
-client-supplied values is unsafe. The Next listener stays on loopback. This
-setting does not replace TLS. The https origin answers only after the proxy
-forwards to `127.0.0.1` and those headers match. Check a real login before you
-rely on the proxy. An SSH tunnel is the path that does not need a proxy.
+> [!IMPORTANT]
+> The TLS proxy on this machine must **overwrite** `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto` with the external HTTPS host and scheme; passing through client-supplied values is unsafe.
+
+The Next listener stays on loopback, and this setting does not replace TLS. The HTTPS origin answers only after the proxy forwards to `127.0.0.1` and those headers match. Check a real login before you rely on the proxy. An SSH tunnel works without a proxy.
 
 A hosted BOSS account is not required. Connect a model you already have only if you want model work.
 
-### Optional coding subscriptions
+## Optional coding subscriptions
 
-The Community API and worker images already contain pinned Claude Code, Codex
-CLI, and Grok Build binaries. This option installs separate host copies for the
-VM user when you want to inspect or import that user's subscription login.
+The Community API and worker images already contain pinned Claude Code, Codex CLI, and Grok Build binaries. This option installs separate host copies for the VM user, for when you want to inspect or import that user's subscription login.
 
-On the VM, add `--install-coding-clis` to install missing official Claude Code,
-Codex CLI, and Grok Build binaries for the VM user. Existing working binaries are
-left alone; each new binary must pass `--version`. This option also reports which
-VM logins can be verified. The installer downloads each provider's native install
-script over HTTPS before running it. Review the upstream install methods at
-[Claude Code](https://code.claude.com/docs/en/setup),
-[Codex CLI](https://github.com/openai/codex#installing-and-running-codex-cli), and
-[Grok Build](https://docs.x.ai/build/overview).
+On the VM, add `--install-coding-clis` to install any missing official Claude Code, Codex CLI, and Grok Build binaries for the VM user. Existing working binaries are left alone, and each new binary must pass `--version`. The option also reports which VM logins can be verified. The installer downloads each provider's native install script over HTTPS before running it; review the upstream install methods for [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex#installing-and-running-codex-cli), and [Grok Build](https://docs.x.ai/build/overview).
 
 ```bash
 # After BOSS is installed (or on a rerun):
 ./install.sh --dir "$PWD" --yes --skip-model-key --install-coding-clis
 ```
 
-The VM cannot discover a subscription login on your laptop. Sign in using the
-provider's official CLI **on the VM**, under the account you intend to use:
+The VM cannot discover a subscription login on your laptop. Sign in with the provider's official CLI **on the VM**, under the account you intend to use:
 
 ```bash
 codex login --device-auth
 grok login --device-auth
 ```
 
-`--discover-subscriptions` only checks status; it sends no credentials. Claude
-Code has a separate **CLI-owned local login**: sign in through the
-official CLI as the `boss` user inside the API container, then tell BOSS to
-record that connection. The API and worker share the same private Claude
-config volume, including `.claude.json`, across container recreates:
+`--discover-subscriptions` only checks status and sends no credentials.
+
+| Flag | What it does |
+|---|---|
+| `--install-coding-clis` | Installs missing official CLIs for the VM user and reports verifiable logins |
+| `--discover-subscriptions` | Checks login status only; sends no credentials |
+| `--connect-claude-local` | Records a Claude Code CLI-owned local login made inside the API container |
+| `--connect-claude` | Imports a setup token you supply into the local secret store |
+| `--connect-codex` | Imports the VM user's Codex CLI auth JSON into BOSS's secret backend |
+| `--connect-grok-local` | Records a Grok device login made inside the API container |
+
+### Claude Code
+
+Claude Code has a separate **CLI-owned local login**. Sign in through the official CLI as the `boss` user inside the API container, then tell BOSS to record that connection. The API and worker share the same private Claude config volume, including `.claude.json`, across container recreates:
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env \
@@ -149,27 +156,19 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 ./install.sh --dir "$PWD" --yes --skip-model-key --connect-claude-local
 ```
 
-The login happens in Anthropic's browser/device flow. BOSS reads the official
-CLI's sanitized `auth status` result and records connection metadata; this path
-does not send OAuth bytes to a BOSS endpoint or database. It refuses to record
-a local subscription if `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or a
-previously stored setup token could make the status misleading. Community does
-not run a live proof turn during setup, so model use remains unverified until a
-governed job succeeds. `--connect-claude` imports a setup token the operator
-supplies and stores it only in the local secret store. It does not call a model.
-A missing token fails before anything is stored.
+The login happens in Anthropic's browser/device flow. BOSS reads the official CLI's sanitized `auth status` result and records connection metadata; this path does not send OAuth bytes to a BOSS endpoint or database.
 
-The separate `--connect-codex` path imports the VM user's CLI auth JSON into
-BOSS's secret backend. A database-backed install asks for
-`--accept-database-fallback` before that credential can be stored in Postgres;
-`--secret-store infisical` provisions a dedicated store. See
-[model connections](../../docs/community/MODEL_CONNECTIONS.md) for each path's
-limits.
+- Recording is refused if `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or a previously stored setup token could make the status misleading.
+- Community does not run a live proof turn during setup, so model use remains unverified until a governed job succeeds.
+- `--connect-claude` imports a setup token the operator supplies and stores it only in the local secret store. It does not call a model. A missing token fails before anything is stored.
 
-Grok's device session is tied to the Unix account and home that runs BOSS.
-A login under the SSH admin account does not authenticate the containers.
-The API and worker images include Grok and share an owner-only `.grok` volume;
-run the device login as `boss` **inside the API container**:
+### Codex CLI
+
+`--connect-codex` imports the VM user's CLI auth JSON into BOSS's secret backend. A database-backed install asks for `--accept-database-fallback` before that credential can be stored in Postgres; `--secret-store infisical` provisions a dedicated store. See [model connections](../../docs/community/MODEL_CONNECTIONS.md) for each path's limits.
+
+### Grok Build
+
+Grok's device session is tied to the Unix account and home that runs BOSS, so a login under the SSH admin account does not authenticate the containers. The API and worker images include Grok and share an owner-only `.grok` volume; run the device login as `boss` **inside the API container**:
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env \
@@ -177,21 +176,15 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 ./install.sh --dir "$PWD" --yes --skip-model-key --connect-grok-local
 ```
 
-The installer does not copy or parse `~/.grok/auth.json`, and `--connect-grok-local`
-does not call the model. If that login is missing, setup stops and records nothing.
-Once the Grok harness is available and its BOSS readiness proof passes, set
-`BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker.
-This selects Grok for governed coding work; it does not select the console's
-chat model. A host CLI being installed does not by itself mean the BOSS
-containers are connected.
+- The installer does not copy or parse `~/.grok/auth.json`, and `--connect-grok-local` does not call the model. If the login is missing, setup stops and records nothing.
+- Once the Grok harness is available and its BOSS readiness proof passes, set `BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker. This selects Grok for governed coding work, not the console's chat model.
 
-The BOSS source URL used by the installer is not an operator repository
-binding. Fresh Community installs leave `BOSS_GITHUB_OWNER` and
-`BOSS_GITHUB_REPO` blank, so the legacy default-project webhook route does
-not point at the private development repository. Register the repository in
-the project setup flow; if you intentionally use the legacy default webhook
-route, set both variables in the private `.env` and rerun the installer. Reruns
-retain those explicit values.
+> [!NOTE]
+> A CLI installed on the host does not by itself mean the BOSS containers are connected.
+
+## Repository binding
+
+The BOSS source URL the installer uses is not an operator repository binding. Fresh Community installs leave `BOSS_GITHUB_OWNER` and `BOSS_GITHUB_REPO` blank, so the legacy default-project webhook route does not point at the BOSS source repository. Register your repository in the project setup flow. If you intentionally use the legacy default webhook route, set both variables in the private `.env` and rerun the installer; reruns retain those explicit values.
 
 ## Files
 
@@ -216,11 +209,11 @@ retain those explicit values.
 | **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at about 1.6 GB. Coding work runs inside the API container and adds whatever that task installs. Less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 
-If the host starts swapping, runs stall. BOSS records `host.stalled` on that machine. Add memory or free disk, then retry. Retrying on a swapping host does not fix the stall.
+If the host starts swapping, runs stall and BOSS records `host.stalled` on that machine. Add memory or free disk, then retry; retrying on a swapping host does not fix the stall.
 
 ### Ports
 
-Everything derives from these; set them once in `.env`:
+Everything derives from these variables; set them once in `.env`:
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -230,34 +223,27 @@ Everything derives from these; set them once in `.env`:
 | `BOSS_POSTGRES_PORT` | 5432 | Always bound to `127.0.0.1`. |
 | `INFISICAL_PORT` | 8080 | Always bound to `127.0.0.1`. |
 
-`NEXT_PUBLIC_BOSS_API_URL` derives from `BOSS_API_PORT` automatically. Set it explicitly only
-when the API is reached at a different hostname than the browser uses — a remote VM, for
-instance, where it must be the address **the browser** will use, not `127.0.0.1`.
+`NEXT_PUBLIC_BOSS_API_URL` derives from `BOSS_API_PORT` automatically. Set it explicitly only when the API is reached at a different hostname than the browser uses, such as a remote VM, where it must be the address **the browser** will use, not `127.0.0.1`.
 
-### Installing on a server (not a laptop)
+### Installing on a server
 
-The worked path for a console hostname is
-[docs/community/hostname.md](../../docs/community/hostname.md). On the VM, pass
-`--console-origin https://console.example` (and `--public-url` when the browser
-must call the API at a name other than loopback). Point DNS or a hosts entry at
-this machine, and run a TLS proxy here that forwards to `127.0.0.1:3000` and
-overwrites `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`. The web listener
-stays on loopback. Postgres stays on loopback. The API stays on `127.0.0.1`
-unless you pass `--api-bind`. The API key stays in `.env` and is not a URL parameter.
+The worked path for a console hostname is [docs/community/hostname.md](../../docs/community/hostname.md). On the VM:
 
-An SSH tunnel is the path that does not need a proxy. `user@your-vm` is a VM you
-administer, not a maintainer machine:
+1. Pass `--console-origin https://console.example`, plus `--public-url` when the browser must call the API at a name other than loopback.
+2. Point DNS or a hosts entry at this machine.
+3. Run a TLS proxy here that forwards to `127.0.0.1:3000` and overwrites `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`.
+
+The web listener and Postgres stay on loopback. The API stays on `127.0.0.1` unless you pass `--api-bind`. The API key stays in `.env` and is never a URL parameter.
+
+To skip the proxy, use an SSH tunnel to a VM you administer:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. The
-public URL is baked into the web build. An older `.env` that set
-`BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. Publishing the
-API is only `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
+Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
 
-### Did it work?
+## Verify the install
 
 ```bash
 ./scripts/install/checkup.sh            # free checks only
@@ -266,7 +252,7 @@ API is only `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
 
 Without `--probe`, the checks do not call a model. `--probe` asks a model a question and spends money. The command is `checkup`, not `doctor`.
 
-The checks are: containers running, the API answering, the address compiled into the console, a model connected, a model that answers (`--probe` only), the repository pushable, and whether this machine can schedule work. The script exits 0 when those checks pass. A passing checkup is not a promise that every preview or deploy will succeed.
+The checks cover: containers running, the API answering, the address compiled into the console, a model connected, a model that answers (`--probe` only), the repository pushable, and whether this machine can schedule work. The script exits 0 when those checks pass.
 
 ```
   ok    containers: 6 running
@@ -280,7 +266,8 @@ The checks are: containers running, the API answering, the address compiled into
   BOSS is ready.  Mission Control: http://127.0.0.1:3000
 ```
 
-A connected subscription can still be out of quota. Only the `--probe` question distinguishes "saved" from "answered."
+> [!NOTE]
+> A passing checkup is not a promise that every preview or deploy will succeed. A connected subscription can still be out of quota; only the `--probe` question distinguishes "saved" from "answered."
 
 ### Before the first run
 
@@ -289,8 +276,7 @@ A connected subscription can still be out of quota. Only the `--probe` question 
 curl -s "$BOSS_API_URL/v1/projects/$BOSS_DEFAULT_PROJECT_ID/preflight"
 ```
 
-`{"ready": true}` means no unresolved blockers from the last run and no recent host stalls.
-Warnings name what to fix first — running anyway wastes real money reaching a known answer.
+`{"ready": true}` means no unresolved blockers from the last run and no recent host stalls. Warnings name what to fix first; running anyway spends real money to reach a known answer.
 
 ### When a run is slower than expected
 
@@ -298,9 +284,7 @@ Warnings name what to fix first — running anyway wastes real money reaching a 
 curl -s "$BOSS_API_URL/v1/code-tasks/${RUN_ID:?the code task run id, from the console}/retrospective"
 ```
 
-Returns three separate grades — delivery, efficiency, host — deterministically, with no model
-call. If `host` is `degraded` or `critical`, the time was the machine's and re-running will not
-improve it.
+Returns three separate grades (delivery, efficiency, host) deterministically, with no model call. If `host` is `degraded` or `critical`, the time was spent on the machine and re-running will not improve it.
 
 ## After install
 
@@ -310,7 +294,7 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 # Mission Control: http://127.0.0.1:3000
 ```
 
-### Upgrade / recover
+## Upgrade & recover
 
 ```bash
 ./scripts/install/upgrade.sh --dir "$PWD"                   # fast-forward and back up first
@@ -325,36 +309,27 @@ A default `~/boss` install can run this from its checkout:
 cd ~/boss && ./scripts/install/upgrade.sh --dir "$PWD"
 ```
 
-Upgrades write a private backup under `~/boss-backups/` before changing source or
-containers. It contains the previous source commit, `.env`, BOSS and optional
-Infisical Postgres dumps, and artifacts. The API, worker, web and Infisical
-services pause during the snapshot and resume even if it fails. The backup
-does not contain Codex/Grok CLI sessions; their named volumes are retained
-during upgrade, and a data-purge recovery requires provider sign-in again.
-Keep the backup outside the checkout and protect it like `.env`.
+Before changing source or containers, an upgrade writes a private backup under `~/boss-backups/` containing:
+
+- the previous source commit
+- `.env`
+- BOSS and optional Infisical Postgres dumps
+- artifacts
+
+The API, worker, web, and Infisical services pause during the snapshot and resume even if it fails. The backup does not contain Codex/Grok CLI sessions; their named volumes are retained during upgrade, and a data-purge recovery requires provider sign-in again.
+
+> [!WARNING]
+> Keep the backup outside the checkout and protect it like `.env`.
 
 ### Recover an older safe uninstall
 
-Older versions of safe uninstall used `docker compose down`. That removed the
-database container but kept its named data volume. The current backup refuses
-to guess which mutable `postgres:16-alpine` image should reopen that data. If
-`backup.sh` reports a missing Postgres container, use this recovery path before
-upgrading. Do not run the new installer or `compose up` against that volume yet.
-Confirm that the old stack is stopped and no other container is writing to its
-database volume; the offline copy below is valid only while the volume is idle.
+Older versions of safe uninstall used `docker compose down`. That removed the database container but kept its named data volume. The current backup refuses to guess which mutable `postgres:16-alpine` image should reopen that data, so if `backup.sh` reports a missing Postgres container, use this recovery path before upgrading.
 
-First identify a **local, reviewed Postgres 16 image ID** from the host's
-deployment records or cached image inventory. Prefer the image ID the old
-container used. If that ID is unavailable, select a compatible cached
-Postgres 16 image only after retaining an offline copy of the volume; this is
-a recovery decision, not an automatic tag update. The commands below make that
-copy before starting Postgres, then create only the database container from
-the explicit immutable image ID. Replace the image-ID placeholder; if you
-cannot identify a reviewed local image, stop and get a recovery review.
-The command resolves the actual database volume from the current Compose
-project, checks that it already exists, and verifies the offline archive has
-PostgreSQL 16 control data. A missing volume or invalid archive stops before
-any database container is created.
+> [!CAUTION]
+> Do not run the new installer or `compose up` against that volume yet. Confirm that the old stack is stopped and no other container is writing to its database volume; the offline copy below is valid only while the volume is idle.
+
+1. **Identify a local, reviewed Postgres 16 image ID** from the host's deployment records or cached image inventory. Prefer the image ID the old container used. If that ID is unavailable, select a compatible cached Postgres 16 image only after retaining an offline copy of the volume; this is a recovery decision, not an automatic tag update. If you cannot identify a reviewed local image, stop and get a recovery review.
+2. **Run the recovery subshell** below after replacing the image-ID placeholder. It resolves the actual database volume from the current Compose project, checks that it already exists, makes an offline copy of the volume, and verifies the archive has PostgreSQL 16 control data before starting Postgres. It then creates only the database container, from the explicit immutable image ID. A missing volume or invalid archive stops before any database container is created.
 
 ```bash
 (
@@ -408,33 +383,25 @@ any database container is created.
 )
 ```
 
-The subshell leaves the recovered database container **stopped**. Only after
-it succeeds, make and inspect a logical backup from that container:
+3. **Back up.** The subshell leaves the recovered database container **stopped**. Only after it succeeds, make and inspect a logical backup from that container:
 
 ```bash
 cd ~/boss && ./scripts/install/backup.sh --dir "$PWD"
 ```
 
-Then run the upgrade. It takes its own fresh backup before changing source:
+4. **Upgrade.** The upgrade takes its own fresh backup before changing source:
 
 ```bash
 cd ~/boss && ./scripts/install/upgrade.sh --dir "$PWD"
 ```
 
-Both commands print private backup paths. If this install's
-`boss-community-api` image is missing, backup
-also stops before any build or pull; restore the reviewed image first. The
-installer tags that image with the compose project name, so a second project
-does not replace the first. For a
-host where Docker requires administrator access, run the Docker commands
-through your host's approved `sudo` policy.
+Both commands print private backup paths. If this install's `boss-community-api` image is missing, backup also stops before any build or pull; restore the reviewed image first. The installer tags that image with the Compose project name, so a second project does not replace the first. On a host where Docker requires administrator access, run the Docker commands through your host's approved `sudo` policy.
 
-If a build fails, the backup path is printed. Inspect Compose logs and retry
-`upgrade.sh` once the cause is fixed. A database migration may already have
-run, so the script deliberately does not reset source or database behind your
-back. To return to the backed-up version, stop app writers, restore the source
-commit and `.env`, restore the dumps, and rebuild that version. Run this from
-the install directory, replacing the backup path first:
+### Roll back to a backup
+
+If a build fails, the backup path is printed. Inspect Compose logs and retry `upgrade.sh` once the cause is fixed. A database migration may already have run, so the script deliberately does not reset source or database behind your back.
+
+To return to the backed-up version, stop app writers, restore the source commit and `.env`, restore the dumps, and rebuild that version. Run this from the install directory, replacing the backup path first:
 
 ```bash
 BACKUP=/absolute/path/from-upgrade
@@ -455,36 +422,28 @@ docker compose -f scripts/install/community-compose.yml --env-file .env run --rm
 docker compose -f scripts/install/community-compose.yml --env-file .env --profile web up -d --build
 ```
 
-The final command is for the default database-backed install with Mission
-Control. Omit `--profile web` if the console was disabled. Add
-`--profile secrets` only if the previous install used Infisical; wait for its
-health before restarting the API and worker. Restoring an upgraded database
-into an older source revision may require a migration-aware recovery plan.
-Run these commands during a maintenance window and confirm `/health`, the
-project list, and an artifact before reopening the console.
+The final command is for the default database-backed install with Mission Control:
 
-The artifact restore overlays its archive. Files created after the backup
-remain unless removed separately; review the current volume first. BOSS does
-not archive the Claude CLI's session volume. The backup's `.env` copy blanks
-`CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_AUTH_JSON`, and those values are removed
-from the dump and artifact archive if they appear there. A normal upgrade or safe uninstall keeps
-its named volume; after an explicit volume purge or moving to another machine,
-run `claude auth login` inside the API container again. A remote archive
-install uses `.boss-shipped-commit` rather than Git; recover it by shipping
-that commit from your own machine with `remote.sh --ref COMMIT install`,
-then restore the database and artifacts from the backup written on that VM.
-The local `upgrade.sh` requires a Git checkout; for archive installs use
-`remote.sh update` from your machine, which backs up on the VM first.
-For remote installs, the new source is at the install path while the prior
-source remains at `PATH.prev` until installer/recreation succeeds. A failed
-build leaves the old containers running; after diagnosing the failure, you can
-move `PATH.prev` back to `PATH` before retrying. If recreation started, a
-database migration may have run: inspect the backup on that VM and use the
-database/artifact recovery steps above instead of only moving source. A failed
-source swap itself restores the prior source path. The remote script refuses to
-discard a leftover `PATH.prev` on a later attempt.
-`user@your-vm` in the examples is a machine you administer, not a shared host.
-For example:
+- Omit `--profile web` if the console was disabled.
+- Add `--profile secrets` only if the previous install used Infisical; wait for its health before restarting the API and worker.
+
+> [!WARNING]
+> Restoring an upgraded database into an older source revision may require a migration-aware recovery plan. Run these commands during a maintenance window and confirm `/health`, the project list, and an artifact before reopening the console.
+
+Notes on what a restore covers:
+
+- The artifact restore overlays its archive. Files created after the backup remain unless removed separately; review the current volume first.
+- BOSS does not archive the Claude CLI's session volume. The backup's `.env` copy blanks `CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_AUTH_JSON`, and those values are removed from the dump and artifact archive if they appear there. A normal upgrade or safe uninstall keeps its named volume; after an explicit volume purge or a move to another machine, run `claude auth login` inside the API container again.
+
+### Remote (archive) installs
+
+A remote archive install uses `.boss-shipped-commit` rather than Git.
+
+- **Update:** the local `upgrade.sh` requires a Git checkout, so use `remote.sh update` from your machine instead; it backs up on the VM first.
+- **Recover:** ship the backed-up commit from your own machine with `remote.sh --ref COMMIT install`, then restore the database and artifacts from the backup written on that VM.
+- **Failed update:** the new source is at the install path while the prior source remains at `PATH.prev` until installer/recreation succeeds. A failed build leaves the old containers running; after diagnosing the failure, you can move `PATH.prev` back to `PATH` before retrying. If recreation started, a database migration may have run: inspect the backup on that VM and use the database/artifact recovery steps above instead of only moving source. A failed source swap itself restores the prior source path, and the remote script refuses to discard a leftover `PATH.prev` on a later attempt.
+
+`user@your-vm` is a machine you administer:
 
 ```bash
 scripts/install/remote.sh --host user@your-vm update --ref main
@@ -493,7 +452,7 @@ scripts/install/remote.sh --host user@your-vm uninstall --yes
 scripts/install/remote.sh --host user@your-vm uninstall --yes --purge-data --confirm-purge DELETE-BOSS-DATA
 ```
 
-### Uninstall / reinstall
+## Uninstall / reinstall
 
 ```bash
 ./scripts/install/uninstall.sh --dir "$PWD" --dry-run
@@ -502,26 +461,22 @@ scripts/install/remote.sh --host user@your-vm uninstall --yes --purge-data --con
 ./scripts/install/uninstall.sh --dir "$PWD" --purge-data     # backs up, then asks for DELETE-BOSS-DATA
 ```
 
-The default safe uninstall stops this Compose stack. It keeps the stopped
-containers and their exact image IDs, source, `.env`, named volumes, images,
-and backups so a later upgrade can start the same database image for backup.
-Rerunning it is safe. `--purge-data` removes this stack's named volumes,
-including Postgres, artifacts and CLI sessions, then deletes `.env` and the
-generated shell shim.
-It first requires a successful private backup unless you explicitly add
-`--skip-backup`. `--yes` alone never authorizes a data purge; for scripted
-purge add `--confirm-purge DELETE-BOSS-DATA`. Backups and checkout stay on disk.
+| Mode | Removes | Keeps |
+|---|---|---|
+| Safe uninstall (default) | Stops this Compose stack | Stopped containers and their exact image IDs, source, `.env`, named volumes, images, and backups, so a later upgrade can start the same database image for backup. Rerunning is safe. |
+| `--purge-data` | This stack's named volumes (including Postgres, artifacts, and CLI sessions), then `.env` and the generated shell shim | Backups and the checkout |
 
-Stop:
+`--purge-data` first requires a successful private backup unless you explicitly add `--skip-backup`. `--yes` alone never authorizes a data purge; for a scripted purge, add `--confirm-purge DELETE-BOSS-DATA`.
+
+To stop:
 
 ```bash
 cd ~/boss
 ./scripts/install/uninstall.sh --dir "$PWD" --yes
 ```
 
-Manual `docker compose down` removes the stopped container needed for a later
-no-recreation backup. Use the recovery procedure above if an older uninstall
-already did that.
+> [!WARNING]
+> A manual `docker compose down` removes the stopped container needed for a later no-recreation backup. If an older uninstall already did that, use [Recover an older safe uninstall](#recover-an-older-safe-uninstall).
 
 ## Flags
 
