@@ -15,9 +15,10 @@
 </p>
 
 <p align="center">
+  <a href="https://boss.sean.network">Website</a> ·
   <a href="#deploy">Deploy</a> ·
   <a href="docs/community/QUICKSTART.md">Quickstart</a> ·
-  <a href="docs/community/README.md">Documentation</a> ·
+  <a href="https://boss.sean.network/docs/">Documentation</a> ·
   <a href="docs/community/FEATURES.md">Features</a> ·
   <a href="examples/README.md">Examples</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
