@@ -4,7 +4,7 @@
 #   curl -fsSL https://boss.sean.network/install.sh | bash
 #   curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes      # never ask
 #
-# boss.sean.network serves this file from docs/landing/.
+# Served at https://boss.sean.network/install.sh from docs/landing/.
 #
 # Finds the newest published BOSS release, downloads that release's install.sh from the
 # public GitHub repository over HTTPS, and runs it with the release pinned. Everything after
