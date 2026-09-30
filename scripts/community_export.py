@@ -53,6 +53,20 @@ PRIVATE_MARKERS = (
     b"46.225.93.220",
     b"/Volumes/DataSSD1/test/boss",
 )
+# Public URLs that share a private marker's domain. Only these exact https origins
+# are allowed; any other host under the same domain still blocks the export.
+PUBLIC_URLS = (b"https://boss.sean.network",)
+PUBLIC_URL_RE = re.compile(
+    rb"(?:" + rb"|".join(re.escape(url) for url in PUBLIC_URLS) + rb")(?=[/\"'\s)<>\]`]|$)"
+)
+
+
+def has_private_marker(data: bytes) -> bool:
+    """True when data names a private source or host, ignoring the reviewed public URLs."""
+    data = PUBLIC_URL_RE.sub(b"", data)
+    return any(marker in data for marker in PRIVATE_MARKERS)
+
+
 PAID_SOURCE_MARKERS = (
     b"AccountConnect",
     b"CloudProduct",
@@ -801,7 +815,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
             if transformed is None or hashlib.sha256(transformed).hexdigest() != main_rewrite["output_sha256"]:
                 blockers.append({"kind": "main-export-output-changed", "path": path})
                 continue
-            if any(marker in transformed for marker in PRIVATE_MARKERS):
+            if has_private_marker(transformed):
                 blockers.append({"kind": "private-source-or-host-reference", "path": path})
                 continue
             if transformed.count(MAIN_COMMUNITY_ACCOUNT_GATE) != 1 or any(
@@ -820,7 +834,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 continue
             blockers.append({"kind": "openapi-export-source-changed", "path": path})
             continue
-        if any(marker in data for marker in PRIVATE_MARKERS):
+        if has_private_marker(data):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             continue
         if has_semantic_paid_source(path, data):
@@ -1109,7 +1123,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
     # rewrites bypass the ordinary scan, and future rewrite rules must never
     # turn a reviewed source into a candidate containing a private reference.
     for path, data in list(selected.items()):
-        if b"goldeneye" in data.lower() or any(marker in data for marker in PRIVATE_MARKERS):
+        if b"goldeneye" in data.lower() or has_private_marker(data):
             blockers.append({"kind": "private-source-or-host-reference", "path": path})
             del selected[path]
             symlink_paths.pop(path, None)
