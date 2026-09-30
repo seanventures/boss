@@ -15,8 +15,17 @@ KEY = "BOSS_CONSOLE_PASSWORD"
 
 
 def private_env(path: Path) -> list[str]:
-    if path.is_symlink() or not path.is_file():
+    # MISSING IS NOT A SYMLINK. Both failed with one sentence about symlinks, so running this
+    # on a laptop checkout — where BOSS was never installed — sent people looking for a link that
+    # does not exist. The usual cause is simply the wrong machine.
+    if path.is_symlink():
         raise SystemExit(f"{path} must be a regular .env file, not a symlink")
+    if not path.is_file():
+        raise SystemExit(
+            f"No BOSS install here: {path} does not exist. The console password lives on the "
+            "server where BOSS is installed. Run this there, in its install directory "
+            "(~/boss by default), or from here: "
+            "ssh user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'")
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o077:
         raise SystemExit(f"{path} must be private (chmod 600) before reading credentials")
