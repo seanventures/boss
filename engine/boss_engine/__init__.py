@@ -25,6 +25,6 @@ one implementation and one module identity while they migrate their imports.
 """
 from __future__ import annotations
 
-__version__ = "1.0.0-rc.1"
+__version__ = "1.0.0-rc.2"
 
 __all__ = ["__version__"]

@@ -1,6 +1,6 @@
 # Interfaces
 
-BOSS Community gives you four ways to work with a running install: the installer CLI that sets it up, the Mission Control console, the Metatron terminal, and the authenticated HTTP API, plus MCP for a single trusted client. This page explains what each one is for and how they fit together. It describes release `v1.0-rc1`, a release candidate.
+BOSS Community gives you four ways to work with a running install: the installer CLI that sets it up, the Mission Control console, the Metatron terminal, and the authenticated HTTP API, plus MCP for a single trusted client. This page explains what each one is for and how they fit together. It describes release `v1.0-rc2`, a release candidate.
 
 | Interface | Use it to | Reference |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ The installer binds the API and console to `127.0.0.1` and keeps credentials in 
 
 After install, source `boss-community.env.sh` from the install directory to load `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` into your shell without printing the key. See [CLI setup](cli.md) for details, and [model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md) for coding CLIs you already have.
 
-Without a checkout, `curl -fsSL https://boss.sean.network/install.sh | bash` installs release `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`, into `~/boss`. Ports, recovery, and credential rules are covered in the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
+Without a checkout, `curl -fsSL https://boss.sean.network/install.sh | bash` installs the newest release into `~/boss`. Ports, recovery, and credential rules are covered in the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
 
 ## Console
 

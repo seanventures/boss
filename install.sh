@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BOSS Community — one-line installer (OpenClaw-style)
+# BOSS Community — one-line installer
 #
-#   See docs/community/QUICKSTART.md for the reviewed-commit download command.
+#   The website bootstrap (docs/landing/install.sh) finds the newest release and runs
+#   this file from it. See docs/community/QUICKSTART.md.
 #
-# Guided Community setup: checks the machine, installs deps, prompts for
-# keys, starts Postgres + API + worker (+ optional Mission Control), seeds the
-# project, and verifies health. No BOSS Cloud required.
+# Checks the machine, installs what it can, picks defaults (~/boss, the database
+# secret store, Mission Control on), starts Postgres + API + worker, seeds the
+# project, verifies health, finds model keys and subscriptions already on this
+# machine, and installs the `boss` command. No BOSS Cloud required.
 # =============================================================================
 set -euo pipefail
 umask 077
 
-BOSS_INSTALL_VERSION="1.1.0"
+BOSS_INSTALL_VERSION="1.2.0"
 # An explicit URL still clones that remote (tests and the published one-liner).
 # Unset means: if this script is already inside a BOSS checkout, install that
 # tree. Do not require the unpublished GitHub repository.
@@ -24,7 +26,13 @@ if [[ -n "${BOSS_REPO_REF:-}" ]]; then
   REF_EXPLICIT=1
 fi
 BOSS_REPO_URL="${BOSS_REPO_URL:-https://github.com/seanventures/boss.git}"
-BOSS_REPO_REF="${BOSS_REPO_REF:-main}"
+# Unset is resolved after the flags: the ref this install recorded last time, else the
+# newest published release. main is the last resort, never a silent default on a rerun.
+BOSS_REPO_REF="${BOSS_REPO_REF:-}"
+# Where the chosen ref came from: explicit, remembered, release, local, or default.
+REF_SOURCE=""
+[[ "$REF_EXPLICIT" -eq 0 ]] || REF_SOURCE="explicit"
+RELEASE_STATE_NAME=".boss-release"
 
 # ---- UI --------------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -52,7 +60,8 @@ BANNER
   echo -e "${NC}${MUTED}  one-line installer v${BOSS_INSTALL_VERSION}${NC}"
   echo ""
 }
-ui_step()  { echo -e "${CYAN}${BOLD}==>${NC}${BOLD} $*${NC}"; }
+CURRENT_STEP=""
+ui_step()  { CURRENT_STEP="$*"; echo -e "${CYAN}${BOLD}==>${NC}${BOLD} $*${NC}"; }
 ui_ok()    { echo -e "  ${GREEN}✓${NC} $*"; }
 ui_warn()  { echo -e "  ${AMBER}!${NC} $*"; }
 ui_err()   { echo -e "  ${RED}✗${NC} $*" >&2; }
@@ -111,13 +120,15 @@ local_api_url() {
 # ---- defaults / flags ------------------------------------------------------
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 BACKUP_DIR=""
-ASSUME_YES=0
 WITH_WEB=1
 WEB_EXPLICIT=0
 NONINTERACTIVE=0
 SKIP_MODEL_KEY=0
 OPENAI_KEY_PRESET="${OPENAI_API_KEY:-}"
 ANTHROPIC_KEY_PRESET="${ANTHROPIC_API_KEY:-}"
+GOOGLE_KEY_PRESET="${GOOGLE_API_KEY:-}"
+XAI_KEY_PRESET="${XAI_API_KEY:-}"
+OPENROUTER_KEY_PRESET="${OPENROUTER_API_KEY:-}"
 GITHUB_TOKEN_PRESET="${BOSS_GITHUB_TOKEN:-}"
 API_PORT="${BOSS_API_PORT:-8000}"
 API_PORT_EXPLICIT=0
@@ -161,11 +172,6 @@ WEB_PORT_EXPLICIT=0
 PG_PORT="${BOSS_POSTGRES_PORT:-5432}"
 PG_PORT_EXPLICIT=0
 [[ -n "${BOSS_POSTGRES_PORT:-}" ]] && PG_PORT_EXPLICIT=1
-# THE BUNDLED SECRET STORE'S HOST PORT. Compose and bootstrap_infisical.sh already read
-# INFISICAL_PORT from .env, and a re-run already preserves it — but nothing ever WROTE it, so a
-# machine with anything on 8080 (a laptop running any other web app) could not use
-# --secret-store infisical: bootstrap probed 8080 and reached the other app.
-INFISICAL_PORT="${INFISICAL_PORT:-8080}"
 BIND_ADDRESS="127.0.0.1"
 COMPOSE_PROFILES=""
 # WHERE THIS INSTALL KEEPS ITS SECRETS. Both options stay inside your own infrastructure; the
@@ -180,6 +186,18 @@ CONNECT_CLAUDE_LOCAL=0
 CONNECT_GROK_LOCAL=0
 INSTALL_CODING_CLIS=0
 ACCEPT_DATABASE_FALLBACK=0
+# Look for model keys and subscriptions already on this machine after the stack is healthy.
+# Finding is read only. Copying a login into BOSS needs a yes at the prompt, or --yes
+# together with --connect-found.
+AUTO_DISCOVER=1
+CONNECT_FOUND=0
+# The local model (Ollama). Offered at a terminal when no model is usable; --install-ollama
+# sets it up unattended; --no-local-model never offers it.
+INSTALL_OLLAMA=0
+LOCAL_MODEL=""
+NO_LOCAL_MODEL=0
+REBIND_OLLAMA=0
+INSTALL_BOSS_COMMAND=1
 SECRET_STORE_EXPLICIT=0
 if [ -n "${BOSS_SECRET_STORE:-}" ]; then
   SECRET_STORE_EXPLICIT=1
@@ -190,12 +208,18 @@ usage() {
 BOSS Community installer
 
 Usage:
+  curl -fsSL <website>/install.sh | bash        (see docs/community/QUICKSTART.md)
   ./install.sh [options]
-  See docs/community/QUICKSTART.md for the reviewed-commit download command.
+
+Every option is optional. Defaults: ~/boss, the newest release (a rerun keeps the release
+it installed), the database secret store, Mission Control on, and loopback-only listeners.
+
+After install, the \`boss\` command runs the lifecycle from any directory:
+  boss status | open | password | doctor | logs | connect | upgrade | update | uninstall
 
 Options:
   --dir PATH              Install directory (default: ~/boss)
-  --yes, -y               Non-interactive defaults (use --skip-model-key to start without one)
+  --yes, -y               Never ask a question. Starts without a model key if none is found
   --no-web                Skip Mission Control web console
   --web                   Enable Mission Control on an install previously made without it
   --public-url URL        Browser-reachable API URL when using a reverse proxy
@@ -206,11 +230,30 @@ Options:
   --api-port N            Host port for API (default 8000)
   --web-port N            Host port for web (default 3000)
   --postgres-port N       Host port for Postgres (default 5432)
-  --infisical-port N      Host port for the bundled secret store (default 8080)
-  --ref REF               Git ref or full commit SHA to install (default main)
+  --ref REF               Release tag, branch, or full commit SHA to install. Default: the
+                          ref this install recorded in .boss-release, else the newest
+                          release tag. Recorded for reruns and \`boss upgrade\`
   --backup-dir PATH       Private recovery backup location for an upgrade
-  --skip-model-key        Allow empty model key (API starts; model calls fail closed)
+  --skip-model-key        Do not ask for a model key (API starts; model calls fail closed)
   --no-install-deps       Do not install missing VM packages
+  --connect-found         Connect what was found on this machine without asking: a Codex
+                          login, a Claude Code or Grok Build sign-in inside the BOSS
+                          container, and Ollama. Needed for --yes to connect anything.
+                          A sign-in needs a person at a terminal and is skipped without
+                          one; a Codex login on the database store also needs
+                          --accept-database-fallback
+  --install-ollama        Set up a free local model without asking: install Ollama if
+                          missing, start it, make it reachable from the BOSS containers,
+                          pull the model, connect it. When no hosted model is connected it
+                          becomes every role's model. At a terminal BOSS offers this when
+                          no model is usable; --yes alone never installs it
+  --local-model NAME      The Ollama model to pull (default qwen2.5-coder:7b)
+  --no-local-model        Never offer the local model
+  --rebind-ollama         Allow --install-ollama to move an Ollama you already had from
+                          127.0.0.1 to the Docker bridge address (Linux). Without it an
+                          unattended run leaves an existing Ollama alone and says how
+  --no-discover           Do not look for model keys and subscriptions on this machine
+  --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
   --connect-codex        Explicitly import this VM user's Codex ChatGPT login into BOSS
@@ -233,12 +276,14 @@ Console hostname and API bind are documented in docs/community/hostname.md.
 --bind-address is not a way to publish ports.
 
 Environment overrides:
-  BOSS_INSTALL_DIR, OPENAI_API_KEY, ANTHROPIC_API_KEY, BOSS_GITHUB_TOKEN,
-  BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT, BOSS_WEB_PORT, BOSS_POSTGRES_PORT,
-  BOSS_PUBLIC_URL, BOSS_CONSOLE_PUBLIC_ORIGIN, BOSS_API_BIND, BOSS_SECRET_STORE
+  BOSS_INSTALL_DIR, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, XAI_API_KEY,
+  OPENROUTER_API_KEY, BOSS_GITHUB_TOKEN, BOSS_REPO_URL, BOSS_REPO_REF, BOSS_API_PORT,
+  BOSS_WEB_PORT, BOSS_POSTGRES_PORT, BOSS_PUBLIC_URL, BOSS_CONSOLE_PUBLIC_ORIGIN,
+  BOSS_API_BIND, BOSS_SECRET_STORE, BOSS_BIN_DIR (where \`boss\` goes)
 
   Do not pass API keys or tokens as arguments. The shell saves them in history
   and process listings. Export them, or paste the OpenAI key at the hidden prompt.
+  An exported provider key is saved to the private .env (never printed).
 
 Examples:
   ./install.sh --dir "\$PWD" --yes --skip-model-key
@@ -249,7 +294,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) INSTALL_DIR="$2"; shift 2 ;;
-    --yes|-y) ASSUME_YES=1; NONINTERACTIVE=1; shift ;;
+    --yes|-y) NONINTERACTIVE=1; shift ;;
     --no-install-deps) INSTALL_DEPS=0; shift ;;
     --discover-subscriptions) DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --install-coding-clis) INSTALL_CODING_CLIS=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
@@ -258,6 +303,17 @@ while [[ $# -gt 0 ]]; do
     --connect-claude-local) CONNECT_CLAUDE_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --connect-grok-local) CONNECT_GROK_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --accept-database-fallback) ACCEPT_DATABASE_FALLBACK=1; shift ;;
+    --connect-found) CONNECT_FOUND=1; shift ;;
+    --install-ollama) INSTALL_OLLAMA=1; shift ;;
+    --local-model)
+      LOCAL_MODEL="${2:-}"
+      [[ "$LOCAL_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$ ]] ||
+        die "--local-model takes an Ollama model name, for example qwen2.5-coder:7b"
+      shift 2 ;;
+    --no-local-model) NO_LOCAL_MODEL=1; shift ;;
+    --rebind-ollama) REBIND_OLLAMA=1; shift ;;
+    --no-discover) AUTO_DISCOVER=0; shift ;;
+    --no-boss-command) INSTALL_BOSS_COMMAND=0; shift ;;
     --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Export OPENAI_API_KEY, ANTHROPIC_API_KEY, or BOSS_GITHUB_TOKEN, or paste the OpenAI key at the hidden prompt." ;;
     --no-web) WITH_WEB=0; WEB_EXPLICIT=1; shift ;;
@@ -285,8 +341,7 @@ while [[ $# -gt 0 ]]; do
     --api-port) API_PORT="$2"; API_PORT_EXPLICIT=1; shift 2 ;;
     --web-port) WEB_PORT="$2"; WEB_PORT_EXPLICIT=1; shift 2 ;;
     --postgres-port) PG_PORT="$2"; PG_PORT_EXPLICIT=1; shift 2 ;;
-    --infisical-port) INFISICAL_PORT="$2"; shift 2 ;;
-    --ref) BOSS_REPO_REF="$2"; REF_EXPLICIT=1; shift 2 ;;
+    --ref) BOSS_REPO_REF="$2"; REF_EXPLICIT=1; REF_SOURCE="explicit"; shift 2 ;;
     --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
     --skip-model-key) SKIP_MODEL_KEY=1; shift ;;
     --secret-store)
@@ -318,6 +373,14 @@ if [[ "$API_BIND_FROM_FLAG" -eq 0 && "$API_BIND_EXPLICIT" -eq 1 ]]; then
   API_BIND="$(normalize_api_bind "$API_BIND")" || exit $?
 fi
 
+# A ref reaches git as an argument. Refuse option-looking or odd names before any action.
+ref_is_valid() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$1" != *..* && "$1" != *.lock ]]
+}
+if [[ "$REF_EXPLICIT" -eq 1 ]] && ! ref_is_valid "$BOSS_REPO_REF"; then
+  die "--ref must be a release tag, branch name, or full commit SHA."
+fi
+
 # Expand ~
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 if [[ -n "${BOSS_BIND_ADDRESS:-}" && "$BOSS_BIND_ADDRESS" != 127.0.0.1 ]]; then
@@ -328,25 +391,21 @@ fi
 # In unattended shells, choose safe defaults rather than reading the rest of install.sh.
 if [[ "$NONINTERACTIVE" -eq 0 ]] && ! (: </dev/tty) 2>/dev/null; then
   NONINTERACTIVE=1
-  ASSUME_YES=1
 fi
 if [[ "$CONNECT_CLAUDE" -eq 1 && "$NONINTERACTIVE" -eq 1 && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
   die "No Claude setup token was provided. Set CLAUDE_CODE_OAUTH_TOKEN for this command, or run it in a terminal and paste the token from \`claude setup-token\`. Nothing was stored."
 fi
 
-prompt() {
-  # prompt "Question" "default" -> sets REPLY
-  local q="$1" def="${2:-}"
-  if [[ "$NONINTERACTIVE" -eq 1 ]]; then
-    REPLY="$def"
-    return
-  fi
-  if [[ -n "$def" ]]; then
-    read -r -p "$(echo -e "${BOLD}$q${NC} ${MUTED}[$def]${NC}: ")" REPLY </dev/tty || true
-    REPLY="${REPLY:-$def}"
-  else
-    read -r -p "$(echo -e "${BOLD}$q${NC}: ")" REPLY </dev/tty || true
-  fi
+# ask_yes "Question" -> status 0 only for an explicit yes typed at the terminal.
+# Non-interactive runs answer no; --connect-found is the only unattended yes.
+ask_yes() {
+  local reply=""
+  [[ "$NONINTERACTIVE" -eq 0 ]] || return 1
+  read -r -p "$(echo -e "  ${BOLD}$1${NC} ${MUTED}[y/N]${NC} ")" reply </dev/tty || return 1
+  case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+    y|yes) return 0 ;;
+  esac
+  return 1
 }
 
 prompt_secret() {
@@ -398,6 +457,17 @@ install_coding_clis() {
 
 # ---- preflight -------------------------------------------------------------
 ui_banner
+
+# Every failure after this point names the step it stopped in. The status is unchanged.
+on_exit() {
+  local rc=$?
+  if [[ "$rc" -ne 0 && -n "$CURRENT_STEP" ]]; then
+    echo -e "  ${RED}✗${NC} Stopped during: ${CURRENT_STEP}" >&2
+    echo -e "    Nothing was deleted. Fix the cause above, then run the same command again." >&2
+  fi
+}
+trap on_exit EXIT
+
 ui_step "Checking your machine"
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
@@ -406,6 +476,12 @@ ui_info "OS: $OS  arch: $ARCH"
 
 install_vm_deps() {
   [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
+  if [[ "$OS" == Darwin ]]; then
+    need_cmd git || ui_err "git is missing. Install Apple's command line tools: xcode-select --install"
+    need_cmd docker || ui_err "Docker is missing. Install Docker Desktop: https://docs.docker.com/desktop/setup/install/mac-install/"
+    need_cmd python3 || ui_err "Python 3 is missing. xcode-select --install provides it."
+    die "Install the items above, start Docker Desktop, then run the same install command again."
+  fi
   [[ "$OS" == Linux && -f /etc/os-release ]] || die "Automatic dependencies require Ubuntu or Debian Linux. Install git, curl, Docker Engine and Compose manually."
   # shellcheck disable=SC1091
   . /etc/os-release
@@ -420,6 +496,11 @@ install_vm_deps() {
     # Some cloud images allow passwordless package commands but reject sudo -v.
     # Test access through the real operation, without prompting in a piped install.
     admin=(sudo -n)
+    # A person at a terminal can type the sudo password once; --yes never prompts.
+    if [[ "$NONINTERACTIVE" -eq 0 ]] && ! sudo -n true 2>/dev/null; then
+      ui_info "Installing git, Python 3 and Docker needs administrator access. sudo asks for your password once."
+      sudo -v </dev/tty || die "Administrator access is needed to install missing packages. Nothing was changed."
+    fi
   fi
   ui_step "Installing missing VM dependencies"
   "${admin[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq ||
@@ -467,6 +548,10 @@ fi
 if ! docker info >/dev/null 2>&1; then
   if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker info >/dev/null 2>&1; then
     DOCKER=(sudo -n docker)
+  elif [[ "$OS" == Linux && "$(id -u)" -ne 0 && "$NONINTERACTIVE" -eq 0 ]] && need_cmd sudo &&
+       ui_info "Docker needs administrator access for this user. sudo may ask for your password." &&
+       sudo -v </dev/tty && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
   else
     die "Docker daemon is unavailable. Start Docker and rerun; on Linux ensure noninteractive sudo access to Docker."
   fi
@@ -498,17 +583,11 @@ for p in "$API_PORT" "$WEB_PORT" "$PG_PORT"; do
     ui_warn "Port $p is already in use — installer will still try; override with --api-port / --web-port / --postgres-port if needed."
   fi
 done
-if [[ "$SECRET_STORE" == "infisical" ]] && port_in_use "$INFISICAL_PORT"; then
-  ui_warn "Port $INFISICAL_PORT (secret store) is already in use — choose another with --infisical-port."
-fi
 
 # ---- prompts ---------------------------------------------------------------
-ui_step "A few quick questions"
+ui_step "Choosing settings"
 
-if [[ "$ASSUME_YES" -eq 0 ]]; then
-  prompt "Install directory" "$INSTALL_DIR"
-  INSTALL_DIR="${REPLY/#\~/$HOME}"
-fi
+# No questions for what has a safe default. --dir, --no-web and --secret-store change them.
 ui_ok "Install dir: $INSTALL_DIR"
 
 # Measure the filesystem that will hold the checkout, not $HOME. A small home
@@ -539,40 +618,42 @@ if [[ "$WEB_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]]; then
 fi
 
 OPENAI_KEY="$OPENAI_KEY_PRESET"
-if [[ -z "$OPENAI_KEY" && "$SKIP_MODEL_KEY" -eq 0 ]]; then
-  if [[ "$NONINTERACTIVE" -eq 1 ]]; then
-    die "Non-interactive mode needs OPENAI_API_KEY in the environment, or --skip-model-key"
-  fi
-  echo ""
-  ui_info "BOSS Community uses YOUR model keys (BYOK). Paste an OpenAI key, or leave blank to skip."
-  ui_info "Compatible base URLs (Ollama, etc.) can be set later in .env as OPENAI_BASE_URL."
-  prompt_secret "OpenAI API key (sk-…, optional)"
-  OPENAI_KEY="${REPLY:-}"
-fi
-if [[ -z "$OPENAI_KEY" ]]; then
-  ui_warn "No model key — API will start; model calls fail closed until you add OPENAI_API_KEY to .env"
-else
-  ui_ok "Model key received (not printed)"
-fi
-
 ANTHROPIC_KEY="$ANTHROPIC_KEY_PRESET"
+GOOGLE_KEY="$GOOGLE_KEY_PRESET"
+XAI_KEY="$XAI_KEY_PRESET"
+OPENROUTER_KEY="$OPENROUTER_KEY_PRESET"
+# A key in the environment is used without asking: exporting it for this installer is the
+# consent. Names only are printed; values go to the private .env.
+_exported_keys=""
+[[ -z "$OPENAI_KEY" ]] || _exported_keys="$_exported_keys OPENAI_API_KEY"
+[[ -z "$ANTHROPIC_KEY" ]] || _exported_keys="$_exported_keys ANTHROPIC_API_KEY"
+[[ -z "$GOOGLE_KEY" ]] || _exported_keys="$_exported_keys GOOGLE_API_KEY"
+[[ -z "$XAI_KEY" ]] || _exported_keys="$_exported_keys XAI_API_KEY"
+[[ -z "$OPENROUTER_KEY" ]] || _exported_keys="$_exported_keys OPENROUTER_API_KEY"
+# The only question: a model key, and only when nothing was exported and a person is here.
+# An existing install keeps its key (restore_preserved_env.sh), so a rerun does not ask.
+if [[ -z "$_exported_keys" && "$SKIP_MODEL_KEY" -eq 0 && "$NONINTERACTIVE" -eq 0 ]] &&
+   ! grep -qs '^OPENAI_API_KEY=.' "$INSTALL_DIR/.env"; then
+  echo ""
+  ui_info "BOSS uses your own model keys and subscriptions. It also looks for existing logins after setup."
+  prompt_secret "OpenAI API key (optional, press Enter to skip)"
+  OPENAI_KEY="${REPLY:-}"
+  [[ -z "$OPENAI_KEY" ]] || _exported_keys=" OPENAI_API_KEY"
+fi
+if [[ -n "$_exported_keys" ]]; then
+  ui_ok "Model keys received (values not printed):${_exported_keys}"
+else
+  ui_info "No model key yet. BOSS starts anyway; model calls fail closed until one is connected."
+fi
 GITHUB_TOKEN="$GITHUB_TOKEN_PRESET"
 
-if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
-  _web_default=Y
-  [[ "$WITH_WEB" -eq 0 ]] && _web_default=N
-  prompt "Install Mission Control web console? (Y/n)" "$_web_default"
-  case "$(printf '%s' "$REPLY" | tr '[:upper:]' '[:lower:]')" in
-    n|no) WITH_WEB=0 ;;
-    *) WITH_WEB=1 ;;
-  esac
-fi
 # THE CHOICE IS THE OPERATOR'S, because the right answer depends on their machine.
 #
 # install.sh used to generate INFISICAL_ENCRYPTION_KEY and then never start Infisical, so every
 # install had those keys written and unused and no secret store at all — which only surfaced
-# later, when storing a subscription token returned "no secret store". Now it is asked and
-# answered, and whichever way it goes the install matches what was chosen.
+# later, when storing a subscription token returned "no secret store". The installer no longer
+# asks: the default is the database store, --secret-store infisical chooses the bundled one,
+# and whichever way it goes the install matches what was chosen.
 #
 # A SECOND RUN MUST NOT FORGET THE ANSWER. `remote.sh install --yes` does not repeat
 # --secret-store, and the interactive prompt used to default to "1" even when this run passed
@@ -588,20 +669,6 @@ if [[ "$SECRET_STORE_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]]; then
       if grep -qs '^BOSS_INFISICAL_TOKEN=.' "$INSTALL_DIR/.env"; then
         SECRET_STORE="infisical"
       fi ;;
-  esac
-fi
-if [[ "$ASSUME_YES" -eq 0 && "$NONINTERACTIVE" -eq 0 ]]; then
-  echo ""
-  ui_info "Where should this install keep credentials? Both stay on this machine."
-  ui_info "  1) database   — 4 containers, leaner. BOSS's own Postgres holds them."
-  ui_info "  2) infisical  — 6 containers (~400MB more). A real secret store, bootstrapped."
-  _store_default=1
-  [[ "$SECRET_STORE" == "infisical" ]] && _store_default=2
-  prompt "Secret store: 1 (database) or 2 (infisical)?" "$_store_default"
-  case "$(printf '%s' "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')" in
-    2|infisical) SECRET_STORE="infisical" ;;
-    1|database) SECRET_STORE="database" ;;
-    *) die "Secret store must be 1 (database) or 2 (infisical)" ;;
   esac
 fi
 
@@ -637,13 +704,6 @@ fi
 # by restore_preserved_env.sh on reruns.
 BOSS_CONSOLE_PASSWORD="$(openssl rand -hex 24)"
 BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
-# THE DATABASE STORE'S KEY, OUTSIDE THE DATABASE. Without it, BOSS provisions a key and keeps it
-# in Postgres beside the ciphertext, so a database backup carries usable credentials — which is
-# why a Claude setup token was refused on an install that chose the database store. 32 random
-# bytes, urlsafe base64 (the form _load_kms_master_key reads). An existing install adopts the
-# key already in its database below instead, so nothing it stored becomes unreadable.
-BOSS_KMS_MASTER_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
-_ADOPTED_DB_KEY=0
 
 # The directory that contains this installer, when it is already a BOSS checkout.
 # A downloaded one-liner lives in a temp file and returns nothing here.
@@ -691,7 +751,7 @@ clone_remote_source() {
     fi
     die "Exact-commit clone failed; check repo visibility, URL, and commit."
   fi
-  if git clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$dest" </dev/null; then
+  if git -c advice.detachedHead=false clone --depth 1 --branch "$BOSS_REPO_REF" "$BOSS_REPO_URL" "$dest" </dev/null; then
     return 0
   fi
   if [[ "$empty_existing" -eq 1 ]]; then
@@ -708,6 +768,93 @@ place_fresh_source() {
   fi
   clone_remote_source "$dest" "$empty_existing"
 }
+
+# ---- which release ----------------------------------------------------------
+# The same program as pick_release in scripts/install/upgrade.sh. This file runs before a
+# checkout exists, so it cannot source that helper; a test keeps the copies identical.
+# stdin: tag names. $1: 1 to consider prereleases. stdout: the newest tag or nothing.
+pick_release() {
+  # >>> boss_pick_release
+  LC_ALL=C awk -v pre="${1:-0}" '
+    /^v[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$/ {
+      core = substr($0, 2); label = ""
+      cut = index(core, "-")
+      if (cut > 0) { label = substr(core, cut + 1); core = substr(core, 1, cut - 1) }
+      if (label != "" && pre != 1) next
+      n = split(core, part, ".")
+      if (n > 3) next
+      printf "%09d.%09d.%09d.%s\t%s\n", part[1], (n >= 2 ? part[2] : 0), (n >= 3 ? part[3] : 0), (label == "" ? "~" : label), $0
+    }' | LC_ALL=C sort | tail -n 1 | cut -f 2
+  # <<< boss_pick_release
+}
+# The newest stable release; the newest prerelease only when no stable release exists.
+newest_release() {
+  local tags stable
+  tags="$(cat)"
+  stable="$(printf '%s\n' "$tags" | pick_release 0)"
+  if [[ -n "$stable" ]]; then
+    printf '%s\n' "$stable"
+  else
+    printf '%s\n' "$tags" | pick_release 1
+  fi
+}
+state_value() {
+  grep -m 1 "^$1=" "$INSTALL_DIR/$RELEASE_STATE_NAME" 2>/dev/null | cut -d= -f2- || true
+}
+
+# A RERUN MUST NOT MOVE A RELEASE INSTALL TO MAIN. BOSS_REPO_REF used to default to main and
+# nothing recorded what was installed, so pasting the install line again (or running it with a
+# new flag) fast-forwarded a v1.0 install to whatever main held that day. Order of precedence:
+#   1. --ref / BOSS_REPO_REF
+#   2. the ref .boss-release recorded on the last run
+#   3. an older install: the release tag at HEAD, else a detached commit stays put, else main
+#   4. a fresh install: the newest published release tag, else main with a warning
+_src_tree=""
+if [[ -z "$REF_SOURCE" ]]; then
+  _remembered="$(state_value BOSS_RELEASE_REF)"
+  if [[ -n "$_remembered" ]] && ref_is_valid "$_remembered"; then
+    BOSS_REPO_REF="$_remembered"
+    REF_SOURCE="remembered"
+  elif [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
+    _head_tag="$(git -C "$INSTALL_DIR" tag --points-at HEAD 2>/dev/null | pick_release 1 || true)"
+    if [[ -n "$_head_tag" ]]; then
+      BOSS_REPO_REF="$_head_tag"
+      REF_SOURCE="remembered"
+    elif ! git -C "$INSTALL_DIR" symbolic-ref -q HEAD >/dev/null 2>&1 &&
+         _head="$(git -C "$INSTALL_DIR" rev-parse --verify -q HEAD 2>/dev/null)"; then
+      BOSS_REPO_REF="$_head"
+      REF_SOURCE="remembered"
+    else
+      BOSS_REPO_REF="main"
+      REF_SOURCE="default"
+    fi
+  elif [[ -f "$INSTALL_DIR/.boss-shipped-commit" ]] ||
+       { [[ -d "$INSTALL_DIR" ]] && [[ -n "$(ls -A "$INSTALL_DIR")" ]]; }; then
+    # A shipped tree has its source already; any other nonempty directory is refused below.
+    BOSS_REPO_REF="main"
+    REF_SOURCE="default"
+  elif [[ "$REPO_URL_EXPLICIT" -eq 0 ]] && _src_tree="$(local_installer_tree)"; then
+    BOSS_REPO_REF="main"
+    REF_SOURCE="local"
+  else
+    ui_info "Looking up the newest published BOSS release"
+    _tags="$(git ls-remote --tags --refs "$BOSS_REPO_URL" 'v*' </dev/null 2>/dev/null | sed 's#.*refs/tags/##' || true)"
+    BOSS_REPO_REF="$(printf '%s\n' "$_tags" | newest_release)"
+    if [[ -n "$BOSS_REPO_REF" ]]; then
+      REF_SOURCE="release"
+    else
+      BOSS_REPO_REF="main"
+      REF_SOURCE="default"
+      ui_warn "No published release tag found at $BOSS_REPO_URL; installing main."
+    fi
+  fi
+fi
+case "$REF_SOURCE" in
+  explicit) ui_ok "Release: $BOSS_REPO_REF (requested)" ;;
+  remembered) ui_ok "Release: $BOSS_REPO_REF (kept from the last install; pass --ref to change)" ;;
+  release) ui_ok "Release: $BOSS_REPO_REF (newest published)" ;;
+  local) ui_ok "Release: this checkout" ;;
+esac
 
 # ---- fetch source ----------------------------------------------------------
 ui_step "Fetching BOSS Community source"
@@ -729,7 +876,8 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
     _fetch_ok=1
   fi
   if [[ "$_fetch_ok" -eq 1 ]]; then
-    _fetched_commit="$(git -C "$INSTALL_DIR" rev-parse FETCH_HEAD)"
+    # ^{commit}: a release tag is an annotated tag object, not the commit HEAD names.
+    _fetched_commit="$(git -C "$INSTALL_DIR" rev-parse 'FETCH_HEAD^{commit}')"
     if [[ "$_installed_commit" == "$_fetched_commit" ]]; then
       ui_info "Checkout already matches $BOSS_REPO_REF"
     elif git -C "$INSTALL_DIR" merge-base --is-ancestor "$_installed_commit" "$_fetched_commit"; then
@@ -807,6 +955,51 @@ cd "$INSTALL_DIR"
 [[ -f scripts/install/community-compose.yml ]] || die "community-compose.yml missing — is this a BOSS checkout?"
 ui_ok "Source ready: $INSTALL_DIR"
 
+# Record the ref this install follows, so a rerun and `boss upgrade` stay on it. Not secret.
+# upgrade.sh pins the installer to a commit and names the ref it came from in
+# BOSS_RELEASE_REF_NAME, so the record says v1.2, not a bare SHA.
+INSTALLED_REF=""
+INSTALLED_CHANNEL=""
+write_release_state() {
+  local ref="$BOSS_REPO_REF" head tmp
+  head="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null)" || return 0
+  if [[ -n "${BOSS_RELEASE_REF_NAME:-}" && "$REF_SOURCE" == explicit &&
+        "$ref" =~ ^[0-9a-fA-F]{40}$ ]] && ref_is_valid "$BOSS_RELEASE_REF_NAME"; then
+    ref="$BOSS_RELEASE_REF_NAME"
+  elif [[ "$REF_SOURCE" == local ]]; then
+    ref="$(git -C "$INSTALL_DIR" tag --points-at HEAD 2>/dev/null | pick_release 1 || true)"
+    [[ -n "$ref" ]] || ref="$(git -C "$_src_tree" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+    ref_is_valid "$ref" || ref="$head"
+  fi
+  if [[ "$ref" =~ ^v[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$ ]]; then
+    INSTALLED_CHANNEL="release"
+  elif [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    INSTALLED_CHANNEL="pinned"
+  else
+    INSTALLED_CHANNEL="branch"
+  fi
+  INSTALLED_REF="$ref"
+  tmp="$INSTALL_DIR/$RELEASE_STATE_NAME.writing.$$"
+  printf '%s\n' \
+    "# BOSS install record, written by install.sh. Not secret. Reruns and boss upgrade read it." \
+    "BOSS_RELEASE_REF=$ref" \
+    "BOSS_RELEASE_CHANNEL=$INSTALLED_CHANNEL" \
+    "BOSS_INSTALLED_COMMIT=$head" \
+    "BOSS_INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+  mv -f "$tmp" "$INSTALL_DIR/$RELEASE_STATE_NAME"
+  # Keep the record out of `git status` in this checkout. The exported repository has no
+  # .gitignore entry for it, so use the checkout's own exclude file; nothing tracked changes.
+  # The dirty-checkout checks already ignore untracked files.
+  local exclude
+  exclude="$(git -C "$INSTALL_DIR" rev-parse --git-path info/exclude 2>/dev/null)" || return 0
+  [[ "$exclude" == /* ]] || exclude="$INSTALL_DIR/$exclude"
+  if ! grep -qsxF "/$RELEASE_STATE_NAME" "$exclude"; then
+    mkdir -p "$(dirname "$exclude")" && printf '/%s\n' "$RELEASE_STATE_NAME" >> "$exclude" || true
+  fi
+}
+write_release_state
+[[ -z "$INSTALLED_REF" ]] || ui_ok "Recorded release $INSTALLED_REF ($INSTALLED_CHANNEL) in $RELEASE_STATE_NAME"
+
 # ---- write env -------------------------------------------------------------
 ui_step "Writing Community configuration"
 
@@ -842,9 +1035,7 @@ if [ -f "$ENV_FILE" ]; then
   if grep -qs '^BOSS_BIND_ADDRESS=0.0.0.0$' "$ENV_FILE"; then
     ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
   fi
-  # `|| true`: a key this .env predates (BOSS_KMS_MASTER_KEY on every upgrade) is a grep with no
-  # match, and under `set -euo pipefail` that silently ended the installer mid-configuration.
-  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
   _keep_api="$(_existing BOSS_API_KEY)"
   if [ -n "$_keep_db" ]; then
@@ -854,27 +1045,6 @@ if [ -f "$ENV_FILE" ]; then
   if [ -n "$_keep_api" ]; then
     BOSS_API_KEY="$_keep_api"
     ui_info "Reusing the existing API key — saved keys keep working"
-  fi
-  # AN EXISTING INSTALL KEEPS THE KEY ITS DATA WAS ENCRYPTED WITH. A key already in .env stays
-  # (restore_preserved_env.sh enforces it too). Without one, the database store provisioned its
-  # own and keeps it in Postgres: adopt exactly that key into .env — then everything stored stays
-  # readable — and remove it from the database once the API is up. If the database cannot be
-  # asked right now, write no key at all: a fresh one would make existing credentials unreadable.
-  _keep_kms="$(_existing BOSS_KMS_MASTER_KEY)"
-  if [ -n "$_keep_kms" ]; then
-    BOSS_KMS_MASTER_KEY="$_keep_kms"
-  elif _db_key="$(cd "$INSTALL_DIR" && "${COMPOSE[@]}" -f scripts/install/community-compose.yml \
-        --env-file "$ENV_FILE" exec -T db psql -U boss -d boss -At \
-        -c "SELECT convert_from(ciphertext, 'UTF8') FROM secret_material WHERE ref_key = '__boss_master_key__'" \
-        2>/dev/null </dev/null)"; then
-    if [ -n "$_db_key" ]; then
-      BOSS_KMS_MASTER_KEY="$_db_key"
-      _ADOPTED_DB_KEY=1
-      ui_info "Moving the secret store's key out of the database and into .env"
-    fi
-  else
-    BOSS_KMS_MASTER_KEY=""
-    ui_warn "Could not reach the database to check its secret-store key; leaving it where it is. Re-run with BOSS running to move it into .env."
   fi
   _ENV_SNAPSHOT="$INSTALL_DIR/.env.previous.$$"
   cp -p "$ENV_FILE" "$_ENV_SNAPSHOT"
@@ -908,7 +1078,6 @@ BOSS_WORKER_PRINCIPAL=system
 BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
 BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
 BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
-BOSS_KMS_MASTER_KEY=${BOSS_KMS_MASTER_KEY}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood
@@ -916,7 +1085,6 @@ BOSS_API_PORT=${API_PORT}
 BOSS_API_BIND=${API_BIND}
 BOSS_WEB_PORT=${WEB_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
-INFISICAL_PORT=${INFISICAL_PORT}
 BOSS_COMMUNITY_WEB_ENABLED=${WITH_WEB}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
@@ -929,6 +1097,9 @@ OPENAI_API_KEY=${OPENAI_KEY}
 OPENAI_BASE_URL=
 OPENAI_MODEL=gpt-4o-mini
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+GOOGLE_API_KEY=${GOOGLE_KEY}
+XAI_API_KEY=${XAI_KEY}
+OPENROUTER_API_KEY=${OPENROUTER_KEY}
 BOSS_GITHUB_TOKEN=${GITHUB_TOKEN}
 # This installer source is not the operator's webhook repository. Leave the
 # legacy default-project GitHub route unbound until explicitly configured.
@@ -1045,6 +1216,14 @@ if printf '%s\n' "$RUNNING_SERVICES" | grep -qx worker; then
     $COMPOSE_PROFILES stop worker </dev/null
 fi
 
+# This installer runs under umask 077, so a checkout it cloned is readable only by its owner.
+# Postgres reads initdb/ as its own user inside the container, and an unreadable directory
+# stops the database on first start. The SQL holds no secrets; .env stays mode 600.
+if [[ -d scripts/install/initdb ]]; then
+  chmod 755 scripts/install/initdb
+  find scripts/install/initdb -type f -name '*.sql' -exec chmod 644 {} +
+fi
+
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
 # shellcheck disable=SC2086
@@ -1114,17 +1293,6 @@ if [[ "$HEALTH_OK" -ne 1 ]]; then
   exit 1
 fi
 ui_ok "API healthy at ${API_URL}/health"
-if [[ "$_ADOPTED_DB_KEY" -eq 1 ]]; then
-  # The API now reads the key from .env, so the copy in Postgres is no longer used — and it is
-  # exactly what made a database backup a credential leak. Removed only after the API is up.
-  if ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T db \
-       psql -U boss -d boss -q -c "DELETE FROM secret_material WHERE ref_key = '__boss_master_key__'" \
-       </dev/null >/dev/null 2>&1; then
-    ui_ok "Secret-store key moved to .env — a database backup no longer contains it"
-  else
-    ui_warn "The secret-store key is in .env, but its old copy could not be removed from the database."
-  fi
-fi
 
 # ---- seed ------------------------------------------------------------------
 ui_step "Seeding Community project (roles, packs, demo project)"
@@ -1158,11 +1326,8 @@ elif [[ ! -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
 else
   # The agent refuses to install with an empty project id. The id is the
   # project this installer just seeded, not a value from the shell environment.
-  # bash, not sh: node_agent.sh is a bash program (`set -euo pipefail`, arrays). Run with sh,
-  # which is dash on Ubuntu and Debian, it stopped at "set: Illegal option -o pipefail", so no
-  # Ubuntu or Debian install ever recorded its own machine as a place to run work.
   if BOSS_PROJECT_ID="${_place_project}" \
-      bash "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+      sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
   else
     ui_warn "Hardware agent did not install. The local machine was not recorded."
@@ -1215,6 +1380,54 @@ else
 fi
 rm -f "$EDITION_BODY"
 
+# ---- models and subscriptions already on this machine ----------------------
+# Finding is read only and prints found / not found, never a value. Exported API keys were
+# already saved above. A Codex login file is copied only after a yes at the prompt, or with
+# --connect-found. Everything else (Claude Code and Grok Build sign-in inside the BOSS
+# container, Ollama, and the offers when no model is usable) is the Models step below, which
+# is this install's own `boss connect`.
+MODEL_NOTES=()
+CODEX_FROM_DISCOVERY=0
+_found=""
+if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
+  ui_step "Looking for models and subscriptions on this machine (read only)"
+  _found="$(mktemp)"
+  # A rerun after the installer moved Ollama to the Docker bridge looks where .env says it is.
+  _ollama_url="$(grep -m 1 '^BOSS_OLLAMA_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  # A reinstall after a purge: an earlier install bound Ollama with BOSS's own systemd drop-in.
+  if [[ -z "$_ollama_url" ]]; then
+    _ollama_hostport="$(sed -n 's/^Environment="OLLAMA_HOST=\([0-9.]*:[0-9]*\)"$/\1/p' \
+      "${BOSS_OLLAMA_DROPIN_DIR:-/etc/systemd/system/ollama.service.d}/boss-docker-bridge.conf" 2>/dev/null | head -n 1 || true)"
+    [[ -z "$_ollama_hostport" ]] || _ollama_url="http://$_ollama_hostport"
+  fi
+  if BOSS_OLLAMA_URL="${_ollama_url:-${BOSS_OLLAMA_URL:-}}" python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
+    found() { [[ "$(grep -m 1 "^$1=" "$_found" | cut -d= -f2-)" == found ]]; }
+    if found codex_login && [[ "$CONNECT_CODEX" -eq 0 ]]; then
+      _codex_home="BOSS's own database on this machine"
+      [[ "$SECRET_STORE" != infisical ]] || _codex_home="this install's secret store"
+      if [[ "$CONNECT_FOUND" -eq 1 ]]; then
+        if [[ "$SECRET_STORE" == infisical || "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]]; then
+          CODEX_FROM_DISCOVERY=1
+        else
+          ui_warn "Codex login found and not copied: the database store also needs --accept-database-fallback."
+        fi
+      elif ask_yes "Connect your Codex ChatGPT login? This copies ~/.codex/auth.json into ${_codex_home}."; then
+        CODEX_FROM_DISCOVERY=1
+      else
+        if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+          ui_info "Codex login left alone (--yes copies nothing without --connect-found). Connect it later: boss connect codex"
+        else
+          ui_info "Codex login left alone. Connect it later: boss connect codex"
+        fi
+      fi
+    fi
+  else
+    ui_warn "Model discovery did not finish; nothing was connected. Retry later: boss connect"
+    rm -f "$_found"
+    _found=""
+  fi
+fi
+
 if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   ui_step "Checking coding subscription connections"
   if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] &&
@@ -1232,7 +1445,66 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   [[ "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]] && _subscription_args+=(--accept-database-fallback)
   BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_subscription_args[@]}" </dev/null ||
     die "Coding subscription discovery/connection failed; BOSS core remains available."
+  [[ "$CONNECT_CODEX" -eq 0 ]] || MODEL_NOTES+=("✓ Codex ChatGPT login connected")
+  [[ "$CONNECT_CLAUDE" -eq 0 && "$CONNECT_CLAUDE_LOCAL" -eq 0 ]] || MODEL_NOTES+=("✓ Claude Code connected")
+  [[ "$CONNECT_GROK_LOCAL" -eq 0 ]] || MODEL_NOTES+=("✓ Grok Build connected")
 fi
+
+# A login found and consented to above goes through the same reviewed import path as
+# --connect-codex. Its failure is reported, not fatal: BOSS itself is already running.
+if [[ "$CODEX_FROM_DISCOVERY" -eq 1 ]]; then
+  ui_step "Connecting the Codex ChatGPT login"
+  _codex_args=(--api-url "$API_URL" --connect-codex)
+  [[ "$SECRET_STORE" == infisical ]] || _codex_args+=(--accept-database-fallback)
+  if BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_codex_args[@]}" </dev/null; then
+    ui_ok "Codex ChatGPT login connected (value never displayed)"
+    MODEL_NOTES+=("✓ Codex ChatGPT login connected")
+  else
+    ui_err "Codex login was not connected; the reason is above. BOSS is running. Retry: boss connect codex"
+    MODEL_NOTES+=("✗ Codex login not connected: boss connect codex")
+  fi
+fi
+
+# ---- the Models step -------------------------------------------------------
+# Detect, connect what was found (with the consent rules above), and when no model is usable
+# offer to sign in to a subscription or set up a free local model. This is `boss connect`, so
+# a later `boss connect` repeats exactly this step. --yes asks nothing; it installs Ollama
+# only with --install-ollama.
+model_usable() {
+  local check rc
+  for check in --hosted --local; do
+    rc=0
+    BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/model_status.py --api-url "$API_URL" \
+      --env-file "$ENV_FILE" "$check" </dev/null >/dev/null 2>&1 || rc=$?
+    [[ "$rc" -ne 0 && "$rc" -ne 4 ]] || return 0   # usable, or BOSS cannot say
+  done
+  return 1
+}
+if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
+   [[ ( "$AUTO_DISCOVER" -eq 1 && -n "$_found" ) || "$INSTALL_OLLAMA" -eq 1 ]]; then
+  ui_step "Models"
+  _models_args=(--dir "$INSTALL_DIR" connect --from-installer)
+  [[ -z "$_found" ]] || _models_args+=(--found "$_found")
+  [[ "$CONNECT_FOUND" -eq 0 ]] || _models_args+=(--connect-found)
+  [[ "$NONINTERACTIVE" -eq 0 ]] || _models_args+=(--no-questions)
+  [[ "$INSTALL_OLLAMA" -eq 0 ]] || _models_args+=(--install-ollama)
+  [[ -z "$LOCAL_MODEL" ]] || _models_args+=(--local-model "$LOCAL_MODEL")
+  [[ "$NO_LOCAL_MODEL" -eq 0 ]] || _models_args+=(--no-local-model)
+  [[ "$REBIND_OLLAMA" -eq 0 ]] || _models_args+=(--rebind-ollama)
+  bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
+    ui_warn "The Models step did not finish; BOSS is running. Retry: boss connect"
+  # Codex signs in on this machine, so it needs the CLI here. Offered only at a terminal and
+  # only while no model is usable; --install-coding-clis does it unattended.
+  if [[ "$INSTALL_CODING_CLIS" -eq 0 && "$NONINTERACTIVE" -eq 0 ]] && ! model_usable &&
+     ask_yes "Install the official coding CLIs on this machine (Claude Code, Codex CLI, Grok Build)? Codex needs its CLI here to sign in; Claude Code and Grok Build already run inside BOSS."; then
+    if ( INSTALL_CODING_CLIS=1; install_coding_clis ); then
+      ui_info "Sign in to Codex with: codex login --device-auth   then: boss connect codex"
+    else
+      ui_warn "The coding CLIs were not all installed; the reason is above. BOSS is running."
+    fi
+  fi
+fi
+[[ -z "$_found" ]] || rm -f "$_found"
 
 set +e
 PROV_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
@@ -1245,29 +1517,125 @@ else
   ui_warn "Providers probe HTTP $PROV_CODE"
 fi
 
+# ---- the boss command ------------------------------------------------------
+# A small launcher on PATH that remembers this install directory and runs
+# scripts/install/boss.sh from it, so `boss upgrade` always uses the installed release's
+# helper. ~/.local/bin needs no sudo. /usr/local/bin is used only when it is already
+# writable and ~/.local/bin is not on PATH. Another program's `boss` is never replaced.
+BOSS_COMMAND=""
+BOSS_COMMAND_MARKER="# BOSS Community command (generated by install.sh)"
+install_boss_command() {
+  local bin_dir="${BOSS_BIN_DIR:-}" target tmp previous resolved
+  if [[ ! -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+    ui_info "This release has no boss command; use the scripts in $INSTALL_DIR/scripts/install."
+    return 0
+  fi
+  if [[ -z "$bin_dir" ]]; then
+    bin_dir="$HOME/.local/bin"
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* && -d /usr/local/bin && -w /usr/local/bin &&
+          ":$PATH:" == *":/usr/local/bin:"* ]]; then
+      bin_dir="/usr/local/bin"
+    fi
+  fi
+  target="$bin_dir/boss"
+  if [[ -e "$target" || -L "$target" ]] && ! grep -qsF "$BOSS_COMMAND_MARKER" "$target"; then
+    ui_warn "$target belongs to another program; left it alone. Use: bash $INSTALL_DIR/scripts/install/boss.sh"
+    BOSS_COMMAND="bash $INSTALL_DIR/scripts/install/boss.sh"
+    return 0
+  fi
+  previous="$(grep -m 1 '^BOSS_INSTALL_DIR_DEFAULT=' "$target" 2>/dev/null | cut -d= -f2- || true)"
+  # The resolved path, so `boss uninstall --purge` can tell this launcher belongs to its install.
+  resolved="$(cd "$INSTALL_DIR" && pwd -P)"
+  mkdir -p "$bin_dir" || { ui_warn "Could not create $bin_dir; the boss command was not installed."; return 0; }
+  tmp="$bin_dir/.boss.writing.$$"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' "$BOSS_COMMAND_MARKER"
+    printf '%s\n' '# Runs the lifecycle helper of one install. Rerunning the installer rewrites this file.'
+    printf 'BOSS_INSTALL_DIR_DEFAULT=%q\n' "$resolved"
+    printf '%s\n' 'export BOSS_INSTALL_DIR="${BOSS_INSTALL_DIR:-$BOSS_INSTALL_DIR_DEFAULT}"' \
+      'export BOSS_LAUNCHER="${BASH_SOURCE[0]}"' \
+      'helper="$BOSS_INSTALL_DIR/scripts/install/boss.sh"' \
+      '[[ -f "$helper" ]] || { echo "boss: no BOSS install at $BOSS_INSTALL_DIR" >&2; exit 1; }' \
+      'exec bash "$helper" "$@"'
+  } > "$tmp" || { rm -f "$tmp"; ui_warn "Could not write $target; the boss command was not installed."; return 0; }
+  chmod 755 "$tmp"
+  mv -f "$tmp" "$target"
+  if [[ -n "$previous" && "$previous" != "$(printf '%q' "$resolved")" &&
+        "$previous" != "$(printf '%q' "$INSTALL_DIR")" ]]; then
+    ui_info "boss now manages $INSTALL_DIR (it pointed at another install before)."
+  fi
+  if [[ ":$PATH:" == *":$bin_dir:"* ]]; then
+    BOSS_COMMAND="boss"
+    ui_ok "Installed the boss command: $target"
+  else
+    BOSS_COMMAND="$target"
+    ui_ok "Installed the boss command: $target"
+    ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+  fi
+}
+if [[ "$INSTALL_BOSS_COMMAND" -eq 1 ]]; then
+  ui_step "Installing the boss command"
+  install_boss_command
+fi
+B="${BOSS_COMMAND:-bash $INSTALL_DIR/scripts/install/boss.sh}"
+[[ -f "$INSTALL_DIR/scripts/install/boss.sh" || -n "$BOSS_COMMAND" ]] || B=""
+CURRENT_STEP=""
+
 # ---- success card ----------------------------------------------------------
 echo ""
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
-echo -e "${GREEN}${BOLD}  BOSS Community is running.${NC}"
+echo -e "${GREEN}${BOLD}  ✓ BOSS Community is running.${NC}"
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
+echo ""
+if [[ "$WITH_WEB" -eq 1 ]]; then
+  echo -e "  ${BOLD}Console${NC}          http://127.0.0.1:${WEB_PORT}   (Mission Control on this machine)"
+  if [[ -n "$B" ]]; then
+    echo -e "  ${BOLD}Password${NC}         $B password   (shown in a terminal only)"
+  else
+    echo -e "  ${BOLD}Password${NC}         python3 \"$INSTALL_DIR/scripts/install/console_password.py\" show --env-file \"$ENV_FILE\""
+  fi
+fi
+[[ -z "$INSTALLED_REF" ]] || echo -e "  ${BOLD}Release${NC}          ${INSTALLED_REF} (${INSTALLED_CHANNEL}; reruns and upgrades stay on it)"
+# One row per model source: connected, found but not connected, or not found, with the command
+# that fixes it. Read from BOSS and this machine now, not from what this run happened to do.
+_model_rows=""
+if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+  _model_rows="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" connect --summary 2>/dev/null </dev/null || true)"
+fi
+if [[ -n "$_model_rows" || "${#MODEL_NOTES[@]}" -gt 0 ]]; then
+  echo -e "  ${BOLD}Models${NC}"
+  [[ -z "$_model_rows" ]] || printf '%s\n' "$_model_rows"
+  for _note in ${MODEL_NOTES[@]+"${MODEL_NOTES[@]}"}; do
+    echo "    $_note"
+  done
+else
+  echo -e "  ${BOLD}Models${NC}           none yet. Model calls fail closed until one is connected${B:+: $B connect}"
+fi
 echo ""
 echo -e "  ${BOLD}API${NC}              ${API_URL}"
 if [[ "$API_BIND" != "127.0.0.1" ]]; then
   echo -e "  ${BOLD}API bind${NC}         ${API_BIND}"
 fi
 echo -e "  ${BOLD}Health${NC}           ${API_URL}/health"
-if [[ "$WITH_WEB" -eq 1 ]]; then
-  echo -e "  ${BOLD}Mission Control on this machine${NC}  http://127.0.0.1:${WEB_PORT}"
-  if [[ -n "$CONSOLE_ORIGIN" ]]; then
-    echo -e "  ${BOLD}Console origin${NC}   ${CONSOLE_ORIGIN}"
-    echo -e "  ${MUTED}It answers only after a TLS proxy on this machine forwards to 127.0.0.1:${WEB_PORT} and overwrites Host, X-Forwarded-Host, and X-Forwarded-Proto.${NC}"
-  fi
-  echo -e "  ${BOLD}Console password${NC} python3 \"$INSTALL_DIR/scripts/install/console_password.py\" show --env-file \"$ENV_FILE\""
+if [[ "$WITH_WEB" -eq 1 && -n "$CONSOLE_ORIGIN" ]]; then
+  echo -e "  ${BOLD}Console origin${NC}   ${CONSOLE_ORIGIN}"
+  echo -e "  ${MUTED}It answers only after a TLS proxy on this machine forwards to 127.0.0.1:${WEB_PORT} and overwrites Host, X-Forwarded-Host, and X-Forwarded-Proto.${NC}"
 fi
 echo -e "  ${BOLD}Project${NC}          boss-dogfood"
 echo -e "  ${BOLD}API key${NC}          (in $ENV_FILE — not printed)"
 echo -e "  ${BOLD}Install dir${NC}      $INSTALL_DIR"
 echo ""
+if [[ -n "$B" ]]; then
+  echo -e "${BOLD}Next${NC}"
+  echo ""
+  echo "  $B open        # console address"
+  echo "  $B doctor      # check the install can do its job"
+  echo "  $B status      # release, services, health"
+  echo "  $B connect     # connect models and subscriptions found later"
+  echo "  $B upgrade     # back up, then move to the newest release"
+  echo "  $B uninstall   # stop BOSS and keep data"
+  echo ""
+fi
 echo -e "${BOLD}On this machine${NC}"
 echo ""
 echo "  # Terminal on this machine"
@@ -1276,34 +1644,8 @@ echo ""
 echo "  # CLI on this machine"
 echo "  source $INSTALL_DIR/boss-community.env.sh"
 echo ""
-echo "  # Health check"
-echo "  curl -sS -H \"Authorization: Bearer \$BOSS_API_KEY\" \$BOSS_API_URL/health"
-echo ""
-echo "  # Logs"
-echo "  cd $INSTALL_DIR && docker compose -f scripts/install/community-compose.yml --env-file .env logs -f"
-echo ""
-echo "  # Stop"
-echo "  cd $INSTALL_DIR && docker compose -f scripts/install/community-compose.yml --env-file .env down"
-echo ""
 echo -e "${MUTED}Docs: https://github.com/seanventures/boss#readme${NC}"
 echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
 echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
 echo ""
-
-# THE ONE THING TO DO NEXT, LAST. The console address was printed mid-summary, without the
-# org, and scrolled away under the command reference — "at the end I want to print the console
-# URI". So the install ends on it: the full address to open, and how to sign in.
-if [[ "$WITH_WEB" -eq 1 ]]; then
-  _open_org="$(env_value BOSS_DEFAULT_ORG_ID)"
-  _open_base="${CONSOLE_ORIGIN:-http://127.0.0.1:${WEB_PORT}}"
-  _open_url="${_open_base%/}/?org=${_open_org:-org_boss}"
-  echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
-  echo -e "  ${BOLD}Open BOSS${NC}    ${_open_url}"
-  echo -e "  ${BOLD}Sign in${NC}      cd \"$INSTALL_DIR\" && python3 scripts/install/console_password.py show"
-  if [[ -z "$CONSOLE_ORIGIN" ]]; then
-    echo -e "  ${MUTED}From another machine: ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} user@this-server, then open the address above.${NC}"
-  fi
-  echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
-  echo ""
-fi

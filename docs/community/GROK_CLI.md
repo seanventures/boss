@@ -39,7 +39,7 @@ Grok gives per-model API keys and API endpoint settings precedence over the acti
 ## Record the login
 
 1. Check detection and the suggested next step with `GET /v1/setup/coding-agents`.
-2. After signing in with `grok login --device-auth` as `boss` inside the API container, record the login in either of these ways:
+2. At a terminal, `boss connect grok` signs in and records the login in one step. By hand, after signing in with `grok login --device-auth` as `boss` inside the API container, record the login in either of these ways:
     - Rerun the installer with `--connect-grok-local`.
     - Call `POST /v1/setup/coding-agents/connect` with `{"project_id":"...","provider":"grok","prove":false}`.
 3. Once the connection succeeds, set `BOSS_CODE_AGENT_ENGINE=grok` for code work.

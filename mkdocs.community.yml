@@ -60,6 +60,7 @@ markdown_extensions:
 nav:
   - Home: README.md
   - Get started:
+      - Getting started: GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Deploy: hostname.md
       - Sign in: CONSOLE_AUTH.md

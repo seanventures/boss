@@ -9,7 +9,7 @@ hide:
 
 <div class="boss-hero__copy" markdown="1">
 
-<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc1</p>
+<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc2</p>
 
 # The control plane for AI software work
 
@@ -135,6 +135,7 @@ Prefer plain HTTP? `source boss-community.env.sh` loads `BOSS_API_URL`, `BOSS_AP
 
 | I want to | Read |
 | --- | --- |
+| Go from install to software BOSS built | [Getting started](GETTING_STARTED.md) |
 | Install BOSS and run a first goal | [Quickstart](QUICKSTART.md) |
 | Serve it to my team on a domain or private IP | [Deploy](hostname.md) |
 | Connect a model or coding subscription | [Model connections](MODEL_CONNECTIONS.md) |

@@ -71,7 +71,7 @@ fi
 
 if [[ "$PURGE_DATA" -eq 1 ]]; then
   if [[ "$CONFIRM_PURGE" != 'DELETE-BOSS-DATA' ]]; then
-    if [[ ! -r /dev/tty ]]; then
+    if ! (: </dev/tty) 2>/dev/null; then
       echo 'Data purge needs a terminal confirmation or --confirm-purge DELETE-BOSS-DATA; nothing was removed.' >&2
       exit 1
     fi
@@ -80,7 +80,7 @@ if [[ "$PURGE_DATA" -eq 1 ]]; then
     [[ "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Confirmation did not match; nothing was removed.' >&2; exit 1; }
   fi
 elif [[ "$ASSUME_YES" -eq 0 ]]; then
-  if [[ ! -r /dev/tty ]]; then
+  if ! (: </dev/tty) 2>/dev/null; then
     echo 'Pass --yes for a noninteractive safe uninstall; nothing was removed.' >&2; exit 1
   fi
   printf 'Stop BOSS Community? Data and credentials will be kept. [y/N] ' >/dev/tty
@@ -96,6 +96,8 @@ if ! docker info >/dev/null 2>&1; then
     echo 'Docker daemon is unavailable; nothing was removed.' >&2; exit 1
   fi
 fi
+# The images are tagged with the compose project name (install.sh), not "local".
+export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}"
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
 if [[ "$PURGE_DATA" -eq 1 && "$SKIP_BACKUP" -eq 0 ]]; then
   args=(--dir "$INSTALL_DIR")
