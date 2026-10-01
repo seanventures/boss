@@ -254,8 +254,9 @@ class Gateway:
     def acquire(self, connection, project_id, *, job_id, worker_id, job_lease_token,
                 agent_id, skill_id, preferred_capabilities, risk_tier, consumer_owner_id,
                 estimated_cost_usd_micros, max_usage, dedupe_key, ttl_seconds,
-                existing_reservation_id=None):
+                existing_reservation_id=None, source_id=None):
         self.acquire_calls += 1
+        self.acquired_for = getattr(self, "acquired_for", []) + [(source_id, consumer_owner_id)]
         self.jobs.require_active_lease(connection, worker_id, job_id, job_lease_token)
         if not existing_reservation_id:
             from boss_engine.services.model_gateway import ModelCapacityDeniedError
@@ -631,3 +632,71 @@ def test_mocked_gateway_requires_a_lease_and_a_reservation():
             max_usage={"total_tokens": 100}, dedupe_key="bad-lease", ttl_seconds=120,
             existing_reservation_id=reserved["reservation_id"],
         )
+
+
+class _Named(Scripted):
+    """A scripted decider that, like the real ones, names its backend and its model source."""
+
+    def __init__(self, world: World, backend: str, source_id: str) -> None:
+        super().__init__(world.budget, world.gateway, lambda: world.open_transactions > 0)
+        self.backend, self.source_id = backend, source_id
+
+    def decide(self, context, questions):
+        batch = super().decide(context, questions)
+        batch.backend = self.backend
+        return batch
+
+
+def _jev_then_claude(world: World):
+    jev = _Named(world, "typesafe", "typesafe_jev")
+    claude = _Named(world, "claude_code", "anthropic_claude_code")
+    claude.answer = "technical"
+    spend = world.spend()
+    spend.decider_factory = lambda role, settings: jev if role == "primary" else claude
+    return spend, jev, claude
+
+
+def test_each_attempt_books_capacity_on_the_source_that_answers_for_the_actor():
+    """BOSS-451: the lease was booked for the PROJECT against whatever the router chose — on a
+    real install, the operator's Claude subscription, which refused it as pooled capacity."""
+    world = World()
+    spend, jev, _ = _jev_then_claude(world)
+    output = spend.execute(_settings(), _binding(), "My card was charged twice")
+    assert output["answer"] == "billing" and jev.calls == 1
+    assert world.gateway.acquired_for == [("typesafe_jev", "workflow")]
+
+
+def test_when_jev_fails_claude_answers_on_its_own_receipt():
+    """TypeSafe is the default decider and Claude the fallback — a separate, receipted attempt
+    against Claude's own source, after a visible fallback event."""
+    world = World()
+    spend, jev, claude = _jev_then_claude(world)
+    jev.fail = RuntimeError("TypeSafe HTTP 500")
+    output = spend.execute(_settings(), _binding(), "My card was charged twice")
+    assert output["answer"] == "technical" and (jev.calls, claude.calls) == (1, 1)
+    assert world.gateway.acquired_for == [("typesafe_jev", "workflow"),
+                                          ("anthropic_claude_code", "workflow")]
+    statuses = sorted(row["status"] for row in world.receipts.rows.values())
+    assert statuses == ["failed", "succeeded"], "each provider attempt has its own receipt"
+    assert "typed_decision.fallback" in world.events.types()
+    assert world.budget.active_reserved() == 0
+
+
+def test_proving_a_key_never_falls_back():
+    """A Claude answer after a Jev failure would prove nothing about the Jev key."""
+    world = World()
+    spend, jev, claude = _jev_then_claude(world)
+    jev.fail = RuntimeError("TypeSafe HTTP 401")
+    with pytest.raises(Exception, match="401"):
+        spend.execute(_settings(), _binding(), "My card was charged twice", fallback=False)
+    assert claude.calls == 0
+
+
+def test_an_uncertain_jev_outcome_is_not_answered_by_claude():
+    """It may already be charged and may yet answer; it waits for reconciliation."""
+    world = World()
+    spend, jev, claude = _jev_then_claude(world)
+    jev.fail = TimeoutError("read timed out")
+    with pytest.raises(Exception, match="reconcil"):
+        spend.execute(_settings(), _binding(), "My card was charged twice")
+    assert claude.calls == 0

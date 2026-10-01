@@ -1109,6 +1109,8 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
 
 # --- The decision model --------------------------------------------------------------------- #
 DECISION_KEY_NAME = "TYPESAFE_API_KEY"
+#: TypeSafe's own model source (packages/specpack/models/providers.yaml).
+TYPESAFE_SOURCE_ID = "typesafe_jev"
 
 
 class DecisionModelGovernanceHold(SetupError):
@@ -1123,12 +1125,12 @@ def decision_model_status(connection, settings: Settings, project_id: str) -> di
     a receipt before the call, so execution is available whenever a model is.
     """
     from . import project_settings
-    from .typed_decisions import _typesafe_key
+    from .typed_decisions import _typesafe_key, typesafe_decides
 
     effective = project_settings.applied(connection, project_id, settings)
-    backend = (effective.decision_backend or "claude").strip().lower()
+    backend = (effective.decision_backend or "typesafe").strip().lower()
     has_key = bool(_typesafe_key(effective))
-    deciding = "typesafe" if backend == "typesafe" and has_key else "claude"
+    deciding = "typesafe" if typesafe_decides(effective) else "claude"
     return {
         "backend": backend,
         "claude_model": effective.decision_model or "",
@@ -1198,6 +1200,58 @@ def store_decision_key(
     if engine is None:
         # No way to commit the reservation and receipt apart from this request: no call.
         raise DecisionModelGovernanceHold(GOVERNANCE_HOLD)
+
+    from .entitlements import EntitlementBrokerService
+    from .model_gateway import ModelGatewayService
+
+    gateway = ModelGatewayService(settings)
+
+    def keep(conn, name: str) -> dict[str, Any]:
+        """Store the key under `name` and make it the TypeSafe source's credential."""
+        stored = put_secret(
+            conn, settings, project_id=project_id, name=name, value=api_key,
+            secret_kind="api_token", backend=backend,
+            scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
+        )
+        conn.execute(text("UPDATE secret_refs SET provider = 'typesafe' WHERE id = :id"),
+                     {"id": stored["secret_ref_id"]})
+        gateway.bind_credential_secret_ref(conn, project_id, TYPESAFE_SOURCE_ID,
+                                           stored["secret_ref_id"], actor=actor)
+        return stored
+
+    # THE KEY IS HELD AS A CANDIDATE WHILE IT IS PROVED. The proof's capacity lease is booked
+    # against TypeSafe's own source, and the gateway will only lease a paid source that has a
+    # credential bound — so the candidate is bound, on its own committed connection, for the
+    # length of the proof. A key that fails is revoked and the source goes back to exactly
+    # what it held before: a bad paste never replaces a working key.
+    with engine.begin() as held:
+        # An install upgraded from before TypeSafe had a source gets it here.
+        EntitlementBrokerService(settings).seed_default_sources(held, project_id, actor=actor)
+        previous = held.execute(text(
+            "SELECT credential_secret_ref_id, connection_ref, connection_status, status, "
+            "runtime_supported, observed_capacity FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = :s"),
+            {"p": project_id, "s": TYPESAFE_SOURCE_ID}).mappings().first()
+        candidate = keep(held, f"{DECISION_KEY_NAME}_CANDIDATE")
+
+    def forget_candidate() -> None:
+        with engine.begin() as held:
+            held.execute(text(
+                "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), "
+                "revoked_by = :a WHERE id = :id"),
+                {"a": actor, "id": candidate["secret_ref_id"]})
+            if previous is not None:
+                held.execute(text(
+                    "UPDATE entitlement_sources SET credential_secret_ref_id = :ref, "
+                    "connection_ref = :cref, connection_status = :cs, status = :st, "
+                    "runtime_supported = :rs, observed_capacity = CAST(:oc AS JSONB), "
+                    "updated_at = now() WHERE project_id = :p AND source_id = :s"),
+                    {"ref": previous["credential_secret_ref_id"],
+                     "cref": previous["connection_ref"], "cs": previous["connection_status"],
+                     "st": previous["status"], "rs": previous["runtime_supported"],
+                     "oc": json.dumps(previous["observed_capacity"] or {}),
+                     "p": project_id, "s": TYPESAFE_SOURCE_ID})
+
     proving = settings.model_copy(update={
         "decision_backend": "typesafe", "typesafe_api_key": api_key,
         # The proof is of THIS key. A Claude second opinion would prove nothing about it.
@@ -1210,12 +1264,14 @@ def store_decision_key(
     )
     try:
         proof = spend.execute(proving, _KEY_PROOF_BINDING,
-                              "BOSS is checking that this key works.")
+                              "BOSS is checking that this key works.", fallback=False)
     except TypedDecisionReconciliationRequired:
+        forget_candidate()
         raise SetupError(
             "TypeSafe did not answer in time. BOSS kept a record of the attempt so it can be "
             "reconciled rather than charged twice; try again in a minute.") from None
     except TypedDecisionSpendError as exc:
+        forget_candidate()
         message = str(exc)
         if " 401" in message:
             raise SetupError("TypeSafe rejected that key — check it was copied whole.") from None
@@ -1223,16 +1279,14 @@ def store_decision_key(
             raise SetupError("the key is valid but the TypeSafe account has no credit. Add "
                              "funds at console.typesafe.ai and try again.") from None
         raise SetupError(f"could not check that key: {message[:200]}") from None
+    except BaseException:
+        forget_candidate()
+        raise
 
-    stored = put_secret(
-        connection, settings, project_id=project_id, name=DECISION_KEY_NAME, value=api_key,
-        secret_kind="api_token", backend=backend,
-        scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
-    )
-    connection.execute(
-        text("UPDATE secret_refs SET provider = 'typesafe' WHERE id = :id"),
-        {"id": stored["secret_ref_id"]},
-    )
+    stored = keep(connection, DECISION_KEY_NAME)
+    connection.execute(text(
+        "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
+        "WHERE id = :id"), {"a": actor, "id": candidate["secret_ref_id"]})
     project_settings.set_one(connection, project_id, "decision_backend", "typesafe", actor=actor)
     emit_event(connection, project_id, "setup.decision_model_connected", actor,
                "secret_ref", stored["secret_ref_id"],
