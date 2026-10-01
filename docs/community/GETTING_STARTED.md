@@ -10,9 +10,9 @@ This guide takes you from a fresh machine to software that BOSS built for you. Y
 6. Follow it down the governed path: panel, PRD, approval, code, tests.
 7. Review the pull request and run the software.
 
-Plan on an hour. The install takes several minutes, and on a machine without a GPU a local model needs several minutes for each panel and build step.
+Plan on an hour or more. The install takes several minutes. On a machine without a GPU, a local model needs tens of minutes for the panel alone.
 
-The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4 and 7 depend on GitHub, and the notes in those steps say which parts you will see for the first time on your own repository.
+The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository.
 
 ## What you need
 
@@ -137,7 +137,7 @@ See what BOSS found:
 boss connect --summary
 ```
 
-With only the free local model, the table ends like this:
+With only the free local model, the table ends like this (the model is the one the installer pulled):
 
 ```text
     API keys     not found. Export a key, then: boss connect keys
@@ -166,7 +166,7 @@ boss doctor --probe
 
 ### Which local model
 
-`qwen2.5-coder:7b`, the installer's default, is the smallest local model to use for a build. With `qwen2.5-coder:1.5b` the panel did produce a PRD for a small command-line app, but the PRD described a monitored production service. It dropped most of what was asked for. A hosted model from [Model connections](MODEL_CONNECTIONS.md) gives better plans and code than either local model.
+Use `qwen2.5-coder:7b`, the installer's default, or larger. Asked for a small command-line tip calculator, the 7b model's panel wrote a PRD about that tool: inputs, validation, the calculation, and the output. The `qwen2.5-coder:1.5b` model's PRD described a production web service with endpoints and deployment, and kept only the tip calculation from the request. A local model is slow without a GPU. On 8 CPUs, the 7b panel took about 24 minutes and the 1.5b panel about 6. To use a hosted model instead, see [Model connections](MODEL_CONNECTIONS.md).
 
 To move from a smaller local model to the 7b model on Linux:
 
@@ -201,7 +201,10 @@ BOSS writes code on a branch named `boss/code/...` and opens a pull request. It 
 3. In Mission Control, open **Settings → Repo and model**. The page is headed **Connect a repo and model**.
 4. In the **Repository** card, paste the token into **Token**, enter `owner/name` in **Repository**, and press **Connect and test**. BOSS checks that it can push before it saves anything. **How do I get a token?** on the same card repeats the token steps.
 
-**Check that it worked:** the **Connect a repository** step on that page is done, and `boss doctor` no longer warns about the repository.
+**Check that it worked:** the **Connect a repository** step on that page is marked done, and `boss doctor` no longer warns about the repository.
+
+!!! note "Verify this part on your own repository"
+    The install used to check this guide had no GitHub repository, so this step was not run for it. The labels above are the ones on the **Repo and model** page.
 
 !!! note "Use the console, not `.env`"
     Setting `BOSS_GITHUB_OWNER` and `BOSS_GITHUB_REPO` in `.env` does not choose where builds go. Connect the repository on **Settings → Repo and model**.
@@ -259,7 +262,7 @@ The reply is the new run. It starts with `"status":"running"`, `"workflow_name":
 
 Open the run on the **Workflow** page. Runs are grouped as **Needs you**, **Running**, **Stopped**, and **Done**. On Backend Service Setup, the steps run in this order:
 
-1. **meeting.** A panel of agents discusses the goal and drafts a PRD. With the local 7b model on 8 CPUs and no GPU, expect several minutes; with the 1.5b model it took about 6 minutes.
+1. **meeting.** A panel of agents discusses the goal and drafts a PRD. On 8 CPUs with no GPU, this took about 24 minutes with the local 7b model.
 2. **spec_review.** The PRD is approved. In this release, PRD approval is automatic by default. **Approvals** shows the decision "Approve publishing the PRD the team drafted" marked **AUTO-APPROVED**, with the PRD attached. Read it here: it is what the build will be measured against.
 3. **build.** BOSS clones your repository and runs the governed coding pipeline. You can follow it in **Factory**: Queued, Cloning repo, Designing plan, QA writing tests, Engineer implementing, Running tests, Adversarial review, Mutation check, Opening PR, Done. If the plan touches something sensitive, it stops at **Awaiting plan approval** and an approval appears in **Approvals**.
 4. **report.** A run report with the cost per step.
