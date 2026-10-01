@@ -109,9 +109,14 @@ def test_a_codex_model_name_boss_has_never_heard_of_is_still_accepted():
     assert ps.model_choice_is_open(ps.KNOBS["codex_cli_model"], "codex") is True
 
 
-def test_claude_s_list_is_closed_because_boss_resolves_those_names_itself():
-    """opus/sonnet/fable/haiku are aliases BOSS maps. A name outside the set resolves to nothing."""
-    assert ps.model_choice_is_open(ps.KNOBS["code_review_model"], "claude_code") is False
+def test_a_claude_name_is_still_kept_off_codex_now_that_the_lists_come_from_the_clis():
+    """Claude's list used to be closed so its aliases could not leak onto codex. The lists are
+    now whatever each CLI reports, and the guard works from those: a name Claude's CLI lists
+    and codex's does not is refused for codex, and a name nobody lists is a typed one."""
+    assert ps.model_choice_is_open(ps.KNOBS["code_review_model"], "claude_code") is True
+    assert ps.model_is_compatible_with_harness("opus", "codex") is False
+    assert ps.model_is_compatible_with_harness("opus", "claude_code") is True
+    assert ps.model_is_compatible_with_harness("a-model-shipped-today", "claude_code") is True
 
 
 def test_the_codex_model_is_reachable_from_the_console_at_all():
