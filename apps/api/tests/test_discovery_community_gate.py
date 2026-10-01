@@ -184,14 +184,66 @@ def test_a_crash_mid_call_blocks_for_reconciliation_and_is_never_called_again(en
     assert _events(engine, run_id, "discovery.reconciliation_required") >= 2
 
 
-def test_budget_denial_makes_zero_model_calls(engine, governed, monkeypatch):
-    monkeypatch.setattr(discovery_spend, "STAGE_ESTIMATE_USD_MICROS", 10**15)
+@pytest.fixture
+def budget_policy(engine):
+    """Change this project's budget policy for one test, and put it back."""
+    with engine.connect() as connection:
+        saved = dict(connection.execute(text(
+            "SELECT daily_cap_usd_micros, burst_cap_usd_micros_per_min FROM budget_policies "
+            "WHERE scope_type = 'project' AND scope_id = :p"), {"p": PROJECT}).mappings().one())
+
+    def set_policy(**values):
+        with engine.begin() as connection:
+            for column, value in values.items():
+                connection.execute(text(
+                    f"UPDATE budget_policies SET {column} = :v "
+                    "WHERE scope_type = 'project' AND scope_id = :p"), {"v": value, "p": PROJECT})
+
+    yield set_policy
+    set_policy(**saved)
+
+
+def test_a_hard_budget_refusal_makes_zero_model_calls(engine, governed, budget_policy):
+    budget_policy(daily_cap_usd_micros=1)
     run_id = _start()
     result = _execute(run_id, _lease(engine, run_id))
     assert result["status"] == "failed" and result["retry"] is False
     assert governed.calls == []
     assert _receipts(engine, run_id) == []
     assert _events(engine, run_id, "discovery.spend_refused") == 1
+
+
+def test_a_per_minute_cap_smaller_than_a_stage_waits_and_retries_instead_of_failing(
+    engine, governed, budget_policy,
+):
+    """boss-1's default policy allows $0.10/min and a stage estimate is larger: the stage used
+    to reserve its full estimate, could never be granted, and the run failed at its first
+    stage. A stage now reserves no more than the cap, and a burst refusal is retried."""
+    budget_policy(burst_cap_usd_micros_per_min=50_000)
+    run_id = _start()
+    for _ in range(8):
+        lease = _lease(engine, run_id)
+        result = _execute(run_id, lease)
+        if result["status"] == "completed":
+            break
+        # A wait is not a failed attempt: the job completes and a fresh one is queued.
+        assert result["status"] == "deferred" and result["retry"] is False, result
+        with engine.begin() as connection:  # a minute passes
+            connection.execute(text(
+                "UPDATE budget_reservations SET created_at = created_at - interval '2 minutes' "
+                "WHERE project_id = :p"), {"p": PROJECT})
+    assert result == {"status": "completed", "retry": False}
+    assert governed.calls == STAGES, "each stage called exactly once across the retries"
+    with engine.connect() as connection:
+        amounts = [row[0] for row in connection.execute(text(
+            "SELECT amount_usd_micros FROM budget_reservations WHERE reason LIKE :r"),
+            {"r": f"Discovery {run_id} stage %"})]
+        decisions = connection.execute(text(
+            "SELECT count(*) FROM decisions WHERE question LIKE :q"),
+            {"q": f"Budget refused Discovery {run_id}%"}).scalar_one()
+    assert amounts and max(amounts) <= 50_000, amounts
+    assert decisions == 0, "a refusal that clears by itself asks nobody to decide anything"
+    assert _events(engine, run_id, "discovery.waiting_for_budget") >= 3
 
 
 def test_the_worker_route_runs_the_leased_job(client, engine, governed):
