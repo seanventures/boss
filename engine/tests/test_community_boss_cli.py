@@ -21,7 +21,7 @@ PICKERS = (REPO / "install.sh", REPO / "scripts/install/upgrade.sh", REPO / "doc
 HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
-    "console_password.py",
+    "console_password.py", "connect_ollama.py",
 )
 SECRET = "sk-test-value-that-must-never-print"
 CODEX_SECRET = "codex-auth-bytes-that-must-never-print"
@@ -118,6 +118,12 @@ def world(tmp_path: Path) -> dict:
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$BOSS_TEST_DOCKER_LOG\"\n"
         "case \"$1:$2\" in compose:version) echo 'Docker Compose version v2' ;; esac\n"
+        # The container-side checks and logins the connect paths run.
+        "case \"$*\" in\n"
+        "  *host.docker.internal*) [ \"${BOSS_TEST_OLLAMA_UNREACHABLE:-0}\" = 1 ] && exit 1 ;;\n"
+        "  *'claude auth login'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/claude\" ;;\n"
+        "  *'grok login --device-auth'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/grok\" ;;\n"
+        "esac\n"
         "exit 0\n",
     )
     _executable(
@@ -135,7 +141,11 @@ def world(tmp_path: Path) -> dict:
                 "#!/bin/sh\n[ \"$1 $2\" = 'login status' ] || exit 0\n"
                 "if [ \"${BOSS_TEST_CODEX_LOGIN:-0}\" = 1 ]; then echo 'Logged in using ChatGPT'; exit 0; fi\n"
                 "echo 'Not logged in'; exit 1\n")
-    _executable(bin_dir / "claude", "#!/bin/sh\necho '{\"loggedIn\": false}'\n")
+    _executable(bin_dir / "claude",
+                "#!/bin/sh\n"
+                "if [ \"${BOSS_TEST_CLAUDE_LOGIN:-0}\" = 1 ]; then\n"
+                "  echo '{\"loggedIn\": true, \"authMethod\": \"claude_ai\"}'; exit 0\nfi\n"
+                "echo '{\"loggedIn\": false}'\n")
     _executable(bin_dir / "grok", "#!/bin/sh\nexit 0\n")
     home = tmp_path / "home"
     home.mkdir()
@@ -549,3 +559,409 @@ def test_bootstrap_honours_an_explicit_ref_and_stops_on_a_failed_download(tmp_pa
     assert failed.returncode != 0
     assert "nothing was installed" in failed.stderr
     assert not (failing_dir / "ran").exists()
+
+
+# ---- phase 2: in-container sign-in, Ollama, keys from `boss connect`, purge -----------------
+
+class _FakeBoss:
+    """BOSS API and Ollama stand-ins on one loopback port. Records every request."""
+
+    def __init__(self, state: Path, models: tuple[str, ...] = ("llama3.2:latest",)) -> None:
+        import http.server
+        import json
+        import threading
+
+        self.state = state
+        self.models = list(models)
+        self.sources: list[dict] = []
+        self.requests: list[tuple[str, str, dict | None]] = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def _reply(self, code: int, body: dict) -> None:
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):  # noqa: N802
+                outer.requests.append(("GET", self.path, None))
+                if self.path.startswith("/api/tags"):
+                    return self._reply(200, {"models": [{"name": n} for n in outer.models]})
+                if self.path.startswith("/health"):
+                    return self._reply(200, {"status": "ok"})
+                if self.path.startswith("/v1/setup/coding-agents"):
+                    claude = (outer.state / "claude").exists()
+                    return self._reply(200, {"agents": [
+                        {"name": "claude_code", "installed": True, "token_present": False,
+                         "authenticated": claude, "auth_method": "claude_ai" if claude else None},
+                        {"name": "grok", "installed": True,
+                         "authenticated": (outer.state / "grok").exists()},
+                    ]})
+                if self.path.startswith("/v1/entitlements/sources"):
+                    return self._reply(200, {"project_id": "boss-dogfood", "items": outer.sources})
+                return self._reply(404, {})
+
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                outer.requests.append(("POST", self.path, body))
+                if self.path == "/v1/setup/coding-agents/connect":
+                    return self._reply(201, {"connected": True, "entitlement_recorded": True,
+                                             "proof": {"skipped": True}})
+                if self.path == "/v1/setup/model":
+                    outer.sources = [{"source_id": "setup-custom",
+                                      "credential_secret_ref_id": "ref-1",
+                                      "connection_metadata": {"base_url": body["base_url"]},
+                                      "supported_models": [body["model"]]}]
+                    return self._reply(201, {"ok": True, "source_id": "setup-custom",
+                                             "model": body["model"]})
+                return self._reply(404, {})
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_port
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def posts(self, path: str) -> list[dict]:
+        return [body for method, where, body in self.requests if method == "POST" and where == path]
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def boss_api(world):
+    state = world["tmp"] / "container-state"
+    state.mkdir()
+    fake = _FakeBoss(state)
+    world["env"].update(BOSS_API_PORT=str(fake.port),
+                        BOSS_OLLAMA_URL=f"http://127.0.0.1:{fake.port}",
+                        BOSS_TEST_STATE=str(state))
+    yield fake
+    fake.close()
+
+
+def _run_tty(*argv: str | Path, env: dict[str, str], answers: str = "",
+             timeout: int = 120) -> tuple[int, str]:
+    """Run with a controlling terminal, as a person at a shell would, typing `answers`."""
+    import fcntl
+    import select
+    import termios
+    import time
+
+    master, slave = os.openpty()
+    proc = subprocess.Popen(
+        [str(arg) for arg in argv], env=env, stdin=slave, stdout=slave, stderr=slave,
+        start_new_session=True, preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0),
+    )
+    os.close(slave)
+    if answers:
+        os.write(master, answers.encode())
+    chunks: list[bytes] = []
+    deadline = time.monotonic() + timeout
+    while True:
+        ready, _, _ = select.select([master], [], [], 0.2)
+        if ready:
+            try:
+                data = os.read(master, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                break
+            chunks.append(data)
+            continue
+        if proc.poll() is not None:
+            break
+        if time.monotonic() > deadline:
+            proc.kill()
+            break
+    proc.wait(timeout=10)
+    os.close(master)
+    return proc.returncode, b"".join(chunks).decode(errors="replace").replace("\r\n", "\n")
+
+
+def _docker_calls(world) -> str:
+    log = Path(world["env"]["BOSS_TEST_DOCKER_LOG"])
+    return log.read_text() if log.exists() else ""
+
+
+def _set_env_line(install: Path, name: str, value: str) -> None:
+    env_file = install / ".env"
+    lines = [line for line in env_file.read_text().splitlines() if not line.startswith(name + "=")]
+    env_file.write_text("\n".join(lines + [f"{name}={value}"]) + "\n")
+
+
+def _found_on_host(world) -> None:
+    """A Claude Code and a Grok Build login on this machine (host side only)."""
+    world["env"]["BOSS_TEST_CLAUDE_LOGIN"] = "1"
+    grok = world["home"] / ".grok"
+    grok.mkdir()
+    (grok / "auth.json").write_text('{"token": "%s"}' % CODEX_SECRET)
+
+
+def test_compose_lets_containers_reach_the_host_without_publishing_anything() -> None:
+    compose = (REPO / "scripts/install/community-compose.yml").read_text()
+    blocks = {
+        "api": compose[compose.index("\n  api:\n"):compose.index("\n  worker:\n")],
+        "worker": compose[compose.index("\n  worker:\n"):compose.index("\n  web:\n")],
+    }
+    for service, block in blocks.items():
+        assert '- "host.docker.internal:host-gateway"' in block, service
+        assert "BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}" in block, service
+    assert compose.count("host-gateway") == 2
+
+
+def test_yes_alone_signs_nothing_in_and_connects_no_ollama(world, boss_api) -> None:
+    _found_on_host(world)
+    result = _install(world)
+    rendered = result.stdout + result.stderr
+    assert result.returncode == 0, rendered
+    assert "- Claude Code login found, not connected: boss connect claude" in rendered
+    assert "- Grok Build login found, not connected: boss connect grok" in rendered
+    assert "- Ollama found, not connected: boss connect ollama" in rendered
+    calls = _docker_calls(world)
+    assert "auth login" not in calls and "login --device-auth" not in calls
+    assert "host.docker.internal" not in calls
+    assert boss_api.posts("/v1/setup/model") == []
+    assert CODEX_SECRET not in rendered
+
+
+def test_connect_found_without_a_terminal_skips_sign_in_and_connects_ollama(world, boss_api) -> None:
+    _found_on_host(world)
+    result = _install(world, "--connect-found")
+    rendered = result.stdout + result.stderr
+    assert result.returncode == 0, rendered
+    assert "Claude Code: signing in needs a person at a terminal. Run: boss connect claude" in rendered
+    assert "Grok Build: signing in needs a person at a terminal. Run: boss connect grok" in rendered
+    assert "- Claude Code found, not signed in: boss connect claude" in rendered
+    calls = _docker_calls(world)
+    assert "auth login" not in calls and "login --device-auth" not in calls
+
+    # Ollama needs no person: reachability is checked from the API container, then it is
+    # registered through the setup route with a placeholder key.
+    assert "exec -T api python -c" in calls
+    assert f"http://host.docker.internal:{boss_api.port}/api/tags" in calls
+    assert boss_api.posts("/v1/setup/model") == [{
+        "project_id": "boss-dogfood", "actor": "ceo", "provider": "custom", "api_key": "ollama",
+        "base_url": f"http://host.docker.internal:{boss_api.port}/v1", "model": "llama3.2:latest",
+    }]
+    assert "✓ Ollama connected as an OpenAI-compatible model" in rendered
+    assert CODEX_SECRET not in rendered
+
+
+def test_connect_found_at_a_terminal_signs_in_inside_the_container(world, boss_api) -> None:
+    _found_on_host(world)
+    code, output = _run_tty("bash", REPO / "install.sh", "--dir", world["install"], "--yes",
+                            "--no-install-deps", "--no-web", "--connect-found", env=world["env"])
+    assert code == 0, output
+    calls = _docker_calls(world)
+    assert "exec -u boss api claude auth login" in calls
+    assert "exec -u boss api grok login --device-auth" in calls
+    recorded = [body["provider"] for body in boss_api.posts("/v1/setup/coding-agents/connect")]
+    assert recorded == ["claude_code", "grok"]
+    assert "✓ Claude Code signed in inside BOSS" in output
+    assert "✓ Grok Build signed in inside BOSS" in output
+    # Nothing from the host login reaches BOSS.
+    assert CODEX_SECRET not in output
+    assert CODEX_SECRET not in str(boss_api.requests)
+
+
+def test_boss_connect_asks_once_per_found_login_and_no_changes_nothing(world, boss_api) -> None:
+    boss = _installed(world)
+    _found_on_host(world)
+    Path(world["env"]["BOSS_TEST_DOCKER_LOG"]).write_text("")
+    # Claude: yes. Grok: no. Ollama: no.
+    code, output = _run_tty(boss, "connect", env=world["env"], answers="y\nn\nn\n")
+    assert code == 0, output
+    assert output.count("[y/N]") == 3
+    calls = _docker_calls(world)
+    assert "claude auth login" in calls
+    assert "grok login" not in calls
+    assert "host.docker.internal" not in calls
+    assert "skipped   Grok Build. Later: boss connect grok" in output
+    assert "skipped   Ollama (nothing was changed)" in output
+    assert [b["provider"] for b in boss_api.posts("/v1/setup/coding-agents/connect")] == ["claude_code"]
+    assert boss_api.posts("/v1/setup/model") == []
+
+    # Signed in already: nothing to ask, nothing to sign in again.
+    again_code, again = _run_tty(boss, "connect", env=world["env"], answers="n\nn\n")
+    assert again_code == 0, again
+    assert "Claude Code is already signed in inside BOSS" in again
+    assert _docker_calls(world).count("claude auth login") == 1
+
+
+def test_boss_connect_claude_and_grok_at_a_terminal(world, boss_api) -> None:
+    boss = _installed(world)
+    code, output = _run_tty(boss, "connect", "grok", env=world["env"])
+    assert code == 0, output
+    assert "exec -u boss api grok login --device-auth" in _docker_calls(world)
+    assert "✓ Grok Build signed in inside BOSS and recorded" in output
+
+    code, output = _run_tty(boss, "connect", "claude", env=world["env"])
+    assert code == 0, output
+    assert "✓ Claude Code signed in inside BOSS and recorded" in output
+
+    # A second explicit run only records the existing container login.
+    code, output = _run_tty(boss, "connect", "claude", env=world["env"])
+    assert code == 0, output
+    assert "already signed in inside BOSS; recording it" in output
+    assert _docker_calls(world).count("claude auth login") == 1
+    assert len(boss_api.posts("/v1/setup/coding-agents/connect")) == 3
+
+
+def test_boss_connect_claude_without_a_terminal_or_with_an_api_key_signs_nothing_in(
+        world, boss_api) -> None:
+    boss = _installed(world)
+    no_tty = _run(boss, "connect", "claude", env=world["env"])
+    assert no_tty.returncode == 2, no_tty.stdout + no_tty.stderr
+    assert "needs a person at a terminal. Run: boss connect claude" in no_tty.stdout
+
+    _set_env_line(world["install"], "ANTHROPIC_API_KEY", SECRET)
+    blocked_code, blocked = _run_tty(boss, "connect", "claude", env=world["env"])
+    assert blocked_code == 1, blocked
+    assert "holds ANTHROPIC_API_KEY" in blocked
+    assert SECRET not in blocked
+    assert "auth login" not in _docker_calls(world)
+    assert boss_api.posts("/v1/setup/coding-agents/connect") == []
+
+
+def test_boss_connect_ollama_registers_once_and_reports_an_unreachable_host(world, boss_api) -> None:
+    boss = _installed(world)
+    world["env"]["BOSS_TEST_OLLAMA_UNREACHABLE"] = "1"
+    unreachable = _run(boss, "connect", "ollama", env=world["env"])
+    assert unreachable.returncode == 1
+    assert "cannot reach Ollama at http://host.docker.internal:" in unreachable.stdout
+    assert boss_api.posts("/v1/setup/model") == []
+
+    world["env"]["BOSS_TEST_OLLAMA_UNREACHABLE"] = "0"
+    first = _run(boss, "connect", "ollama", env=world["env"])
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert "Ollama connected: llama3.2:latest" in first.stdout
+    again = _run(boss, "connect", "ollama", env=world["env"])
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "already connected" in again.stdout
+    assert len(boss_api.posts("/v1/setup/model")) == 1
+
+    # Another OpenAI-compatible connection is never replaced from here.
+    boss_api.sources[0]["connection_metadata"]["base_url"] = "https://llm.example.invalid/v1"
+    other = _run(boss, "connect", "ollama", env=world["env"])
+    assert other.returncode == 1
+    assert "Nothing was changed" in other.stderr
+    assert len(boss_api.posts("/v1/setup/model")) == 1
+
+    # A model the user names must exist in Ollama.
+    boss_api.sources = []
+    missing = _run(boss, "connect", "ollama", env=dict(world["env"], BOSS_OLLAMA_MODEL="nope:1b"))
+    assert missing.returncode == 1
+    assert "no model named 'nope:1b'" in missing.stderr
+
+
+def test_boss_connect_saves_exported_keys_and_restarts_only_api_and_worker(world, boss_api) -> None:
+    boss = _installed(world)
+    log = Path(world["env"]["BOSS_TEST_DOCKER_LOG"])
+    log.write_text("")
+    env = dict(world["env"], OPENAI_API_KEY=SECRET, XAI_API_KEY=SECRET + "-x")
+
+    result = _run(boss, "connect", "keys", env=env)
+
+    rendered = result.stdout + result.stderr
+    assert result.returncode == 0, rendered
+    env_file = world["install"] / ".env"
+    text = env_file.read_text()
+    assert f"OPENAI_API_KEY={SECRET}\n" in text and f"XAI_API_KEY={SECRET}-x\n" in text
+    assert text.count("OPENAI_API_KEY=") == 1
+    assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+    assert SECRET not in rendered
+    assert "OPENAI_API_KEY" in rendered and "XAI_API_KEY" in rendered
+    calls = log.read_text()
+    assert "up -d --no-deps --no-build --force-recreate api worker" in calls
+    assert " down" not in calls and "--volumes" not in calls
+    assert "Keys applied" in rendered
+    assert SECRET not in calls  # never on a command line
+
+    # Nothing new: no restart.
+    log.write_text("")
+    again = _run(boss, "connect", "keys", env=env)
+    assert again.returncode == 0, again.stderr
+    assert "already holds these keys" in again.stdout
+    assert "force-recreate" not in log.read_text()
+
+    # Plain `boss connect` picks up a newly exported key too.
+    plain = _run(boss, "connect", env=dict(world["env"], GOOGLE_API_KEY=SECRET + "-g"))
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert f"GOOGLE_API_KEY={SECRET}-g" in env_file.read_text()
+    assert SECRET not in plain.stdout + plain.stderr
+
+    # A key typed as an argument is refused and not echoed.
+    argv = _run(boss, "connect", SECRET, env=world["env"])
+    assert argv.returncode != 0
+    assert SECRET not in argv.stdout + argv.stderr
+
+
+def test_purge_removes_this_installs_boss_command_and_nothing_else(world) -> None:
+    boss = _installed(world)
+    env = world["env"]
+
+    kept = _run(boss, "uninstall", "--yes", env=env)
+    assert kept.returncode == 0, kept.stderr
+    assert boss.exists()
+
+    refused = _run(boss, "uninstall", "--purge", "--yes", env=env)
+    assert refused.returncode != 0
+    assert boss.exists()
+
+    dry = _run(boss, "uninstall", "--purge", "--dry-run", env=env)
+    assert dry.returncode == 0, dry.stderr
+    assert f"Would also remove the boss command: {boss}" in dry.stdout
+    assert boss.exists()
+
+    # A launcher that manages another install is left alone.
+    other = world["tmp"] / "other-bin" / "boss"
+    other.parent.mkdir()
+    default_line = next(line for line in boss.read_text().splitlines()
+                        if line.startswith("BOSS_INSTALL_DIR_DEFAULT="))
+    other.write_text(boss.read_text().replace(default_line, "BOSS_INSTALL_DIR_DEFAULT=/elsewhere"))
+    other.chmod(0o755)
+
+    purged = _run(boss, "uninstall", "--purge", "--yes", "--confirm-purge", "DELETE-BOSS-DATA",
+                  env=env)
+
+    assert purged.returncode == 0, purged.stdout + purged.stderr
+    assert "--volumes" in _docker_calls(world)
+    assert not (world["install"] / ".env").exists()
+    assert not boss.exists()
+    assert f"Removed the boss command: {boss}" in purged.stdout
+    assert other.exists()
+
+
+def test_purge_never_removes_another_programs_boss(world) -> None:
+    _installed(world)
+    foreign = world["tmp"] / "foreign" / "boss"
+    foreign.parent.mkdir()
+    _executable(foreign, "#!/bin/sh\necho someone-elses-boss\n")
+    env = dict(world["env"], BOSS_LAUNCHER=str(foreign),
+               PATH=f"{foreign.parent}:{world['env']['PATH']}")
+    purged = _run("bash", world["install"] / "scripts/install/boss.sh", "--dir", world["install"],
+                  "uninstall", "--purge", "--yes", "--confirm-purge", "DELETE-BOSS-DATA", env=env)
+    assert purged.returncode == 0, purged.stdout + purged.stderr
+    assert foreign.read_text() == "#!/bin/sh\necho someone-elses-boss\n"
+    assert world["boss"].exists()  # not on PATH and not named by BOSS_LAUNCHER: left alone
+    assert "Removed the boss command" not in purged.stdout
+
+
+def test_release_record_is_not_a_local_change_in_the_install(world) -> None:
+    _installed(world)
+    assert (world["install"] / ".boss-release").exists()
+    assert ".boss-release" not in _git("status", "--porcelain", cwd=world["install"])
+    assert ".boss-release" in (REPO / ".gitignore").read_text().splitlines()
+    rerun = _install(world)
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    exclude = Path(_git("rev-parse", "--git-path", "info/exclude", cwd=world["install"]))
+    exclude = exclude if exclude.is_absolute() else world["install"] / exclude
+    assert exclude.read_text().splitlines().count("/.boss-release") == 1

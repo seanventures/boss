@@ -207,6 +207,32 @@ def grok_local_session_ready(api_url: str, api_key: str) -> None:
         )
 
 
+def local_session_signed_in(api_url: str, api_key: str, provider: str) -> bool | None:
+    """Is the CLI already signed in inside the BOSS API container? None when BOSS cannot say.
+
+    Reads only BOSS's sanitized status; never opens a CLI auth file or calls a model.
+    """
+    name = {"claude": "claude_code", "grok": "grok"}[provider]
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/v1/setup/coding-agents?project_id=boss-dogfood",
+        headers={"x-boss-api-key": api_key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode() or "{}")
+    except (OSError, ValueError):
+        return None
+    agents = body.get("agents") if isinstance(body, dict) else None
+    row = next((item for item in agents if isinstance(item, dict)
+                and item.get("name") == name), None) if isinstance(agents, list) else None
+    if not row or row.get("installed") is not True:
+        return None
+    if provider == "claude" and row.get("authenticated") is True and \
+            row.get("auth_method") not in {"claude_ai", "oauth", "oauth_token"}:
+        return False
+    return row.get("authenticated") is True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
@@ -215,7 +241,15 @@ def main() -> int:
     parser.add_argument("--connect-claude-local", action="store_true")
     parser.add_argument("--connect-grok-local", action="store_true")
     parser.add_argument("--accept-database-fallback", action="store_true")
+    parser.add_argument("--local-status", choices=("claude", "grok"),
+                        help="exit 0 when that CLI is already signed in inside the BOSS API "
+                             "container, 3 when it is not, 4 when BOSS cannot say; prints nothing")
     args = parser.parse_args()
+    if args.local_status:
+        api_key = os.environ.get("BOSS_API_KEY", "")
+        state = local_session_signed_in(args.api_url, api_key, args.local_status) \
+            if api_key else None
+        return 0 if state is True else 3 if state is False else 4
     if args.connect_claude and args.connect_claude_local:
         raise RuntimeError("Choose one Claude connection path for this run")
     # A container-owned login has nothing to do with this VM user's CLI home. In

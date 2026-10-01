@@ -35,10 +35,26 @@ The installer reports each of these as `found` or `not found` and never prints a
 |---|---|
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY` exported for the installer | Saved to the private `.env`. Exporting the key for this command is the consent. |
 | Codex ChatGPT login (`~/.codex/auth.json`, verified with `codex login status`) | Asks once before copying it into BOSS's secret store. `--yes` copies nothing unless you add `--connect-found`; on the database store that also needs `--accept-database-fallback`. |
-| Claude Code or Grok Build login on this machine | Reported only. BOSS signs these CLIs in inside its own container: `boss connect claude`, `boss connect grok`. |
-| Ollama on `127.0.0.1:11434` | Reported only. Add it in Mission Control as an OpenAI-compatible model. |
+| Claude Code or Grok Build login on this machine | Never copied. At a terminal, asks once whether to sign the CLI in inside the BOSS API container, as the `boss` user, with the provider's own login (`claude auth login`, `grok login --device-auth`), then records it with the existing `--connect-claude-local` / `--connect-grok-local` path. Skipped when the CLI is already signed in there. `--yes` signs nothing in unless you add `--connect-found`; even then a sign-in needs a person at a terminal, and without one the card says to run `boss connect claude` or `boss connect grok`. |
+| Ollama on `127.0.0.1:11434` | Asks once whether to connect it. `--yes` connects it only with `--connect-found`. See [Ollama](#ollama). |
 
 A found login that fails to connect is shown with `✗` on the summary card; BOSS itself stays installed. Retry with `boss connect`. Skip the whole step with `--no-discover`.
+
+A Claude Code sign-in is refused while `.env` holds `ANTHROPIC_API_KEY` or a legacy `CLAUDE_CODE_OAUTH_TOKEN`, because Claude Code would use that instead of the subscription. Remove the line, run `boss update`, then `boss connect claude`.
+
+### Ollama
+
+Connecting Ollama does three things, and nothing else:
+
+1. The API and worker containers can reach the host as `host.docker.internal`. The Compose file maps that name with `extra_hosts: host-gateway` (Docker Desktop resolves it already). No port is published.
+2. The API container checks that it can read Ollama's model list at `http://host.docker.internal:11434`. If it cannot, nothing is changed.
+3. BOSS registers Ollama through the same route as the setup screen's **Anything OpenAI-compatible** form (`POST /v1/setup/model`): base URL `http://host.docker.internal:11434/v1`, the first model Ollama lists (or `BOSS_OLLAMA_MODEL`), and the placeholder key `ollama`, because the form requires a key and Ollama ignores it. No model is called; the connection stays unverified until a governed job uses it.
+
+An existing **Anything OpenAI-compatible** connection to another address is never replaced; replace it in Mission Control if you want Ollama instead. When the setup screen also holds an OpenAI key, the native lane uses whichever of the two connections was saved last, so connecting Ollama after an OpenAI key makes Ollama the native model.
+
+On Linux, Ollama listens on `127.0.0.1` only by default, and a container cannot reach that address. BOSS does not change Ollama's settings. To let the containers reach it, Ollama must listen on an address the Docker bridge can reach, for example `OLLAMA_HOST=0.0.0.0:11434` in Ollama's service settings. Ollama has no authentication, so then block port 11434 from other machines with your firewall.
+
+BOSS prices tokens for a model it does not know at its default rate, which overstates a local model's cost. To record Ollama usage at zero, add a line such as `BOSS_MODEL_PRICES_JSON='{"llama3.2:latest":[0,0]}'` to `.env` with your model's name, then run `boss update`.
 
 ### The `boss` command
 
@@ -51,15 +67,17 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | `boss password` | Shows the console password, in a terminal only. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
-| `boss connect [codex\|claude\|grok]` | Looks for model keys and subscriptions again and connects them, asking before any copy |
+| `boss connect` | Looks for model keys, subscriptions, and Ollama again. Saves newly exported provider keys into `.env` and restarts only api and worker, then asks once before each copy, sign-in, or connection. `--connect-found` answers yes |
+| `boss connect keys` | Saves `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` exported in this shell into the private `.env` (mode `0600`), then recreates the api and worker containers so they read it. Names only are printed; a key is never accepted as an argument. No `boss update` needed |
+| `boss connect codex\|claude\|grok\|ollama` | Connects one. `claude` and `grok` sign in inside the BOSS container and need a terminal |
 | `boss upgrade [--to REF]` | Backs up, then moves to the newest release, or to `REF`. `--dry-run` shows the move first |
 | `boss update` | Re-applies configuration on the installed release: reruns the installer so newly exported keys and flags such as `--web` take effect. It never changes the release |
-| `boss uninstall [--purge]` | Stops BOSS and keeps data. `--purge` deletes data after a backup and a typed confirmation |
+| `boss uninstall [--purge]` | Stops BOSS and keeps data and the `boss` command. `--purge` deletes data after a backup and a typed confirmation, then removes the `boss` command the installer wrote for this install (one that belongs to another program or another install is left alone) |
 | `boss version` | Installed release and commit |
 
 ### Which release, and staying on it
 
-The installer records the ref it installed in `.boss-release` in the install directory (not secret). Reruns and `boss upgrade` read it, so a release install never moves to `main` by itself:
+The installer records the ref it installed in `.boss-release` in the install directory (not secret, and listed in the checkout's `.git/info/exclude` so it never shows as a local change). Reruns and `boss upgrade` read it, so a release install never moves to `main` by itself:
 
 | Channel | Installed with | `boss upgrade` without `--to` |
 |---|---|---|
@@ -284,6 +302,7 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 | `install.sh` | The installer (repo root) |
 | `scripts/install/boss.sh` | The `boss` command; the launcher on `PATH` runs it from the install |
 | `scripts/install/discover_models.py` | Read-only report of model keys, subscriptions, and Ollama on this machine |
+| `scripts/install/connect_ollama.py` | Registers the Ollama on this machine through `POST /v1/setup/model` (used by `boss connect ollama`) |
 | `scripts/install/coding_subscriptions.py` | Read-only VM CLI discovery and explicit Claude/Codex binding |
 | `.boss-release` (generated) | The ref this install follows; not secret |
 | `scripts/install/community-compose.yml` | Self-contained Community stack |
@@ -559,7 +578,7 @@ scripts/install/remote.sh --host user@your-vm uninstall --yes --purge-data --con
 
 ```bash
 boss uninstall                     # safe: stops BOSS, keeps data and credentials (asks first)
-boss uninstall --purge             # backs up, then asks you to type DELETE-BOSS-DATA
+boss uninstall --purge             # backs up, asks you to type DELETE-BOSS-DATA, removes the boss command
 ```
 
 `boss uninstall` runs `scripts/install/uninstall.sh`. The script works directly too:
@@ -588,7 +607,7 @@ cd ~/boss
 > [!WARNING]
 > A manual `docker compose down` removes the stopped container needed for a later no-recreation backup. If an older uninstall already did that, use [Recover an older safe uninstall](#recover-an-older-safe-uninstall).
 
-The `boss` command stays on `PATH` after an uninstall so you can reinstall with `boss update`. Remove it with `rm ~/.local/bin/boss`.
+After a safe uninstall the `boss` command stays on `PATH`, so you can reinstall with `boss update`. `boss uninstall --purge` removes it once the purge has succeeded, but only when it is the launcher the installer wrote for this install directory: a `boss` that belongs to another program or manages another install is left alone. `uninstall.sh --purge-data` run directly does not touch the launcher. `--dry-run` with `--purge` names the launcher it would remove.
 
 ## Flags
 
@@ -598,7 +617,7 @@ Every flag is optional. See `./install.sh --help` for the full list. Added for t
 |---|---|
 | `--yes`, `-y` | Never ask. Starts without a model key when none is exported |
 | `--ref REF` | Install a release tag, branch, or full commit SHA, and record it |
-| `--connect-found` | Connect found subscriptions without asking (the only way `--yes` copies a login) |
+| `--connect-found` | Connect what was found without asking: a Codex login, a Claude Code or Grok Build sign-in inside the BOSS container (only with a person at a terminal), and Ollama. The only way `--yes` connects anything |
 | `--no-discover` | Skip looking for model keys and subscriptions |
 | `--no-boss-command` | Do not install `boss` on `PATH` |
 

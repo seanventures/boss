@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -35,14 +36,19 @@ ENV_KEYS = (
     ("openrouter_key", "OPENROUTER_API_KEY", "OpenRouter API key"),
 )
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
 
 
 def env_keys(environ: dict[str, str]) -> dict[str, bool]:
     return {name: bool(environ.get(variable, "").strip()) for name, variable, _ in ENV_KEYS}
 
 
-def ollama_models(base_url: str, timeout: float = 1.5) -> int | None:
-    """Number of local models, or None when no Ollama answers on loopback."""
+def ollama_model_names(base_url: str, timeout: float = 1.5) -> list[str] | None:
+    """Names of the local models, or None when no Ollama answers on loopback.
+
+    A name that is not a plain model tag is counted but not returned, so nothing odd from a
+    local server reaches a terminal or a request.
+    """
     parsed = urllib.parse.urlparse(base_url)
     if parsed.scheme != "http" or parsed.hostname not in LOOPBACK:
         return None
@@ -52,7 +58,19 @@ def ollama_models(base_url: str, timeout: float = 1.5) -> int | None:
     except (OSError, ValueError, urllib.error.URLError):
         return None
     models = body.get("models") if isinstance(body, dict) else None
-    return len(models) if isinstance(models, list) else None
+    if not isinstance(models, list):
+        return None
+    names = []
+    for item in models:
+        name = item.get("name") if isinstance(item, dict) else None
+        names.append(name if isinstance(name, str) and MODEL_NAME.fullmatch(name) else "")
+    return names
+
+
+def ollama_models(base_url: str, timeout: float = 1.5) -> int | None:
+    """Number of local models, or None when no Ollama answers on loopback."""
+    names = ollama_model_names(base_url, timeout)
+    return None if names is None else len(names)
 
 
 def grok_login_present(home: Path) -> bool:

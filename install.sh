@@ -230,9 +230,12 @@ Options:
   --backup-dir PATH       Private recovery backup location for an upgrade
   --skip-model-key        Do not ask for a model key (API starts; model calls fail closed)
   --no-install-deps       Do not install missing VM packages
-  --connect-found         Connect the subscriptions found on this machine without asking.
-                          Needed for --yes to connect anything; a Codex login on the
-                          database store also needs --accept-database-fallback
+  --connect-found         Connect what was found on this machine without asking: a Codex
+                          login, a Claude Code or Grok Build sign-in inside the BOSS
+                          container, and Ollama. Needed for --yes to connect anything.
+                          A sign-in needs a person at a terminal and is skipped without
+                          one; a Codex login on the database store also needs
+                          --accept-database-fallback
   --no-discover           Do not look for model keys and subscriptions on this machine
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
@@ -960,6 +963,15 @@ write_release_state() {
     "BOSS_INSTALLED_COMMIT=$head" \
     "BOSS_INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
   mv -f "$tmp" "$INSTALL_DIR/$RELEASE_STATE_NAME"
+  # Keep the record out of `git status` in this checkout. The exported repository has no
+  # .gitignore entry for it, so use the checkout's own exclude file; nothing tracked changes.
+  # The dirty-checkout checks already ignore untracked files.
+  local exclude
+  exclude="$(git -C "$INSTALL_DIR" rev-parse --git-path info/exclude 2>/dev/null)" || return 0
+  [[ "$exclude" == /* ]] || exclude="$INSTALL_DIR/$exclude"
+  if ! grep -qsxF "/$RELEASE_STATE_NAME" "$exclude"; then
+    mkdir -p "$(dirname "$exclude")" && printf '/%s\n' "$RELEASE_STATE_NAME" >> "$exclude" || true
+  fi
 }
 write_release_state
 [[ -z "$INSTALLED_REF" ]] || ui_ok "Recorded release $INSTALLED_REF ($INSTALLED_CHANNEL) in $RELEASE_STATE_NAME"
@@ -1348,6 +1360,35 @@ for _key in OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY XAI_API_KEY OPENROUT
 done
 [[ -z "$_env_keys" ]] || MODEL_NOTES+=("✓ API keys in .env (values not shown):${_env_keys}")
 CODEX_FROM_DISCOVERY=0
+
+# The in-container sign-ins and Ollama go through this install's own `boss connect`, so the
+# installer and the command share one reviewed path. --offer asks first (terminal only);
+# --connect-found answers yes. Status: 0 connected, 1 failed, 2 skipped.
+run_boss_connect() {
+  local args=(--dir "$INSTALL_DIR" connect --offer "$1")
+  [[ "$CONNECT_FOUND" -eq 0 ]] || args+=(--connect-found)
+  [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] || return 1
+  bash "$INSTALL_DIR/scripts/install/boss.sh" "${args[@]}"
+}
+
+# A Claude Code or Grok Build login on this machine is never copied. BOSS offers to sign the
+# CLI in inside its own container instead, with the provider's own login, which needs a
+# person at a terminal. --yes alone changes nothing; --connect-found skips the question.
+offer_found_sign_in() {
+  local name="$1" label="$2" rc=0
+  if [[ "$NONINTERACTIVE" -eq 1 && "$CONNECT_FOUND" -eq 0 ]]; then
+    ui_info "$label login found on this machine, not connected (an unattended install signs nothing in without --connect-found). Later: boss connect $name"
+    MODEL_NOTES+=("- $label login found, not connected: boss connect $name")
+    return 0
+  fi
+  run_boss_connect "$name" || rc=$?
+  case "$rc" in
+    0) MODEL_NOTES+=("✓ $label signed in inside BOSS") ;;
+    2) MODEL_NOTES+=("- $label found, not signed in: boss connect $name") ;;
+    *) MODEL_NOTES+=("✗ $label not connected: boss connect $name") ;;
+  esac
+}
+
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   ui_step "Looking for models and subscriptions on this machine (read only)"
   _found="$(mktemp)"
@@ -1374,17 +1415,25 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
         MODEL_NOTES+=("- Codex login found, not connected: boss connect codex")
       fi
     fi
-    if found claude_login; then
-      ui_info "Claude Code signs in inside the BOSS container. Connect it: boss connect claude"
-      MODEL_NOTES+=("- Claude Code login found on this machine: boss connect claude")
+    if found claude_login && [[ "$CONNECT_CLAUDE" -eq 0 && "$CONNECT_CLAUDE_LOCAL" -eq 0 ]]; then
+      offer_found_sign_in claude "Claude Code"
     fi
-    if found grok_login; then
-      ui_info "Grok Build signs in inside the BOSS container. Connect it: boss connect grok"
-      MODEL_NOTES+=("- Grok Build login found on this machine: boss connect grok")
+    if found grok_login && [[ "$CONNECT_GROK_LOCAL" -eq 0 ]]; then
+      offer_found_sign_in grok "Grok Build"
     fi
     if found ollama; then
-      ui_info "Ollama answers here. Add it in Mission Control as an OpenAI-compatible model (docs/community/MODEL_CONNECTIONS.md)."
-      MODEL_NOTES+=("- Ollama found: add it in Mission Control")
+      if [[ "$NONINTERACTIVE" -eq 1 && "$CONNECT_FOUND" -eq 0 ]]; then
+        ui_info "Ollama answers here, not connected (an unattended install connects nothing without --connect-found). Later: boss connect ollama"
+        MODEL_NOTES+=("- Ollama found, not connected: boss connect ollama")
+      else
+        _rc=0
+        run_boss_connect ollama || _rc=$?
+        case "$_rc" in
+          0) MODEL_NOTES+=("✓ Ollama connected as an OpenAI-compatible model") ;;
+          2) MODEL_NOTES+=("- Ollama found, not connected: boss connect ollama") ;;
+          *) MODEL_NOTES+=("✗ Ollama not connected: boss connect ollama") ;;
+        esac
+      fi
     fi
   else
     ui_warn "Model discovery did not finish; nothing was connected. Retry later: boss connect"
@@ -1448,7 +1497,7 @@ fi
 BOSS_COMMAND=""
 BOSS_COMMAND_MARKER="# BOSS Community command (generated by install.sh)"
 install_boss_command() {
-  local bin_dir="${BOSS_BIN_DIR:-}" target tmp previous
+  local bin_dir="${BOSS_BIN_DIR:-}" target tmp previous resolved
   if [[ ! -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
     ui_info "This release has no boss command; use the scripts in $INSTALL_DIR/scripts/install."
     return 0
@@ -1467,20 +1516,24 @@ install_boss_command() {
     return 0
   fi
   previous="$(grep -m 1 '^BOSS_INSTALL_DIR_DEFAULT=' "$target" 2>/dev/null | cut -d= -f2- || true)"
+  # The resolved path, so `boss uninstall --purge` can tell this launcher belongs to its install.
+  resolved="$(cd "$INSTALL_DIR" && pwd -P)"
   mkdir -p "$bin_dir" || { ui_warn "Could not create $bin_dir; the boss command was not installed."; return 0; }
   tmp="$bin_dir/.boss.writing.$$"
   {
     printf '%s\n' '#!/usr/bin/env bash' "$BOSS_COMMAND_MARKER"
     printf '%s\n' '# Runs the lifecycle helper of one install. Rerunning the installer rewrites this file.'
-    printf 'BOSS_INSTALL_DIR_DEFAULT=%q\n' "$INSTALL_DIR"
+    printf 'BOSS_INSTALL_DIR_DEFAULT=%q\n' "$resolved"
     printf '%s\n' 'export BOSS_INSTALL_DIR="${BOSS_INSTALL_DIR:-$BOSS_INSTALL_DIR_DEFAULT}"' \
+      'export BOSS_LAUNCHER="${BASH_SOURCE[0]}"' \
       'helper="$BOSS_INSTALL_DIR/scripts/install/boss.sh"' \
       '[[ -f "$helper" ]] || { echo "boss: no BOSS install at $BOSS_INSTALL_DIR" >&2; exit 1; }' \
       'exec bash "$helper" "$@"'
   } > "$tmp" || { rm -f "$tmp"; ui_warn "Could not write $target; the boss command was not installed."; return 0; }
   chmod 755 "$tmp"
   mv -f "$tmp" "$target"
-  if [[ -n "$previous" && "$previous" != "$(printf '%q' "$INSTALL_DIR")" ]]; then
+  if [[ -n "$previous" && "$previous" != "$(printf '%q' "$resolved")" &&
+        "$previous" != "$(printf '%q' "$INSTALL_DIR")" ]]; then
     ui_info "boss now manages $INSTALL_DIR (it pointed at another install before)."
   fi
   if [[ ":$PATH:" == *":$bin_dir:"* ]]; then

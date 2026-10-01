@@ -20,7 +20,7 @@ Paste one command:
 curl -fsSL https://boss.sean.network/install.sh | bash
 ```
 
-It installs the newest published release into `~/boss` without asking anything, except an optional OpenAI key when no provider key is exported. Add `| bash -s -- --yes` instead of `| bash` to skip that question too. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed. The installer also reports a Codex, Claude Code, or Grok login and a local Ollama it finds, and asks before copying any login into BOSS.
+It installs the newest published release into `~/boss` without asking anything, except an optional OpenAI key when no provider key is exported. Add `| bash -s -- --yes` instead of `| bash` to skip that question too. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed. The installer also looks for a Codex, Claude Code, or Grok login and a local Ollama. At a terminal it asks once before each one: copying the Codex login, signing Claude Code or Grok in inside the BOSS container with the provider's own login (login files on your machine are never copied), and connecting Ollama. `--yes` connects none of them unless you also pass `--connect-found`.
 
 Prefer git? Clone the release and install it in place:
 
@@ -41,7 +41,7 @@ boss open        # console address
 boss password    # console password, in a terminal only
 boss doctor      # check the install can do its job
 boss status      # release, services, and health
-boss connect     # connect model keys and subscriptions found on this machine
+boss connect     # save newly exported keys; connect logins and Ollama found here
 boss upgrade     # back up, then move to the newest release
 boss uninstall   # stop BOSS and keep data
 ```

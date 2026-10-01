@@ -2,6 +2,8 @@
 .env*
 !.env.example
 app.env
+# Written by install.sh in an install checkout: the release it follows. Holds no secrets.
+.boss-release
 .venv/
 .venv*/
 __pycache__/
