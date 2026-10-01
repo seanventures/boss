@@ -2,7 +2,7 @@
 
 **Describe an outcome. BOSS helps plan it, writes the spec, builds it, tests it, and opens a pull request — with evidence you can inspect at each step.**
 
-[![Release](https://img.shields.io/badge/release-v1.0--rc1-blue.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.0--rc2-blue.svg)](CHANGELOG.md)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-Docker-2496ED.svg)](#quick-start)
 
 BOSS — the Business Operating System Sentinel — is a self-hosted control plane for AI software
