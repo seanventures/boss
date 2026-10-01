@@ -88,10 +88,12 @@ The `boss` command works from anywhere: `boss open`, `boss password`, `boss doct
 **Deploying from your own machine instead?** Both commands above run on the server, and the server downloads BOSS from GitHub. If the server can't reach GitHub, or you're working from a private copy of the repository, deploy from a checkout on your own machine instead: `remote.sh` copies it to the server over SSH, runs the installer there, and backs up before every update. The server never needs GitHub access.
 
 ```sh
-git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+git clone https://github.com/seanventures/boss.git
 cd boss
 scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes
 ```
+
+Clone `main` and let `--ref` pick the release: `remote.sh` runs from your checkout and ships only the commit `--ref` names, and the copy in the `v1.0-rc1` tree takes `--dir '~/boss'` literally, installing into a folder named `~`.
 
 Later, update or check that install from the same checkout:
 
@@ -99,6 +101,14 @@ Later, update or check that install from the same checkout:
 scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 update --with-console
 scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
 scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
+```
+
+Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line:
+
+```sh
+claude setup-token        # then paste the token it prints at the next command's hidden prompt
+read -rs T && printf %s "$T" | scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider claude_code; unset T
+scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider codex < ~/.codex/auth.json
 ```
 
 `--host` is anything `ssh` accepts, including an alias from `~/.ssh/config` (use one for a non-standard SSH port), and `--key PATH` picks a private key. `--dir` defaults to `/opt/boss`, which needs root; `~/boss` keeps it where the commands above install. Add `--secret-store infisical` to `install` for the bundled secret store. The [installer guide](scripts/install/README.md#remote-archive-installs) covers recovery and uninstall.
