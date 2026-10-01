@@ -14,7 +14,7 @@ from boss_engine.services.cli_harness import SUBSCRIPTION_SECRET_SCOPE
 from boss_engine.services.secrets_service import ref_key_for
 from boss_engine.services.setup_service import SetupError, store_coding_agent_credential
 
-TOKEN = "test-claude-token"
+TOKEN = "sk-ant-oat01-" + "t" * 48  # shaped like a real setup token; not one
 
 
 class _Row:
@@ -126,3 +126,17 @@ def test_an_install_with_a_secret_store_keeps_the_claude_token_there(monkeypatch
     assert result["backend"] == "infisical"
     assert stored["backend"] == "infisical"
     assert result["fallback_accepted"] is False
+
+
+@pytest.mark.parametrize("pasted", ["Everyword99", "hunter2", "sk-ant-short", "not a token at all"])
+def test_something_that_is_not_a_setup_token_is_refused_before_it_is_stored(monkeypatch, pasted):
+    """On boss-1 a 10-character value had been pasted where the Claude setup token belonged. It
+    was stored without a word and surfaced as "401 Invalid bearer token" inside a workflow. The
+    refusal never repeats what was pasted: a wrong paste is often a password."""
+    monkeypatch.setattr("boss_engine.services.secrets_service.put_secret",
+                        lambda *a, **k: pytest.fail("a non-token was stored"))
+    with pytest.raises(SetupError) as refused:
+        store_coding_agent_credential(None, Settings(), "boss-dogfood", "claude_code", pasted,
+                                      actor="ceo")
+    assert "sk-ant-" in str(refused.value) and "Nothing was stored" in str(refused.value)
+    assert pasted not in str(refused.value)
