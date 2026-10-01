@@ -537,7 +537,9 @@ def store_coding_agent_credential(
     """
     from .cli_harness import SUBSCRIPTION_SECRET_SCOPE, load_specs
     from .core import emit_event
-    from .secret_backends import SecretUnavailable, backend_for, default_secret_backend
+    from .secret_backends import (
+        database_key_is_external, default_secret_backend, operator_chosen_backend,
+    )
     from .secrets_service import put_secret
 
     spec = load_specs(settings).get(provider)
@@ -559,37 +561,31 @@ def store_coding_agent_credential(
             # Malformed is all that is safe to say; the text is a live credential.
             raise SetupError(f"the {provider} credential is not valid JSON.") from None
 
-    # A Claude setup token is an operator-supplied session. It stays in the local
-    # secret store. Postgres would put it in the next backup dump, so there is no
-    # database fallback for this provider.
+    # A Claude setup token is a long-lived credential for a whole subscription, so it never sits
+    # in Postgres in a form a database backup could use. That was enforced as "local_vault
+    # only" — a store no installer configures — and later as "never the database", which made
+    # an install that CHOSE the database unable to connect Claude at all.
     #
-    # NOT POSTGRES IS THE RULE — NOT "LOCAL_VAULT ONLY". The first version accepted the local
-    # vault and nothing else, and the installer never configures the vault's master key, so a
-    # Claude token could not be stored on any standard install — including one installed with
-    # --secret-store infisical, a real secret store that had just accepted the Codex login.
-    # The install's own secret store is used when it has one; the local vault is the fallback
-    # only when the default would be the database.
-    if provider == "claude_code":
-        backend = default_secret_backend(settings)
-        if backend == "database":
-            try:
-                backend_for("local_vault", settings)
-            except SecretUnavailable as exc:
-                raise SetupError(
-                    "Claude setup-token import needs a secret store, and this install has "
-                    "none: the token is never put in BOSS's Postgres database. Reinstall with "
-                    "--secret-store infisical (the bundled store), then connect again. The "
-                    f"token was not stored. {exc}"
-                ) from None
-            backend = "local_vault"
-    else:
-        backend = default_secret_backend(settings)
+    # What a backup can use is the deciding fact. The database store encrypts every value; the
+    # question is where its key is. With BOSS_KMS_MASTER_KEY in .env (the installer writes one),
+    # Postgres holds only ciphertext and a dump is not a key compromise, so the token may go
+    # there. With the key provisioned INSIDE Postgres, a dump carries both — refused.
+    backend = default_secret_backend(settings)
+    if provider == "claude_code" and backend == "database" and not database_key_is_external():
+        raise SetupError(
+            "Claude setup-token import needs the database store's key to live outside the "
+            "database (BOSS_KMS_MASTER_KEY in .env), and on this install it does not, so a "
+            "database backup would carry a usable token. Re-run the installer — it writes the "
+            "key — or install with --secret-store infisical. The token was not stored.")
     # ASK BEFORE FALLING BACK TO POSTGRES. `default_secret_backend` takes the best store the
     # installation has and quietly drops to `database` when it has none — which is right for
     # not blocking a first run, and wrong as a silent default for a live subscription
     # credential. The operator gets told once, in the words of this module's own comment: the
     # database is not a good place for a token.
-    if provider != "claude_code" and backend == "database" and not accept_database_fallback:
+    # Asked only when BOSS FELL BACK to the database. An operator who chose "database" at the
+    # installer's prompt has already answered this question.
+    if (provider != "claude_code" and backend == "database" and not accept_database_fallback
+            and operator_chosen_backend() != "database"):
         raise SecretFallbackNotAccepted(
             backend,
             "this installation has no secret store configured, so the credential would go "
