@@ -1268,6 +1268,84 @@ def test_a_role_the_operator_chose_is_kept_when_ollama_becomes_the_default(world
     assert puts["code_agent_engine"] == "native" and puts["code_agent_model"] == "llama3.2:latest"
 
 
+def _role_models(boss_api) -> dict[str, tuple[str, str]]:
+    return {engine: (boss_api.settings[engine]["value"],
+                     boss_api.settings[engine.replace("_engine", "_model")]["value"])
+            for engine in ("code_agent_engine", "code_review_engine",
+                           "code_agent_strong_engine", "code_agent_low_cost_engine")}
+
+
+def test_switching_the_local_model_moves_the_roles_boss_set_and_keeps_a_hand_set_one(
+        world, boss_api) -> None:
+    """`boss connect ollama --local-model NAME` used to say "every role already has a model you
+    chose" and move only chat: the roles BOSS itself had given the old local model stayed on
+    it. BOSS records the roles it set, so those follow the switch; one the operator set by hand
+    afterwards is still never overwritten."""
+    boss_api.models = ["llama3.2:latest", "qwen2.5-coder:1.5b"]
+    boss = _installed(world)
+    first = _run(boss, "connect", "ollama", env=world["env"])
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert all(value == ("native", "llama3.2:latest") for value in _role_models(boss_api).values())
+    record = world["install"] / ".env.boss-local-roles"
+    assert record.exists() and oct(record.stat().st_mode & 0o777) == "0o600"
+    import json
+    assert json.loads(record.read_text()) == {  # role names and the model, never a credential
+        "model": "llama3.2:latest",
+        "lanes": ["code_agent_engine", "code_agent_low_cost_engine",
+                  "code_agent_strong_engine", "code_review_engine"]}
+
+    # The operator picks the reviewer by hand: same engine, a model of their own.
+    boss_api.settings["code_review_model"] = {"key": "code_review_model",
+                                              "value": "my-reviewer:latest", "source": "project"}
+    switched = _run(boss, "connect", "ollama", "--local-model", "qwen2.5-coder:1.5b",
+                    env=world["env"])
+    out = switched.stdout + switched.stderr
+    assert switched.returncode == 0, out
+    roles = _role_models(boss_api)
+    assert roles["code_agent_engine"] == ("native", "qwen2.5-coder:1.5b")
+    assert roles["code_agent_strong_engine"] == ("native", "qwen2.5-coder:1.5b")
+    assert roles["code_agent_low_cost_engine"] == ("native", "qwen2.5-coder:1.5b")
+    assert roles["code_review_engine"] == ("native", "my-reviewer:latest")
+    assert "every role already has a model you chose" not in out
+    assert "The 3 role(s) BOSS had given the previous local model now use Ollama " \
+           "qwen2.5-coder:1.5b; 1 role(s) you chose were left alone" in out
+
+
+def test_a_role_set_by_hand_to_the_old_local_model_stays_when_boss_recorded_its_roles(
+        world, boss_api) -> None:
+    boss_api.models = ["llama3.2:latest", "qwen2.5-coder:1.5b"]
+    boss = _installed(world)
+    assert _run(boss, "connect", "ollama", env=world["env"]).returncode == 0
+    # BOSS's record says the reviewer is not one of its roles: the operator owns it.
+    record = world["install"] / ".env.boss-local-roles"
+    record.write_text('{"model": "llama3.2:latest", "lanes": ["code_agent_engine"]}\n')
+    switched = _run(boss, "connect", "ollama", "--local-model", "qwen2.5-coder:1.5b",
+                    env=world["env"])
+    assert switched.returncode == 0, switched.stdout + switched.stderr
+    roles = _role_models(boss_api)
+    assert roles["code_agent_engine"] == ("native", "qwen2.5-coder:1.5b")
+    assert roles["code_review_engine"] == ("native", "llama3.2:latest")
+
+
+def test_an_install_from_before_the_record_moves_roles_on_the_old_local_model(
+        world, boss_api) -> None:
+    """Installs that predate the record (v1.0-rc2 and earlier) are read by comparison: a role
+    still native on exactly the previously connected Ollama model was set by BOSS."""
+    boss_api.models = ["llama3.2:latest", "qwen2.5-coder:1.5b"]
+    boss = _installed(world)
+    assert _run(boss, "connect", "ollama", env=world["env"]).returncode == 0
+    (world["install"] / ".env.boss-local-roles").unlink()
+    boss_api.settings["code_agent_low_cost_engine"] = {
+        "key": "code_agent_low_cost_engine", "value": "codex", "source": "project"}
+    switched = _run(boss, "connect", "ollama", "--local-model", "qwen2.5-coder:1.5b",
+                    env=world["env"])
+    assert switched.returncode == 0, switched.stdout + switched.stderr
+    roles = _role_models(boss_api)
+    assert roles["code_agent_engine"] == ("native", "qwen2.5-coder:1.5b")
+    assert roles["code_review_engine"] == ("native", "qwen2.5-coder:1.5b")
+    assert roles["code_agent_low_cost_engine"][0] == "codex"
+
+
 def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_api) -> None:
     boss = _installed(world)
     _local_ollama(world, boss_api)
