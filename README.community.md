@@ -104,7 +104,7 @@ On a private IP, use `https://192.168.1.50` as the site address and in the three
 Export a provider key such as `OPENAI_API_KEY` before installing, paste an OpenAI key at the hidden prompt, or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The installer reports Codex, Claude Code, and Grok logins it finds and asks before copying one; `boss connect` does the same later. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 > [!TIP]
-> **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal.
+> **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal. [Getting started](docs/community/GETTING_STARTED.md) goes on to your first project and a pull request BOSS built.
 
 Optional host copies of the Claude Code, Codex CLI, and Grok Build binaries install with `--install-coding-clis`; you sign in to each one on the server.
 
@@ -180,6 +180,7 @@ The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 | Guide | What it covers |
 | --- | --- |
+| [Getting started](docs/community/GETTING_STARTED.md) | From install to a first project and a pull request BOSS built |
 | [Quickstart](docs/community/QUICKSTART.md) | Install, sign in, and run a first goal |
 | [Deploy](docs/community/hostname.md) | HTTPS on your domain or private network, and publishing the API |
 | [Use cases](docs/community/use-cases.md) | What a fresh install can do today |
