@@ -122,6 +122,11 @@ class CliHarnessSpec:
     #: stale twice: codex showed gpt-5.2-codex/o3 while the account had gpt-6-*, and Claude
     #: offered `fable`, which that account's CLI did not list. See `offered_models`.
     models_catalog: str = ""
+    #: Regex a pasted token must match before BOSS stores it. A credential pasted into the wrong
+    #: prompt — on boss-1 a 10-character value sat where a Claude setup token belonged — was
+    #: stored without a word and surfaced much later as "401 Invalid bearer token" inside a
+    #: workflow. Empty means the CLI's token has no checkable shape.
+    token_format: str = ""
     #: Seconds before BOSS gives up on a build step. Review steps get review_timeout.
     timeout: int = 2400
     review_timeout: int = 420
@@ -279,6 +284,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         # account's models (value + description) without running a model turn — measured at
         # 0.6s on boss-1. Nothing maps names here; the value goes to `--model` unchanged.
         models_catalog="claude_initialize",
+        # `claude setup-token` mints a long `sk-ant-…` OAuth token.
+        token_format=r"^sk-ant-[A-Za-z0-9_\-]{40,}$",
         # A governed task HAS completed on claude_code; this is the same engine, reached
         # through its own adapter.
         verified=True,

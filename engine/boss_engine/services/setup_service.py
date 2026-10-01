@@ -14,6 +14,7 @@ otherwise have to learn from the source.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path as pathlib_Path
 import urllib.error
 import urllib.request
@@ -555,6 +556,13 @@ def store_coding_agent_credential(
     credential = (credential or "").strip()
     if not credential:
         raise SetupError("credential is required.")
+    if spec.token_format and not re.match(spec.token_format, credential):
+        # Never echo it, its length or any part of it: a wrong paste is often a password.
+        raise SetupError(
+            f"that is not a {provider} token — `claude setup-token` prints a long value that "
+            "starts with sk-ant-. Copy that whole value and paste it again. Nothing was stored."
+            if provider == "claude_code" else
+            f"that is not a {provider} token. Nothing was stored.")
     if spec.auth_file_name.endswith(".json"):
         try:
             json.loads(credential)
