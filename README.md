@@ -123,7 +123,7 @@ On a private IP, use `https://192.168.1.50` as the site address and in the three
 python3 scripts/install/console_password.py show
 ```
 
-From your own machine: `ssh user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'`. [Console access](docs/community/CONSOLE_AUTH.md) covers resetting it.
+From your own machine: `ssh -t user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'` (`-t` matters: the script prints the password only to a real terminal). [Console access](docs/community/CONSOLE_AUTH.md) covers resetting it.
 
 When the installer asks for a model key, paste it at the hidden prompt or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
