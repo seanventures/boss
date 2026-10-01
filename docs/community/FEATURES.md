@@ -68,7 +68,7 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 | Spec / architecture / implement / test phases | ✅ |
 | Sandbox execution plane | ◐ Local subprocess is the Community coding path. Firecracker/microVM claims are **frozen** (`BOSS_MICROVM_CLAIMS_FROZEN=true`). The in-repo Go S1 sandbox is a fail-closed scaffold: not live, not GA. Retained sandbox inspection requires project access; hold and delete controls stay disabled until their budget, approval, rollback, and receipt paths are complete. |
 | Evidence-backed completion | ✅ |
-| Discovery web research | ◐ Saved dossiers are readable. New and deeper research is paused until leased model jobs and spend reconciliation are complete. |
+| Discovery web research | ◐ Runs as a governed worker job: each research stage is budget-reserved, leased and receipted, and a retry replays stages already paid for instead of calling them again. Uses the Claude Code subscription. |
 | Live debugging investigations | ◐ Past results remain readable. New Claude CLI investigations and legacy queued execution are paused until leased, budgeted model calls and governed host/database effects are complete. |
 | Factory quality pass after green verify | ◐ One improve pass when UI/UX evidence is thin. Frozen tests stay frozen, and a failed pass restores the last green implementation. Unknown JTBD / `a11y_violations` stay `not_scored`. Stays partial. |
 | PR / review packets (with GitHub) | ✅ |

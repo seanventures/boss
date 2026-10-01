@@ -829,6 +829,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             context=(args.get("context") or "").strip(),
             settings=ctx.settings,
             deep=bool(args.get("deep")),
+            actor=actor,
         )
         return {"status": "running", "run_id": run_id, "project_id": pid}
 
