@@ -224,6 +224,16 @@ def _models_of(harness: str) -> tuple[str, ...]:
         return ()
 
 
+def _offered_models_of(harness: str) -> tuple[str, ...]:
+    """What the dropdown lists: the signed-in account's models where the CLI can say."""
+    try:
+        from .cli_harness import offered_models
+
+        return offered_models(harness)
+    except Exception:  # noqa: BLE001
+        return _models_of(harness)
+
+
 def model_choice_is_open(spec: dict[str, Any], harness: str) -> bool:
     """Whether this model knob accepts a name outside its offered list.
 
@@ -345,7 +355,7 @@ def offered_choices(connection, settings, project_id: str,
         # The models of the harness this lane actually runs — not every harness's, which is the
         # accept bound and the wrong list for a dropdown.
         harness = harness_for_model_knob(spec, settings)
-        offered = ["", *_models_of(harness)]
+        offered = ["", *_offered_models_of(harness)]
         if current and str(current) not in offered:
             offered.append(str(current))
         return offered

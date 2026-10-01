@@ -51,3 +51,20 @@ def entitlement_tables():
     one file is a helper that breaks the full run.
     """
     return create_entitlement_tables
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cli_model_catalog(monkeypatch):
+    """Never ask a real coding CLI for its model catalog during a test.
+
+    `offered_models` asks `codex debug models`, so on a machine with a signed-in Codex every
+    model picker test would see that account's models instead of the list it asserts on.
+    A test that wants a catalog patches `_read_model_catalog` itself.
+    """
+    from boss_engine.services import cli_harness
+
+    monkeypatch.setattr(cli_harness, "_read_model_catalog", lambda spec: (), raising=False)
+    monkeypatch.setattr(cli_harness, "_catalog_cache", {}, raising=False)
