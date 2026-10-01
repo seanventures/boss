@@ -24,15 +24,39 @@ from boss_engine.services.typed_decision_spend import (
 )
 
 
-class _Connection:
-    engine = object()
+class _Result:
+    def mappings(self):
+        return self
 
+    def first(self):
+        return None
+
+
+class _Engine:
     def __init__(self) -> None:
         self.statements: list[str] = []
 
+    def begin(self):
+        engine = self
+
+        class _Tx:
+            def __enter__(self):
+                return _Connection(engine)
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Tx()
+
+
+class _Connection:
+    def __init__(self, engine: "_Engine | None" = None) -> None:
+        self.engine = engine if engine is not None else _Engine()
+        self.statements = self.engine.statements
+
     def execute(self, statement, params=None):
         self.statements.append(str(statement))
-        return self
+        return _Result()
 
 
 class _Spend:
@@ -41,8 +65,9 @@ class _Spend:
     def __init__(self, seen, outcome):
         self.seen, self.outcome = seen, outcome
 
-    def execute(self, settings, binding, state):
+    def execute(self, settings, binding, state, *, fallback=True):
         self.seen["order"].append("spend")
+        self.seen["fallback"] = fallback
         self.seen["proving"] = settings
         self.seen["binding"] = binding
         if isinstance(self.outcome, BaseException):
@@ -53,6 +78,7 @@ class _Spend:
 @pytest.fixture
 def world(monkeypatch):
     seen = {"stored": {}, "knobs": {}, "events": [], "order": [], "for_runner": None,
+            "names": [], "bound": [],
             "outcome": {"answer": "yes", "model": "jev-1", "latency_ms": 180,
                         "receipt_id": "rcpt_1", "cost_usd_micros": 12}}
     monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
@@ -60,6 +86,7 @@ def world(monkeypatch):
 
     def put_secret(*a, **k):
         seen["order"].append("store")
+        seen["names"].append(k["name"])
         seen["stored"].update(k)
         return {"secret_ref_id": "sref_1", "ref_key": "BOSS_SUBSCRIPTION_TYPESAFE_API_KEY",
                 "backend": k.get("backend"), "fingerprint": "fp"}
@@ -76,6 +103,12 @@ def world(monkeypatch):
 
     monkeypatch.setattr(
         "boss_engine.services.typed_decision_spend.TypedDecisionSpend.for_runner", for_runner)
+    monkeypatch.setattr(
+        "boss_engine.services.entitlements.EntitlementBrokerService.seed_default_sources",
+        lambda self, c, p, actor="": None)
+    monkeypatch.setattr(
+        "boss_engine.services.model_gateway.ModelGatewayService.bind_credential_secret_ref",
+        lambda self, c, p, source, ref, actor="": seen["bound"].append((source, ref)))
     monkeypatch.setattr("boss_engine.services.typed_decisions.TypeSafeDecider.decide",
                         lambda *a, **k: pytest.fail("TypeSafe was called outside the spend path"))
     return seen
@@ -84,12 +117,16 @@ def world(monkeypatch):
 def test_a_key_is_proved_through_the_spend_path_then_stored(world):
     result = store_decision_key(_Connection(), Settings(), "p", " ts_key ", actor="ceo")
 
-    assert world["order"] == ["spend", "store"], "proved before it is kept"
+    assert world["order"] == ["store", "spend", "store"], "held as a candidate, proved, kept"
+    assert world["names"] == ["TYPESAFE_API_KEY_CANDIDATE", "TYPESAFE_API_KEY"]
+    assert [source for source, _ in world["bound"]] == ["typesafe_jev", "typesafe_jev"], (
+        "the key is TypeSafe's own source's credential, not a pooled subscription's")
     assert world["for_runner"]["project_id"] == "p"
-    assert world["for_runner"]["engine"] is _Connection.engine, "committed on its own connection"
+    assert isinstance(world["for_runner"]["engine"], _Engine), "committed on its own connection"
     proving = world["proving"]
     assert proving.decision_backend == "typesafe" and proving.typesafe_api_key == "ts_key"
     assert proving.decision_fallback_below == 0.0, "a Claude second opinion proves nothing"
+    assert world["fallback"] is False, "nor does a Claude answer after a Jev failure"
     assert set(world["binding"]["typed_decision"]["options"]) == {"yes", "no"}
 
     assert world["stored"]["value"] == "ts_key" and world["stored"]["backend"] == "infisical"
@@ -119,16 +156,16 @@ def test_a_failed_proof_keeps_nothing_and_says_why(world, failure, says):
     world["outcome"] = failure
     with pytest.raises(SetupError, match=says):
         store_decision_key(_Connection(), Settings(), "p", "ts_key")
-    assert world["order"] == ["spend"]
-    assert not world["stored"] and not world["knobs"] and not world["events"]
+    assert world["order"] == ["store", "spend"], "only the candidate was ever stored"
+    assert world["names"] == ["TYPESAFE_API_KEY_CANDIDATE"]
+    assert not world["knobs"] and not world["events"]
 
 
 def test_without_a_separate_connection_there_is_no_call(world):
-    class _Bare(_Connection):
-        engine = None
-
+    bare = _Connection()
+    bare.engine = None
     with pytest.raises(DecisionModelGovernanceHold, match="BOSS-451"):
-        store_decision_key(_Bare(), Settings(), "p", "ts_key")
+        store_decision_key(bare, Settings(), "p", "ts_key")
     assert world["order"] == []
 
 
