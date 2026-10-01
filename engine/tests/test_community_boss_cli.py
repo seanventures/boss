@@ -1327,6 +1327,29 @@ def test_a_role_set_by_hand_to_the_old_local_model_stays_when_boss_recorded_its_
     assert roles["code_review_engine"] == ("native", "llama3.2:latest")
 
 
+def test_a_role_set_by_hand_to_the_new_model_stays_the_operators_on_the_way_back(
+        world, boss_api) -> None:
+    """The reviewer is put on the small model by hand. Switching BOSS to that model must not
+    adopt it, so switching back moves only BOSS's roles and the reviewer stays where the
+    operator put it."""
+    boss_api.models = ["llama3.2:latest", "qwen2.5-coder:1.5b"]
+    boss = _installed(world)
+    assert _run(boss, "connect", "ollama", env=world["env"]).returncode == 0
+    (world["install"] / ".env.boss-local-roles").unlink()  # an install from before the record
+    boss_api.settings["code_review_model"] = {"key": "code_review_model",
+                                              "value": "qwen2.5-coder:1.5b", "source": "project"}
+    there = _run(boss, "connect", "ollama", "--local-model", "qwen2.5-coder:1.5b",
+                 env=world["env"])
+    assert there.returncode == 0, there.stdout + there.stderr
+    assert "1 role(s) you chose were left alone" in there.stdout
+    back = _run(boss, "connect", "ollama", "--local-model", "llama3.2:latest", env=world["env"])
+    assert back.returncode == 0, back.stdout + back.stderr
+    roles = _role_models(boss_api)
+    assert roles["code_agent_engine"] == ("native", "llama3.2:latest")
+    assert roles["code_agent_low_cost_engine"] == ("native", "llama3.2:latest")
+    assert roles["code_review_engine"] == ("native", "qwen2.5-coder:1.5b")
+
+
 def test_an_install_from_before_the_record_moves_roles_on_the_old_local_model(
         world, boss_api) -> None:
     """Installs that predate the record (v1.0-rc2 and earlier) are read by comparison: a role

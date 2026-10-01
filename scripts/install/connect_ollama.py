@@ -172,6 +172,8 @@ def make_default(api_url: str, api_key: str, env_file: Path, model: str,
     if knobs is None:
         raise ConnectError("BOSS did not return the project's role settings")
     assigned = read_assigned(env_file)
+    # Re-running with the model that is already connected: roles on it are BOSS's as before.
+    reconnect = model in (previous or [])
     previous = [name for name in (previous or []) if name and name != model]
     changed = moved = 0
     owned: list[str] = []
@@ -182,9 +184,15 @@ def make_default(api_url: str, api_key: str, env_file: Path, model: str,
         current = model_knob.get("value")
         if engine_knob.get("value") == "native" and current == model \
                 and model_knob.get("source") == "project":
-            # Already on this model. Still BOSS's if BOSS put it there.
-            if assigned is None or engine_key in assigned["lanes"]:
+            # Already on this model. Still BOSS's only if BOSS put it there: in the record
+            # under this same model, or, with no record, because this model is the one that
+            # was already connected. A role on the NEW model before BOSS moved anything was
+            # chosen by the operator, and stays theirs when the local model changes again.
+            if (engine_key in assigned["lanes"] and assigned["model"] == model) \
+                    if assigned is not None else reconnect:
                 owned.append(engine_key)
+            else:
+                kept.append(engine_key)
             continue
         ours = boss_assigned(engine_knob, model_knob, engine_key, assigned, previous)
         if not ours:
