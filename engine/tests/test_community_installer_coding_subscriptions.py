@@ -125,3 +125,35 @@ def test_local_claude_connect_does_not_read_or_upload_a_token(monkeypatch):
 
     assert coding_subscriptions.main() == 0
     assert calls == ["status", "connect"]
+
+
+@pytest.mark.parametrize("backend", ["infisical", "local_vault"])
+def test_a_claude_token_in_any_secret_store_is_recorded_as_connected(monkeypatch, backend):
+    """The server stores a Claude token in the install's secret store — Infisical on an install
+    made with --secret-store infisical. The installer demanded "local_vault" exactly, so it
+    called the stored token a failure and never recorded the connection (found 2026-09-30:
+    "BOSS did not store the Claude setup token in the local secret store")."""
+    connected = []
+    monkeypatch.setenv("BOSS_API_KEY", "k")
+    monkeypatch.setattr(coding_subscriptions, "discover", lambda: {"codex": False, "claude_code": True})
+    monkeypatch.setattr(coding_subscriptions, "claude_credential", lambda: "tok")
+    monkeypatch.setattr(coding_subscriptions, "send_to_boss",
+                        lambda *a, **k: {"ok": True, "backend": backend})
+    monkeypatch.setattr(coding_subscriptions, "connect",
+                        lambda _url, _key, provider: connected.append(provider))
+    monkeypatch.setattr(sys, "argv", ["coding_subscriptions.py", "--connect-claude"])
+    assert coding_subscriptions.main() == 0
+    assert connected == ["claude_code"]
+
+
+def test_a_claude_token_that_landed_in_the_database_is_refused(monkeypatch):
+    monkeypatch.setenv("BOSS_API_KEY", "k")
+    monkeypatch.setattr(coding_subscriptions, "discover", lambda: {"codex": False, "claude_code": True})
+    monkeypatch.setattr(coding_subscriptions, "claude_credential", lambda: "tok")
+    monkeypatch.setattr(coding_subscriptions, "send_to_boss",
+                        lambda *a, **k: {"ok": True, "backend": "database"})
+    monkeypatch.setattr(coding_subscriptions, "connect",
+                        lambda *a: pytest.fail("recorded a token stored in the database"))
+    monkeypatch.setattr(sys, "argv", ["coding_subscriptions.py", "--connect-claude"])
+    with pytest.raises(RuntimeError, match="secret store"):
+        coding_subscriptions.main()
