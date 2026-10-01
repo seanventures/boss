@@ -700,3 +700,17 @@ def test_an_uncertain_jev_outcome_is_not_answered_by_claude():
     with pytest.raises(Exception, match="reconcil"):
         spend.execute(_settings(), _binding(), "My card was charged twice")
     assert claude.calls == 0
+
+
+@pytest.mark.parametrize(("message", "state"), [
+    ("provider rejected the prompt", "available"),
+    ("TypeSafe HTTP 401 unauthorized", "available"),
+    ("HTTP 429 Too Many Requests", "rate_limited"),
+    ("Claude usage limit reached", "unavailable"),
+])
+def test_only_a_capacity_failure_marks_the_source_unavailable(message, state):
+    """One crashed call or one rejected key must not take the operator's only source out of
+    routing; the router skips a source recorded as unavailable."""
+    from boss_engine.services.typed_decision_spend import capacity_after_failure
+
+    assert capacity_after_failure(RuntimeError(message)) == {"capacity_state": state}

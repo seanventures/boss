@@ -156,6 +156,14 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_discovery(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API container to run one leased Discovery job — that is where the CLI lives."""
+        response = self._client.post(
+            f"/v1/discoveries/{payload['run_id']}/execute",
+            json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
+        response.raise_for_status()
+        return response.json()
+
     def run_code_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/code-tasks/step", json=payload)
         # Operator/host 422 (claims frozen, missing sandbox task) is fail-closed:
