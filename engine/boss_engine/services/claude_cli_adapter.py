@@ -362,13 +362,15 @@ class ClaudeCliAdapter(CliChatBrain):
         d.mkdir(parents=True, exist_ok=True)
         return str(d)
 
-    # Claude Code's built-in tools — explicitly DENIED so Claude is a pure
-    # reasoning brain: BOSS, not Claude, controls all data access and actions.
-    # (An empty --allowedTools does NOT disable server tools like WebSearch.)
-    _BLOCKED_TOOLS = (
-        "WebSearch,WebFetch,Bash,BashOutput,KillShell,Edit,MultiEdit,Write,Read,"
-        "Glob,Grep,Task,NotebookEdit,TodoWrite,SlashCommand,ExitPlanMode"
-    )
+    # NO BUILT-IN TOOLS, so Claude is a pure reasoning brain: BOSS, not Claude, controls all
+    # data access and actions. `--tools ""` is the CLI's own switch for that (its --help: 'Use
+    # "" to disable all tools'), so nothing here names a tool. A written deny list did, and went
+    # stale both ways: Claude Code 2.1 dropped MultiEdit and a deny rule naming an unknown tool
+    # makes `claude -p` exit 1 — every meeting step failed with 'Permission deny rule
+    # "MultiEdit" matches no known tool' — while it had added tools the list never named
+    # (Cron*, EnterWorktree, DesignSync, …: 26 built-ins, measured on boss-1, 0 with this flag).
+    # (An empty --allowedTools does NOT disable server tools like WebSearch; --tools "" does.)
+    _NO_BUILTIN_TOOLS = ("--tools", "")
 
     def _invoke(self, prompt: str) -> dict:
         timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
@@ -395,7 +397,9 @@ class ClaudeCliAdapter(CliChatBrain):
             # 53rd tipped it over, so it would have looked like whichever tool was added last
             # broke the console. Leave room to recover from one stray attempt.
             "--max-turns", "6",
-            "--disallowedTools", self._BLOCKED_TOOLS,  # pure completion, no tool use
+            # VARIADIC: `--tools` takes every argument up to the next flag, so it never sits
+            # last before a positional prompt — the prompt is passed with -p above.
+            *self._NO_BUILTIN_TOOLS,  # pure completion, no tool use
         ]
         model = self.model_override or getattr(self.settings, "claude_cli_model", None)
         if model:
