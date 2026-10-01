@@ -1,6 +1,6 @@
 # BOSS Community installer
 
-Install BOSS Community on a machine you administer. This page is the installer reference: the one-line install, the `boss` command, the pinned `v1.0-rc1` command, local checkouts, network and secret defaults, upgrade, recovery, and uninstall. For a single guided path from install to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md).
+Install BOSS Community on a machine you administer. This page is the installer reference: the one-line install, the `boss` command, the commit-pinned GitHub command, local checkouts, network and secret defaults, upgrade, recovery, and uninstall. For a single guided path from install to the console and a first task, use the [quickstart](../../docs/community/QUICKSTART.md).
 
 ## Install
 
@@ -22,7 +22,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc1 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc2 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -132,7 +132,7 @@ An install made before this record existed stays where it is: a checkout at a re
 curl -fsSL https://boss.sean.network/install.sh | bash
 ```
 
-This installs release `v1.0-rc1` (commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`) into `~/boss`, asking before it uses another directory. Pass installer flags after `bash -s --`, for example `| bash -s -- --console-origin https://boss.example.com`. The script only downloads `install.sh` from that release commit on GitHub and runs it with the same commit pinned, so reruns stay on the release. To read it first, download it with `curl -fsSL https://boss.sean.network/install.sh -o install.sh`.
+This is the same command as [Install](#install): it installs the newest release into `~/boss` and records that release, so reruns and `boss upgrade` stay on releases. Pass installer flags after `bash -s --`. To read the script first, download it with `curl -fsSL https://boss.sean.network/install.sh -o install.sh`.
 
 ### Straight from GitHub
 
@@ -152,9 +152,9 @@ The installer uses `~/boss` unless you pass `--dir`. Add installer flags after t
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc2 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc1
+./install.sh --dir "$PWD" --ref v1.0-rc2
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:

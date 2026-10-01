@@ -61,8 +61,8 @@ body:
     id: version
     attributes:
       label: BOSS version or commit
-      description: The release (for example v1.0-rc1) or the full commit SHA from your checkout.
-      placeholder: v1.0-rc1
+      description: The release (for example v1.0-rc2) or the full commit SHA from your checkout.
+      placeholder: v1.0-rc2
     validations:
       required: true
   - type: textarea

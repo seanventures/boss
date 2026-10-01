@@ -18,4 +18,4 @@ The `Docs site` workflow in `.github/workflows/pages.yml` only verifies the buil
 
 ## Installer pin
 
-The one-line installer is pinned to `v1.0-rc1`, commit `7b88a18a2b4cd0b14b09a47fc415f7ffd4580066`. Update the pin in the README, the quickstart, and the installer guide together when a new release is cut.
+The commit-pinned GitHub command in the installer guide names one release commit. Update that pin when a new release is cut.
