@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc1"><img alt="Release v1.0-rc1" src="https://img.shields.io/badge/release-v1.0--rc1-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc2"><img alt="Release v1.0-rc2" src="https://img.shields.io/badge/release-v1.0--rc2-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -67,53 +67,25 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 
-**2. Install BOSS** on the server:
+**2. Install** on the server with one command. It installs the newest published release into `~/boss`, needs no answers, and finishes by installing the `boss` command:
 
 ```sh
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --console-origin https://boss.example.com
 ```
 
-Use your own domain, or `https://192.168.1.50` for a private IP. The installer checks the machine, sets up Docker if needed, asks for an optional model key, and installs the `v1.0-rc1` release into `~/boss`. It pins the reviewed release commit, so running the same command again keeps you on the release. Want to read it first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
+Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
 
-Prefer git? Clone the release and install it in place. `--ref` keeps the install on the release instead of moving it to `main`:
+Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
 ```sh
-git clone --branch v1.0-rc1 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc2 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc1 --console-origin https://boss.example.com
+./install.sh --dir "$PWD" --ref v1.0-rc2 --console-origin https://boss.example.com
 ```
 
-Either way, run later commands such as `make metatron` and upgrades from the install directory.
+The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
 
-**Deploying from your own machine instead?** Both commands above run on the server, and the server downloads BOSS from GitHub. If the server can't reach GitHub, or you're working from a private copy of the repository, deploy from a checkout on your own machine instead: `remote.sh` copies it to the server over SSH, runs the installer there, and backs up before every update. The server never needs GitHub access.
-
-```sh
-git clone https://github.com/seanventures/boss.git
-cd boss
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes -- --console-origin https://boss.example.com
-```
-
-Everything after `--` goes to the installer on the server, so `--console-origin` is the same address as step 2. Clone `main` and let `--ref` pick the release: `remote.sh` runs from your checkout and ships only the commit `--ref` names, and the copy in the `v1.0-rc1` tree takes `--dir '~/boss'` literally, installing into a folder named `~`.
-
-Later, update or check that install from the same checkout:
-
-```sh
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 update --with-console
-scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
-scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
-```
-
-Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line. Storing a Claude token needs a build newer than `v1.0-rc1`; install with `--ref main` until the next release:
-
-```sh
-claude setup-token        # then paste the token it prints at the next command's hidden prompt
-read -rs T && printf %s "$T" | scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider claude_code; unset T
-scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider codex < ~/.codex/auth.json
-```
-
-`--host` is anything `ssh` accepts, including an alias from `~/.ssh/config` (use one for a non-standard SSH port), and `--key PATH` picks a private key. `--dir` defaults to `/opt/boss`, which needs root; `~/boss` keeps it where the commands above install. Add `--secret-store infisical` to `install` for the bundled secret store. The [installer guide](scripts/install/README.md#remote-archive-installs) covers recovery and uninstall.
-
-**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you. On Ubuntu or Debian, `sudo apt install -y caddy`, replace the contents of `/etc/caddy/Caddyfile` with this block, then `sudo systemctl reload caddy`:
+**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
 
 ```caddy
 boss.example.com {
@@ -125,20 +97,14 @@ boss.example.com {
 }
 ```
 
-On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
+On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once.
 
-**4. Sign in** at your address, such as `https://boss.example.com`. The installer generated the console password and kept it on the server; the sign-in page says how to find it. To print it, run this in the install directory on the server:
+**4. Sign in** at your address, such as `https://boss.example.com`, with the password from `boss password`.
 
-```sh
-python3 scripts/install/console_password.py show
-```
-
-From your own machine: `ssh -t user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'` (`-t` matters: the script prints the password only to a real terminal). [Console access](docs/community/CONSOLE_AUTH.md) covers resetting it.
-
-When the installer asks for a model key, paste it at the hidden prompt or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
+Export a provider key such as `OPENAI_API_KEY` before installing, paste an OpenAI key at the hidden prompt, or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The installer reports Codex, Claude Code, and Grok logins it finds and asks before copying one; `boss connect` does the same later. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 > [!TIP]
-> **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal.
+> **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal. [Getting started](docs/community/GETTING_STARTED.md) goes on to your first project and a pull request BOSS built.
 
 Optional host copies of the Claude Code, Codex CLI, and Grok Build binaries install with `--install-coding-clis`; you sign in to each one on the server.
 
@@ -208,12 +174,13 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** A few capabilities are paused in `v1.0-rc1` while their spend, recovery, and effect safeguards are finished: new Discovery web research, live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Saved dossiers, investigation results, and deployment records stay readable. A preview record is not proof that a deploy succeeded.
+> **About this release candidate.** A few capabilities are paused in `v1.0-rc2` while their spend, recovery, and effect safeguards are finished: new Discovery web research, live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Saved dossiers, investigation results, and deployment records stay readable. A preview record is not proof that a deploy succeeded.
 
 ## Documentation
 
 | Guide | What it covers |
 | --- | --- |
+| [Getting started](docs/community/GETTING_STARTED.md) | From install to a first project and a pull request BOSS built |
 | [Quickstart](docs/community/QUICKSTART.md) | Install, sign in, and run a first goal |
 | [Deploy](docs/community/hostname.md) | HTTPS on your domain or private network, and publishing the API |
 | [Use cases](docs/community/use-cases.md) | What a fresh install can do today |
@@ -227,12 +194,14 @@ Everything else is linked from the [documentation home](docs/community/README.md
 
 ## Upgrade and uninstall
 
-From the installed checkout:
+From any directory:
 
 ```sh
-./scripts/install/upgrade.sh --dir "$PWD"          # writes a private backup, then upgrades
-./scripts/install/uninstall.sh --dir "$PWD" --yes  # stops BOSS, keeps data and credentials
+boss upgrade      # writes a private backup, then moves to the newest release
+boss uninstall    # stops BOSS, keeps data and credentials
 ```
+
+Without the `boss` command, run `./scripts/install/upgrade.sh --dir "$PWD"` and `./scripts/install/uninstall.sh --dir "$PWD" --yes` from the install directory.
 
 Deleting data takes a separate confirmation. See [upgrade, backup, and restore](scripts/install/README.md#upgrade--recover).
 

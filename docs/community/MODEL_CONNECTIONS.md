@@ -1,6 +1,16 @@
 # Connect a model you already have
 
-Attach an API key or a coding subscription you already have to your BOSS install, so governed jobs can use it. The control plane runs without a model, so you can connect one whenever you are ready. BOSS does not create provider accounts for you or copy logins from your laptop.
+Attach an API key, a coding subscription, or a local model to your BOSS install, so governed jobs can use it. The control plane runs without a model, so you can connect one whenever you are ready. BOSS does not create provider accounts for you or copy logins from your laptop.
+
+## The Models step
+
+The installer sets up models as part of the install, and `boss connect` repeats the same step whenever you run it:
+
+1. **Detect.** BOSS reports what this machine has: exported provider keys; Codex, Claude Code, and Grok Build logins; the coding CLIs on `PATH`; and Ollama, whether it is running or installed but stopped, with the models it has pulled. No value is printed. `boss connect --list` shows only this report.
+2. **Connect what was found.** BOSS asks once for each source at a terminal. A Codex login is copied into BOSS; a Claude Code or Grok Build login is never copied, and the CLI signs in again inside the BOSS container instead. A running Ollama is connected as described in [Ollama](#ollama). `--yes` connects nothing found unless you add `--connect-found`.
+3. **When no model is usable, offer one.** At a terminal, BOSS offers to sign in to Claude Code or Grok Build inside BOSS, and then to set up a free [local model](#a-local-model-with-ollama). The local model question defaults to yes, because without it BOSS has no model. `--yes` installs nothing; `--install-ollama` sets up the local model unattended, and `--no-local-model` turns the offer off.
+
+The step ends with one row per source (API keys, Codex, Claude Code, Grok Build, Ollama, and the default model). Each row says connected, found but not connected, or not found, with the command that fixes it. The installer's summary card shows the same rows, and `boss connect --summary` prints them.
 
 ## Connect from the console
 
@@ -25,11 +35,12 @@ The table lists every model path BOSS currently supports, with its present limit
 | OpenRouter API | Add OpenRouter on the setup screen with its own key and model | The installer does not prompt for this key; the saved model is unverified. |
 | Google Gemini API | Choose **Google Gemini API** in the setup screen and enter its key and model, or set `GOOGLE_API_KEY` on the VM | BOSS uses Google's OpenAI-compatible chat endpoint. Provider-specific tools may need a separate adapter; the connection is unverified until a governed job succeeds. |
 | xAI Grok API | Choose **xAI Grok API** in the setup screen and enter its key and model, or set `XAI_API_KEY` on the VM | This is an API-key path, separate from a Grok Build subscription. The connection is unverified until a governed job succeeds. |
-| OpenAI-compatible API | Choose **Anything OpenAI-compatible** and provide a reachable base URL, model, and credential | Local Ollama needs a container-reachable address; the setup form currently requires a nonempty key, even for a local server that does not authenticate. |
+| OpenAI-compatible API | Choose **Anything OpenAI-compatible** and provide a reachable base URL, model, and credential | The setup form requires a nonempty key, even for a local server that does not authenticate. |
+| Ollama on the install machine | `boss connect ollama` for a running Ollama, `boss connect --install-ollama` to set one up, or yes at the installer's question | Uses the **Anything OpenAI-compatible** route with the placeholder key `ollama`, priced at zero for the local endpoint only. It becomes every role's model, and chat's, only when no hosted model is connected. See [Ollama](#ollama). Unverified until a governed job uses it. |
 | Codex ChatGPT subscription | Optionally install the official CLI, sign in on this VM, then rerun with `--connect-codex` | Explicit import stores the CLI auth file in BOSS's selected secret backend and records the connection without a live proof turn. It remains unverified. |
-| Claude Code subscription, local CLI login | Run `claude auth login` as `boss` inside the API container, then rerun the installer with `--connect-claude-local` | Claude Code owns its private session in the shared API/worker config volume. BOSS records status without receiving OAuth bytes. The first governed job still needs to verify model use. |
+| Claude Code subscription, local CLI login | `boss connect claude` (needs a terminal), or yes at the installer's question when a Claude Code login is found. Both run `claude auth login` as `boss` inside the API container, then the `--connect-claude-local` recording | Claude Code owns its private session in the shared API/worker config volume. BOSS records status without receiving OAuth bytes. The first governed job still needs to verify model use. |
 | Claude Code subscription, setup-token import | Operator runs `claude setup-token` and passes the token to `--connect-claude`, `store_subscription_token.py claude_code --stdin`, or the setup screen | Stored only in the local secret store. Not written to git, logs, or Postgres. A missing token is an error. No model call during setup. |
-| Grok Build subscription | Sign in as `boss` inside the API container with `grok login --device-auth`, then `--connect-grok-local`; see [Grok CLI](GROK_CLI.md) | BOSS does not copy `auth.json`. Recording checks CLI status and does not start a model call. A missing login is an error. |
+| Grok Build subscription | `boss connect grok` (needs a terminal), which signs in as `boss` inside the API container with `grok login --device-auth`, then records it with `--connect-grok-local`; see [Grok CLI](GROK_CLI.md) | BOSS does not copy `auth.json`. Recording checks CLI status and does not start a model call. A missing login is an error. |
 
 The Gemini and xAI entries use each provider's documented OpenAI-compatible chat endpoint, so provider-specific features outside that compatibility layer may not be available. See the [Gemini compatibility guide](https://ai.google.dev/gemini-api/docs/openai) and the [xAI API reference](https://docs.x.ai/developers/rest-api-reference/inference).
 
@@ -39,6 +50,8 @@ To see what BOSS has recorded, use the setup screen or `GET /v1/setup/coding-age
 
 !!! warning "Never pass keys as arguments"
     BOSS refuses API keys and tokens as command-line arguments, because the shell would keep them in history and process listings. Paste an OpenAI key at the installer's hidden prompt, or export `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the installer process.
+
+    To add a key after installing, export it and run `boss connect keys` (plain `boss connect` does the same as part of its search). It saves `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` into the install's private `.env`, prints only the names, and recreates the api and worker containers so they read it. The database and console keep running, and no `boss update` is needed.
 
 Everything stays on the install machine:
 
@@ -72,7 +85,9 @@ This installs the tools only. It does not sign you in or purchase a subscription
 
 ### Record a Claude Code login
 
-Sign in with each provider's own CLI on this machine before asking BOSS to record the login. For Claude Code, sign in inside the API container as the `boss` user that runs the API and worker, then record the login:
+`boss connect claude` does both steps below at a terminal: it signs Claude Code in inside the API container as the `boss` user, then records the login. When the installer finds a Claude Code login on your machine, it offers the same thing once. Your machine's login is never copied; Claude Code signs in again inside the container with its own login. Without a terminal, nothing is signed in and BOSS tells you to run `boss connect claude`. The sign-in is refused while `.env` holds `ANTHROPIC_API_KEY` or a legacy `CLAUDE_CODE_OAUTH_TOKEN`.
+
+By hand, for Claude Code, sign in inside the API container as the `boss` user that runs the API and worker, then record the login:
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env \
@@ -84,7 +99,43 @@ The CLI config directory is a named volume shared by the API and worker. Safe un
 
 ### Record a Grok Build login
 
-Grok device login follows the same pattern, as `boss` inside the API container. See [Grok CLI](GROK_CLI.md) for the steps and limits. Credential import, the database fallback, and recovery are covered in the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
+Grok device login follows the same pattern, as `boss` inside the API container. `boss connect grok` runs it at a terminal and records the login. See [Grok CLI](GROK_CLI.md) for the steps and limits. Credential import, the database fallback, and recovery are covered in the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
+
+## Ollama
+
+`boss connect ollama` connects an Ollama that is already running on the install machine. The installer and `boss connect` offer it when they find Ollama on `127.0.0.1:11434`; `--yes` connects it only with `--connect-found`.
+
+1. The API and worker containers reach the host as `host.docker.internal`, which the Compose file maps with `host-gateway`. No port is published.
+2. BOSS checks from inside the API container that Ollama answers at `http://host.docker.internal:11434`. If it does not, nothing is changed and the fix is printed.
+3. BOSS saves an **Anything OpenAI-compatible** connection with:
+   - the base URL `http://host.docker.internal:11434/v1`
+   - the first model Ollama lists, or the one named by `--local-model` or `BOSS_OLLAMA_MODEL`
+   - the placeholder key `ollama`
+4. When no hosted model is connected (no provider key in `.env`, no recorded subscription, and no API-key connection), Ollama becomes the model for every role: implementer, reviewer, hard problems, and routine work. A role you already chose is left alone. Chat, meetings, and the other surfaces that read `OPENAI_*` then use it too: BOSS sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL` to the local address, and `OPENAI_MODEL` in `.env`, but only when `.env` holds no hosted OpenAI key. With a hosted model connected, chat is untouched. When a hosted model is connected, Ollama is added but not made the default.
+5. The model is priced at zero for the local endpoint only: the `BOSS_MODEL_PRICES_JSON` key is `<local base URL>#<model>`, for example `http://host.docker.internal:11434/v1#qwen2.5-coder:7b`, so the same model name on a hosted provider keeps its normal price. Other entries are kept. Only api and worker are recreated.
+6. BOSS checks from the API container that the model is there. No completion is run, because Community setup makes no model calls (see [Verification and live checks](#verification-and-live-checks)). The first governed job is what verifies it.
+
+An existing **Anything OpenAI-compatible** connection to another address is left alone. A local Ollama never takes the native (OpenAI-compatible) lane from a hosted connection: with an OpenAI key saved in the setup screen or in `.env`, that key is used whichever was saved last; Ollama is used there only when nothing hosted is connected.
+
+When a hosted model is connected later, `boss connect` hands back the roles the fallback set (lanes that still say native with the Ollama model return to their defaults), and `boss connect keys` with a new `OPENAI_API_KEY` moves chat from Ollama to that key. An installer rerun with an exported OpenAI key does the same for chat. Ollama stays connected.
+
+Switching to a different Ollama model later, with `boss connect ollama --local-model NAME`, moves chat to the new model but leaves the build roles on the old one, and says so: `every role already has a model you chose, so none was changed`. Set the new model for each role in **Mission Control → Settings → Repo and model → Who does what**.
+
+## A local model with Ollama
+
+`boss connect --install-ollama`, or `--install-ollama` for the installer, sets up a free local model end to end. A yes to the local model offer does the same:
+
+1. **Install Ollama if it is missing.** On Linux, BOSS uses the official installer from `https://ollama.com/install.sh`. On macOS, it runs `brew install ollama` when Homebrew is present; otherwise it asks you to install the app from https://ollama.com/download.
+2. **Start it if it is stopped.**
+3. **Make it reachable from the containers.** On Linux, Ollama listens on `127.0.0.1`, which containers cannot reach. BOSS binds the Ollama service to the Docker bridge address, usually `172.17.0.1`, which this machine and its containers can reach and your network cannot. It never binds to `0.0.0.0`.
+   - An Ollama that was already installed or running before this run belongs to you, and other programs may use it on `127.0.0.1`, so BOSS asks before moving it (default no). An unattended run never moves it unless you pass `--rebind-ollama`; without that, it stops with the fix. An Ollama that this run installed is moved without asking.
+   - The change is a systemd drop-in, `/etc/systemd/system/ollama.service.d/boss-docker-bridge.conf`, and it needs `sudo`.
+   - BOSS records the new address as `BOSS_OLLAMA_URL` in `.env`.
+   - Afterwards, run the `ollama` command with `export OLLAMA_HOST=<bridge address>:11434`.
+4. **Pull the model.** The default is `qwen2.5-coder:7b`; `--local-model NAME` picks another. BOSS prints the download size and the free disk space first, and stops when there is not enough room.
+5. **Connect it** as described in [Ollama](#ollama).
+
+See the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) for each step's details and how to undo the Linux binding.
 
 ## Next steps
 

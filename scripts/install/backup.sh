@@ -57,6 +57,8 @@ if ! docker info >/dev/null 2>&1; then
     echo 'Docker daemon is unavailable to this user.' >&2; exit 1
   fi
 fi
+# The images are tagged with the compose project name (install.sh), not "local".
+export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}"
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
 RUNNING="$("${COMPOSE[@]}" ps --status running --services)"
 was_running() { [[ $'\n'"$RUNNING"$'\n' == *$'\n'"$1"$'\n'* ]]; }

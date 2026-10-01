@@ -79,7 +79,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       db:
@@ -115,6 +115,7 @@ services:
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
       XAI_API_KEY: ${XAI_API_KEY:-}
       XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Subscription credentials, so an operator who puts one in .env actually gets it.
       # Without these the value sits in .env, compose never passes it in, and the container
       # reports "not signed in" while the operator is looking at the credential they just set.
@@ -131,11 +132,6 @@ services:
       BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
-      # The operator's store choice and the database store's key, both from .env. Without the
-      # key the database store keeps its key inside Postgres; without the choice, BOSS ignored
-      # the installer's "database or infisical" answer.
-      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
-      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -167,6 +163,8 @@ services:
       BOSS_CLAUDE_CLI_MODEL: ${BOSS_CLAUDE_CLI_MODEL:-}
       BOSS_CODE_AGENT_LOW_COST_MODEL: ${BOSS_CODE_AGENT_LOW_COST_MODEL:-}
       BOSS_CODE_AGENT_STRONG_MODEL: ${BOSS_CODE_AGENT_STRONG_MODEL:-}
+      # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.
+      BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}
       BOSS_BOOTSTRAP_SEED_API_ENABLED: "false"
       # Community: no Account Connect required
       BOSS_ACCOUNT_CONNECT_URL: ""
@@ -186,6 +184,11 @@ services:
       # Device login is local to the Unix user. Share the owner-only Grok home with the
       # worker so API setup and governed jobs see the same renewable session.
       - boss_community_grok_home:/home/boss/.grok
+    # A model server on this machine (Ollama) is reachable as host.docker.internal. Docker
+    # Desktop resolves the name already; on Linux this maps it to the host's bridge address.
+    # Nothing is published: this only lets the container dial out to the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         - CMD
@@ -205,7 +208,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-    image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       api:
@@ -233,6 +236,7 @@ services:
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
       XAI_API_KEY: ${XAI_API_KEY:-}
       XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Subscription credentials, so an operator who puts one in .env actually gets it.
       # Without these the value sits in .env, compose never passes it in, and the container
       # reports "not signed in" while the operator is looking at the credential they just set.
@@ -247,11 +251,6 @@ services:
       BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
-      # The operator's store choice and the database store's key, both from .env. Without the
-      # key the database store keeps its key inside Postgres; without the choice, BOSS ignored
-      # the installer's "database or infisical" answer.
-      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
-      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -283,6 +282,8 @@ services:
       BOSS_CLAUDE_CLI_MODEL: ${BOSS_CLAUDE_CLI_MODEL:-}
       BOSS_CODE_AGENT_LOW_COST_MODEL: ${BOSS_CODE_AGENT_LOW_COST_MODEL:-}
       BOSS_CODE_AGENT_STRONG_MODEL: ${BOSS_CODE_AGENT_STRONG_MODEL:-}
+      # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.
+      BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
@@ -293,6 +294,11 @@ services:
       - boss_community_cli_home:/home/boss/.codex
       - boss_community_claude_home:/home/boss/.claude
       - boss_community_grok_home:/home/boss/.grok
+    # Same as api: a model server on this machine (Ollama) is reachable as host.docker.internal. Docker
+    # Desktop resolves the name already; on Linux this maps it to the host's bridge address.
+    # Nothing is published: this only lets the container dial out to the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   web:
     profiles: ["web"]
@@ -310,7 +316,7 @@ services:
         # correct, and the only way in was unreachable.
         NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:${BOSS_API_PORT:-8000}}
         NEXT_PUBLIC_BOSS_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
-    image: boss-community-web:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: boss-community-web:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       api:

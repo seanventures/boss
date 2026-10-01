@@ -433,10 +433,7 @@ class ModelGatewayService:
         dedupe_key: str,
         ttl_seconds: int,
         existing_reservation_id: Optional[str] = None,
-        source_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        """`source_id` pins the lease to the source that will actually answer — a typed decision
-        knows whether TypeSafe or the Claude CLI makes the call. Unpinned, the router chooses."""
         job = self.jobs.require_active_lease(
             connection, worker_id, job_id, job_lease_token
         )
@@ -485,7 +482,6 @@ class ModelGatewayService:
             preferred_capabilities=preferred_capabilities,
             data_boundary=job["data_boundary"],
             actor=worker_id,
-            only_source_id=source_id,
         )
         if not decision.get("selected_source_id") or not decision["policy_result"]["allowed"]:
             raise ModelCapacityDeniedError(

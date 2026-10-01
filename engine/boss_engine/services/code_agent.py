@@ -1779,6 +1779,38 @@ def _bind_lane_credentials(
     return settings
 
 
+LOCAL_MODEL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1", "::1"}
+
+
+def is_local_model_endpoint(url: str) -> bool:
+    """A model server on the install machine (Ollama), as the containers or the host see it."""
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse((url or "").strip()).hostname
+    except ValueError:
+        return False
+    return bool(host) and host in LOCAL_MODEL_HOSTS
+
+
+def choose_native_source(rows: list[dict], *, env_hosted: bool, metadata) -> dict | None:
+    """Which saved connection the native (OpenAI-compatible) lane uses.
+
+    Newest first, as saved — except that a local model server (an "Anything OpenAI-compatible"
+    connection to host.docker.internal) never displaces a hosted connection, whichever was
+    saved last. A hosted key in the environment counts as hosted too: then the local row is
+    skipped and the caller falls back to that key.
+    """
+    local = [row for row in rows if row.get("source_id") == "setup-custom"
+             and is_local_model_endpoint(str(metadata(row).get("base_url") or ""))]
+    hosted = [row for row in rows if row not in local]
+    if hosted:
+        return hosted[0]
+    if local and not env_hosted:
+        return local[0]
+    return None
+
+
 def _project_api_model_binding(
     connection, settings: Settings, project_id: str, lane: str,
 ) -> tuple[str, str, str] | None:
@@ -1793,20 +1825,27 @@ def _project_api_model_binding(
     sources = ("setup-openai", "setup-custom") if lane == "native" else (
         f"setup-{lane}", f"setup-{lane}"
     )
-    row = connection.execute(text(
-        "SELECT credential_secret_ref_id, supported_models, connection_metadata "
+    rows = connection.execute(text(
+        "SELECT source_id, credential_secret_ref_id, supported_models, connection_metadata "
         "FROM entitlement_sources WHERE project_id=:project_id "
         "AND source_id IN (:source_a, :source_b) "
         "AND credential_secret_ref_id IS NOT NULL "
-        "ORDER BY updated_at DESC NULLS LAST, source_id LIMIT 1"
-    ), {"project_id": project_id, "source_a": sources[0], "source_b": sources[1]}).mappings().first()
-    if row is None:
-        return None
+        "ORDER BY updated_at DESC NULLS LAST, source_id"
+    ), {"project_id": project_id, "source_a": sources[0], "source_b": sources[1]}).mappings().all()
 
     def object_value(value, expected):
         if isinstance(value, str):
             value = json.loads(value)
         return value if isinstance(value, expected) else expected()
+
+    row = choose_native_source(
+        [dict(item) for item in rows],
+        env_hosted=bool(str(getattr(settings, "openai_api_key", "") or "").strip())
+        and not is_local_model_endpoint(str(getattr(settings, "openai_base_url", "") or "")),
+        metadata=lambda item: object_value(item.get("connection_metadata"), dict),
+    ) if lane == "native" else (dict(rows[0]) if rows else None)
+    if row is None:
+        return None
 
     models = object_value(row["supported_models"], list)
     metadata = object_value(row["connection_metadata"], dict)

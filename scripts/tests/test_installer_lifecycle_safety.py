@@ -305,9 +305,10 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
     assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer
-    assert "7b88a18a2b4cd0b14b09a47fc415f7ffd4580066" in (
+    # The GitHub-only command pins a full 40-character release commit.
+    assert re.search(r"^BOSS_RELEASE_COMMIT=[0-9a-f]{40} bash -c ", (
         ROOT / "scripts/install/README.md"
-    ).read_text(encoding="utf-8")
+    ).read_text(encoding="utf-8"), re.MULTILINE)
     assert './install.sh --dir "$PWD"' in (ROOT / "scripts/install/README.md").read_text(encoding="utf-8")
     notes = (ROOT / "docs/operations/COMMUNITY_GA_RELEASE_NOTES_DRAFT.md").read_text(encoding="utf-8")
     assert "Public installer URL" in notes
@@ -339,3 +340,16 @@ def test_secret_arguments_are_refused_and_not_echoed() -> None:
     assert remote.returncode != 0
     assert secret not in remote.stdout + remote.stderr
     assert "shell history" in remote.stdout + remote.stderr
+
+
+def test_installer_makes_initdb_readable_before_the_database_starts() -> None:
+    """umask 077 makes a cloned checkout owner-only; Postgres must still read initdb/."""
+    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "umask 077" in text
+    fix = text.index("chmod 755 scripts/install/initdb")
+    first_up = text.index("up -d --no-build db api")
+    assert fix < first_up
+    assert "-name '*.sql' -exec chmod 644" in text
+    compose = (ROOT / "scripts/install/community-compose.yml").read_text(encoding="utf-8")
+    mounts = re.findall(r"^\s+- (\./[^:]+):", compose, re.MULTILINE)
+    assert mounts == ["./initdb"], "a new bind mount needs the same readable-permissions step"

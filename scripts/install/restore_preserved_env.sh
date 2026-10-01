@@ -28,6 +28,9 @@ FILL_IF_BLANK="
 OPENAI_API_KEY
 OPENAI_BASE_URL
 ANTHROPIC_API_KEY
+GOOGLE_API_KEY
+XAI_API_KEY
+OPENROUTER_API_KEY
 BOSS_GITHUB_TOKEN
 BOSS_ACCOUNT_CONNECT_URL
 CODEX_AUTH_JSON
@@ -49,7 +52,6 @@ BOSS_MCP_PROJECT_ID
 BOSS_WORKER_API_KEY
 BOSS_CONSOLE_PASSWORD
 BOSS_CONSOLE_SESSION_SECRET
-BOSS_KMS_MASTER_KEY
 BOSS_GITHUB_OWNER
 BOSS_GITHUB_REPO
 INFISICAL_ENCRYPTION_KEY
@@ -100,7 +102,23 @@ set_val() {
   chmod 600 "$NEW" 2>/dev/null || true
 }
 
+# A LOCAL CHAT SETUP GIVES WAY TO A HOSTED KEY. When BOSS pointed OPENAI_* at the local
+# Ollama (placeholder key "ollama", base URL on host.docker.internal) and this run brings a
+# real OpenAI key, the old base URL and model belong to Ollama, not to that key: keep the
+# new file's values instead of sending the hosted key to the local server.
+LOCAL_CHAT_REPLACED=0
+case "$(old_val OPENAI_BASE_URL)" in
+  http://host.docker.internal:*|http://127.0.0.1:*|http://localhost:*)
+    if [ "$(old_val OPENAI_API_KEY)" = ollama ] && [ -n "$(new_val OPENAI_API_KEY)" ] &&
+       [ "$(new_val OPENAI_API_KEY)" != ollama ]; then
+      LOCAL_CHAT_REPLACED=1
+    fi ;;
+esac
+
 for key in $FILL_IF_BLANK; do
+  if [ "$LOCAL_CHAT_REPLACED" -eq 1 ] && [ "$key" = OPENAI_BASE_URL ]; then
+    continue
+  fi
   old="$(old_val "$key")"
   [ -n "$old" ] || continue
   new="$(new_val "$key")"
@@ -110,6 +128,9 @@ for key in $FILL_IF_BLANK; do
 done
 
 for key in $KEEP_PREVIOUS; do
+  if [ "$LOCAL_CHAT_REPLACED" -eq 1 ] && [ "$key" = OPENAI_MODEL ]; then
+    continue
+  fi
   old="$(old_val "$key")"
   [ -n "$old" ] || continue
   set_val "$key" "$old"

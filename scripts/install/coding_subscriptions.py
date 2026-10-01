@@ -23,7 +23,19 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from store_subscription_token import read_whole_file, send_to_boss  # noqa: E402
+try:
+    from store_subscription_token import read_whole_file, send_to_boss  # noqa: E402
+except ImportError as _import_error:  # e.g. a host Python older than the engine needs
+    # Discovery (detect_logins) must still work; only a credential import needs the engine.
+    _IMPORT_PROBLEM = f"{type(_import_error).__name__}: {_import_error}"
+
+    def read_whole_file(path: Path) -> str:
+        raise RuntimeError("This machine's python3 cannot load the BOSS credential helper "
+                           f"({_IMPORT_PROBLEM}). It needs a BOSS checkout and Python 3.11 "
+                           "or newer. Nothing was stored.")
+
+    def send_to_boss(*_args, **_kwargs):
+        read_whole_file(Path())
 
 
 def checked_output(argv: list[str], timeout: int = 15) -> tuple[int, str]:
@@ -35,8 +47,8 @@ def checked_output(argv: list[str], timeout: int = 15) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
-def discover() -> dict[str, bool]:
-    """Report only booleans; CLI status output might include private account data."""
+def detect_logins() -> dict[str, bool]:
+    """Booleans only, nothing printed; CLI status output might include private account data."""
     found = {name: bool(shutil.which(name)) for name in ("claude", "codex", "grok")}
     codex_subscription = False
     claude_subscription = False
@@ -51,6 +63,16 @@ def discover() -> dict[str, bool]:
                 auth.get("authMethod") in ("claude_ai", "oauth_token", "oauth")
         except (ValueError, AttributeError):
             pass
+    return {**found, "claude_subscription": claude_subscription,
+            "codex_subscription": codex_subscription}
+
+
+def discover() -> dict[str, bool]:
+    """Report only booleans; CLI status output might include private account data."""
+    logins = detect_logins()
+    found = {name: logins[name] for name in ("claude", "codex", "grok")}
+    codex_subscription = logins["codex_subscription"]
+    claude_subscription = logins["claude_subscription"]
     print("Coding CLI discovery on this VM user (read only):")
     for name in ("claude", "codex", "grok"):
         print(f"  {name}: {'installed' if found[name] else 'missing'}")
@@ -185,6 +207,32 @@ def grok_local_session_ready(api_url: str, api_key: str) -> None:
         )
 
 
+def local_session_signed_in(api_url: str, api_key: str, provider: str) -> bool | None:
+    """Is the CLI already signed in inside the BOSS API container? None when BOSS cannot say.
+
+    Reads only BOSS's sanitized status; never opens a CLI auth file or calls a model.
+    """
+    name = {"claude": "claude_code", "grok": "grok"}[provider]
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/v1/setup/coding-agents?project_id=boss-dogfood",
+        headers={"x-boss-api-key": api_key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode() or "{}")
+    except (OSError, ValueError):
+        return None
+    agents = body.get("agents") if isinstance(body, dict) else None
+    row = next((item for item in agents if isinstance(item, dict)
+                and item.get("name") == name), None) if isinstance(agents, list) else None
+    if not row or row.get("installed") is not True:
+        return None
+    if provider == "claude" and row.get("authenticated") is True and \
+            row.get("auth_method") not in {"claude_ai", "oauth", "oauth_token"}:
+        return False
+    return row.get("authenticated") is True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
@@ -193,7 +241,15 @@ def main() -> int:
     parser.add_argument("--connect-claude-local", action="store_true")
     parser.add_argument("--connect-grok-local", action="store_true")
     parser.add_argument("--accept-database-fallback", action="store_true")
+    parser.add_argument("--local-status", choices=("claude", "grok"),
+                        help="exit 0 when that CLI is already signed in inside the BOSS API "
+                             "container, 3 when it is not, 4 when BOSS cannot say; prints nothing")
     args = parser.parse_args()
+    if args.local_status:
+        api_key = os.environ.get("BOSS_API_KEY", "")
+        state = local_session_signed_in(args.api_url, api_key, args.local_status) \
+            if api_key else None
+        return 0 if state is True else 3 if state is False else 4
     if args.connect_claude and args.connect_claude_local:
         raise RuntimeError("Choose one Claude connection path for this run")
     # A container-owned login has nothing to do with this VM user's CLI home. In
@@ -213,7 +269,7 @@ def main() -> int:
         print("Then rerun the installer with --connect-claude-local; no token is copied "
               "and no model call is made.")
         print("To import a Claude setup token you supply, rerun with --connect-claude. "
-              "It is stored encrypted, with its key outside BOSS's database.")
+              "It is stored only in the local secret store.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:
@@ -234,14 +290,9 @@ def main() -> int:
         fallback = False if provider == "claude_code" else args.accept_database_fallback
         result = send_to_boss(args.api_url, api_key, "boss-dogfood", provider, credential,
                               accept_database_fallback=fallback)
-        # THE SERVER DECIDES WHERE A CLAUDE TOKEN MAY LIVE (setup_service.
-        # store_coding_agent_credential): a secret store, or the database store only when its
-        # key is outside the database. This demanded "local_vault" exactly, so a token the
-        # server had correctly stored was reported as a failure and the connection was never
-        # recorded. Only a reply that does not say where the token went is refused.
-        if provider == "claude_code" and not result.get("backend"):
+        if provider == "claude_code" and result.get("backend") != "local_vault":
             raise RuntimeError(
-                "BOSS did not confirm where it stored the Claude setup token. "
+                "BOSS did not store the Claude setup token in the local secret store. "
                 "Nothing else was accepted."
             )
         print(f"  {provider}: credential stored by BOSS (value never displayed)")
