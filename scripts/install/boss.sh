@@ -106,7 +106,10 @@ compose() {
   local profiles=()
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" == 0 ]] || profiles+=(--profile web)
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)
+  # The images are tagged with the compose project name (install.sh); without the same
+  # default here Compose looks for boss-community-api:local, which was never built.
   COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-boss-community}" \
+  BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}" \
     "${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"} "$@"
 }
 

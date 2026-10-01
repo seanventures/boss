@@ -117,6 +117,9 @@ def world(tmp_path: Path) -> dict:
         bin_dir / "docker",
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$BOSS_TEST_DOCKER_LOG\"\n"
+        # The image tag Compose would resolve, beside the call that would resolve it.
+        "[ \"$1\" = compose ] && printf '%s %s\\n' \"${BOSS_COMMUNITY_IMAGE_TAG:-local}\" \"$*\" "
+        ">> \"$BOSS_TEST_DOCKER_LOG.tags\"\n"
         "case \"$1:$2\" in compose:version) echo 'Docker Compose version v2' ;; esac\n"
         # The container-side checks and logins the connect paths run.
         "case \"$*\" in\n"
@@ -988,6 +991,21 @@ def test_boss_connect_saves_exported_keys_and_restarts_only_api_and_worker(world
     argv = _run(boss, "connect", SECRET, env=world["env"])
     assert argv.returncode != 0
     assert SECRET not in argv.stdout + argv.stderr
+
+
+def test_boss_restarts_the_images_the_installer_built(world, boss_api) -> None:
+    # install.sh tags api, worker and web with the compose project name. `boss` must ask
+    # Compose for the same tag, or the restart looks for boss-community-api:local and fails.
+    boss = _installed(world)
+    tags = Path(world["env"]["BOSS_TEST_DOCKER_LOG"] + ".tags")
+    tags.write_text("")
+
+    result = _run(boss, "connect", "keys", env=dict(world["env"], OPENAI_API_KEY=SECRET))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    restarts = [line for line in tags.read_text().splitlines() if "force-recreate" in line]
+    assert restarts, tags.read_text()
+    assert all(line.startswith("boss-community ") for line in restarts), restarts
 
 
 def test_purge_removes_this_installs_boss_command_and_nothing_else(world) -> None:
