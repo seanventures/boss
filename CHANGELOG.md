@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Build** runs in Community. Standard Product Delivery, the workflow Build starts, no longer deadletters at its research step: Discovery research stays paused in Community, and the step is recorded as skipped ("Skipped: research is paused in Community") with a `workflow.research_skipped` event, then the run goes on to the panel and the PRD.
+- The PRD, its meeting, and its task are titled with your request instead of the panel brief ("PRD: --- WHAT THIS PANEL IS FOR --- ...").
+- `boss connect ollama --local-model NAME` moves the roles BOSS gave the previous local model, not just chat. Roles you chose by hand are left alone. BOSS records the roles it set in `.env.boss-local-roles`.
+- The New Project form no longer promises a "platform default" repository that does not exist. It says a build needs a connected GitHub repository and links to **Settings → Repo and model → Repository**. `/v1/setup/status` and the build's missing-repository error name the same screen instead of `BOSS_TARGET_GITHUB_OWNER`/`_REPO`, which the Community Compose file does not pass to its containers.
+
 ## v1.0-rc2 - 2026-10-01
 
 Community release candidate. Package version `1.0.0-rc.2`. Not a public GA.
