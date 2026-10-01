@@ -269,8 +269,7 @@ def main() -> int:
         print("Then rerun the installer with --connect-claude-local; no token is copied "
               "and no model call is made.")
         print("To import a Claude setup token you supply, rerun with --connect-claude. "
-              "It is stored only in a secret store (Infisical or the local vault), never in "
-              "BOSS's database.")
+              "It is stored encrypted, with its key outside BOSS's database.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:
@@ -291,13 +290,14 @@ def main() -> int:
         fallback = False if provider == "claude_code" else args.accept_database_fallback
         result = send_to_boss(args.api_url, api_key, "boss-dogfood", provider, credential,
                               accept_database_fallback=fallback)
-        # NOT POSTGRES IS THE RULE (see setup_service.store_coding_agent_credential). This
-        # demanded "local_vault" exactly, so after the server correctly stored the token in the
-        # install's Infisical, the installer called it a failure and never recorded the
-        # connection — the token sat stored and Claude showed as not connected.
-        if provider == "claude_code" and result.get("backend") in (None, "", "database"):
+        # THE SERVER DECIDES WHERE A CLAUDE TOKEN MAY LIVE (setup_service.
+        # store_coding_agent_credential): a secret store, or the database store only when its
+        # key is outside the database. This demanded "local_vault" exactly, so a token the
+        # server had correctly stored was reported as a failure and the connection was never
+        # recorded. Only a reply that does not say where the token went is refused.
+        if provider == "claude_code" and not result.get("backend"):
             raise RuntimeError(
-                "BOSS did not store the Claude setup token in a secret store. "
+                "BOSS did not confirm where it stored the Claude setup token. "
                 "Nothing else was accepted."
             )
         print(f"  {provider}: credential stored by BOSS (value never displayed)")
