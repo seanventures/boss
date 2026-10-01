@@ -1392,7 +1392,9 @@ _found=""
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   ui_step "Looking for models and subscriptions on this machine (read only)"
   _found="$(mktemp)"
-  if python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
+  # A rerun after the installer moved Ollama to the Docker bridge looks where .env says it is.
+  _ollama_url="$(grep -m 1 '^BOSS_OLLAMA_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  if BOSS_OLLAMA_URL="${_ollama_url:-${BOSS_OLLAMA_URL:-}}" python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
     found() { [[ "$(grep -m 1 "^$1=" "$_found" | cut -d= -f2-)" == found ]]; }
     if found codex_login && [[ "$CONNECT_CODEX" -eq 0 ]]; then
       _codex_home="BOSS's own database on this machine"

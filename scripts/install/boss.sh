@@ -899,7 +899,7 @@ models_step() {
   else
     printf 'Looking for model keys, subscriptions, coding CLIs, and Ollama on this machine (read only)...\n'
     summary="$(mktemp)"; own_summary=1
-    python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary" </dev/null
+    BOSS_OLLAMA_URL="$(ollama_url)" python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary" </dev/null
   fi
   state() { grep -m 1 "^$1=" "$summary" | cut -d= -f2-; }
 
@@ -996,11 +996,11 @@ cmd_connect() {
   case "$mode" in
     list)
       printf 'Model keys, subscriptions, coding CLIs, and Ollama on this machine (read only):\n'
-      python3 "$INSTALL_DIR/scripts/install/discover_models.py" </dev/null
+      BOSS_OLLAMA_URL="$(ollama_url)" python3 "$INSTALL_DIR/scripts/install/discover_models.py" </dev/null
       return ;;
     summary)
       summary="$(mktemp)"
-      python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary" </dev/null >/dev/null
+      BOSS_OLLAMA_URL="$(ollama_url)" python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary" </dev/null >/dev/null
       print_model_rows "$summary"
       rm -f "$summary"
       return ;;

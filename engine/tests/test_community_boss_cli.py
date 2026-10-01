@@ -1168,6 +1168,11 @@ def test_install_ollama_from_scratch_on_linux_sets_up_everything_and_becomes_the
     assert "No model is connected yet" not in out
     # Not a terminal: the pull's progress spinner never reaches the output.
     assert "\x1b[" not in out
+    # Discovery afterwards looks where the install recorded Ollama, not only at 127.0.0.1:11434.
+    plain = {k: v for k, v in env.items() if k != "BOSS_OLLAMA_URL"}  # only .env knows it now
+    listed = _run(boss, "connect", "--list", env=plain, timeout=60)
+    assert "stopped" not in listed.stdout, listed.stdout
+    assert "not found  Ollama" not in listed.stdout, listed.stdout
 
 
 def test_install_ollama_starts_a_stopped_ollama_and_keeps_a_hosted_default(world, boss_api) -> None:
