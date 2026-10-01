@@ -1216,6 +1216,14 @@ if printf '%s\n' "$RUNNING_SERVICES" | grep -qx worker; then
     $COMPOSE_PROFILES stop worker </dev/null
 fi
 
+# This installer runs under umask 077, so a checkout it cloned is readable only by its owner.
+# Postgres reads initdb/ as its own user inside the container, and an unreadable directory
+# stops the database on first start. The SQL holds no secrets; .env stays mode 600.
+if [[ -d scripts/install/initdb ]]; then
+  chmod 755 scripts/install/initdb
+  find scripts/install/initdb -type f -name '*.sql' -exec chmod 644 {} +
+fi
+
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
 # shellcheck disable=SC2086

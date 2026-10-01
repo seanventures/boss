@@ -339,3 +339,16 @@ def test_secret_arguments_are_refused_and_not_echoed() -> None:
     assert remote.returncode != 0
     assert secret not in remote.stdout + remote.stderr
     assert "shell history" in remote.stdout + remote.stderr
+
+
+def test_installer_makes_initdb_readable_before_the_database_starts() -> None:
+    """umask 077 makes a cloned checkout owner-only; Postgres must still read initdb/."""
+    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "umask 077" in text
+    fix = text.index("chmod 755 scripts/install/initdb")
+    first_up = text.index("up -d --no-build db api")
+    assert fix < first_up
+    assert "-name '*.sql' -exec chmod 644" in text
+    compose = (ROOT / "scripts/install/community-compose.yml").read_text(encoding="utf-8")
+    mounts = re.findall(r"^\s+- (\./[^:]+):", compose, re.MULTILINE)
+    assert mounts == ["./initdb"], "a new bind mount needs the same readable-permissions step"
