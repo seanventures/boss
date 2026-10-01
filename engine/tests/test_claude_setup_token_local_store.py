@@ -99,5 +99,38 @@ def test_claude_setup_token_does_not_fall_back_to_postgres(monkeypatch):
         )
 
     message = str(exc.value)
-    assert "local secret store" in message
+    assert "never put in BOSS's Postgres database" in message
+    assert "--secret-store infisical" in message
     assert TOKEN not in message
+
+
+def test_an_install_with_a_secret_store_keeps_the_claude_token_there(monkeypatch):
+    """--secret-store infisical: the token goes to Infisical, not refused for want of a vault.
+
+    The first version accepted only the local vault, which no installer configures, so a fresh
+    `install.sh --secret-store infisical --connect-claude` refused the token with "that store is
+    not available on this install" — while the same run had just stored the Codex login in
+    Infisical (reported 2026-09-30)."""
+    monkeypatch.delenv("BOSS_KMS_MASTER_KEY", raising=False)
+    monkeypatch.delenv("BOSS_KMS_MASTER_KEY_FILE", raising=False)
+    monkeypatch.delenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", raising=False)
+    monkeypatch.setattr(
+        "boss_engine.services.secret_backends.default_secret_backend",
+        lambda _settings: "infisical",
+    )
+    stored = {}
+    monkeypatch.setattr(
+        "boss_engine.services.secrets_service.put_secret",
+        lambda *args, **kwargs: stored.update(kwargs) or {
+            "secret_ref_id": "sref_1", "ref_key": "k", "backend": kwargs["backend"],
+            "fingerprint": "fp"},
+    )
+    monkeypatch.setattr("boss_engine.services.core.emit_event", lambda *args, **kwargs: "evt")
+
+    result = store_coding_agent_credential(
+        _Connection(), Settings(), "boss-dogfood", "claude_code", TOKEN, actor="ceo",
+    )
+
+    assert result["backend"] == "infisical"
+    assert stored["backend"] == "infisical"
+    assert result["fallback_accepted"] is False
