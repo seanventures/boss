@@ -919,6 +919,7 @@ class EntitlementBrokerService:
                 },
                 actor=actor,
                 emit_events=False,
+                keep_connection=True,
             )
 
     def list_sources(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -1182,7 +1183,16 @@ class EntitlementBrokerService:
         *,
         actor: str,
         emit_events: bool = True,
+        keep_connection: bool = False,
     ) -> dict[str, Any]:
+        """Create or update one entitlement source.
+
+        keep_connection: seeding refreshes the CATALOGUE (models, strengths, limits) on every
+        install run, and must not touch a CONNECTION somebody made. Without it, re-running the
+        installer reset every connected subscription to "declared / not_connected" — the Codex
+        login recorded by `--connect-codex` was gone after the next upgrade. A real disconnect
+        passes an explicit status ("revoked") and is unaffected.
+        """
         defaults = self._source_record_defaults().get(payload["source_id"], {})
         if payload.get("provider") == "boss" and not defaults:
             raise ValueError("BOSS-owned model source is unavailable in this edition")
@@ -1235,7 +1245,7 @@ class EntitlementBrokerService:
                     owner_id = EXCLUDED.owner_id,
                     workload_classes_allowed = EXCLUDED.workload_classes_allowed,
                     multi_tenant_allowed = EXCLUDED.multi_tenant_allowed,
-                    credential_ref = EXCLUDED.credential_ref,
+                    credential_ref = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.credential_ref ELSE EXCLUDED.credential_ref END,
                     credential_secret_ref_id = COALESCE(
                         EXCLUDED.credential_secret_ref_id,
                         entitlement_sources.credential_secret_ref_id
@@ -1245,20 +1255,21 @@ class EntitlementBrokerService:
                     supported_models = EXCLUDED.supported_models,
                     task_strengths = EXCLUDED.task_strengths,
                     risk_tier_max = EXCLUDED.risk_tier_max,
-                    status = EXCLUDED.status,
-                    auth_method = EXCLUDED.auth_method,
-                    connection_status = EXCLUDED.connection_status,
-                    connection_ref = EXCLUDED.connection_ref,
-                    oauth_scopes = EXCLUDED.oauth_scopes,
-                    connection_metadata = EXCLUDED.connection_metadata,
+                    status = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.status ELSE EXCLUDED.status END,
+                    auth_method = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.auth_method ELSE EXCLUDED.auth_method END,
+                    connection_status = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.connection_status ELSE EXCLUDED.connection_status END,
+                    connection_ref = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.connection_ref ELSE EXCLUDED.connection_ref END,
+                    oauth_scopes = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.oauth_scopes ELSE EXCLUDED.oauth_scopes END,
+                    connection_metadata = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.connection_metadata ELSE EXCLUDED.connection_metadata END,
                     policy_notes = EXCLUDED.policy_notes,
-                    observed_capacity = EXCLUDED.observed_capacity,
-                    runtime_supported = EXCLUDED.runtime_supported,
+                    observed_capacity = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.observed_capacity ELSE EXCLUDED.observed_capacity END,
+                    runtime_supported = CASE WHEN (:keep_connection AND entitlement_sources.connection_status <> 'not_connected') THEN entitlement_sources.runtime_supported ELSE EXCLUDED.runtime_supported END,
                     updated_at = now()
                 """
             ),
             {
                 "id": source_pk,
+                "keep_connection": bool(keep_connection),
                 "project_id": record["project_id"],
                 "provider": record["provider"],
                 "source_id": record["source_id"],
