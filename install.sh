@@ -191,6 +191,11 @@ ACCEPT_DATABASE_FALLBACK=0
 # together with --connect-found.
 AUTO_DISCOVER=1
 CONNECT_FOUND=0
+# The local model (Ollama). Offered at a terminal when no model is usable; --install-ollama
+# sets it up unattended; --no-local-model never offers it.
+INSTALL_OLLAMA=0
+LOCAL_MODEL=""
+NO_LOCAL_MODEL=0
 INSTALL_BOSS_COMMAND=1
 SECRET_STORE_EXPLICIT=0
 if [ -n "${BOSS_SECRET_STORE:-}" ]; then
@@ -236,6 +241,13 @@ Options:
                           A sign-in needs a person at a terminal and is skipped without
                           one; a Codex login on the database store also needs
                           --accept-database-fallback
+  --install-ollama        Set up a free local model without asking: install Ollama if
+                          missing, start it, make it reachable from the BOSS containers,
+                          pull the model, connect it. When no hosted model is connected it
+                          becomes every role's model. At a terminal BOSS offers this when
+                          no model is usable; --yes alone never installs it
+  --local-model NAME      The Ollama model to pull (default qwen2.5-coder:7b)
+  --no-local-model        Never offer the local model
   --no-discover           Do not look for model keys and subscriptions on this machine
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
@@ -288,6 +300,13 @@ while [[ $# -gt 0 ]]; do
     --connect-grok-local) CONNECT_GROK_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --accept-database-fallback) ACCEPT_DATABASE_FALLBACK=1; shift ;;
     --connect-found) CONNECT_FOUND=1; shift ;;
+    --install-ollama) INSTALL_OLLAMA=1; shift ;;
+    --local-model)
+      LOCAL_MODEL="${2:-}"
+      [[ "$LOCAL_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$ ]] ||
+        die "--local-model takes an Ollama model name, for example qwen2.5-coder:7b"
+      shift 2 ;;
+    --no-local-model) NO_LOCAL_MODEL=1; shift ;;
     --no-discover) AUTO_DISCOVER=0; shift ;;
     --no-boss-command) INSTALL_BOSS_COMMAND=0; shift ;;
     --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
@@ -1350,45 +1369,13 @@ rm -f "$EDITION_BODY"
 
 # ---- models and subscriptions already on this machine ----------------------
 # Finding is read only and prints found / not found, never a value. Exported API keys were
-# already saved above. A login file is copied only after a yes at the prompt, or with
-# --connect-found. Claude Code and Grok sign in inside the BOSS container, so a host login is
-# reported with the command that connects it rather than copied.
+# already saved above. A Codex login file is copied only after a yes at the prompt, or with
+# --connect-found. Everything else (Claude Code and Grok Build sign-in inside the BOSS
+# container, Ollama, and the offers when no model is usable) is the Models step below, which
+# is this install's own `boss connect`.
 MODEL_NOTES=()
-_env_keys=""
-for _key in OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY XAI_API_KEY OPENROUTER_API_KEY; do
-  [[ -z "$(env_value "$_key")" ]] || _env_keys="$_env_keys $_key"
-done
-[[ -z "$_env_keys" ]] || MODEL_NOTES+=("✓ API keys in .env (values not shown):${_env_keys}")
 CODEX_FROM_DISCOVERY=0
-
-# The in-container sign-ins and Ollama go through this install's own `boss connect`, so the
-# installer and the command share one reviewed path. --offer asks first (terminal only);
-# --connect-found answers yes. Status: 0 connected, 1 failed, 2 skipped.
-run_boss_connect() {
-  local args=(--dir "$INSTALL_DIR" connect --offer "$1")
-  [[ "$CONNECT_FOUND" -eq 0 ]] || args+=(--connect-found)
-  [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] || return 1
-  bash "$INSTALL_DIR/scripts/install/boss.sh" "${args[@]}"
-}
-
-# A Claude Code or Grok Build login on this machine is never copied. BOSS offers to sign the
-# CLI in inside its own container instead, with the provider's own login, which needs a
-# person at a terminal. --yes alone changes nothing; --connect-found skips the question.
-offer_found_sign_in() {
-  local name="$1" label="$2" rc=0
-  if [[ "$NONINTERACTIVE" -eq 1 && "$CONNECT_FOUND" -eq 0 ]]; then
-    ui_info "$label login found on this machine, not connected (an unattended install signs nothing in without --connect-found). Later: boss connect $name"
-    MODEL_NOTES+=("- $label login found, not connected: boss connect $name")
-    return 0
-  fi
-  run_boss_connect "$name" || rc=$?
-  case "$rc" in
-    0) MODEL_NOTES+=("✓ $label signed in inside BOSS") ;;
-    2) MODEL_NOTES+=("- $label found, not signed in: boss connect $name") ;;
-    *) MODEL_NOTES+=("✗ $label not connected: boss connect $name") ;;
-  esac
-}
-
+_found=""
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   ui_step "Looking for models and subscriptions on this machine (read only)"
   _found="$(mktemp)"
@@ -1402,7 +1389,6 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
           CODEX_FROM_DISCOVERY=1
         else
           ui_warn "Codex login found and not copied: the database store also needs --accept-database-fallback."
-          MODEL_NOTES+=("- Codex login found, not connected: boss connect codex")
         fi
       elif ask_yes "Connect your Codex ChatGPT login? This copies ~/.codex/auth.json into ${_codex_home}."; then
         CODEX_FROM_DISCOVERY=1
@@ -1412,33 +1398,13 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
         else
           ui_info "Codex login left alone. Connect it later: boss connect codex"
         fi
-        MODEL_NOTES+=("- Codex login found, not connected: boss connect codex")
-      fi
-    fi
-    if found claude_login && [[ "$CONNECT_CLAUDE" -eq 0 && "$CONNECT_CLAUDE_LOCAL" -eq 0 ]]; then
-      offer_found_sign_in claude "Claude Code"
-    fi
-    if found grok_login && [[ "$CONNECT_GROK_LOCAL" -eq 0 ]]; then
-      offer_found_sign_in grok "Grok Build"
-    fi
-    if found ollama; then
-      if [[ "$NONINTERACTIVE" -eq 1 && "$CONNECT_FOUND" -eq 0 ]]; then
-        ui_info "Ollama answers here, not connected (an unattended install connects nothing without --connect-found). Later: boss connect ollama"
-        MODEL_NOTES+=("- Ollama found, not connected: boss connect ollama")
-      else
-        _rc=0
-        run_boss_connect ollama || _rc=$?
-        case "$_rc" in
-          0) MODEL_NOTES+=("✓ Ollama connected as an OpenAI-compatible model") ;;
-          2) MODEL_NOTES+=("- Ollama found, not connected: boss connect ollama") ;;
-          *) MODEL_NOTES+=("✗ Ollama not connected: boss connect ollama") ;;
-        esac
       fi
     fi
   else
     ui_warn "Model discovery did not finish; nothing was connected. Retry later: boss connect"
+    rm -f "$_found"
+    _found=""
   fi
-  rm -f "$_found"
 fi
 
 if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
@@ -1477,6 +1443,46 @@ if [[ "$CODEX_FROM_DISCOVERY" -eq 1 ]]; then
     MODEL_NOTES+=("✗ Codex login not connected: boss connect codex")
   fi
 fi
+
+# ---- the Models step -------------------------------------------------------
+# Detect, connect what was found (with the consent rules above), and when no model is usable
+# offer to sign in to a subscription or set up a free local model. This is `boss connect`, so
+# a later `boss connect` repeats exactly this step. --yes asks nothing; it installs Ollama
+# only with --install-ollama.
+model_usable() {
+  local check rc
+  for check in --hosted --local; do
+    rc=0
+    BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/model_status.py --api-url "$API_URL" \
+      --env-file "$ENV_FILE" "$check" </dev/null >/dev/null 2>&1 || rc=$?
+    [[ "$rc" -ne 0 && "$rc" -ne 4 ]] || return 0   # usable, or BOSS cannot say
+  done
+  return 1
+}
+if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
+   [[ ( "$AUTO_DISCOVER" -eq 1 && -n "$_found" ) || "$INSTALL_OLLAMA" -eq 1 ]]; then
+  ui_step "Models"
+  _models_args=(--dir "$INSTALL_DIR" connect --from-installer)
+  [[ -z "$_found" ]] || _models_args+=(--found "$_found")
+  [[ "$CONNECT_FOUND" -eq 0 ]] || _models_args+=(--connect-found)
+  [[ "$NONINTERACTIVE" -eq 0 ]] || _models_args+=(--no-questions)
+  [[ "$INSTALL_OLLAMA" -eq 0 ]] || _models_args+=(--install-ollama)
+  [[ -z "$LOCAL_MODEL" ]] || _models_args+=(--local-model "$LOCAL_MODEL")
+  [[ "$NO_LOCAL_MODEL" -eq 0 ]] || _models_args+=(--no-local-model)
+  bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
+    ui_warn "The Models step did not finish; BOSS is running. Retry: boss connect"
+  # Codex signs in on this machine, so it needs the CLI here. Offered only at a terminal and
+  # only while no model is usable; --install-coding-clis does it unattended.
+  if [[ "$INSTALL_CODING_CLIS" -eq 0 && "$NONINTERACTIVE" -eq 0 ]] && ! model_usable &&
+     ask_yes "Install the official coding CLIs on this machine (Claude Code, Codex CLI, Grok Build)? Codex needs its CLI here to sign in; Claude Code and Grok Build already run inside BOSS."; then
+    if ( INSTALL_CODING_CLIS=1; install_coding_clis ); then
+      ui_info "Sign in to Codex with: codex login --device-auth   then: boss connect codex"
+    else
+      ui_warn "The coding CLIs were not all installed; the reason is above. BOSS is running."
+    fi
+  fi
+fi
+[[ -z "$_found" ]] || rm -f "$_found"
 
 set +e
 PROV_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
@@ -1568,9 +1574,16 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   fi
 fi
 [[ -z "$INSTALLED_REF" ]] || echo -e "  ${BOLD}Release${NC}          ${INSTALLED_REF} (${INSTALLED_CHANNEL}; reruns and upgrades stay on it)"
-if [[ "${#MODEL_NOTES[@]}" -gt 0 ]]; then
+# One row per model source: connected, found but not connected, or not found, with the command
+# that fixes it. Read from BOSS and this machine now, not from what this run happened to do.
+_model_rows=""
+if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+  _model_rows="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" connect --summary 2>/dev/null </dev/null || true)"
+fi
+if [[ -n "$_model_rows" || "${#MODEL_NOTES[@]}" -gt 0 ]]; then
   echo -e "  ${BOLD}Models${NC}"
-  for _note in "${MODEL_NOTES[@]}"; do
+  [[ -z "$_model_rows" ]] || printf '%s\n' "$_model_rows"
+  for _note in ${MODEL_NOTES[@]+"${MODEL_NOTES[@]}"}; do
     echo "    $_note"
   done
 else

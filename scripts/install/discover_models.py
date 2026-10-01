@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find the model keys and subscriptions already on this machine. Read only.
+"""Find the model keys, subscriptions, coding CLIs, and Ollama already on this machine. Read only.
 
 The installer and `boss connect` use this to report what exists before asking to connect
 anything. It checks presence only:
@@ -8,17 +8,24 @@ anything. It checks presence only:
 - a Codex ChatGPT login or a Claude Code subscription login, through each CLI's own status
   command (coding_subscriptions.detect_logins)
 - a Grok Build login file under ~/.grok (existence only; the file is never opened)
-- an Ollama server on this machine's loopback address
+- the claude, codex, grok, and ollama programs on PATH
+- an Ollama server on this machine (loopback, or an address of this machine such as the
+  Docker bridge), and the models it has already pulled
 
 Nothing is stored, sent, or connected here. Output is found / not found per source, and an
 optional KEY=found|missing summary file for the shell. Exit status is 0 whatever is found.
+
+`--ollama-models URL` prints the model names one per line and exits 1 when nothing answers.
 """
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
+import shutil
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -37,20 +44,46 @@ ENV_KEYS = (
 )
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
 
 def env_keys(environ: dict[str, str]) -> dict[str, bool]:
     return {name: bool(environ.get(variable, "").strip()) for name, variable, _ in ENV_KEYS}
 
 
+def is_this_machine(host: str | None) -> bool:
+    """Loopback, or an IP literal assigned to this machine (for example the Docker bridge).
+
+    Discovery must never probe another computer. An address this machine can bind to is one of
+    its own interfaces; a hostname other than localhost is refused outright.
+    """
+    if not host:
+        return False
+    if host in LOOPBACK:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if address.is_unspecified or address.is_multicast:
+        return False
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.bind((host, 0))
+    except OSError:
+        return False
+    return True
+
+
 def ollama_model_names(base_url: str, timeout: float = 1.5) -> list[str] | None:
-    """Names of the local models, or None when no Ollama answers on loopback.
+    """Names of the local models, or None when no Ollama answers on this machine.
 
     A name that is not a plain model tag is counted but not returned, so nothing odd from a
     local server reaches a terminal or a request.
     """
     parsed = urllib.parse.urlparse(base_url)
-    if parsed.scheme != "http" or parsed.hostname not in LOOPBACK:
+    if parsed.scheme != "http" or not is_this_machine(parsed.hostname):
         return None
     try:
         with urllib.request.urlopen(base_url.rstrip("/") + "/api/tags", timeout=timeout) as reply:
@@ -68,7 +101,7 @@ def ollama_model_names(base_url: str, timeout: float = 1.5) -> list[str] | None:
 
 
 def ollama_models(base_url: str, timeout: float = 1.5) -> int | None:
-    """Number of local models, or None when no Ollama answers on loopback."""
+    """Number of local models, or None when no Ollama answers on this machine."""
     names = ollama_model_names(base_url, timeout)
     return None if names is None else len(names)
 
@@ -78,30 +111,59 @@ def grok_login_present(home: Path) -> bool:
     return auth.is_file() and not auth.is_symlink()
 
 
+def _line(found: bool, text: str, missing: str = "not found") -> str:
+    return f"{'found' if found else missing:<10} {text}"
+
+
 def discover(environ: dict[str, str], home: Path, ollama_url: str) -> tuple[dict[str, bool], list[str]]:
     found = env_keys(environ)
     lines = []
     for name, variable, label in ENV_KEYS:
-        lines.append(f"{'found' if found[name] else 'not found':<10} {label} ({variable} in this shell)")
+        lines.append(_line(found[name], f"{label} ({variable} in this shell)"))
     logins = detect_logins()
     found["codex_login"] = logins["codex_subscription"]
     found["claude_login"] = logins["claude_subscription"]
     found["grok_login"] = logins["grok"] and grok_login_present(home)
-    lines.append(f"{'found' if found['codex_login'] else 'not found':<10} Codex ChatGPT login on this machine")
-    lines.append(f"{'found' if found['claude_login'] else 'not found':<10} Claude Code subscription login on this machine")
-    lines.append(f"{'found' if found['grok_login'] else 'not found':<10} Grok Build login on this machine")
-    models = ollama_models(ollama_url)
-    found["ollama"] = models is not None
-    detail = f" ({models} model{'s' if models != 1 else ''})" if models is not None else ""
-    lines.append(f"{'found' if found['ollama'] else 'not found':<10} Ollama at {ollama_url}{detail}")
+    lines.append(_line(found["codex_login"], "Codex ChatGPT login on this machine"))
+    lines.append(_line(found["claude_login"], "Claude Code subscription login on this machine"))
+    lines.append(_line(found["grok_login"], "Grok Build login on this machine"))
+    for cli, label in (("claude", "Claude Code"), ("codex", "Codex"), ("grok", "Grok Build")):
+        found[f"{cli}_cli"] = bool(logins.get(cli))
+    clis = [label for cli, label in (("claude", "Claude Code"), ("codex", "Codex CLI"),
+                                      ("grok", "Grok Build")) if found[f"{cli}_cli"]]
+    lines.append(_line(bool(clis), "Coding CLIs on PATH" + (f": {', '.join(clis)}" if clis else "")))
+    names = ollama_model_names(ollama_url)
+    found["ollama"] = names is not None
+    found["ollama_installed"] = bool(shutil.which("ollama"))
+    found["ollama_models"] = bool(names)
+    if names is not None:
+        usable = [name for name in names if name]
+        listed = f": {', '.join(usable[:5])}{' ...' if len(usable) > 5 else ''}" if usable else ""
+        detail = f" ({len(names)} model{'s' if len(names) != 1 else ''} pulled{listed})"
+        lines.append(_line(True, f"Ollama at {ollama_url}{detail}"))
+    elif found["ollama_installed"]:
+        lines.append(_line(False, f"Ollama is installed but not answering at {ollama_url}",
+                           missing="stopped"))
+    else:
+        lines.append(_line(False, f"Ollama at {ollama_url}"))
     return found, lines
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--summary", type=Path, help="write name=found|missing lines here")
+    parser.add_argument("--ollama-models", metavar="URL",
+                        help="print the models of the Ollama at URL; exit 1 when none answers")
     args = parser.parse_args()
-    ollama_url = os.environ.get("BOSS_OLLAMA_URL", "http://127.0.0.1:11434")
+    if args.ollama_models:
+        names = ollama_model_names(args.ollama_models, timeout=3)
+        if names is None:
+            return 1
+        for name in names:
+            if name:
+                print(name)
+        return 0
+    ollama_url = os.environ.get("BOSS_OLLAMA_URL") or DEFAULT_OLLAMA_URL
     found, lines = discover(dict(os.environ), Path.home(), ollama_url)
     for line in lines:
         print(f"  {line}")

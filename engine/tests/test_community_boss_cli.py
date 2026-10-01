@@ -21,7 +21,7 @@ PICKERS = (REPO / "install.sh", REPO / "scripts/install/upgrade.sh", REPO / "doc
 HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
-    "console_password.py", "connect_ollama.py",
+    "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
 )
 SECRET = "sk-test-value-that-must-never-print"
 CODEX_SECRET = "codex-auth-bytes-that-must-never-print"
@@ -120,7 +120,10 @@ def world(tmp_path: Path) -> dict:
         "case \"$1:$2\" in compose:version) echo 'Docker Compose version v2' ;; esac\n"
         # The container-side checks and logins the connect paths run.
         "case \"$*\" in\n"
-        "  *host.docker.internal*) [ \"${BOSS_TEST_OLLAMA_UNREACHABLE:-0}\" = 1 ] && exit 1 ;;\n"
+        "  *'network inspect bridge'*) echo 127.0.0.1 ;;\n"
+        "  *host.docker.internal*)\n"
+        "    [ \"${BOSS_TEST_OLLAMA_UNREACHABLE:-0}\" = 1 ] && exit 1\n"
+        "    [ -n \"${BOSS_TEST_STATE:-}\" ] && [ -e \"$BOSS_TEST_STATE/ollama-loopback-only\" ] && exit 1 ;;\n"
         "  *'claude auth login'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/claude\" ;;\n"
         "  *'grok login --device-auth'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/grok\" ;;\n"
         "esac\n"
@@ -128,14 +131,28 @@ def world(tmp_path: Path) -> dict:
     )
     _executable(
         bin_dir / "curl",
-        "#!/bin/sh\nout=; code=\n"
+        "#!/bin/sh\nout=; code=; url=\n"
         "while [ \"$#\" -gt 0 ]; do\n"
         "  if [ \"$1\" = -o ]; then out=\"$2\"; shift 2; continue; fi\n"
         "  if [ \"$1\" = -w ]; then code=200; shift 2; continue; fi\n"
+        "  case \"$1\" in http://*|https://*) url=\"$1\" ;; esac\n"
         "  shift\ndone\n"
+        "printf '%s\\n' \"$url\" >> \"$BOSS_TEST_CURL_LOG\"\n"
+        # The official Ollama installer is never downloaded: a fixture stands in for it.
+        "case \"$url\" in *ollama.com*)\n"
+        "  [ -n \"${BOSS_TEST_OLLAMA_INSTALLER:-}\" ] || exit 22\n"
+        "  cp \"$BOSS_TEST_OLLAMA_INSTALLER\" \"$out\"; exit 0 ;;\nesac\n"
         "if [ -n \"$out\" ] && [ \"$out\" != /dev/null ]; then printf '{\"edition\":\"community\"}' > \"$out\"; fi\n"
         "if [ -n \"$code\" ]; then printf '%s' \"$code\"; fi\n",
     )
+    # Free disk space, as df -Pk prints it.
+    _executable(bin_dir / "df",
+                "#!/bin/sh\necho 'Filesystem 1024-blocks Used Available Capacity Mounted on'\n"
+                "echo \"/dev/test 999999999 1 ${BOSS_TEST_FREE_KB:-900000000} 1% /\"\n")
+    # uname -s answers BOSS_TEST_UNAME when a test sets it, so both host paths run anywhere.
+    _executable(bin_dir / "uname",
+                "#!/bin/sh\nif [ -n \"${BOSS_TEST_UNAME:-}\" ] && [ \"$1\" = -s ]; then\n"
+                "  echo \"$BOSS_TEST_UNAME\"; exit 0\nfi\nexec /usr/bin/uname \"$@\"\n")
     # Provider CLIs: not signed in unless the test says so. Status output only.
     _executable(bin_dir / "codex",
                 "#!/bin/sh\n[ \"$1 $2\" = 'login status' ] || exit 0\n"
@@ -154,9 +171,23 @@ def world(tmp_path: Path) -> dict:
         if not key.startswith(("BOSS_", "OPENAI_", "ANTHROPIC_", "GOOGLE_", "XAI_", "OPENROUTER_",
                                "CODEX_", "CLAUDE_"))
     }
+    # Never reach a real Ollama or Homebrew on the machine running the tests. A directory that
+    # holds either is dropped from PATH; the tools the scripts need from it are linked back.
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for tool in ("python3", "git", "bash"):
+        found = shutil.which(tool)
+        if found:
+            (tools / tool).symlink_to(Path(found).resolve())
+    path = [part for part in os.environ["PATH"].split(os.pathsep)
+            if part and not any((Path(part) / tool).exists() for tool in ("ollama", "brew"))]
     env.update(
         HOME=str(home),
-        PATH=f"{bin_dir}:{os.environ['PATH']}",
+        PATH=os.pathsep.join([str(bin_dir), str(tools), *path]),
+        BOSS_TEST_BIN=str(bin_dir),
+        BOSS_TEST_CURL_LOG=str(tmp_path / "curl-urls.log"),
+        BOSS_OLLAMA_REGISTRY="http://127.0.0.1:9",
+        BOSS_OLLAMA_DROPIN_DIR=str(tmp_path / "ollama.service.d"),
         BOSS_REPO_URL=str(upstream),
         BOSS_BIN_DIR=str(tmp_path / "userbin"),
         BOSS_OLLAMA_URL="http://127.0.0.1:9",
@@ -434,7 +465,7 @@ def test_yes_reports_a_found_login_without_copying_it(world) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     rendered = result.stdout + result.stderr
     assert "found      Codex ChatGPT login on this machine" in rendered
-    assert "Codex login found, not connected: boss connect codex" in rendered
+    assert "found, not connected: boss connect codex" in rendered
     assert "Connecting the Codex ChatGPT login" not in rendered
     assert "not found  Ollama" in rendered
     assert CODEX_SECRET not in rendered
@@ -490,7 +521,7 @@ def test_ollama_is_found_on_loopback_only(world, tmp_path: Path) -> None:
         summary = tmp_path / "summary"
         found = _run("python3", REPO / "scripts/install/discover_models.py", "--summary", summary, env=env)
         assert found.returncode == 0, found.stderr
-        assert "found      Ollama" in found.stdout and "(1 model)" in found.stdout
+        assert "found      Ollama" in found.stdout and "(1 model pulled: llama3)" in found.stdout
         assert "ollama=found" in summary.read_text()
         assert oct(summary.stat().st_mode & 0o777) == "0o600"
 
@@ -564,7 +595,17 @@ def test_bootstrap_honours_an_explicit_ref_and_stops_on_a_failed_download(tmp_pa
 # ---- phase 2: in-container sign-in, Ollama, keys from `boss connect`, purge -----------------
 
 class _FakeBoss:
-    """BOSS API and Ollama stand-ins on one loopback port. Records every request."""
+    """BOSS API, Ollama, and the Ollama registry, stand-ins on one loopback port.
+
+    Records every request. Ollama answers with `models` unless `local` is set; then it answers
+    only while the state directory says it is running, with the models pulled there.
+    """
+
+    ROLE_KEYS = ("code_agent_engine", "code_agent_model", "code_review_engine",
+                 "code_review_model", "code_agent_strong_engine", "code_agent_strong_model",
+                 "code_agent_low_cost_engine", "code_agent_low_cost_model")
+    SUBSCRIPTION_SOURCES = {"claude_code": "anthropic_claude_code", "grok": "xai_grok_build",
+                            "codex": "openai_codex_chatgpt"}
 
     def __init__(self, state: Path, models: tuple[str, ...] = ("llama3.2:latest",)) -> None:
         import http.server
@@ -573,7 +614,12 @@ class _FakeBoss:
 
         self.state = state
         self.models = list(models)
+        self.local = False
+        self.model_bytes = 4_683_000_000
         self.sources: list[dict] = []
+        self.settings: dict[str, dict] = {
+            key: {"key": key, "value": "claude_code" if key.endswith("_engine") else "",
+                  "source": "deployment default"} for key in self.ROLE_KEYS}
         self.requests: list[tuple[str, str, dict | None]] = []
         outer = self
 
@@ -586,10 +632,19 @@ class _FakeBoss:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def _body(self) -> dict:
+                return json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+
             def do_GET(self):  # noqa: N802
                 outer.requests.append(("GET", self.path, None))
                 if self.path.startswith("/api/tags"):
-                    return self._reply(200, {"models": [{"name": n} for n in outer.models]})
+                    names = outer.ollama_names()
+                    if names is None:
+                        return self._reply(503, {})
+                    return self._reply(200, {"models": [{"name": n} for n in names]})
+                if self.path.startswith("/v2/") and "/manifests/" in self.path:
+                    return self._reply(200, {"config": {"size": 1000},
+                                             "layers": [{"size": outer.model_bytes}]})
                 if self.path.startswith("/health"):
                     return self._reply(200, {"status": "ok"})
                 if self.path.startswith("/v1/setup/coding-agents"):
@@ -602,20 +657,34 @@ class _FakeBoss:
                     ]})
                 if self.path.startswith("/v1/entitlements/sources"):
                     return self._reply(200, {"project_id": "boss-dogfood", "items": outer.sources})
+                if self.path.startswith("/v1/settings"):
+                    return self._reply(200, {"knobs": list(outer.settings.values())})
                 return self._reply(404, {})
 
+            def do_PUT(self):  # noqa: N802
+                body = self._body()
+                outer.requests.append(("PUT", self.path, body))
+                key = self.path.rsplit("/", 1)[-1]
+                if key not in outer.settings:
+                    return self._reply(404, {})
+                outer.settings[key] = {"key": key, "value": body["value"], "source": "project"}
+                return self._reply(200, {"key": key, "value": body["value"], "source": "project"})
+
             def do_POST(self):  # noqa: N802
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length) or b"{}")
+                body = self._body()
                 outer.requests.append(("POST", self.path, body))
                 if self.path == "/v1/setup/coding-agents/connect":
+                    outer.sources.append({"source_id": outer.SUBSCRIPTION_SOURCES[body["provider"]],
+                                          "connection_status": "connected"})
                     return self._reply(201, {"connected": True, "entitlement_recorded": True,
                                              "proof": {"skipped": True}})
                 if self.path == "/v1/setup/model":
-                    outer.sources = [{"source_id": "setup-custom",
-                                      "credential_secret_ref_id": "ref-1",
-                                      "connection_metadata": {"base_url": body["base_url"]},
-                                      "supported_models": [body["model"]]}]
+                    outer.sources = [item for item in outer.sources
+                                     if item.get("source_id") != "setup-custom"]
+                    outer.sources.append({"source_id": "setup-custom",
+                                          "credential_secret_ref_id": "ref-1",
+                                          "connection_metadata": {"base_url": body["base_url"]},
+                                          "supported_models": [body["model"]]})
                     return self._reply(201, {"ok": True, "source_id": "setup-custom",
                                              "model": body["model"]})
                 return self._reply(404, {})
@@ -627,8 +696,20 @@ class _FakeBoss:
         self.port = self.server.server_port
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
+    def ollama_names(self) -> list[str] | None:
+        if not self.local:
+            return self.models
+        if not (self.state / "ollama-running").exists():
+            return None
+        pulled = self.state / "ollama-models"
+        return pulled.read_text().split() if pulled.exists() else []
+
     def posts(self, path: str) -> list[dict]:
         return [body for method, where, body in self.requests if method == "POST" and where == path]
+
+    def puts(self) -> dict[str, str]:
+        return {where.rsplit("/", 1)[-1]: body["value"]
+                for method, where, body in self.requests if method == "PUT"}
 
     def close(self) -> None:
         self.server.shutdown()
@@ -642,6 +723,7 @@ def boss_api(world):
     fake = _FakeBoss(state)
     world["env"].update(BOSS_API_PORT=str(fake.port),
                         BOSS_OLLAMA_URL=f"http://127.0.0.1:{fake.port}",
+                        BOSS_OLLAMA_REGISTRY=f"http://127.0.0.1:{fake.port}",
                         BOSS_TEST_STATE=str(state))
     yield fake
     fake.close()
@@ -722,9 +804,9 @@ def test_yes_alone_signs_nothing_in_and_connects_no_ollama(world, boss_api) -> N
     result = _install(world)
     rendered = result.stdout + result.stderr
     assert result.returncode == 0, rendered
-    assert "- Claude Code login found, not connected: boss connect claude" in rendered
-    assert "- Grok Build login found, not connected: boss connect grok" in rendered
-    assert "- Ollama found, not connected: boss connect ollama" in rendered
+    assert "Claude Code  found, not connected: boss connect claude" in rendered
+    assert "Grok Build   found, not connected: boss connect grok" in rendered
+    assert "Ollama       found, not connected: boss connect ollama" in rendered
     calls = _docker_calls(world)
     assert "auth login" not in calls and "login --device-auth" not in calls
     assert "host.docker.internal" not in calls
@@ -739,19 +821,21 @@ def test_connect_found_without_a_terminal_skips_sign_in_and_connects_ollama(worl
     assert result.returncode == 0, rendered
     assert "Claude Code: signing in needs a person at a terminal. Run: boss connect claude" in rendered
     assert "Grok Build: signing in needs a person at a terminal. Run: boss connect grok" in rendered
-    assert "- Claude Code found, not signed in: boss connect claude" in rendered
+    assert "Claude Code  found, not connected: boss connect claude" in rendered
     calls = _docker_calls(world)
     assert "auth login" not in calls and "login --device-auth" not in calls
 
     # Ollama needs no person: reachability is checked from the API container, then it is
     # registered through the setup route with a placeholder key.
     assert "exec -T api python -c" in calls
-    assert f"http://host.docker.internal:{boss_api.port}/api/tags" in calls
+    assert f"http://host.docker.internal:{boss_api.port} llama3.2:latest" in calls
     assert boss_api.posts("/v1/setup/model") == [{
         "project_id": "boss-dogfood", "actor": "ceo", "provider": "custom", "api_key": "ollama",
         "base_url": f"http://host.docker.internal:{boss_api.port}/v1", "model": "llama3.2:latest",
     }]
-    assert "✓ Ollama connected as an OpenAI-compatible model" in rendered
+    assert "Ollama       connected: llama3.2:latest" in rendered
+    # Nothing hosted is connected, so the found Ollama became every role's model.
+    assert "Default      Ollama llama3.2:latest for every role" in rendered
     assert CODEX_SECRET not in rendered
 
 
@@ -765,8 +849,8 @@ def test_connect_found_at_a_terminal_signs_in_inside_the_container(world, boss_a
     assert "exec -u boss api grok login --device-auth" in calls
     recorded = [body["provider"] for body in boss_api.posts("/v1/setup/coding-agents/connect")]
     assert recorded == ["claude_code", "grok"]
-    assert "✓ Claude Code signed in inside BOSS" in output
-    assert "✓ Grok Build signed in inside BOSS" in output
+    assert "Claude Code  connected" in output
+    assert "Grok Build   connected" in output
     # Nothing from the host login reaches BOSS.
     assert CODEX_SECRET not in output
     assert CODEX_SECRET not in str(boss_api.requests)
@@ -967,3 +1051,239 @@ def test_release_record_is_not_a_local_change_in_the_install(world) -> None:
     exclude = Path(_git("rev-parse", "--git-path", "info/exclude", cwd=world["install"]))
     exclude = exclude if exclude.is_absolute() else world["install"] / exclude
     assert exclude.read_text().splitlines().count("/.boss-release") == 1
+
+
+# ---- phase 2b: the Models step and the local model --------------------------------------------
+
+DEFAULT_LOCAL = "qwen2.5-coder:7b"
+
+
+def _local_ollama(world, boss_api, *, installed: bool = False, running: bool = False,
+                  pulled: tuple[str, ...] = (), unit: bool = False, brew: bool = False,
+                  loopback_only: bool = False) -> Path:
+    """Ollama as BOSS would set it up: its installer, binary, service, and Homebrew, all fakes.
+
+    Nothing is downloaded and nothing runs a model. Returns the call log.
+    """
+    boss_api.local = True
+    state = boss_api.state
+    bin_dir = Path(world["env"]["BOSS_TEST_BIN"])
+    fake = world["tmp"] / "fake-ollama"
+    _executable(fake,
+                "#!/bin/sh\n"
+                "printf 'ollama %s OLLAMA_HOST=%s\\n' \"$*\" \"${OLLAMA_HOST:-}\" >> \"$BOSS_TEST_STATE/calls\"\n"
+                "case \"$1\" in\n"
+                "  serve) touch \"$BOSS_TEST_STATE/ollama-running\" ;;\n"
+                "  pull) printf '%s\\n' \"$2\" >> \"$BOSS_TEST_STATE/ollama-models\" ;;\n"
+                "esac\n")
+    installer = world["tmp"] / "ollama-install.sh"
+    installer.write_text("#!/bin/sh\n# stands in for the official Ollama installer\n"
+                         f"cp '{fake}' \"$BOSS_TEST_BIN/ollama\"\n"
+                         "touch \"$BOSS_TEST_STATE/ollama-unit\" \"$BOSS_TEST_STATE/ollama-running\"\n")
+    _executable(bin_dir / "systemctl",
+                "#!/bin/sh\nprintf 'systemctl %s\\n' \"$*\" >> \"$BOSS_TEST_STATE/calls\"\n"
+                "case \"$1\" in\n"
+                "  cat) [ -e \"$BOSS_TEST_STATE/ollama-unit\" ] ;;\n"
+                "  enable|start) touch \"$BOSS_TEST_STATE/ollama-running\" ;;\n"
+                "  restart) touch \"$BOSS_TEST_STATE/ollama-running\"\n"
+                "           rm -f \"$BOSS_TEST_STATE/ollama-loopback-only\" ;;\n"
+                "esac\n")
+    _executable(bin_dir / "sudo",
+                "#!/bin/sh\nprintf 'sudo %s\\n' \"$*\" >> \"$BOSS_TEST_STATE/calls\"\n"
+                "[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+    _executable(bin_dir / "brew",
+                "#!/bin/sh\nprintf 'brew %s\\n' \"$*\" >> \"$BOSS_TEST_STATE/calls\"\n"
+                "case \"$1 $2\" in\n"
+                f"  'install ollama') cp '{fake}' \"$BOSS_TEST_BIN/ollama\"\n"
+                "                    touch \"$BOSS_TEST_STATE/brew-ollama\" ;;\n"
+                "  'list --formula') [ -e \"$BOSS_TEST_STATE/brew-ollama\" ] ;;\n"
+                "  'services start') touch \"$BOSS_TEST_STATE/ollama-running\" ;;\n"
+                "esac\n")
+    world["env"]["BOSS_TEST_OLLAMA_INSTALLER"] = str(installer)
+    if installed:
+        shutil.copy2(fake, bin_dir / "ollama")
+    for flag, name in ((brew, "brew-ollama"), (unit, "ollama-unit"), (running, "ollama-running"),
+                       (loopback_only, "ollama-loopback-only")):
+        if flag:
+            (state / name).touch()
+    if pulled:
+        (state / "ollama-models").write_text("\n".join(pulled) + "\n")
+    calls = state / "calls"
+    calls.touch()
+    return calls
+
+
+def _curl_urls(world) -> str:
+    log = Path(world["env"]["BOSS_TEST_CURL_LOG"])
+    return log.read_text() if log.exists() else ""
+
+
+ROLE_DEFAULT = {key: ("native" if key.endswith("_engine") else DEFAULT_LOCAL)
+                for key in _FakeBoss.ROLE_KEYS}
+
+
+def test_install_ollama_from_scratch_on_linux_sets_up_everything_and_becomes_the_default(
+        world, boss_api) -> None:
+    boss = _installed(world)
+    calls = _local_ollama(world, boss_api, loopback_only=True)
+    Path(world["env"]["BOSS_TEST_DOCKER_LOG"]).write_text("")
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux")
+
+    result = _run(boss, "connect", "--yes", "--install-ollama", env=env, timeout=120)
+
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+    # Installed with the official installer (a fixture here), then started by it.
+    assert "https://ollama.com/install.sh" in _curl_urls(world)
+    assert "✓ Ollama installed" in out
+    # Linux: the containers could not reach a loopback-only Ollama, so it was bound to the
+    # Docker bridge address through a systemd drop-in, never to 0.0.0.0.
+    dropin = (world["tmp"] / "ollama.service.d" / "boss-docker-bridge.conf").read_text()
+    assert f'Environment="OLLAMA_HOST=127.0.0.1:{boss_api.port}"' in dropin
+    assert "After=docker.service" in dropin and "0.0.0.0" not in dropin
+    assert "systemctl restart ollama.service" in calls.read_text()
+    # Size and disk shown before the pull.
+    assert out.index("about 4.4 GB to download") < out.index("Pulling qwen2.5-coder:7b")
+    assert "Disk: " in out and "GB free" in out
+    assert f"ollama pull {DEFAULT_LOCAL} OLLAMA_HOST=127.0.0.1:{boss_api.port}" in calls.read_text()
+    # Registered through the setup route, then made every role's model: nothing hosted.
+    assert boss_api.posts("/v1/setup/model")[-1]["model"] == DEFAULT_LOCAL
+    assert boss_api.puts() == ROLE_DEFAULT
+    assert "is now the default for every role" in out
+    env_text = (world["install"] / ".env").read_text()
+    assert f"BOSS_MODEL_PRICES_JSON='{{\"{DEFAULT_LOCAL}\":[0,0]}}'" in env_text
+    assert f"BOSS_OLLAMA_URL=http://127.0.0.1:{boss_api.port}" in env_text
+    assert "up -d --no-deps --no-build --force-recreate api worker" in _docker_calls(world)
+    assert "No completion was run" in out
+    assert f"Default      Ollama {DEFAULT_LOCAL} for every role" in out
+
+
+def test_install_ollama_starts_a_stopped_ollama_and_keeps_a_hosted_default(world, boss_api) -> None:
+    boss = _installed(world)
+    calls = _local_ollama(world, boss_api, installed=True, brew=True, pulled=(DEFAULT_LOCAL,))
+    boss_api.sources.append({"source_id": "anthropic_claude_code", "connection_status": "connected"})
+    env = dict(world["env"], BOSS_TEST_UNAME="Darwin")
+
+    result = _run(boss, "connect", "--yes", "--install-ollama", env=env, timeout=120)
+
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+    log = calls.read_text()
+    assert "brew services start ollama" in log
+    assert "brew install" not in log and "ollama pull" not in log
+    assert "ollama.com" not in _curl_urls(world)
+    assert f"{DEFAULT_LOCAL} is already pulled" in out
+    assert boss_api.posts("/v1/setup/model")[-1]["model"] == DEFAULT_LOCAL
+    # A hosted model is connected: Ollama is added, the roles are not touched.
+    assert boss_api.puts() == {}
+    assert "Ollama is added but not made the default" in out
+    assert "Default      hosted:" in out and "Ollama is added but not the default" in out
+
+
+def test_install_ollama_checks_disk_space_before_pulling(world, boss_api) -> None:
+    boss = _installed(world)
+    calls = _local_ollama(world, boss_api, installed=True, unit=True, running=True)
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux", BOSS_TEST_FREE_KB="1000000")
+
+    result = _run(boss, "connect", "--install-ollama", "--local-model", "qwen2.5-coder:14b", env=env)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Not enough disk space; nothing was downloaded" in result.stdout
+    assert "boss connect --install-ollama --local-model NAME" in result.stdout
+    assert "ollama pull" not in calls.read_text()
+    assert boss_api.posts("/v1/setup/model") == []
+    assert boss_api.puts() == {}
+
+
+def test_install_ollama_fails_visibly_when_the_containers_cannot_reach_it(world, boss_api) -> None:
+    boss = _installed(world)
+    _local_ollama(world, boss_api, installed=True, brew=True, running=True, pulled=(DEFAULT_LOCAL,),
+                  loopback_only=True)
+    env = dict(world["env"], BOSS_TEST_UNAME="Darwin")
+
+    result = _run(boss, "connect", "--install-ollama", env=env)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "The BOSS containers cannot reach Ollama at http://host.docker.internal:" in result.stdout
+    assert "boss connect --install-ollama" in result.stdout
+    assert boss_api.posts("/v1/setup/model") == []
+    assert not (world["tmp"] / "ollama.service.d").exists()
+
+
+def test_a_role_the_operator_chose_is_kept_when_ollama_becomes_the_default(world, boss_api) -> None:
+    boss = _installed(world)
+    boss_api.settings["code_review_engine"] = {"key": "code_review_engine", "value": "codex",
+                                               "source": "project"}
+    result = _run(boss, "connect", "ollama", env=world["env"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    puts = boss_api.puts()
+    assert "code_review_engine" not in puts and "code_review_model" not in puts
+    assert puts["code_agent_engine"] == "native" and puts["code_agent_model"] == "llama3.2:latest"
+
+
+def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_api) -> None:
+    boss = _installed(world)
+    _local_ollama(world, boss_api)
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux")
+
+    suppressed_code, suppressed = _run_tty(boss, "connect", "--no-local-model", env=env,
+                                           answers="n\nn\n")
+    assert suppressed_code == 0, suppressed
+    assert "[Y/n]" not in suppressed
+    assert "ollama.com" not in _curl_urls(world)
+
+    # Claude: no. Grok: no. Local model: Enter, which is yes.
+    code, output = _run_tty(boss, "connect", env=env, answers="n\nn\n\n", timeout=180)
+    assert code == 0, output
+    assert output.count("[y/N]") == 2 and output.count("[Y/n]") == 1
+    assert f"downloads {DEFAULT_LOCAL} (about 4.4 GB)" in output
+    assert "https://ollama.com/install.sh" in _curl_urls(world)
+    assert f"Ollama       connected: {DEFAULT_LOCAL}" in output
+
+
+def test_yes_alone_never_installs_a_local_model(world, boss_api) -> None:
+    _local_ollama(world, boss_api)
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux")
+    result = _install(world, env=env)
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+    assert "ollama.com" not in _curl_urls(world)
+    assert not (Path(env["BOSS_TEST_BIN"]) / "ollama").exists()
+    assert "A free local model: boss connect --install-ollama" in out
+    # The card: one row per source, each with its fix.
+    assert "API keys     not found. Export a key, then: boss connect keys" in out
+    assert "Codex        not found. Sign in with codex login --device-auth" in out
+    assert "Claude Code  not found. Sign in inside BOSS: boss connect claude" in out
+    assert "Ollama       not found. Set it up: boss connect --install-ollama" in out
+    assert "Default      none. Model calls fail closed until one is connected: boss connect" in out
+
+    again = _run(world["boss"], "connect", "--yes", env=env)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "ollama.com" not in _curl_urls(world)
+
+
+def test_installer_install_ollama_sets_up_the_local_model_unattended(world, boss_api) -> None:
+    calls = _local_ollama(world, boss_api, loopback_only=True)
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux")
+    result = _install(world, "--install-ollama", "--local-model", "qwen2.5-coder:3b", env=env)
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+    assert "ollama pull qwen2.5-coder:3b" in calls.read_text()
+    assert "Ollama       connected: qwen2.5-coder:3b" in out
+    assert "Default      Ollama qwen2.5-coder:3b for every role" in out
+
+    refused = _install(world, "--local-model", "bad name;rm", env=env)
+    assert refused.returncode != 0
+    assert "--local-model takes an Ollama model name" in refused.stdout + refused.stderr
+
+
+def test_boss_connect_list_only_reports(world, boss_api) -> None:
+    boss = _installed(world)
+    Path(world["env"]["BOSS_TEST_DOCKER_LOG"]).write_text("")
+    before = len(boss_api.requests)
+    result = _run(boss, "connect", "--list", env=world["env"])
+    assert result.returncode == 0, result.stderr
+    assert "Coding CLIs on PATH: Claude Code, Codex CLI, Grok Build" in result.stdout
+    assert f"found      Ollama at http://127.0.0.1:{boss_api.port} (1 model pulled: llama3.2:latest)" in result.stdout
+    assert _docker_calls(world) == ""
+    assert [r for r in boss_api.requests[before:] if r[0] != "GET"] == []

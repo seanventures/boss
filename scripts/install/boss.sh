@@ -25,8 +25,17 @@ Commands:
   password [reset]    Show the console password (terminal only), or rotate it
   doctor [--probe]    Check the install can do its job (runs checkup.sh)
   logs [-f] [SERVICE] Recent service logs (api, worker, web, db)
-  connect [WHAT]      Find model keys, subscriptions, and Ollama on this machine and offer
-                      to connect each one (one question each, terminal only).
+  connect [WHAT]      The Models step: find model keys, subscriptions, coding CLIs, and
+                      Ollama on this machine, offer to connect each one (one question
+                      each, terminal only), and when no model is usable offer to sign in
+                      to a subscription or set up a free local model. Ends with a table.
+                      --list               print what was found, change nothing
+                      --summary            print the Models table only
+                      --install-ollama     set up a local model end to end: install
+                                           Ollama, start it, make it reachable from the
+                                           containers, pull the model, connect it
+                      --local-model NAME   the model to pull (default qwen2.5-coder:7b)
+                      --no-local-model     never offer the local model
                       WHAT connects one explicitly:
                         keys    save provider keys exported in this shell into .env and
                                 restart api and worker (OPENAI_, ANTHROPIC_, GOOGLE_, XAI_,
@@ -37,7 +46,8 @@ Commands:
                         grok    sign Grok Build in inside the BOSS container (terminal)
                         ollama  connect the Ollama on this machine as a BOSS model
                       --connect-found answers yes for everything found; a sign-in that
-                      needs a person is still skipped without a terminal.
+                      needs a person is still skipped without a terminal. --yes asks
+                      nothing and installs nothing unless --install-ollama is given.
   upgrade [--to REF]  Back up, then move to the newest release (or REF). Never jumps to
                       main unless you installed from main or pass --to main.
                       Also: --dry-run, --backup-dir PATH, --web, --no-web
@@ -354,17 +364,17 @@ PY
 }
 
 # Recreate only api and worker so they read the new .env. The database and console keep running.
-apply_keys() {
-  local url i
-  printf 'Restarting api and worker so they read the saved keys...\n'
+apply_env() {
+  local what="${1:-Settings}" url i
+  printf 'Restarting api and worker so they read the updated .env...\n'
   if ! compose up -d --no-deps --no-build --force-recreate api worker </dev/null; then
-    printf '  ✗ api and worker were not restarted. The keys are saved; apply them with: boss update\n'
+    printf '  ✗ api and worker were not restarted. The change is saved in .env; apply it with: boss update\n'
     return 1
   fi
   url="$(api_url)"
   for i in $(seq 1 40); do
     if curl -fsS --max-time 5 "$url/health" >/dev/null 2>&1; then
-      printf '  ✓ Keys applied; API healthy at %s\n' "$url"
+      printf '  ✓ %s applied; API healthy at %s\n' "$what" "$url"
       return 0
     fi
     [[ "$i" -eq 40 ]] || sleep 3
@@ -384,7 +394,7 @@ connect_keys() {
   fi
   save_exported_keys || rc=$?
   case "$rc" in
-    0) apply_keys ;;
+    0) apply_env Keys ;;
     1) printf '  nothing   .env already holds these keys; no restart needed\n' ;;
     *) return 1 ;;
   esac
@@ -460,6 +470,10 @@ offer_sign_in() {
     printf '  next      %s: signing in needs a person at a terminal. Run: boss connect %s\n' "$label" "$name"
     return 2
   fi
+  if [[ "$assume" -ne 1 && "${NO_QUESTIONS:-0}" -eq 1 ]]; then
+    printf '  next      %s login found, not signed in (an unattended run signs nothing in without --connect-found). Run: boss connect %s\n' "$label" "$name"
+    return 2
+  fi
   if [[ "$assume" -ne 1 ]] &&
      ! ask_yes "Sign $label in inside the BOSS container now? $label runs its own login there; nothing is copied from this machine."; then
     printf '  skipped   %s. Later: boss connect %s\n' "$label" "$name"
@@ -468,85 +482,489 @@ offer_sign_in() {
   sign_in "$name"
 }
 
-# Ollama on this machine, reached from the containers as host.docker.internal (Compose maps it
-# with host-gateway; nothing is published). Registered through POST /v1/setup/model, the same
-# route as Mission Control's "Anything OpenAI-compatible" form. Status: 0 connected, 1 failed,
-# 2 skipped by the user.
-connect_ollama() {
-  local assume="$1" host_url="${BOSS_OLLAMA_URL:-http://127.0.0.1:11434}" port container key
-  if [[ "$host_url" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})/?$ ]]; then
-    port="${BASH_REMATCH[2]}"
+# ---- Ollama: connect one that is running, or set up a local model end to end ------------------
+
+OLLAMA_DEFAULT_MODEL="qwen2.5-coder:7b"
+OLLAMA_INSTALLER_URL="https://ollama.com/install.sh"
+
+host_os() { uname -s 2>/dev/null || echo unknown; }
+
+# Root for a system service change: directly as root, through sudo at a terminal, and only
+# noninteractive sudo otherwise. Never used for the per-user parts.
+as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif have_tty; then
+    sudo "$@"
   else
-    printf '  ✗ BOSS_OLLAMA_URL must be http://127.0.0.1:PORT on this machine; nothing was changed.\n'
+    sudo -n "$@"
+  fi
+}
+
+# Where Ollama answers on this machine: the environment, then .env (set when BOSS bound Ollama to
+# the Docker bridge), then the default loopback address.
+ollama_url() {
+  local url="${BOSS_OLLAMA_URL:-}"
+  [[ -n "$url" ]] || url="$(env_value BOSS_OLLAMA_URL)"
+  printf '%s\n' "${url:-http://127.0.0.1:11434}"
+}
+
+ollama_port() {
+  local url
+  url="$(ollama_url)"
+  [[ "$url" =~ ^http://[^/]+:([0-9]{1,5})/?$ ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+ollama_hostport() { local url; url="$(ollama_url)"; url="${url#http://}"; printf '%s\n' "${url%/}"; }
+
+# The models Ollama has pulled, one per line; status 1 when no Ollama answers on this machine.
+ollama_models() {
+  python3 "$INSTALL_DIR/scripts/install/discover_models.py" --ollama-models "$(ollama_url)" \
+    </dev/null 2>/dev/null
+}
+
+ollama_up() { ollama_models >/dev/null; }
+
+valid_model_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$ ]]; }
+
+gigabytes() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1073741824 }'; }
+
+# A value that is not a secret (an address) into .env, replacing its line. Atomic, mode 0600.
+set_env_value() {
+  BOSS_ENV_VALUE="$2" python3 - "$ENV_FILE" "$1" <<'PY'
+import os
+import sys
+
+path, name = sys.argv[1], sys.argv[2]
+value = os.environ["BOSS_ENV_VALUE"]
+with open(path, encoding="utf-8") as stream:
+    lines = [line for line in stream.read().splitlines() if not line.startswith(name + "=")]
+lines.append(f"{name}={value}")
+temporary = f"{path}.writing.{os.getpid()}"
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+    stream.write("\n".join(lines) + "\n")
+os.replace(temporary, path)
+PY
+}
+
+# Can the BOSS API container read Ollama's model list (and see MODEL, when given)?
+container_sees_ollama() {
+  compose exec -T api python -c '
+import json, sys, urllib.request
+body = json.load(urllib.request.urlopen(sys.argv[1] + "/api/tags", timeout=5))
+names = [m.get("name") for m in body.get("models", []) if isinstance(m, dict)]
+sys.exit(0 if len(sys.argv) < 3 or sys.argv[2] in names else 3)' "$@" </dev/null >/dev/null 2>&1
+}
+
+install_ollama() {
+  local script
+  if command -v ollama >/dev/null 2>&1; then
+    printf '  ✓ Ollama is installed\n'
+    return 0
+  fi
+  case "$(host_os)" in
+    Linux)
+      printf 'Installing Ollama with its official installer (%s)...\n' "$OLLAMA_INSTALLER_URL"
+      script="$(mktemp)"
+      # Download first: a failed or partial download never runs.
+      if ! curl -fsSL --proto '=https' --tlsv1.2 "$OLLAMA_INSTALLER_URL" -o "$script" ||
+         [[ "$(head -c 2 "$script" 2>/dev/null)" != '#!' ]]; then
+        rm -f "$script"
+        printf '  ✗ Could not download the Ollama installer from %s. Nothing was installed.\n' "$OLLAMA_INSTALLER_URL"
+        return 1
+      fi
+      if have_tty; then sh "$script" </dev/tty; else sh "$script" </dev/null; fi || {
+        rm -f "$script"
+        printf '  ✗ The Ollama installer failed; the reason is above. Retry: boss connect --install-ollama\n'
+        return 1
+      }
+      rm -f "$script"
+      ;;
+    Darwin)
+      if ! command -v brew >/dev/null 2>&1; then
+        printf '  ✗ Install the Ollama app from https://ollama.com/download and open it once, then run: boss connect --install-ollama\n'
+        return 1
+      fi
+      printf 'Installing Ollama with Homebrew (brew install ollama)...\n'
+      brew install ollama </dev/null || {
+        printf '  ✗ brew install ollama failed; the reason is above. Retry: boss connect --install-ollama\n'
+        return 1
+      }
+      ;;
+    *)
+      printf '  ✗ BOSS can set up Ollama on Linux and macOS only. Install it from https://ollama.com/download, then: boss connect ollama\n'
+      return 1
+      ;;
+  esac
+  hash -r
+  if ! command -v ollama >/dev/null 2>&1; then
+    printf '  ✗ Ollama was installed, but the ollama command is not on PATH. Open a new shell, then: boss connect --install-ollama\n'
     return 1
   fi
+  printf '  ✓ Ollama installed\n'
+}
+
+start_ollama_serve() {
+  mkdir -p "$HOME/.ollama"
+  printf '  Running ollama serve in the background (log: ~/.ollama/boss-serve.log). It does not start again after a reboot.\n'
+  OLLAMA_HOST="$(ollama_hostport)" nohup ollama serve >"$HOME/.ollama/boss-serve.log" 2>&1 </dev/null &
+}
+
+start_ollama() {
+  local i
+  if ollama_up; then
+    printf '  ✓ Ollama is running at %s\n' "$(ollama_url)"
+    return 0
+  fi
+  printf 'Starting Ollama...\n'
+  case "$(host_os)" in
+    Linux)
+      if command -v systemctl >/dev/null 2>&1 && systemctl cat ollama.service >/dev/null 2>&1; then
+        as_root systemctl enable --now ollama.service </dev/null || true
+      else
+        start_ollama_serve
+      fi
+      ;;
+    Darwin)
+      if command -v brew >/dev/null 2>&1 && brew list --formula ollama >/dev/null 2>&1; then
+        brew services start ollama </dev/null >/dev/null || true
+      elif [[ -d /Applications/Ollama.app ]]; then
+        open -a Ollama || true
+      else
+        start_ollama_serve
+      fi
+      ;;
+    *) start_ollama_serve ;;
+  esac
+  for i in $(seq 1 30); do
+    if ollama_up; then
+      printf '  ✓ Ollama is running at %s\n' "$(ollama_url)"
+      return 0
+    fi
+    [[ "$i" -eq 30 ]] || sleep 1
+  done
+  printf '  ✗ Ollama did not start. Start it (ollama serve), then: boss connect --install-ollama\n'
+  return 1
+}
+
+# The containers reach the host as host.docker.internal. Docker Desktop forwards that to the
+# host's loopback. Docker Engine on Linux maps it to the Docker bridge gateway, where an Ollama
+# listening on 127.0.0.1 cannot be reached. With $1=1 (the full setup), BOSS then binds the
+# Ollama service to the bridge gateway: reachable from this machine and its containers, not from
+# the network. Never 0.0.0.0. Without it, the fix is printed and nothing changes.
+reach_ollama() {
+  local rebind="$1" port container gateway dropin i
+  port="$(ollama_port)" || { printf '  ✗ BOSS_OLLAMA_URL must look like http://127.0.0.1:11434\n'; return 1; }
   container="http://host.docker.internal:$port"
+  if container_sees_ollama "$container"; then
+    return 0
+  fi
+  if [[ "$rebind" -ne 1 || "$(host_os)" != Linux ]] || ! command -v systemctl >/dev/null 2>&1 ||
+     ! systemctl cat ollama.service >/dev/null 2>&1; then
+    printf '  ✗ The BOSS containers cannot reach Ollama at %s. Ollama must listen on an address the Docker bridge reaches; on Linux run: boss connect --install-ollama (it binds Ollama to the bridge address). See docs/community/MODEL_CONNECTIONS.md. Nothing was changed.\n' "$container"
+    return 1
+  fi
+  docker_cmd
+  gateway="$("${DOCKER[@]}" network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' </dev/null 2>/dev/null || true)"
+  if [[ ! "$gateway" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ || "$gateway" == 0.0.0.0 ]]; then
+    printf '  ✗ Could not read the Docker bridge address. Set OLLAMA_HOST=<bridge address>:%s for the Ollama service, then: boss connect ollama\n' "$port"
+    return 1
+  fi
+  dropin="${BOSS_OLLAMA_DROPIN_DIR:-/etc/systemd/system/ollama.service.d}"
+  printf 'Ollama listens on 127.0.0.1, which containers cannot reach on Linux. Binding it to the Docker bridge address %s:%s: this machine and its containers reach it, your network does not.\n' "$gateway" "$port"
+  if ! as_root mkdir -p "$dropin" </dev/null ||
+     ! printf '[Unit]\nAfter=docker.service\n\n[Service]\nEnvironment="OLLAMA_HOST=%s:%s"\n' "$gateway" "$port" |
+         as_root tee "$dropin/boss-docker-bridge.conf" >/dev/null ||
+     ! as_root systemctl daemon-reload </dev/null || ! as_root systemctl restart ollama.service </dev/null; then
+    printf '  ✗ Could not change the Ollama service (this needs sudo). Set OLLAMA_HOST=%s:%s for it yourself, then: boss connect ollama\n' "$gateway" "$port"
+    return 1
+  fi
+  set_env_value BOSS_OLLAMA_URL "http://$gateway:$port"
+  export BOSS_OLLAMA_URL="http://$gateway:$port"
+  printf '  Ollama now listens on %s:%s (%s/boss-docker-bridge.conf). For the ollama command use: export OLLAMA_HOST=%s:%s\n' "$gateway" "$port" "$dropin" "$gateway" "$port"
+  for i in $(seq 1 30); do
+    if ollama_up && container_sees_ollama "$container"; then
+      return 0
+    fi
+    [[ "$i" -eq 30 ]] || sleep 1
+  done
+  printf '  ✗ The BOSS containers still cannot reach Ollama at %s. Check: systemctl status ollama, then: boss connect ollama\n' "$container"
+  return 1
+}
+
+pull_local_model() {
+  local model="$1" bytes dir free_kb need_kb
+  if ollama_models | grep -qxF -- "$model"; then
+    printf '  ✓ %s is already pulled\n' "$model"
+    return 0
+  fi
+  bytes="$(python3 "$INSTALL_DIR/scripts/install/local_model.py" size "$model" </dev/null 2>/dev/null || echo unknown)"
+  dir="${OLLAMA_MODELS:-}"
+  if [[ -z "$dir" ]]; then
+    if [[ -d /usr/share/ollama ]]; then dir=/usr/share/ollama; else dir="$HOME"; fi
+  fi
+  free_kb="$(df -Pk "$dir" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [[ "$bytes" =~ ^[0-9]+$ ]]; then
+    need_kb=$(( bytes / 1024 + 2 * 1024 * 1024 ))
+    printf 'Model %s: about %s GB to download.\n' "$model" "$(gigabytes "$bytes")"
+  else
+    need_kb=$(( 10 * 1024 * 1024 ))
+    printf 'Model %s: the Ollama registry did not say how large it is, so BOSS asks for 10 GB free.\n' "$model"
+  fi
+  if [[ "$free_kb" =~ ^[0-9]+$ ]]; then
+    printf 'Disk: %s GB free in %s, %s GB needed.\n' "$(gigabytes $(( free_kb * 1024 )))" "$dir" "$(gigabytes $(( need_kb * 1024 )))"
+    if (( free_kb < need_kb )); then
+      printf '  ✗ Not enough disk space; nothing was downloaded. Free space, or choose a smaller model: boss connect --install-ollama --local-model NAME\n'
+      return 1
+    fi
+  else
+    printf 'Disk: could not read free space in %s; pulling anyway.\n' "$dir"
+  fi
+  printf 'Pulling %s with ollama pull...\n' "$model"
+  if ! OLLAMA_HOST="$(ollama_hostport)" ollama pull "$model" </dev/null; then
+    printf '  ✗ ollama pull %s failed; the reason is above. Retry: boss connect --install-ollama --local-model %s\n' "$model" "$model"
+    return 1
+  fi
+  printf '  ✓ %s pulled\n' "$model"
+}
+
+# Register through POST /v1/setup/model, make it every role's model when no hosted model is
+# connected, price it at zero, and check from the API container that the model is there.
+# Container reachability must already be established.
+register_ollama() {
+  local model="$1" key port container result rc=0 args
+  port="$(ollama_port)" || return 1
+  container="http://host.docker.internal:$port"
+  key="$(env_value BOSS_API_KEY)"
+  [[ -n "$key" ]] || { printf '  ✗ BOSS_API_KEY is missing from %s; rerun the installer.\n' "$ENV_FILE"; return 1; }
+  result="$(mktemp)"
+  args=(--api-url "$(api_url)" --container-url "$container/v1" --default-if-no-hosted --env-file "$ENV_FILE")
+  [[ -z "$model" ]] || args+=(--model "$model")
+  BOSS_MODELS_RESULT="$result" BOSS_API_KEY="$key" BOSS_OLLAMA_URL="$(ollama_url)" \
+    python3 "$INSTALL_DIR/scripts/install/connect_ollama.py" "${args[@]}" </dev/null || rc=$?
+  model="$(grep -m 1 '^ollama_model=' "$result" | cut -d= -f2- || true)"
+  [[ -z "${BOSS_MODELS_RESULT:-}" ]] || cat "$result" >> "$BOSS_MODELS_RESULT"
+  rm -f "$result"
+  [[ "$rc" -eq 0 && -n "$model" ]] || return 1
+  rc=0
+  python3 "$INSTALL_DIR/scripts/install/local_model.py" price-zero "$model" "$ENV_FILE" </dev/null || rc=$?
+  case "$rc" in
+    0) printf '  Priced %s at zero in BOSS_MODEL_PRICES_JSON (.env)\n' "$model"
+       apply_env Price || return 1 ;;
+    3) ;;
+    *) printf '  ✗ %s was connected but not priced at zero; BOSS counts it at its default rate.\n' "$model" ;;
+  esac
+  if container_sees_ollama "$container" "$model"; then
+    printf '  ✓ Checked: the BOSS API container sees %s in Ollama. No completion was run: Community setup makes no model calls; the first governed job verifies it.\n' "$model"
+  else
+    printf '  ✗ The BOSS API container does not see %s in Ollama. Check: ollama list, then: boss connect ollama\n' "$model"
+    return 1
+  fi
+}
+
+# A running Ollama, found on this machine. Status: 0 connected, 1 failed, 2 skipped.
+connect_ollama() {
+  local assume="$1" model="${2:-}"
   if [[ "$assume" -ne 1 ]] &&
-     ! ask_yes "Connect the Ollama on this machine as a BOSS model? The BOSS containers reach it at $container; no port is opened."; then
+     ! ask "Connect the Ollama on this machine as a BOSS model? The BOSS containers reach it as host.docker.internal; no port is opened."; then
     printf '  skipped   Ollama (nothing was changed). Later: boss connect ollama\n'
     return 2
   fi
-  if ! compose exec -T api python -c \
-       'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=5).read(1)' \
-       "$container/api/tags" </dev/null >/dev/null 2>&1; then
-    printf '  ✗ The BOSS API container cannot reach Ollama at %s. On Linux, Ollama listens on 127.0.0.1 only unless configured otherwise; see docs/community/MODEL_CONNECTIONS.md. Nothing was changed.\n' "$container"
-    return 1
-  fi
+  reach_ollama 0 || return 1
+  register_ollama "$model"
+}
+
+# The whole local setup: install, start, reach from the containers, pull, register, check.
+setup_local_model() {
+  local model="$1"
+  printf 'Setting up a local model: Ollama with %s\n' "$model"
+  install_ollama || return 1
+  start_ollama || return 1
+  reach_ollama 1 || return 1
+  pull_local_model "$model" || return 1
+  register_ollama "$model"
+}
+
+# ---- the Models step: detect, connect what was found, offer to install when nothing is usable ---
+
+ASSUME=0           # --connect-found / --yes: yes for found items (never for installs)
+NO_QUESTIONS=0     # --yes / an unattended installer: ask nothing
+INSTALL_OLLAMA=0   # --install-ollama: the whole local setup, unattended allowed
+NO_LOCAL_MODEL=0   # --no-local-model: never offer the local setup
+LOCAL_MODEL="$OLLAMA_DEFAULT_MODEL"
+LOCAL_MODEL_SET=0
+FROM_INSTALLER=0   # the installer already saved keys and handled Codex
+FOUND_FILE=""
+
+# Ask unless told not to. ask_default_yes answers yes on Enter.
+ask() { [[ "$NO_QUESTIONS" -eq 0 ]] && ask_yes "$1"; }
+ask_default_yes() {
+  local reply
+  [[ "$NO_QUESTIONS" -eq 0 ]] && have_tty || return 1
+  printf '%s [Y/n] ' "$1" >/dev/tty
+  read -r reply </dev/tty || return 1
+  [[ -z "$reply" || "$reply" == y || "$reply" == Y || "$reply" == yes ]]
+}
+
+model_state() {
+  local key rc=0
   key="$(env_value BOSS_API_KEY)"
-  [[ -n "$key" ]] || { printf '  ✗ BOSS_API_KEY is missing from %s; rerun the installer.\n' "$ENV_FILE"; return 1; }
-  BOSS_API_KEY="$key" BOSS_OLLAMA_URL="$host_url" python3 \
-    "$INSTALL_DIR/scripts/install/connect_ollama.py" --api-url "$(api_url)" \
-    --container-url "$container/v1" </dev/null
+  BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/model_status.py" \
+    --api-url "$(api_url)" --env-file "$ENV_FILE" "$@" </dev/null >/dev/null 2>&1 || rc=$?
+  return "$rc"
+}
+
+# 0 a model BOSS can use is connected, 3 none, 4 BOSS cannot say.
+usable_model() {
+  local rc=0
+  model_state --hosted || rc=$?
+  [[ "$rc" -ne 0 ]] || return 0
+  [[ "$rc" -ne 4 ]] || return 4
+  model_state --local || rc=$?
+  return "$rc"
+}
+
+print_model_rows() {
+  local found="$1" key
+  key="$(env_value BOSS_API_KEY)"
+  BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/model_status.py" \
+    --api-url "$(api_url)" --env-file "$ENV_FILE" ${found:+--found "$found"} </dev/null
+}
+
+models_step() {
+  local summary own_summary=0 key rc=0 size failed=0
+  if [[ -n "$FOUND_FILE" ]]; then
+    summary="$FOUND_FILE"
+  else
+    printf 'Looking for model keys, subscriptions, coding CLIs, and Ollama on this machine (read only)...\n'
+    summary="$(mktemp)"; own_summary=1
+    python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary" </dev/null
+  fi
+  state() { grep -m 1 "^$1=" "$summary" | cut -d= -f2-; }
+
+  if [[ "$FROM_INSTALLER" -eq 0 ]]; then
+    for key in openai anthropic google xai openrouter; do
+      if [[ "$(state "${key}_key")" == found ]]; then
+        connect_keys || true
+        break
+      fi
+    done
+    if [[ "$(state codex_login)" == found ]]; then
+      connect_codex "$ASSUME" || printf '  ✗ Codex login not connected; the reason is above. Retry: boss connect codex\n'
+    fi
+  fi
+  if [[ "$(state claude_login)" == found ]]; then
+    offer_sign_in claude "$ASSUME" || true
+  fi
+  if [[ "$(state grok_login)" == found ]]; then
+    offer_sign_in grok "$ASSUME" || true
+  fi
+
+  if [[ "$INSTALL_OLLAMA" -eq 1 ]]; then
+    setup_local_model "$LOCAL_MODEL" || failed=1
+  elif [[ "$(state ollama)" == found ]]; then
+    if ollama_models | grep -qxF -- "$LOCAL_MODEL"; then
+      connect_ollama "$ASSUME" "$LOCAL_MODEL" || true
+    else
+      connect_ollama "$ASSUME" || true
+    fi
+  fi
+
+  usable_model || rc=$?
+  if [[ "$rc" -eq 3 ]]; then
+    printf '\nNo model is connected yet, so BOSS cannot run model work.\n'
+    for key in claude grok; do
+      [[ "$(state "${key}_login")" != found ]] || continue  # already offered above
+      if have_tty && ask "Sign in to $([[ $key == claude ]] && echo 'Claude Code' || echo 'Grok Build') inside BOSS now? It runs the provider's own login in the BOSS container; you need that subscription."; then
+        if sign_in "$key" && usable_model; then
+          break
+        fi
+      fi
+    done
+    rc=0
+    usable_model || rc=$?
+  fi
+  if [[ "$rc" -eq 3 && "$NO_LOCAL_MODEL" -eq 0 && "$INSTALL_OLLAMA" -eq 0 ]]; then
+    size="$(python3 "$INSTALL_DIR/scripts/install/local_model.py" size "$LOCAL_MODEL" </dev/null 2>/dev/null || echo unknown)"
+    [[ "$size" =~ ^[0-9]+$ ]] && size="about $(gigabytes "$size") GB" || size="size unknown"
+    if ask_default_yes "Set up a free local model? BOSS installs Ollama if needed and downloads $LOCAL_MODEL ($size)."; then
+      setup_local_model "$LOCAL_MODEL" || true
+    else
+      printf '  next      A free local model: boss connect --install-ollama  (or --local-model NAME)\n'
+    fi
+  fi
+  if [[ "$FROM_INSTALLER" -eq 0 ]]; then
+    if [[ "$(state codex_cli)" != found && "$(state codex_login)" != found ]]; then
+      printf '  next      Codex: install the CLI with boss update --install-coding-clis, sign in with codex login --device-auth, then: boss connect codex\n'
+    fi
+    printf '\nModels\n'
+    print_model_rows "$summary" || true
+  fi
+  [[ "$own_summary" -eq 0 ]] || rm -f "$summary"
+  # An explicit --install-ollama that did not finish is a failure, not a note.
+  return "$failed"
 }
 
 cmd_connect() {
-  local what="" assume=0 offer=0 summary key
+  local what="" offer=0 mode=steps summary
   ACCEPT_DB=0
   need_install
   while [[ $# -gt 0 ]]; do
     case "$1" in
       codex|claude|grok|ollama|keys) what="$1"; shift ;;
-      --yes|-y|--connect-found) assume=1; shift ;;
+      --connect-found) ASSUME=1; shift ;;
+      --yes|-y) ASSUME=1; NO_QUESTIONS=1; shift ;;
       --accept-database-fallback) ACCEPT_DB=1; shift ;;
-      --offer) offer=1; shift ;;  # the installer: ask first, as for a found login
+      --install-ollama) INSTALL_OLLAMA=1; shift ;;
+      --local-model)
+        LOCAL_MODEL="${2:-}"; LOCAL_MODEL_SET=1; shift 2 || die "--local-model needs a model name"
+        valid_model_name "$LOCAL_MODEL" || die "--local-model takes an Ollama model name such as $OLLAMA_DEFAULT_MODEL" ;;
+      --no-local-model) NO_LOCAL_MODEL=1; shift ;;
+      --list) mode=list; shift ;;
+      --summary) mode=summary; shift ;;
+      # Used by the installer.
+      --offer) offer=1; shift ;;
+      --no-questions) NO_QUESTIONS=1; shift ;;
+      --from-installer) FROM_INSTALLER=1; shift ;;
+      --found) FOUND_FILE="${2:?--found needs a file}"; shift 2 ;;
       *) die "connect does not take that argument (see boss help). Model keys are read from the environment, never from arguments, so the argument is not repeated here." ;;
     esac
   done
+  case "$mode" in
+    list)
+      printf 'Model keys, subscriptions, coding CLIs, and Ollama on this machine (read only):\n'
+      python3 "$INSTALL_DIR/scripts/install/discover_models.py" </dev/null
+      return ;;
+    summary)
+      summary="$(mktemp)"
+      python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary" </dev/null >/dev/null
+      print_model_rows "$summary"
+      rm -f "$summary"
+      return ;;
+  esac
   case "$what" in
-    codex) connect_codex "$assume"; return ;;
+    codex) connect_codex "$ASSUME"; return ;;
     keys) connect_keys; return ;;
-    ollama) connect_ollama "$([[ "$offer" -eq 1 ]] && echo "$assume" || echo 1)"; return ;;
+    ollama)
+      if [[ "$INSTALL_OLLAMA" -eq 1 ]]; then
+        setup_local_model "$LOCAL_MODEL"
+      elif [[ "$offer" -eq 1 ]]; then
+        connect_ollama "$ASSUME"
+      else
+        connect_ollama 1 "$([[ "${LOCAL_MODEL_SET:-0}" -eq 1 ]] && printf '%s' "$LOCAL_MODEL")"
+      fi
+      return ;;
     claude|grok)
       if [[ "$offer" -eq 1 ]]; then
-        offer_sign_in "$what" "$assume"
+        offer_sign_in "$what" "$ASSUME"
       else
         sign_in "$what"
       fi
       return ;;
   esac
-  printf 'Looking for model keys and subscriptions on this machine (read only)...\n'
-  summary="$(mktemp)"
-  trap 'rm -f "$summary"' RETURN
-  python3 "$INSTALL_DIR/scripts/install/discover_models.py" --summary "$summary"
-  state() { grep -m 1 "^$1=" "$summary" | cut -d= -f2-; }
-  for key in openai anthropic google xai openrouter; do
-    if [[ "$(state "${key}_key")" == found ]]; then
-      connect_keys || true
-      break
-    fi
-  done
-  if [[ "$(state codex_login)" == found ]]; then
-    connect_codex "$assume" || printf '  ✗ Codex login not connected; the reason is above. Retry: boss connect codex\n'
-  fi
-  if [[ "$(state claude_login)" == found ]]; then
-    offer_sign_in claude "$assume" || true
-  fi
-  if [[ "$(state grok_login)" == found ]]; then
-    offer_sign_in grok "$assume" || true
-  fi
-  if [[ "$(state ollama)" == found ]]; then
-    connect_ollama "$assume" || true
-  fi
+  models_step
 }
 
 case "$COMMAND" in

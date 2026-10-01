@@ -20,7 +20,9 @@ Paste one command:
 curl -fsSL https://boss.sean.network/install.sh | bash
 ```
 
-It installs the newest published release into `~/boss` without asking anything, except an optional OpenAI key when no provider key is exported. Add `| bash -s -- --yes` instead of `| bash` to skip that question too. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed. The installer also looks for a Codex, Claude Code, or Grok login and a local Ollama. At a terminal it asks once before each one: copying the Codex login, signing Claude Code or Grok in inside the BOSS container with the provider's own login (login files on your machine are never copied), and connecting Ollama. `--yes` connects none of them unless you also pass `--connect-found`.
+It installs the newest published release into `~/boss`. The only setup question is an optional OpenAI key, asked when no provider key is exported. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed.
+
+Models are part of the install. After the stack is healthy, the installer looks for a Codex, Claude Code, or Grok login, the coding CLIs, and Ollama, and asks once before connecting each one. A Codex login is copied into BOSS. Claude Code and Grok sign in again inside the BOSS container with the provider's own login, so login files on your machine are never copied. If no model is usable, it offers to sign you in to a subscription or to set up a free local model: Ollama with `qwen2.5-coder:7b`. That model then becomes the default for every role. Add `| bash -s -- --yes` instead of `| bash` to skip every question. With `--yes`, exported keys are still saved, but nothing is copied, signed in, or installed; add `--connect-found` to connect what was found, or `--install-ollama` to set up the local model. The summary card lists each model source with the command that fixes it, and [Model connections](MODEL_CONNECTIONS.md) has the details.
 
 Prefer git? Clone the release and install it in place:
 
@@ -41,7 +43,7 @@ boss open        # console address
 boss password    # console password, in a terminal only
 boss doctor      # check the install can do its job
 boss status      # release, services, and health
-boss connect     # save newly exported keys; connect logins and Ollama found here
+boss connect     # the Models step again: keys, logins, Ollama, a local model
 boss upgrade     # back up, then move to the newest release
 boss uninstall   # stop BOSS and keep data
 ```
