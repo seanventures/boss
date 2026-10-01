@@ -562,16 +562,26 @@ def store_coding_agent_credential(
     # A Claude setup token is an operator-supplied session. It stays in the local
     # secret store. Postgres would put it in the next backup dump, so there is no
     # database fallback for this provider.
+    #
+    # NOT POSTGRES IS THE RULE — NOT "LOCAL_VAULT ONLY". The first version accepted the local
+    # vault and nothing else, and the installer never configures the vault's master key, so a
+    # Claude token could not be stored on any standard install — including one installed with
+    # --secret-store infisical, a real secret store that had just accepted the Codex login.
+    # The install's own secret store is used when it has one; the local vault is the fallback
+    # only when the default would be the database.
     if provider == "claude_code":
-        try:
-            backend_for("local_vault", settings)
-        except SecretUnavailable as exc:
-            raise SetupError(
-                "Claude setup-token import stores only in the local secret store, "
-                "and that store is not available on this install. The token was not "
-                f"stored. {exc}"
-            ) from None
-        backend = "local_vault"
+        backend = default_secret_backend(settings)
+        if backend == "database":
+            try:
+                backend_for("local_vault", settings)
+            except SecretUnavailable as exc:
+                raise SetupError(
+                    "Claude setup-token import needs a secret store, and this install has "
+                    "none: the token is never put in BOSS's Postgres database. Reinstall with "
+                    "--secret-store infisical (the bundled store), then connect again. The "
+                    f"token was not stored. {exc}"
+                ) from None
+            backend = "local_vault"
     else:
         backend = default_secret_backend(settings)
     # ASK BEFORE FALLING BACK TO POSTGRES. `default_secret_backend` takes the best store the
