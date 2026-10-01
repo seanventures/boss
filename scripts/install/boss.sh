@@ -737,7 +737,21 @@ pull_local_model() {
     printf 'Disk: could not read free space in %s; pulling anyway.\n' "$dir"
   fi
   printf 'Pulling %s with ollama pull...\n' "$model"
-  if ! OLLAMA_HOST="$(ollama_hostport)" ollama pull "$model" </dev/null; then
+  local pull_ok=0
+  if [[ -t 1 ]]; then
+    OLLAMA_HOST="$(ollama_hostport)" ollama pull "$model" </dev/null && pull_ok=1
+  else
+    # Not a terminal (a log, CI, a pipe): the progress spinner would fill it with escape codes.
+    local pull_log
+    pull_log="$(mktemp)"
+    if OLLAMA_HOST="$(ollama_hostport)" ollama pull "$model" </dev/null >"$pull_log" 2>&1; then
+      pull_ok=1
+    else
+      tail -n 5 "$pull_log" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'
+    fi
+    rm -f "$pull_log"
+  fi
+  if [[ "$pull_ok" -ne 1 ]]; then
     printf '  ✗ ollama pull %s failed; the reason is above. Retry: boss connect --install-ollama --local-model %s\n' "$model" "$model"
     return 1
   fi
@@ -866,6 +880,7 @@ usable_model() {
   model_state --hosted || rc=$?
   [[ "$rc" -ne 0 ]] || return 0
   [[ "$rc" -ne 4 ]] || return 4
+  rc=0
   model_state --local || rc=$?
   return "$rc"
 }

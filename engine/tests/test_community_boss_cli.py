@@ -1164,6 +1164,10 @@ def test_install_ollama_from_scratch_on_linux_sets_up_everything_and_becomes_the
     assert "up -d --no-deps --no-build --force-recreate api worker" in _docker_calls(world)
     assert "No completion was run" in out
     assert f"Default      Ollama {DEFAULT_LOCAL} for every role" in out
+    # The local model counts as usable: no "nothing connected" line after connecting it.
+    assert "No model is connected yet" not in out
+    # Not a terminal: the pull's progress spinner never reaches the output.
+    assert "\x1b[" not in out
 
 
 def test_install_ollama_starts_a_stopped_ollama_and_keeps_a_hosted_default(world, boss_api) -> None:
