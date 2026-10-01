@@ -397,3 +397,19 @@ def clean_tables(engine):
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cli_model_catalog(monkeypatch):
+    """Stand in for what each coding CLI reports about its models; never run the real ones.
+
+    The settings API asks each CLI which models the signed-in account has. On a machine with
+    a signed-in Codex or Claude the tests would otherwise see that account. Test data only.
+    """
+    from boss_engine.services import cli_harness
+
+    reported = {"claude_code": ("opus", "sonnet", "fable", "haiku"),
+                "codex": ("gpt-5.2-codex", "o3")}
+    monkeypatch.setattr(cli_harness, "_read_model_catalog",
+                        lambda spec: reported.get(spec.name, ()))
+    monkeypatch.setattr(cli_harness, "_catalog_cache", {})
