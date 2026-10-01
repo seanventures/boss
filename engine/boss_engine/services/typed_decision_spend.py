@@ -104,11 +104,15 @@ def _uncertain(error: BaseException) -> bool:
 
 
 def governed_decider(settings: Settings, role: str):
-    """One provider, one try. Internal retries would be a second call on one receipt."""
-    from .typed_decisions import ClaudeDecider, TypeSafeDecider
+    """One provider, one try. Internal retries would be a second call on one receipt.
 
-    backend = (getattr(settings, "decision_backend", None) or "claude").strip().lower()
-    if role == "primary" and backend == "typesafe":
+    The primary is TypeSafe whenever it decides on this project (chosen, the default, and a key
+    held); everything else — no key, the fallback after a Jev failure, the second opinion when
+    Jev is unsure — is Claude, or the worker's API model where the CLI is absent.
+    """
+    from .typed_decisions import ClaudeDecider, TypeSafeDecider, typesafe_decides
+
+    if role == "primary" and typesafe_decides(settings):
         return TypeSafeDecider(settings, attempts=1)
     return ClaudeDecider(
         settings, model=getattr(settings, "decision_model", None) or None, attempts=1,
@@ -156,6 +160,7 @@ class TypedDecisionSpend:
         self.workspace_id = workspace_id
         self.before_provider_call = before_provider_call
         self.ttl_seconds = ttl_seconds
+        self._primary_backend = ""
 
     @classmethod
     def for_runner(
@@ -194,10 +199,24 @@ class TypedDecisionSpend:
             decider_factory=lambda role, bound: governed_decider(bound, role),
         )
 
-    def execute(self, settings: Settings, binding: dict, state: Any) -> dict:
+    def execute(self, settings: Settings, binding: dict, state: Any, *,
+                fallback: bool = True) -> dict:
+        """`fallback=False` is for proving a key: an answer from another model would prove
+        nothing about it."""
         identity = _identity(self.project_id, self.run_id, self.step_id, binding, state)
-        primary = self._attempt(settings, binding, state, identity, "primary")
-        if not _needs_second_opinion(settings, primary):
+        try:
+            primary = self._attempt(settings, binding, state, identity, "primary")
+        except TypedDecisionSpendError as error:
+            # JEV FAILED OUTRIGHT, so Claude answers — its own attempt, lease and receipt.
+            # Not after an UNCERTAIN outcome: that one stays for reconciliation.
+            if not (fallback and self._primary_backend == "typesafe"):
+                raise
+            self._emit_now("typed_decision.fallback", {
+                "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
+                "reason": str(error)[:300],
+            })
+            return self._attempt(settings, binding, state, identity, "careful")
+        if not fallback or not _needs_second_opinion(settings, primary):
             return primary
         self._emit_now("typed_decision.second_opinion", {
             "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
@@ -218,8 +237,19 @@ class TypedDecisionSpend:
     def _attempt(
         self, settings: Settings, binding: dict, state: Any, identity: str, role: str,
     ) -> dict:
+        # THE DECIDER FIRST, because it names the source that will answer — the lease is booked
+        # against that source. Building one makes no call; one that cannot be built is a
+        # refusal before anything is reserved.
+        factory = self.decider_factory or (lambda asked, bound: governed_decider(bound, asked))
+        try:
+            decider = factory(role, settings)
+        except RuntimeError as error:
+            raise TypedDecisionSpendError(str(error)) from error
+        if role == "primary":
+            self._primary_backend = getattr(decider, "backend", "")
+        source_id = getattr(decider, "source_id", None)
         authority = self.commit(lambda connection: self._prepare(
-            connection, settings, binding, state, identity, role,
+            connection, settings, binding, state, identity, role, source_id,
         ))
         if authority.outcome == "replay":
             return authority.output or {}
@@ -240,7 +270,7 @@ class TypedDecisionSpend:
             raise TypedDecisionSpendError(str(reason)) from reason
         self._ensure_lease(authority)
         try:
-            batch = self._call(settings, binding, state, role)
+            batch = self._call(decider, binding, state)
         except Exception as error:
             reason = error
             if _uncertain(reason):
@@ -277,6 +307,7 @@ class TypedDecisionSpend:
 
     def _prepare(
         self, connection, settings, binding, state, identity: str, role: str,
+        source_id: Optional[str] = None,
     ) -> _Authority:
         dedupe = _invocation_dedupe(identity, self.attempt, role)
         existing = self._existing(connection, identity, dedupe)
@@ -362,12 +393,15 @@ class TypedDecisionSpend:
                 skill_id=SKILL_ID,
                 preferred_capabilities=["classify"],
                 risk_tier=1,
-                consumer_owner_id=self.project_id,
+                # The person the work is for. A subscription is owner-scoped: booking it for
+                # the project read as pooling the operator's own Claude login, and refused.
+                consumer_owner_id=self.actor,
                 estimated_cost_usd_micros=MAX_COST_USD_MICROS,
                 max_usage={"total_tokens": 20_000},
                 dedupe_key=dedupe,
                 ttl_seconds=self.ttl_seconds,
                 existing_reservation_id=reservation_id,
+                source_id=source_id,
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, str(denied))
@@ -556,9 +590,7 @@ class TypedDecisionSpend:
             "receipt_id": authority.receipt_id,
         })
 
-    def _call(self, settings, binding, state, role: str) -> DecisionBatch:
-        factory = self.decider_factory or (lambda asked, bound: governed_decider(bound, asked))
-        decider = factory(role, settings)
+    def _call(self, decider, binding, state) -> DecisionBatch:
         spec = binding["typed_decision"]
         options = {str(key): str(value) for key, value in spec["options"].items()}
         question = Question("decision", str(spec["question"]), options)
@@ -707,9 +739,9 @@ class TypedDecisionSpend:
 
 
 def _needs_second_opinion(settings: Settings, output: dict) -> bool:
-    backend = (getattr(settings, "decision_backend", None) or "claude").strip().lower()
+    """Only an answer Jev gave is second-guessed; Claude's own answer is not re-asked."""
     floor = float(getattr(settings, "decision_fallback_below", 0) or 0)
-    if backend != "typesafe" or floor <= 0:
+    if output.get("backend") != "typesafe" or floor <= 0:
         return False
     confidence = output.get("confidence")
     return output.get("answer") is None or confidence is None or float(confidence) < floor
