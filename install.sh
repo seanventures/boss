@@ -1652,3 +1652,20 @@ echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
 echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
 echo ""
+
+# THE ONE THING TO DO NEXT, LAST. The console address was printed mid-summary, without the
+# org, and scrolled away under the command reference — "at the end I want to print the console
+# URI". So the install ends on it: the full address to open, and how to sign in.
+if [[ "$WITH_WEB" -eq 1 ]]; then
+  _open_org="$(env_value BOSS_DEFAULT_ORG_ID)"
+  _open_base="${CONSOLE_ORIGIN:-http://127.0.0.1:${WEB_PORT}}"
+  _open_url="${_open_base%/}/?org=${_open_org:-org_boss}"
+  echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
+  echo -e "  ${BOLD}Open BOSS${NC}    ${_open_url}"
+  echo -e "  ${BOLD}Sign in${NC}      cd \"$INSTALL_DIR\" && python3 scripts/install/console_password.py show"
+  if [[ -z "$CONSOLE_ORIGIN" ]]; then
+    echo -e "  ${MUTED}From another machine: ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} user@this-server, then open the address above.${NC}"
+  fi
+  echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
+  echo ""
+fi
