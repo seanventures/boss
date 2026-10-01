@@ -26,7 +26,7 @@ Everything in BOSS Community as of `v1.0-rc3`, grouped by area. Cloud and Enterp
 |---|---|
 | HTTP control-plane API (OpenAPI) | ✅ |
 | CLI | ✅ |
-| MCP server for agent clients | ◐ All 993 mounted Community operations are mapped: 860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work, and 67 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
+| MCP server for agent clients | ◐ All 994 mounted Community operations are mapped: 860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work, and 68 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
 | Self-hosted Mission Control console | ✅ |
 | API-first clients (`packages/api-client`) | ✅ |
 

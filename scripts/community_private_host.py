@@ -29,8 +29,8 @@ DOCUMENTED_OPERATION_COUNTS = {
         ("all 993", "all 982"),
     ),
     "docs/community/MCP.md": (
-        ("**993 Community**", "**982 Community**"),
-        ("| Community | 860 | 64 | 2 | 67 |", "| Community | 851 | 64 | 0 | 67 |"),
+        ("**994 Community**", "**983 Community**"),
+        ("| Community | 860 | 64 | 2 | 68 |", "| Community | 851 | 64 | 0 | 68 |"),
     ),
     "docs/community/CONTROL_SURFACES.md": (
         ("all 993", "all 982"),
@@ -42,7 +42,7 @@ DOCUMENTED_OPERATION_COUNTS = {
         ('<b data-count="api">993</b>', '<b data-count="api">982</b>'),
     ),
     "docs/community/FEATURES.md": (
-        ("All 993 mounted", "All 982 mounted"),
+        ("All 994 mounted", "All 983 mounted"),
         (
             "860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work",
             "851 use API policy, 64 need separate exact-request human confirmation, none remain held",

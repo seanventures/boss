@@ -688,6 +688,13 @@ class DiscoveryStartBody(OpenRequestBody):
     actor: SkipValidation[str | None] = None
     context: SkipValidation[str | None] = None
 
+class DiscoveryExecuteBody(BaseModel):
+    """The worker's lease of a discovery.run job. All three are required: every research stage
+    spends only under this lease, so a call without one must not reach the pipeline."""
+    job_id: str = Field(min_length=1)
+    worker_id: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+
 class DiscoveryPromoteBody(OpenRequestBody):
     outcome_index: SkipValidation[int | None] = None
     actor: SkipValidation[str | None] = None

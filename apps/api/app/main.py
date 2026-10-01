@@ -10837,7 +10837,7 @@ def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
 
 
 @app.post("/v1/discoveries/{run_id}/execute")
-def execute_discovery_endpoint(run_id: str, payload: dict):
+def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecuteBody):
     """The worker hands a leased `discovery.run` job here: the research agent (the Claude CLI)
     lives in this container. Each stage spends under the job's lease, with its own
     reservation and receipt; stages already paid for replay. Fenced by the lease token."""
@@ -10845,12 +10845,9 @@ def execute_discovery_endpoint(run_id: str, payload: dict):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.discovery_service import execute_discovery_job
 
-    for field in ("job_id", "worker_id", "lease_token"):
-        if not str(payload.get(field) or "").strip():
-            raise HTTPException(status_code=400, detail=f"{field} is required")
     return execute_discovery_job(
-        settings, run_id=run_id, job_id=str(payload["job_id"]),
-        worker_id=str(payload["worker_id"]), lease_token=str(payload["lease_token"]),
+        settings, run_id=run_id, job_id=payload.job_id,
+        worker_id=payload.worker_id, lease_token=payload.lease_token,
     )
 
 
