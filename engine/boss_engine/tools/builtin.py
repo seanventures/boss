@@ -1363,19 +1363,19 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         workflow_name = (args.get("workflow_name") or "").strip()
         if objective:
             directive = (
-                f"--- WHAT THIS PANEL IS FOR ---\n"
+                f"{ms.PANEL_BRIEF_MARKER}\n"
                 f"You are the panel inside BOSS's "
                 f"{workflow_name or 'delivery'} workflow. That workflow's objective:\n\n"
                 f"{objective}\n\n"
                 f"Write for THAT outcome. A PRD that suits a different workflow is the wrong "
                 f"document however good it is.\n"
-                f"--- WHAT YOU ARE BEING ASKED ABOUT ---\n\n{directive}"
+                f"{ms.REQUEST_MARKER}\n\n{directive}"
             )
         research = (args.get("research") or "").strip()
         if research:
             directive = (
                 f"{directive}\n\n"
-                f"--- RESEARCH ALREADY DONE FOR THIS ---\n"
+                f"{ms.RESEARCH_MARKER}\n"
                 f"BOSS researched this before convening you. Argue from it: agree, disagree, "
                 f"or say what it missed — do not re-derive it from scratch.\n\n{research}"
             )
