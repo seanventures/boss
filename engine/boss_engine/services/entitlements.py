@@ -385,6 +385,10 @@ class EntitlementBrokerService:
             )
         if source_id == "anthropic_api":
             return False, bool(self.settings.anthropic_api_key)
+        if source_id == "typesafe_jev":
+            # Runs over HTTPS from the API and the worker; the key is the only prerequisite. A
+            # key BOSS stored is a bound SecretRef, which _runtime_context counts by itself.
+            return True, bool(self.settings.typesafe_api_key)
         if source_id == "google_api":
             return False, bool(self.settings.google_api_key)
         if source_id == "xai_api":
@@ -425,6 +429,8 @@ class EntitlementBrokerService:
             return "BOSS_ANTHROPIC_CLAUDE_OAUTH_SESSION_REF"
         if source_id == "anthropic_api":
             return "ANTHROPIC_API_KEY"
+        if source_id == "typesafe_jev":
+            return "TYPESAFE_API_KEY"
         if source_id == "google_api":
             return "GOOGLE_API_KEY"
         if source_id == "xai_api":
@@ -1937,6 +1943,7 @@ class EntitlementBrokerService:
         budget_state: Optional[str] = None,
         data_boundary: str = "internal",
         actor: str = "system",
+        only_source_id: Optional[str] = None,
     ) -> dict[str, Any]:
         route = self.preview_route(
             connection,
@@ -1949,6 +1956,7 @@ class EntitlementBrokerService:
             budget_state=budget_state,
             data_boundary=data_boundary,
             actor=actor,
+            only_source_id=only_source_id,
         )
         log = self.get_routing_log(
             connection, project_id, route["route_decision_log_id"]
@@ -1968,6 +1976,7 @@ class EntitlementBrokerService:
         budget_state: Optional[str] = None,
         data_boundary: str = "internal",
         actor: str = "system",
+        only_source_id: Optional[str] = None,
     ) -> dict[str, Any]:
         preferred_capabilities = preferred_capabilities or []
         skill = self.get_skill(skill_id, project_id, connection=connection)
@@ -1992,6 +2001,17 @@ class EntitlementBrokerService:
         candidates: list[tuple[int, dict[str, Any], Optional[dict[str, Any]]]] = []
         rejected_sources: list[dict[str, Any]] = []
         for source in self.list_sources(connection, project_id):
+            # PINNED: the caller already knows which provider will answer (a typed decision on
+            # TypeSafe, or on the Claude CLI), so the lease must be booked against that source
+            # and no other. Every policy check below still applies to it.
+            if only_source_id and source["source_id"] != only_source_id:
+                continue
+            # A decisions-only source (TypeSafe Jev) cannot write code; never offer it for
+            # anything but a typed decision, however cheap it scores.
+            if (self._connection_metadata(source).get("decisions_only")
+                    and skill_id != "typed_decision"):
+                self._reject_source(rejected_sources, source, "source_reserved_for_decisions")
+                continue
             effective_status = source["effective_status"]
             if effective_status != "active":
                 self._reject_source(rejected_sources, source, effective_status)
