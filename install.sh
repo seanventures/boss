@@ -704,13 +704,6 @@ fi
 # by restore_preserved_env.sh on reruns.
 BOSS_CONSOLE_PASSWORD="$(openssl rand -hex 24)"
 BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
-# THE DATABASE STORE'S KEY, OUTSIDE THE DATABASE. Without it, BOSS provisions a key and keeps it
-# in Postgres beside the ciphertext, so a database backup carries usable credentials — which is
-# why a Claude setup token was refused on an install that chose the database store. 32 random
-# bytes, urlsafe base64 (the form _load_kms_master_key reads). An existing install adopts the
-# key already in its database below instead, so nothing it stored becomes unreadable.
-BOSS_KMS_MASTER_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
-_ADOPTED_DB_KEY=0
 
 # The directory that contains this installer, when it is already a BOSS checkout.
 # A downloaded one-liner lives in a temp file and returns nothing here.
@@ -1042,9 +1035,7 @@ if [ -f "$ENV_FILE" ]; then
   if grep -qs '^BOSS_BIND_ADDRESS=0.0.0.0$' "$ENV_FILE"; then
     ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
   fi
-  # `|| true`: a key this .env predates (BOSS_KMS_MASTER_KEY on every upgrade) is a grep with no
-  # match, and under `set -euo pipefail` that silently ended the installer mid-configuration.
-  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
   _keep_api="$(_existing BOSS_API_KEY)"
   if [ -n "$_keep_db" ]; then
@@ -1054,27 +1045,6 @@ if [ -f "$ENV_FILE" ]; then
   if [ -n "$_keep_api" ]; then
     BOSS_API_KEY="$_keep_api"
     ui_info "Reusing the existing API key — saved keys keep working"
-  fi
-  # AN EXISTING INSTALL KEEPS THE KEY ITS DATA WAS ENCRYPTED WITH. A key already in .env stays
-  # (restore_preserved_env.sh enforces it too). Without one, the database store provisioned its
-  # own and keeps it in Postgres: adopt exactly that key into .env — then everything stored stays
-  # readable — and remove it from the database once the API is up. If the database cannot be
-  # asked right now, write no key at all: a fresh one would make existing credentials unreadable.
-  _keep_kms="$(_existing BOSS_KMS_MASTER_KEY)"
-  if [ -n "$_keep_kms" ]; then
-    BOSS_KMS_MASTER_KEY="$_keep_kms"
-  elif _db_key="$(cd "$INSTALL_DIR" && "${COMPOSE[@]}" -f scripts/install/community-compose.yml \
-        --env-file "$ENV_FILE" exec -T db psql -U boss -d boss -At \
-        -c "SELECT convert_from(ciphertext, 'UTF8') FROM secret_material WHERE ref_key = '__boss_master_key__'" \
-        2>/dev/null </dev/null)"; then
-    if [ -n "$_db_key" ]; then
-      BOSS_KMS_MASTER_KEY="$_db_key"
-      _ADOPTED_DB_KEY=1
-      ui_info "Moving the secret store's key out of the database and into .env"
-    fi
-  else
-    BOSS_KMS_MASTER_KEY=""
-    ui_warn "Could not reach the database to check its secret-store key; leaving it where it is. Re-run with BOSS running to move it into .env."
   fi
   _ENV_SNAPSHOT="$INSTALL_DIR/.env.previous.$$"
   cp -p "$ENV_FILE" "$_ENV_SNAPSHOT"
@@ -1108,7 +1078,6 @@ BOSS_WORKER_PRINCIPAL=system
 BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
 BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
 BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
-BOSS_KMS_MASTER_KEY=${BOSS_KMS_MASTER_KEY}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood
@@ -1324,17 +1293,6 @@ if [[ "$HEALTH_OK" -ne 1 ]]; then
   exit 1
 fi
 ui_ok "API healthy at ${API_URL}/health"
-if [[ "$_ADOPTED_DB_KEY" -eq 1 ]]; then
-  # The API now reads the key from .env, so the copy in Postgres is no longer used — and it is
-  # exactly what made a database backup a credential leak. Removed only after the API is up.
-  if ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T db \
-       psql -U boss -d boss -q -c "DELETE FROM secret_material WHERE ref_key = '__boss_master_key__'" \
-       </dev/null >/dev/null 2>&1; then
-    ui_ok "Secret-store key moved to .env — a database backup no longer contains it"
-  else
-    ui_warn "The secret-store key is in .env, but its old copy could not be removed from the database."
-  fi
-fi
 
 # ---- seed ------------------------------------------------------------------
 ui_step "Seeding Community project (roles, packs, demo project)"
@@ -1368,11 +1326,8 @@ elif [[ ! -f "$INSTALL_DIR/scripts/install/node_agent.sh" ]]; then
 else
   # The agent refuses to install with an empty project id. The id is the
   # project this installer just seeded, not a value from the shell environment.
-  # bash, not sh: node_agent.sh is a bash program (`set -euo pipefail`, arrays). Run with sh,
-  # which is dash on Ubuntu and Debian, it stopped at "set: Illegal option -o pipefail", so no
-  # Ubuntu or Debian install ever recorded its own machine as a place to run work.
   if BOSS_PROJECT_ID="${_place_project}" \
-      bash "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+      sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
   else
     ui_warn "Hardware agent did not install. The local machine was not recorded."
@@ -1694,20 +1649,3 @@ echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
 echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
 echo ""
-
-# THE ONE THING TO DO NEXT, LAST. The console address was printed mid-summary, without the
-# org, and scrolled away under the command reference — "at the end I want to print the console
-# URI". So the install ends on it: the full address to open, and how to sign in.
-if [[ "$WITH_WEB" -eq 1 ]]; then
-  _open_org="$(env_value BOSS_DEFAULT_ORG_ID)"
-  _open_base="${CONSOLE_ORIGIN:-http://127.0.0.1:${WEB_PORT}}"
-  _open_url="${_open_base%/}/?org=${_open_org:-org_boss}"
-  echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
-  echo -e "  ${BOLD}Open BOSS${NC}    ${_open_url}"
-  echo -e "  ${BOLD}Sign in${NC}      cd \"$INSTALL_DIR\" && python3 scripts/install/console_password.py show"
-  if [[ -z "$CONSOLE_ORIGIN" ]]; then
-    echo -e "  ${MUTED}From another machine: ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} user@this-server, then open the address above.${NC}"
-  fi
-  echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
-  echo ""
-fi
