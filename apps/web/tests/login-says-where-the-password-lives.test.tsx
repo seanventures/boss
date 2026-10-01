@@ -28,7 +28,7 @@ describe("the console sign-in page", () => {
     const html = await render();
     expect(html).toContain('data-testid="console-password-hint"');
     expect(html).toContain("python3 scripts/install/console_password.py show");
-    expect(html).toContain("ssh user@your-server");
+    expect(html).toContain("ssh -t user@your-server");
     expect(html).toContain("https://boss.sean.network/docs/CONSOLE_AUTH/");
   });
 
