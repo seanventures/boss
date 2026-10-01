@@ -103,6 +103,22 @@ def _uncertain(error: BaseException) -> bool:
     return "timeout" in name or "connect" in name
 
 
+def capacity_after_failure(error: BaseException) -> dict:
+    """What a failed call says about the SOURCE's capacity: only a capacity failure counts.
+
+    Every failure used to be recorded as `capacity_state: unavailable`, and the router skips an
+    unavailable source — so one crashed research call, or one rejected key, took the operator's
+    only Claude subscription out of routing until something marked it available again.
+    """
+    text_ = str(error).lower()
+    if any(term in text_ for term in ("rate limit", "rate_limit", " 429", "too many requests")):
+        return {"capacity_state": "rate_limited"}
+    if any(term in text_ for term in ("quota", "usage limit", "limit reached", "overloaded",
+                                      " 529", "exhausted")):
+        return {"capacity_state": "unavailable"}
+    return {"capacity_state": "available"}
+
+
 def governed_decider(settings: Settings, role: str):
     """One provider, one try. Internal retries would be a second call on one receipt.
 
@@ -657,7 +673,7 @@ class TypedDecisionSpend:
             provider_ref=None,
             usage_units={},
             actual_cost_usd_micros=actual,
-            observed_capacity={"capacity_state": "unavailable"},
+            observed_capacity=capacity_after_failure(error),
             error={"reason": str(error)[:500]},
         )
         try:

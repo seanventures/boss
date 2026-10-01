@@ -361,6 +361,8 @@ def capabilities() -> list[str]:
         # A real debugging session: shell, repo, read-only SQL, the fleet. Declared here or the
         # worker will not lease the job and the investigation sits queued forever.
         "investigation.run",
+        # Governed Discovery research: each stage reserves, leases and receipts its own spend.
+        "discovery.run",
         "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
@@ -793,6 +795,17 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             if is_sandbox_fail_closed(result):
                 return result
             raise RuntimeError(result.get("error") or "Code task failed.")
+        return result
+    if job.kind == "discovery.run":
+        # The research agent lives in the API container. The lease token goes with it: every
+        # stage's model lease is bound to this job's lease, so a reclaimed job cannot spend.
+        result = client.run_discovery({
+            "run_id": job.payload["discovery_run_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+        })
+        if result.get("status") == "failed" and result.get("retry"):
+            # A stage failed outright; the next attempt replays the stages already paid for.
+            raise RuntimeError(result.get("error") or "Discovery stage failed.")
         return result
     if job.kind == "investigation.run":
         # A long one by design: a real debugging session reads the code, the database and the

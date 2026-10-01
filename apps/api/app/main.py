@@ -10827,20 +10827,31 @@ def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
     actor = str(current_api_principal.get() or payload.get("actor") or "executive_console").strip()
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
-    from .services.discovery_service import (
-        DiscoveryExecutionBlocked,
-        require_discovery_runtime,
-        start_discovery,
-    )
-    try:
-        require_discovery_runtime(settings)
-    except DiscoveryExecutionBlocked as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+    from .services.discovery_service import start_discovery
+
     run_id = start_discovery(
         project_id=project_id, title=title, seed=seed,
-        context=(payload.get("context") or "").strip(), settings=settings,
+        context=(payload.get("context") or "").strip(), settings=settings, actor=actor,
     )
     return {"status": "running", "run_id": run_id}
+
+
+@app.post("/v1/discoveries/{run_id}/execute")
+def execute_discovery_endpoint(run_id: str, payload: dict):
+    """The worker hands a leased `discovery.run` job here: the research agent (the Claude CLI)
+    lives in this container. Each stage spends under the job's lease, with its own
+    reservation and receipt; stages already paid for replay. Fenced by the lease token."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.discovery_service import execute_discovery_job
+
+    for field in ("job_id", "worker_id", "lease_token"):
+        if not str(payload.get(field) or "").strip():
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+    return execute_discovery_job(
+        settings, run_id=run_id, job_id=str(payload["job_id"]),
+        worker_id=str(payload["worker_id"]), lease_token=str(payload["lease_token"]),
+    )
 
 
 @app.get("/v1/discoveries")
@@ -10962,26 +10973,17 @@ def deepen_discovery_endpoint(run_id: str, payload: Optional[dict] = None):
     (competitor/pain/demand/timing) for a richer, more-cited dossier. Returns the new run_id."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.discovery_service import (
-        DiscoveryExecutionBlocked,
-        load_discovery_run,
-        require_discovery_runtime,
-        start_discovery,
-    )
+    from .services.discovery_service import load_discovery_run, start_discovery
     with begin(engine) as c:
         parent = load_discovery_run(c, run_id)
         if parent is None:
             raise HTTPException(status_code=404, detail="discovery run not found")
         actor = str(current_api_principal.get() or (payload or {}).get("actor") or "executive_console").strip()
         require_project_actor(c, parent["project_id"], actor, "workflow_execute")
-    try:
-        require_discovery_runtime(settings)
-    except DiscoveryExecutionBlocked as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
     new_id = start_discovery(
         project_id=parent["project_id"], title=f"[deep] {parent['title']}"[:300],
         seed=parent["seed"] or "", context=parent["context"] or "",
-        settings=settings, deep=True, parent_run_id=run_id,
+        settings=settings, deep=True, parent_run_id=run_id, actor=actor,
     )
     return {"status": "running", "run_id": new_id, "deep": True}
 

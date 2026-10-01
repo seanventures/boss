@@ -9,15 +9,16 @@ The moat, applied to research: every finding is cited, the thesis is adversarial
 fail-closed evidence gate decides "pursue" vs "needs more research". See
 docs/product/BOSS_DISCOVERY_PIPELINE_DESIGN.md.
 
-D1 scope: web-only signals. Community research is paused until this pipeline uses
-durable leased jobs and reconciled model spend; saved dossiers remain readable.
+D1 scope: web-only signals. In Community a discovery is a durable `discovery.run` job that a
+worker leases, and every research stage is reserved, leased, receipted and settled on its own
+(discovery_spend.py); a retry replays stages it already paid for instead of calling them again.
 """
 from __future__ import annotations
 
 import json
 import threading
 import traceback
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 
@@ -27,28 +28,22 @@ from .code_agent import make_code_agent
 from .core import create_blocking_decision, emit_event, make_id
 
 PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"]
+#: Recorded on a run that was running on the old in-process thread when Community restarted.
 COMMUNITY_DISCOVERY_BLOCK_REASON = (
-    "Discovery research is unavailable in Community until model calls have durable "
-    "leases, budget reservations, and reconciled receipts."
+    "This research was running in-process when BOSS restarted, before Discovery ran as a "
+    "governed job; its model spend must be reconciled before it is retried."
 )
 
 
-class DiscoveryExecutionBlocked(ValueError):
-    """Community must not launch unleased research that can spend without a reservation."""
+def _research_runs_as_a_job(settings: Settings) -> bool:
+    """Community runs Discovery as a governed worker job. Other editions keep the legacy
+    in-process path until they are qualified separately (DISCOVERY_COMMUNITY_GA_BLOCKER.md)."""
+    return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
 
 
 def community_research_paused(settings: Settings) -> bool:
-    """True where Discovery research must not start: the Community editions."""
-    return str(getattr(settings, "boss_edition", "") or "").strip().lower() in {
-        "community", "oss", "local"}
-
-
-_community_research_paused = community_research_paused
-
-
-def require_discovery_runtime(settings: Settings) -> None:
-    if _community_research_paused(settings):
-        raise DiscoveryExecutionBlocked(COMMUNITY_DISCOVERY_BLOCK_REASON)
+    """Kept for the workflow research step until it is reconciled with the governed job."""
+    return _research_runs_as_a_job(settings)
 
 
 class DiscoveryResearchUnavailable(RuntimeError):
@@ -86,24 +81,19 @@ def _record_stage(dossier: dict, stage: str, result: dict, *, parsed: dict) -> N
 # --------------------------------------------------------------------------- #
 def start_discovery(*, project_id: str, title: str, seed: str, context: str,
                     settings: Settings, deep: bool = False, parent_run_id: Optional[str] = None,
-                    governance: Optional[dict] = None) -> str:
-    """Create the durable run row and kick off the pipeline in a background thread.
+                    governance: Optional[dict] = None, actor: str = "ceo") -> str:
+    """Create the durable run row and start the pipeline.
 
     deep=True runs a multi-source parallel scout sweep (competitor/pain/demand/timing) for a richer,
     more cited dossier — the deeper second pass for a promising idea.
 
-    Community research stays blocked until the caller has already reserved budget
-    and written a receipt. A direct start, with no governance, still raises.
+    In Community the run is a durable `discovery.run` job: a worker leases it and every
+    research stage spends only through its own reservation, lease and receipt. Nothing runs
+    on a thread in this process, so a restart cannot orphan it or replay a paid call.
     """
-    governed = bool(
-        governance
-        and governance.get("reservation_id")
-        and governance.get("receipt_id")
-    )
-    if not governed:
-        require_discovery_runtime(settings)
     run_id = make_id("drun")
     engine = get_engine()
+    as_job = _research_runs_as_a_job(settings)
     init_state = {"deep": deep}
     if governance:
         init_state["governance"] = governance
@@ -118,14 +108,102 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
             {"id": run_id, "p": project_id, "t": title[:300], "s": seed, "ctx": context or "",
              "st": json.dumps(init_state)},
         )
+        if as_job:
+            from .discovery_spend import AGENT_ID, JOB_KIND
+            from .jobs import enqueue_job
+
+            job = enqueue_job(
+                c, project_id, JOB_KIND,
+                {"discovery_run_id": run_id, "agent_id": AGENT_ID, "actor": actor},
+                priority=40, max_attempts=3, dedupe_key=f"discovery:{run_id}",
+                workload_class="owner_sandbox", data_boundary="internal",
+            )
+            c.execute(
+                text("UPDATE discovery_runs SET state = state || CAST(:j AS JSONB) "
+                     "WHERE id = :id"),
+                {"id": run_id, "j": json.dumps({"job_id": job["id"]})},
+            )
         emit_event(c, project_id, "discovery.started", "boss", "discovery_run", run_id,
-                   {"title": title[:300], "deep": deep})
-    threading.Thread(
-        target=_run_discovery,
-        args=(run_id, project_id, seed, context, settings, deep, governance),
-        daemon=True,
-    ).start()
+                   {"title": title[:300], "deep": deep, "governed_job": as_job})
+    if not as_job:
+        threading.Thread(
+            target=_run_discovery,
+            args=(run_id, project_id, seed, context, settings, deep, governance),
+            daemon=True,
+        ).start()
     return run_id
+
+
+def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worker_id: str,
+                          lease_token: str) -> dict:
+    """Run (or resume) one discovery under the worker's lease of its `discovery.run` job.
+
+    Stages already paid for replay from their receipts. Returns {"status", "retry"}: a stage
+    that failed outright is retryable on the job's next attempt; a refused budget, a research
+    reply with no evidence, or a call that needs reconciliation is not — retrying would either
+    spend again for the same result or risk paying twice.
+    """
+    from . import discovery_spend
+    from .discovery_spend import (
+        DiscoveryReconciliationRequired,
+        DiscoverySpendRefused,
+        DiscoveryStageSpend,
+    )
+
+    engine = get_engine()
+    with begin(engine) as c:
+        row = c.execute(
+            text("SELECT d.project_id, d.seed, d.context, d.state, d.status, "
+                 "j.attempt, j.max_attempts, j.payload FROM discovery_runs d "
+                 "JOIN jobs j ON j.id = :job WHERE d.id = :id"),
+            {"id": run_id, "job": job_id},
+        ).mappings().first()
+    if row is None:
+        return {"status": "failed", "retry": False, "error": f"no discovery run {run_id}"}
+    if row["status"] != "running":
+        return {"status": row["status"], "retry": False}
+    state = row["state"] if isinstance(row["state"], dict) else {}
+    payload = row["payload"] if isinstance(row["payload"], dict) else {}
+    spend = DiscoveryStageSpend.for_engine(
+        settings, engine, project_id=row["project_id"], run_id=run_id, job_id=job_id,
+        worker_id=worker_id, job_lease_token=lease_token,
+        actor=str(payload.get("actor") or "ceo"),
+    )
+    agent = make_code_agent(settings, engine="claude_code")
+    if not hasattr(agent, "run_research"):
+        raise RuntimeError("Discovery requires the claude_code engine (web research).")
+
+    def research(stage: str, prompt: str) -> dict:
+        return spend.run(stage, lambda: agent.run_research(prompt),
+                         source_id=discovery_spend.RESEARCH_SOURCE_ID)
+
+    last_attempt = int(row["attempt"] or 1) >= int(row["max_attempts"] or 1)
+    try:
+        _run_discovery(run_id, row["project_id"], row["seed"] or "", row["context"] or "",
+                       settings, bool(state.get("deep")), None, research=research,
+                       sequential=True, raise_errors=True)
+    except (DiscoverySpendRefused, DiscoveryReconciliationRequired,
+            DiscoveryResearchUnavailable) as settled:
+        _fail_run(engine, row["project_id"], run_id, settled)
+        return {"status": "failed", "retry": False, "error": str(settled)[:1000]}
+    except Exception as error:  # noqa: BLE001 — a stage failed outright; retry if attempts remain
+        if last_attempt:
+            _fail_run(engine, row["project_id"], run_id, error)
+            return {"status": "failed", "retry": False, "error": str(error)[:1000]}
+        with begin(engine) as c:
+            c.execute(text("UPDATE discovery_runs SET error = :e, updated_at = now() "
+                           "WHERE id = :id"), {"e": f"retrying: {error}"[:1000], "id": run_id})
+        return {"status": "failed", "retry": True, "error": str(error)[:1000]}
+    return {"status": "completed", "retry": False}
+
+
+def _fail_run(engine, project_id: str, run_id: str, error: BaseException) -> None:
+    with begin(engine) as c:
+        c.execute(text("UPDATE discovery_runs SET status = 'failed', error = :e, "
+                       "updated_at = now() WHERE id = :id AND status = 'running'"),
+                  {"e": f"{error}"[:1000], "id": run_id})
+        emit_event(c, project_id, "discovery.failed", "boss", "discovery_run", run_id,
+                   {"error": f"{error}"[:500], "kind": type(error).__name__})
 
 
 def resume_interrupted(settings: Settings) -> dict:
@@ -142,7 +220,10 @@ def resume_interrupted(settings: Settings) -> dict:
     replaying model calls. Other editions retain the earlier restart behavior.
     """
     engine = get_engine()
-    if _community_research_paused(settings):
+    if _research_runs_as_a_job(settings):
+        # A job-owned run is the job system's to resume: the worker's lease is reclaimed and
+        # the run replays the stages it already paid for. Only a run left over from the old
+        # in-process thread is failed here for reconciliation.
         blocked: list[str] = []
         with begin(engine) as c:
             rows = c.execute(
@@ -150,6 +231,9 @@ def resume_interrupted(settings: Settings) -> dict:
                      "WHERE status = 'running' ORDER BY created_at FOR UPDATE SKIP LOCKED")
             ).mappings().all()
             for row in rows:
+                state = row["state"] if isinstance(row["state"], dict) else {}
+                if state.get("job_id"):
+                    continue
                 changed = c.execute(
                     text("UPDATE discovery_runs SET status = 'failed', error = :reason, "
                          "updated_at = now() WHERE id = :id AND status = 'running'"),
@@ -293,15 +377,25 @@ def _still_working(run_id: str, engine, stop: threading.Event) -> None:
 
 def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                    settings: Settings, deep: bool = False,
-                   governance: Optional[dict] = None) -> None:
+                   governance: Optional[dict] = None, *,
+                   research: Optional[Callable[[str, str], dict]] = None,
+                   sequential: bool = False, raise_errors: bool = False) -> None:
+    """The pipeline. `research(stage, prompt)` makes each model call: the governed job passes
+    one that reserves, leases and receipts each stage (and replays a stage already paid for);
+    the legacy path calls the agent directly. `raise_errors` hands a failure to the job, which
+    decides between a retry and a failed run, instead of recording it here."""
     engine = get_engine()
     _hb_stop = threading.Event()
     threading.Thread(target=_still_working, args=(run_id, engine, _hb_stop),
                      name=f"drun-hb-{run_id}", daemon=True).start()
     try:
-        agent = make_code_agent(settings, engine="claude_code")
-        if not hasattr(agent, "run_research"):
-            raise RuntimeError("Discovery requires the claude_code engine (web research).")
+        if research is None:
+            agent = make_code_agent(settings, engine="claude_code")
+            if not hasattr(agent, "run_research"):
+                raise RuntimeError("Discovery requires the claude_code engine (web research).")
+
+            def research(stage: str, prompt: str) -> dict:  # noqa: F811 — the legacy path
+                return agent.run_research(prompt)
         dossier: dict = {"deep": deep}
         if governance:
             dossier["governance"] = governance
@@ -311,12 +405,13 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         # P1 — Signal sweep (web research). Deep mode fans out to parallel focused scouts.
         _phase(engine, run_id, "signal_sweep")
         if deep:
-            brief, findings, sweep_cost, model = _deep_sweep(agent, seed, context)
+            brief, findings, sweep_cost, model = _deep_sweep(research, seed, context,
+                                                             sequential=sequential)
             dossier["research_brief"] = brief
             dossier["signal_findings"] = findings
             cost += sweep_cost
         else:
-            r = agent.run_research(_sweep_prompt(seed, context))
+            r = research("signal_sweep", _sweep_prompt(seed, context))
             cost += r["cost_usd_micros"]
             model = r.get("model")
             sweep = _extract_json(r["summary"])
@@ -356,7 +451,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         # P2 — Synthesize
         _phase(engine, run_id, "synthesize")
-        r = agent.run_research(_synth_prompt(seed, context, dossier["signal_findings"]))
+        r = research("synthesize", _synth_prompt(seed, context, dossier["signal_findings"]))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["market_analysis"] = parsed.get("analysis", {})
@@ -365,7 +460,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         # P3 — Adversarial vetting (web research for disconfirming evidence)
         _phase(engine, run_id, "vet")
-        r = agent.run_research(_vet_prompt(seed, dossier))
+        r = research("vet", _vet_prompt(seed, dossier))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["critique"] = parsed.get("critique", {})
@@ -374,7 +469,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         # P4 — Shape outcomes
         _phase(engine, run_id, "shape")
-        r = agent.run_research(_shape_prompt(seed, context, dossier))
+        r = research("shape", _shape_prompt(seed, context, dossier))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["candidate_outcomes"] = parsed.get("outcomes", [])
@@ -388,7 +483,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         with begin(engine) as c:
             c.execute(
                 text("""UPDATE discovery_runs SET status='completed', phase='done',
-                        state=CAST(:s AS JSONB),
+                        state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
                         usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
                                                  'model', CAST(:m AS text)),
                         updated_at=now() WHERE id=:id"""),
@@ -418,6 +513,8 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                     int(cost),
                 )
     except Exception as exc:  # noqa: BLE001 — record the failure durably, never crash the thread
+        if raise_errors:
+            raise
         detail = f"{exc}"[:1000]
         try:
             with begin(engine) as c:
@@ -455,9 +552,11 @@ def _phase(engine, run_id: str, phase: str) -> None:
 
 
 def _save(engine, run_id: str, dossier: dict, cost: int, model: Optional[str]) -> None:
+    # The dossier REPLACES the state but the job that owns the run is kept: dropping it made a
+    # governed run look like an orphan of the old in-process path to startup recovery.
     with begin(engine) as c:
         c.execute(
-            text("""UPDATE discovery_runs SET state=CAST(:s AS JSONB),
+            text("""UPDATE discovery_runs SET state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
                     usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
                                              'model', CAST(:m AS text)),
                     updated_at=now() WHERE id=:id"""),
@@ -585,22 +684,28 @@ def _scout_prompt(angle: str, focus: str, seed: str, context: str) -> str:
     )
 
 
-def _deep_sweep(agent, seed: str, context: str):
-    """Run the focused scouts in parallel and merge their cited findings — the deeper pass."""
+def _deep_sweep(research, seed: str, context: str, *, sequential: bool = False):
+    """Run the focused scouts and merge their cited findings — the deeper pass.
+
+    In parallel on the legacy path. One at a time when governed: each scout is its own leased
+    stage, and a subscription source holds one model lease at a time.
+    """
     from concurrent.futures import ThreadPoolExecutor
 
     def run_scout(item):
         angle, focus = item
         try:
-            r = agent.run_research(_scout_prompt(angle, focus, seed, context))
+            r = research(f"scout_{angle}", _scout_prompt(angle, focus, seed, context))
             return r, _extract_json(r["summary"]).get("findings", [])
         except Exception:  # noqa: BLE001 — a dead scout shouldn't sink the sweep
+            if sequential:
+                raise   # governed: the job decides retry vs reconcile, never a silent zero
             return {"cost_usd_micros": 0, "model": None}, []
 
     findings: list = []
     cost = 0
     model = None
-    with ThreadPoolExecutor(max_workers=len(_SCOUTS)) as pool:
+    with ThreadPoolExecutor(max_workers=1 if sequential else len(_SCOUTS)) as pool:
         for r, fs in pool.map(run_scout, _SCOUTS.items()):
             cost += r.get("cost_usd_micros", 0)
             model = model or r.get("model")
