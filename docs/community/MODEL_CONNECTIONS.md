@@ -119,6 +119,8 @@ An existing **Anything OpenAI-compatible** connection to another address is left
 
 When a hosted model is connected later, `boss connect` hands back the roles the fallback set (lanes that still say native with the Ollama model return to their defaults), and `boss connect keys` with a new `OPENAI_API_KEY` moves chat from Ollama to that key. An installer rerun with an exported OpenAI key does the same for chat. Ollama stays connected.
 
+Switching to a different Ollama model later, with `boss connect ollama --local-model NAME`, moves chat to the new model but leaves the build roles on the old one, and says so: `every role already has a model you chose, so none was changed`. Set the new model for each role in **Mission Control → Settings → Repo and model → Who does what**.
+
 ## A local model with Ollama
 
 `boss connect --install-ollama`, or `--install-ollama` for the installer, sets up a free local model end to end. A yes to the local model offer does the same:
