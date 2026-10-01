@@ -90,10 +90,10 @@ The `boss` command works from anywhere: `boss open`, `boss password`, `boss doct
 ```sh
 git clone https://github.com/seanventures/boss.git
 cd boss
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes -- --console-origin https://boss.example.com
 ```
 
-Clone `main` and let `--ref` pick the release: `remote.sh` runs from your checkout and ships only the commit `--ref` names, and the copy in the `v1.0-rc1` tree takes `--dir '~/boss'` literally, installing into a folder named `~`.
+Everything after `--` goes to the installer on the server, so `--console-origin` is the same address as step 2. Clone `main` and let `--ref` pick the release: `remote.sh` runs from your checkout and ships only the commit `--ref` names, and the copy in the `v1.0-rc1` tree takes `--dir '~/boss'` literally, installing into a folder named `~`.
 
 Later, update or check that install from the same checkout:
 
@@ -103,7 +103,7 @@ scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
 scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
 ```
 
-Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line:
+Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line. Storing a Claude token needs a build newer than `v1.0-rc1`; install with `--ref main` until the next release:
 
 ```sh
 claude setup-token        # then paste the token it prints at the next command's hidden prompt
@@ -113,7 +113,7 @@ scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --
 
 `--host` is anything `ssh` accepts, including an alias from `~/.ssh/config` (use one for a non-standard SSH port), and `--key PATH` picks a private key. `--dir` defaults to `/opt/boss`, which needs root; `~/boss` keeps it where the commands above install. Add `--secret-store infisical` to `install` for the bundled secret store. The [installer guide](scripts/install/README.md#remote-archive-installs) covers recovery and uninstall.
 
-**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
+**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you. On Ubuntu or Debian, `sudo apt install -y caddy`, replace the contents of `/etc/caddy/Caddyfile` with this block, then `sudo systemctl reload caddy`:
 
 ```caddy
 boss.example.com {
@@ -125,7 +125,7 @@ boss.example.com {
 }
 ```
 
-On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once.
+On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
 **4. Sign in** at your address, such as `https://boss.example.com`, with the password from `boss password`.
 
