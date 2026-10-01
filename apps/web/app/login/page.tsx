@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 type Props = { searchParams: Promise<{ next?: string; error?: string }> };
 
 const SHOW_ON_SERVER = "python3 scripts/install/console_password.py show";
-const SHOW_OVER_SSH = `ssh user@your-server 'cd ~/boss && ${SHOW_ON_SERVER}'`;
+// -t: the script prints only to a real terminal, and ssh running a command allocates none.
+const SHOW_OVER_SSH = `ssh -t user@your-server 'cd ~/boss && ${SHOW_ON_SERVER}'`;
 
 export default async function ConsoleLogin({ searchParams }: Props) {
   const params = await searchParams;
