@@ -37,8 +37,13 @@ class DiscoveryExecutionBlocked(ValueError):
     """Community must not launch unleased research that can spend without a reservation."""
 
 
-def _community_research_paused(settings: Settings) -> bool:
-    return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
+def community_research_paused(settings: Settings) -> bool:
+    """True where Discovery research must not start: the Community editions."""
+    return str(getattr(settings, "boss_edition", "") or "").strip().lower() in {
+        "community", "oss", "local"}
+
+
+_community_research_paused = community_research_paused
 
 
 def require_discovery_runtime(settings: Settings) -> None:
