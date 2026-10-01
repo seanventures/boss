@@ -305,9 +305,10 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
     assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer
-    assert "7b88a18a2b4cd0b14b09a47fc415f7ffd4580066" in (
+    # The GitHub-only command pins a full 40-character release commit.
+    assert re.search(r"^BOSS_RELEASE_COMMIT=[0-9a-f]{40} bash -c ", (
         ROOT / "scripts/install/README.md"
-    ).read_text(encoding="utf-8")
+    ).read_text(encoding="utf-8"), re.MULTILINE)
     assert './install.sh --dir "$PWD"' in (ROOT / "scripts/install/README.md").read_text(encoding="utf-8")
     notes = (ROOT / "docs/operations/COMMUNITY_GA_RELEASE_NOTES_DRAFT.md").read_text(encoding="utf-8")
     assert "Public installer URL" in notes
