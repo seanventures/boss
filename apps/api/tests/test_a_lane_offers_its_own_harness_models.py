@@ -5,7 +5,7 @@ codex on this project, the reviewer's model picker still followed the deployment
 offered opus, sonnet, fable and haiku. Reported from the console: "after selecting codex I'm
 not seeing codex models but still Claude ones".
 """
-from boss_engine.services.project_settings import CLAUDE_MODELS, _models_of
+from boss_engine.services.project_settings import _models_of
 
 PROJECT_ID = "boss-dogfood"
 
@@ -22,7 +22,7 @@ def test_the_reviewer_model_follows_the_reviewer_chosen_here(client):
     model = _knob(client, "code_review_model")
     offered = [c for c in model["choices"] if c]
     assert set(offered) <= set(_models_of("codex")) | {""}, offered
-    assert not set(offered) & set(m for m in CLAUDE_MODELS if m), offered
+    assert not set(offered) & set(_models_of("claude_code")), offered
 
 
 def test_handing_the_reviewer_back_restores_the_implementers_list(client):
