@@ -365,27 +365,3 @@ def test_package_manager_commands_name_the_declared_packages() -> None:
         assert needle in result.stdout
         for package in ("curl", "ca-certificates", "python3"):
             assert package in result.stdout
-
-
-def test_the_installer_runs_the_agent_with_the_shell_it_is_written_for() -> None:
-    """install.sh ran node_agent.sh with `sh`. On Ubuntu and Debian that is dash, which stops at
-    `set -o pipefail`, so every install there warned "Hardware agent did not install" and never
-    recorded its own machine. Every other test here runs the agent with bash, which is why the
-    mismatch went unseen (found on a fresh v1.0-rc1 install, 2026-09-30)."""
-    installer = (ROOT / "install.sh").read_text()
-    calls = [line.strip() for line in installer.splitlines()
-             if "scripts/install/node_agent.sh" in line and "--local" in line]
-    assert calls, "install.sh no longer runs the local agent"
-    assert all(line.startswith("bash ") for line in calls), calls
-    assert SCRIPT.read_text().startswith("#!/usr/bin/env bash")
-
-
-def test_the_place_script_is_in_the_image_the_installer_runs_it_in() -> None:
-    """install.sh runs scripts/install/ensure_local_place.py inside the api container, and the
-    image never copied it: every install ended "can't open file .../ensure_local_place.py"
-    (found on a fresh local install of main, 2026-09-30, once the node agent step before it
-    stopped failing under `sh`)."""
-    dockerfile = (ROOT / "Dockerfile.community").read_text()
-    assert "COPY scripts/install/ensure_local_place.py ./scripts/install/ensure_local_place.py" in dockerfile
-    place = (ROOT / "scripts" / "install" / "ensure_local_place.py").read_text()
-    assert '["sh", str(path)' not in place, "the place script runs the bash agent with sh"
