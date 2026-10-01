@@ -866,7 +866,9 @@ def test_boss_connect_saves_exported_keys_and_restarts_only_api_and_worker(world
     boss = _installed(world)
     log = Path(world["env"]["BOSS_TEST_DOCKER_LOG"])
     log.write_text("")
-    env = dict(world["env"], OPENAI_API_KEY=SECRET, XAI_API_KEY=SECRET + "-x")
+    env = dict(world["env"])
+    for provider, value in (("OPENAI", SECRET), ("XAI", SECRET + "-x")):
+        env[f"{provider}_API_KEY"] = value
 
     result = _run(boss, "connect", "keys", env=env)
 
