@@ -177,8 +177,18 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
         _run_discovery(run_id, row["project_id"], row["seed"] or "", row["context"] or "",
                        settings, bool(state.get("deep")), None, research=research,
                        sequential=True, raise_errors=True)
-    except (DiscoverySpendRefused, DiscoveryReconciliationRequired,
-            DiscoveryResearchUnavailable) as settled:
+    except DiscoverySpendRefused as refused:
+        waits = int(state.get("budget_waits") or 0)
+        if refused.transient and waits < MAX_BUDGET_WAITS:
+            # THE PER-MINUTE CAP CLEARS BY ITSELF, and waiting for it is not a failed attempt —
+            # retrying the job spent one of its three attempts per wait, so a run needing more
+            # than three waits failed. Queue a fresh job a minute out instead; it replays every
+            # stage already paid for and carries on.
+            _defer_run(engine, row["project_id"], run_id, payload, waits + 1, str(refused))
+            return {"status": "deferred", "retry": False, "error": str(refused)[:1000]}
+        _fail_run(engine, row["project_id"], run_id, refused)
+        return {"status": "failed", "retry": False, "error": str(refused)[:1000]}
+    except (DiscoveryReconciliationRequired, DiscoveryResearchUnavailable) as settled:
         _fail_run(engine, row["project_id"], run_id, settled)
         return {"status": "failed", "retry": False, "error": str(settled)[:1000]}
     except Exception as error:  # noqa: BLE001 — a stage failed outright; retry if attempts remain
@@ -190,6 +200,33 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
                            "WHERE id = :id"), {"e": f"retrying: {error}"[:1000], "id": run_id})
         return {"status": "failed", "retry": True, "error": str(error)[:1000]}
     return {"status": "completed", "retry": False}
+
+
+#: How many times one run may wait out the per-minute budget cap before it is failed.
+MAX_BUDGET_WAITS = 30
+BUDGET_WAIT_SECONDS = 65
+
+
+def _defer_run(engine, project_id: str, run_id: str, payload: dict, waits: int,
+               reason: str) -> None:
+    from .discovery_spend import JOB_KIND
+    from .jobs import enqueue_job
+
+    with begin(engine) as c:
+        job = enqueue_job(
+            c, project_id, JOB_KIND, dict(payload), priority=40, max_attempts=3,
+            run_after_seconds=BUDGET_WAIT_SECONDS, dedupe_key=f"discovery:{run_id}:wait:{waits}",
+            workload_class="owner_sandbox", data_boundary="internal",
+        )
+        c.execute(
+            text("UPDATE discovery_runs SET state = state || CAST(:s AS JSONB), error = :e, "
+                 "updated_at = now() WHERE id = :id"),
+            {"id": run_id, "e": f"waiting for the per-minute budget: {reason}"[:1000],
+             "s": json.dumps({"job_id": job["id"], "budget_waits": waits})},
+        )
+        emit_event(c, project_id, "discovery.waiting_for_budget", "boss", "discovery_run",
+                   run_id, {"job_id": job["id"], "waits": waits,
+                            "retry_in_seconds": BUDGET_WAIT_SECONDS})
 
 
 def _fail_run(engine, project_id: str, run_id: str, error: BaseException) -> None:
