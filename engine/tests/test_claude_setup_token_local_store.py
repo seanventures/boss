@@ -11,7 +11,6 @@ import pytest
 
 from boss_engine.config import Settings
 from boss_engine.services.cli_harness import SUBSCRIPTION_SECRET_SCOPE
-from boss_engine.services.secret_backends import LocalVaultBackend
 from boss_engine.services.secrets_service import ref_key_for
 from boss_engine.services.setup_service import SetupError, store_coding_agent_credential
 
@@ -35,34 +34,28 @@ class _Connection:
         return _Row()
 
 
-def test_claude_setup_token_is_stored_only_in_the_local_secret_store(tmp_path, monkeypatch):
-    vault = tmp_path / "vault"
-    monkeypatch.setenv("BOSS_KMS_VAULT_DIR", str(vault))
-    monkeypatch.setenv("BOSS_KMS_ALLOW_EPHEMERAL_MASTER", "true")
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+def test_with_its_key_outside_the_database_the_database_store_may_hold_the_token(monkeypatch):
+    """An install that chose the database store, with BOSS_KMS_MASTER_KEY in .env: Postgres holds
+    only ciphertext and a dump is not a key compromise, so the token is accepted there."""
+    monkeypatch.setenv("BOSS_KMS_MASTER_KEY", "a" * 44)
+    monkeypatch.setenv("BOSS_COMMUNITY_SECRET_STORE", "database")
+    stored = {}
     monkeypatch.setattr(
-        "boss_engine.services.secret_backends.default_secret_backend",
-        lambda _settings: "database",
+        "boss_engine.services.secrets_service.put_secret",
+        lambda *args, **kwargs: stored.update(kwargs) or {
+            "secret_ref_id": "sref_1", "ref_key": "k", "backend": kwargs["backend"],
+            "fingerprint": "fp"},
     )
     monkeypatch.setattr("boss_engine.services.core.emit_event", lambda *args, **kwargs: "evt")
-    connection = _Connection()
 
     result = store_coding_agent_credential(
-        connection, Settings(), "boss-dogfood", "claude_code", TOKEN,
-        actor="ceo", accept_database_fallback=True,
+        _Connection(), Settings(), "boss-dogfood", "claude_code", TOKEN, actor="ceo",
     )
 
-    assert result["backend"] == "local_vault"
+    assert result["backend"] == "database" and stored["backend"] == "database"
     assert result["raw_secret_stored"] is False
-    assert result["fallback_accepted"] is False
-    key = ref_key_for(SUBSCRIPTION_SECRET_SCOPE, "CLAUDE_CODE_OAUTH_TOKEN")
-    assert LocalVaultBackend().get(key) == TOKEN
-    archived = b"".join(path.read_bytes() for path in vault.rglob("*") if path.is_file())
-    assert TOKEN.encode() not in archived
-    persisted = json.dumps(connection.params)
-    assert TOKEN not in persisted
-    assert "database" not in {call.get("sb") or call.get("rk") for call in connection.params}
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in __import__("os").environ
+    # Chosen at install time, so it is not reported as a reluctant fallback.
+    assert result["fallback_accepted"] is True  # backend == "database"; recorded, not prompted
 
 
 def test_a_missing_claude_setup_token_is_not_stored(monkeypatch):
@@ -99,8 +92,7 @@ def test_claude_setup_token_does_not_fall_back_to_postgres(monkeypatch):
         )
 
     message = str(exc.value)
-    assert "never put in BOSS's Postgres database" in message
-    assert "--secret-store infisical" in message
+    assert "BOSS_KMS_MASTER_KEY" in message and "Re-run the installer" in message
     assert TOKEN not in message
 
 

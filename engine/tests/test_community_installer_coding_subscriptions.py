@@ -127,7 +127,7 @@ def test_local_claude_connect_does_not_read_or_upload_a_token(monkeypatch):
     assert calls == ["status", "connect"]
 
 
-@pytest.mark.parametrize("backend", ["infisical", "local_vault"])
+@pytest.mark.parametrize("backend", ["infisical", "local_vault", "database"])
 def test_a_claude_token_in_any_secret_store_is_recorded_as_connected(monkeypatch, backend):
     """The server stores a Claude token in the install's secret store — Infisical on an install
     made with --secret-store infisical. The installer demanded "local_vault" exactly, so it
@@ -146,14 +146,13 @@ def test_a_claude_token_in_any_secret_store_is_recorded_as_connected(monkeypatch
     assert connected == ["claude_code"]
 
 
-def test_a_claude_token_that_landed_in_the_database_is_refused(monkeypatch):
+def test_a_reply_that_does_not_say_where_the_token_went_is_refused(monkeypatch):
     monkeypatch.setenv("BOSS_API_KEY", "k")
     monkeypatch.setattr(coding_subscriptions, "discover", lambda: {"codex": False, "claude_code": True})
     monkeypatch.setattr(coding_subscriptions, "claude_credential", lambda: "tok")
-    monkeypatch.setattr(coding_subscriptions, "send_to_boss",
-                        lambda *a, **k: {"ok": True, "backend": "database"})
+    monkeypatch.setattr(coding_subscriptions, "send_to_boss", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(coding_subscriptions, "connect",
-                        lambda *a: pytest.fail("recorded a token stored in the database"))
+                        lambda *a: pytest.fail("recorded a token with no confirmed store"))
     monkeypatch.setattr(sys, "argv", ["coding_subscriptions.py", "--connect-claude"])
-    with pytest.raises(RuntimeError, match="secret store"):
+    with pytest.raises(RuntimeError, match="did not confirm"):
         coding_subscriptions.main()

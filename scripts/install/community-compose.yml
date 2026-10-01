@@ -131,6 +131,11 @@ services:
       BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
+      # The operator's store choice and the database store's key, both from .env. Without the
+      # key the database store keeps its key inside Postgres; without the choice, BOSS ignored
+      # the installer's "database or infisical" answer.
+      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
+      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -242,6 +247,11 @@ services:
       BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
+      # The operator's store choice and the database store's key, both from .env. Without the
+      # key the database store keeps its key inside Postgres; without the choice, BOSS ignored
+      # the installer's "database or infisical" answer.
+      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
+      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
