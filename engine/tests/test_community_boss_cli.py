@@ -1191,6 +1191,14 @@ def test_install_ollama_from_scratch_on_linux_sets_up_everything_and_becomes_the
     listed = _run(boss, "connect", "--list", env=plain, timeout=60)
     assert "stopped" not in listed.stdout, listed.stdout
     assert "not found  Ollama" not in listed.stdout, listed.stdout
+    # A reinstall after a purge has a new .env without BOSS_OLLAMA_URL; the Ollama an earlier
+    # install bound with BOSS's own drop-in must still be found there, not reported as stopped.
+    env_file = world["install"] / ".env"
+    env_file.write_text("".join(line for line in env_file.read_text().splitlines(keepends=True)
+                                if not line.startswith("BOSS_OLLAMA_URL=")))
+    relisted = _run(boss, "connect", "--list", env=plain, timeout=60)
+    assert "stopped" not in relisted.stdout, relisted.stdout
+    assert "not found  Ollama" not in relisted.stdout, relisted.stdout
 
 
 def test_install_ollama_starts_a_stopped_ollama_and_keeps_a_hosted_default(world, boss_api) -> None:

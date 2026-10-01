@@ -516,7 +516,19 @@ as_root() {
 ollama_url() {
   local url="${BOSS_OLLAMA_URL:-}"
   [[ -n "$url" ]] || url="$(env_value BOSS_OLLAMA_URL)"
+  [[ -n "$url" ]] || url="$(boss_dropin_url || true)"
   printf '%s\n' "${url:-http://127.0.0.1:11434}"
+}
+
+# The address an earlier BOSS install bound Ollama to (its own systemd drop-in), so a reinstall
+# after a purge finds the Ollama that is still running there. Only BOSS's drop-in is read.
+boss_dropin_url() {
+  local file hostport
+  file="${BOSS_OLLAMA_DROPIN_DIR:-/etc/systemd/system/ollama.service.d}/boss-docker-bridge.conf"
+  [[ -r "$file" ]] || return 1
+  hostport="$(sed -n 's/^Environment="OLLAMA_HOST=\([0-9.]*:[0-9]*\)"$/\1/p' "$file" | head -n 1)"
+  [[ -n "$hostport" ]] || return 1
+  printf 'http://%s\n' "$hostport"
 }
 
 ollama_port() {
@@ -616,6 +628,14 @@ install_ollama() {
   printf '  ✓ Ollama installed\n'
 }
 
+# Keep a non-default Ollama address in .env so the next command and the containers use it.
+remember_ollama_url() {
+  local url
+  url="$(ollama_url)"
+  [[ "$url" != http://127.0.0.1:11434 && -z "$(env_value BOSS_OLLAMA_URL)" && -f "$ENV_FILE" ]] || return 0
+  set_env_value BOSS_OLLAMA_URL "$url"
+}
+
 start_ollama_serve() {
   mkdir -p "$HOME/.ollama"
   printf '  Running ollama serve in the background (log: ~/.ollama/boss-serve.log). It does not start again after a reboot.\n'
@@ -626,6 +646,7 @@ start_ollama() {
   local i
   if ollama_up; then
     printf '  ✓ Ollama is running at %s\n' "$(ollama_url)"
+    remember_ollama_url
     return 0
   fi
   printf 'Starting Ollama...\n'
@@ -651,6 +672,7 @@ start_ollama() {
   for i in $(seq 1 30); do
     if ollama_up; then
       printf '  ✓ Ollama is running at %s\n' "$(ollama_url)"
+      remember_ollama_url
       return 0
     fi
     [[ "$i" -eq 30 ]] || sleep 1

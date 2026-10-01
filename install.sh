@@ -1394,6 +1394,12 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   _found="$(mktemp)"
   # A rerun after the installer moved Ollama to the Docker bridge looks where .env says it is.
   _ollama_url="$(grep -m 1 '^BOSS_OLLAMA_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  # A reinstall after a purge: an earlier install bound Ollama with BOSS's own systemd drop-in.
+  if [[ -z "$_ollama_url" ]]; then
+    _ollama_hostport="$(sed -n 's/^Environment="OLLAMA_HOST=\([0-9.]*:[0-9]*\)"$/\1/p' \
+      "${BOSS_OLLAMA_DROPIN_DIR:-/etc/systemd/system/ollama.service.d}/boss-docker-bridge.conf" 2>/dev/null | head -n 1 || true)"
+    [[ -z "$_ollama_hostport" ]] || _ollama_url="http://$_ollama_hostport"
+  fi
   if BOSS_OLLAMA_URL="${_ollama_url:-${BOSS_OLLAMA_URL:-}}" python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
     found() { [[ "$(grep -m 1 "^$1=" "$_found" | cut -d= -f2-)" == found ]]; }
     if found codex_login && [[ "$CONNECT_CODEX" -eq 0 ]]; then

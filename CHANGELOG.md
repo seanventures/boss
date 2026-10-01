@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.0-rc2 - 2026-10-01
+
+Community release candidate. Package version `1.0.0-rc.2`. Not a public GA.
+
+### Added
+
+- One-command install: `curl -fsSL https://boss.sean.network/install.sh | bash` finds the newest release, installs missing dependencies, and needs no answers (`--yes` never asks).
+- The `boss` command: `status`, `open`, `password`, `doctor`, `logs`, `connect`, `upgrade`, `update`, `uninstall [--purge]`, `version`.
+- The installed release is recorded in `.boss-release`, so reruns and `boss upgrade` never move a release install to `main`.
+- Models step during install and `boss connect`: detects exported API keys, Codex, Claude Code, and Grok logins, coding CLIs, and Ollama; connects what it finds after consent; offers sign-in or a local model when nothing is usable.
+- `--install-ollama`: installs Ollama, makes it reachable from the containers on the Docker bridge only, pulls a coding model, and makes it the default for every role and chat when no hosted model is connected. Zero-priced only for the local endpoint; never overrides a hosted model.
+- Getting started guide from install to a first project and a governed build.
+- Public site and manual at https://boss.sean.network, with a rewritten README, guides, examples, and community health files.
+
+### Fixed
+
+- A checkout cloned by the installer (the default for the one-command install) left `initdb/` unreadable to Postgres under `umask 077`, so the database never became healthy.
+- A connected local model no longer reports "No model is connected yet"; `ollama pull` progress no longer floods logs without a terminal.
+- Discovery looks for Ollama where the install recorded it instead of only `127.0.0.1:11434`.
+- `boss`, `backup.sh`, and `uninstall.sh` used a different image tag than the installer builds, which broke model reconnects and backups before `boss upgrade` and purges.
+
+### Known issues
+
+- Software Factory builds need a GitHub repository connected to the project.
+- The default Build workflow (Standard Product Delivery) stops at its research step in Community; choose Backend Service Setup instead (see the getting started guide).
+- The PRD title shows the panel brief instead of the request.
+
 ## v1.0-rc1 - 2026-09-29
 
 Community release candidate on `ai/codex/boss-293-community-integrate`. Package version `1.0.0-rc.1`. This is not a public GA. `v0.14.0` is unchanged. Container images were not rebuilt.
