@@ -60,11 +60,15 @@ import pytest
 def _no_real_cli_model_catalog(monkeypatch):
     """Never ask a real coding CLI for its model catalog during a test.
 
-    `offered_models` asks `codex debug models`, so on a machine with a signed-in Codex every
-    model picker test would see that account's models instead of the list it asserts on.
-    A test that wants a catalog patches `_read_model_catalog` itself.
+    The product asks each CLI which models the signed-in account has, so on a machine with a
+    signed-in Codex or Claude every picker test would see that account instead of the list it
+    asserts on. This stands in for "what the CLI reported" — test data, not a product list.
+    A test about the readers themselves undoes it (`monkeypatch.undo()`).
     """
     from boss_engine.services import cli_harness
 
-    monkeypatch.setattr(cli_harness, "_read_model_catalog", lambda spec: (), raising=False)
+    reported = {"claude_code": ("opus", "sonnet", "fable", "haiku"),
+                "codex": ("gpt-5.2-codex", "o3")}
+    monkeypatch.setattr(cli_harness, "_read_model_catalog",
+                        lambda spec: reported.get(spec.name, ()), raising=False)
     monkeypatch.setattr(cli_harness, "_catalog_cache", {}, raising=False)
