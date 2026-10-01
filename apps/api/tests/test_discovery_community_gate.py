@@ -246,6 +246,51 @@ def test_a_per_minute_cap_smaller_than_a_stage_waits_and_retries_instead_of_fail
     assert _events(engine, run_id, "discovery.waiting_for_budget") >= 3
 
 
+@pytest.fixture
+def owned_source(engine):
+    """Make the research source owner-scoped, as a seeded subscription is, then restore it."""
+    with engine.connect() as connection:
+        saved = dict(connection.execute(text(
+            "SELECT owner_type, owner_id, entitlement_kind, multi_tenant_allowed "
+            "FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = 'openai_api'"), {"p": PROJECT}).mappings().one())
+
+    def own(owner_type: str, owner_id: str) -> None:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE entitlement_sources SET owner_type = :t, owner_id = :o, "
+                "entitlement_kind = 'subscription', multi_tenant_allowed = false "
+                "WHERE project_id = :p AND source_id = 'openai_api'"),
+                {"t": owner_type, "o": owner_id, "p": PROJECT})
+
+    yield own
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE entitlement_sources SET owner_type = :owner_type, owner_id = :owner_id, "
+            "entitlement_kind = :entitlement_kind, multi_tenant_allowed = :multi_tenant_allowed "
+            "WHERE project_id = :p AND source_id = 'openai_api'"),
+            {**saved, "p": PROJECT})
+
+
+def test_the_workspace_operators_subscription_serves_research_started_by_a_member(
+    engine, governed, owned_source,
+):
+    """The seed gives every subscription to the workspace operator ("founder"); research started
+    by a member ("ceo") was refused as pooling — every governed stage on a default install."""
+    owned_source("workspace_operator", "founder")
+    run_id = _start()
+    assert _execute(run_id, _lease(engine, run_id)) == {"status": "completed", "retry": False}
+    assert governed.calls == STAGES
+
+
+def test_someone_elses_personal_subscription_is_still_not_pooled(engine, governed, owned_source):
+    owned_source("operator", "somebody_else")
+    run_id = _start()
+    result = _execute(run_id, _lease(engine, run_id))
+    assert result["status"] == "failed" and result["retry"] is False
+    assert "pooled" in result["error"] and governed.calls == []
+
+
 def test_the_worker_route_runs_the_leased_job(client, engine, governed):
     run_id = _start()
     response = client.post(f"/v1/discoveries/{run_id}/execute", json=_lease(engine, run_id))
