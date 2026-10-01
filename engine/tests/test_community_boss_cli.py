@@ -1151,8 +1151,16 @@ def test_install_ollama_from_scratch_on_linux_sets_up_everything_and_becomes_the
     assert boss_api.puts() == ROLE_DEFAULT
     assert "is now the default for every role" in out
     env_text = (world["install"] / ".env").read_text()
-    assert f"BOSS_MODEL_PRICES_JSON='{{\"{DEFAULT_LOCAL}\":[0,0]}}'" in env_text
+    local = f"http://host.docker.internal:{boss_api.port}/v1"
+    # Zero price for this endpoint only: a hosted model with the same name never matches it.
+    assert f"BOSS_MODEL_PRICES_JSON='{{\"{local}#{DEFAULT_LOCAL}\":[0,0]}}'" in env_text
     assert f"BOSS_OLLAMA_URL=http://127.0.0.1:{boss_api.port}" in env_text
+    # Nothing hosted: chat and the other OPENAI_* surfaces use the local model too.
+    assert "OPENAI_API_KEY=ollama\n" in env_text
+    assert f"OPENAI_BASE_URL={local}\n" in env_text
+    assert f"OPENAI_MODEL={DEFAULT_LOCAL}\n" in env_text
+    assert "Chat         the local Ollama model" in out
+    assert "API keys     not found" in out  # the placeholder is not a hosted key
     assert "up -d --no-deps --no-build --force-recreate api worker" in _docker_calls(world)
     assert "No completion was run" in out
     assert f"Default      Ollama {DEFAULT_LOCAL} for every role" in out
@@ -1178,6 +1186,10 @@ def test_install_ollama_starts_a_stopped_ollama_and_keeps_a_hosted_default(world
     assert boss_api.puts() == {}
     assert "Ollama is added but not made the default" in out
     assert "Default      hosted:" in out and "Ollama is added but not the default" in out
+    # Chat is untouched when a hosted model is connected.
+    env_text = (world["install"] / ".env").read_text()
+    assert "OPENAI_API_KEY=\n" in env_text and "OPENAI_BASE_URL=\n" in env_text
+    assert "Chat         the local Ollama model" not in out
 
 
 def test_install_ollama_checks_disk_space_before_pulling(world, boss_api) -> None:
@@ -1287,3 +1299,80 @@ def test_boss_connect_list_only_reports(world, boss_api) -> None:
     assert f"found      Ollama at http://127.0.0.1:{boss_api.port} (1 model pulled: llama3.2:latest)" in result.stdout
     assert _docker_calls(world) == ""
     assert [r for r in boss_api.requests[before:] if r[0] != "GET"] == []
+
+
+# ---- phase 2b decisions: rebind consent, scoped price, hosted first, chat ---------------------
+
+def test_an_existing_ollama_is_moved_only_with_consent(world, boss_api) -> None:
+    boss = _installed(world)
+    calls = _local_ollama(world, boss_api, installed=True, unit=True, running=True,
+                          pulled=(DEFAULT_LOCAL,), loopback_only=True)
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux")
+    dropin = world["tmp"] / "ollama.service.d" / "boss-docker-bridge.conf"
+
+    # Unattended: never moved without --rebind-ollama; the fix is printed.
+    refused = _run(boss, "connect", "--yes", "--install-ollama", env=env)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "Your existing Ollama was left on 127.0.0.1" in refused.stdout
+    assert "boss connect --install-ollama --rebind-ollama" in refused.stdout
+    assert not dropin.exists() and "restart" not in calls.read_text()
+    assert boss_api.posts("/v1/setup/model") == []
+
+    # At a terminal the question defaults to no.
+    # Rebind: Enter (no). Then Claude and Grok sign-in offers: no.
+    code, output = _run_tty(boss, "connect", "--install-ollama", env=env, answers="\nn\nn\n")
+    assert code == 1, output
+    assert "Move it to the Docker bridge address" in output and "[y/N]" in output
+    assert not dropin.exists()
+
+    # The explicit flag allows it.
+    moved = _run(boss, "connect", "--yes", "--install-ollama", "--rebind-ollama", env=env)
+    assert moved.returncode == 0, moved.stdout + moved.stderr
+    assert f"OLLAMA_HOST=127.0.0.1:{boss_api.port}" in dropin.read_text()
+
+
+def test_a_hosted_openai_key_takes_chat_and_the_fallback_roles_back(world, boss_api) -> None:
+    boss = _installed(world)
+    _local_ollama(world, boss_api, installed=True, unit=True, running=True, pulled=(DEFAULT_LOCAL,))
+    env = dict(world["env"], BOSS_TEST_UNAME="Linux")
+    setup = _run(boss, "connect", "--yes", "--install-ollama", env=env)
+    assert setup.returncode == 0, setup.stdout + setup.stderr
+    assert boss_api.puts() == ROLE_DEFAULT
+    assert "OPENAI_API_KEY=ollama" in (world["install"] / ".env").read_text()
+
+    keyed = dict(env)
+    keyed["OPENAI_API_KEY"] = SECRET
+    result = _run(boss, "connect", "keys", env=keyed)
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+    assert SECRET not in out
+    env_text = (world["install"] / ".env").read_text()
+    assert f"OPENAI_API_KEY={SECRET}\n" in env_text
+    assert "OPENAI_BASE_URL=\n" in env_text and "OPENAI_MODEL=gpt-4o-mini\n" in env_text
+    assert "move from the local Ollama to the OpenAI key" in out
+    # The four lanes the fallback set are handed back; Ollama stays connected.
+    released = [body for method, where, body in boss_api.requests
+                if method == "PUT" and body["value"] == ""]
+    assert len(released) == 4
+    assert "went back to their defaults" in out
+
+
+def test_a_rerun_with_a_hosted_openai_key_does_not_keep_the_local_chat_address(world) -> None:
+    first = _install(world)
+    assert first.returncode == 0, first.stdout + first.stderr
+    local = "http://host.docker.internal:11434/v1"
+    for name, value in (("OPENAI_API_KEY", "ollama"), ("OPENAI_BASE_URL", local),
+                        ("OPENAI_MODEL", DEFAULT_LOCAL)):
+        _set_env_line(world["install"], name, value)
+
+    kept = _install(world)
+    assert kept.returncode == 0, kept.stdout + kept.stderr
+    assert f"OPENAI_BASE_URL={local}" in (world["install"] / ".env").read_text()
+
+    env = dict(world["env"])
+    env["OPENAI_API_KEY"] = SECRET
+    hosted = _install(world, env=env)
+    assert hosted.returncode == 0, hosted.stdout + hosted.stderr
+    text = (world["install"] / ".env").read_text()
+    assert f"OPENAI_API_KEY={SECRET}" in text
+    assert local not in text and "OPENAI_MODEL=gpt-4o-mini" in text

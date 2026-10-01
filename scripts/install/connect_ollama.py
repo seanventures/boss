@@ -30,7 +30,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_models import MODEL_NAME, ollama_model_names  # noqa: E402
-from model_status import ROLE_ENGINES, hosted_connected, role_settings  # noqa: E402
+from model_status import (  # noqa: E402
+    ROLE_ENGINES, hosted_connected, ollama_connection, role_settings, sources,
+)
 
 PROJECT = "boss-dogfood"
 SOURCE_ID = "setup-custom"
@@ -97,6 +99,7 @@ def record(line: str) -> None:
 
 def make_default(api_url: str, api_key: str, env_file: Path, model: str) -> str:
     hosted = hosted_connected(api_url, api_key, env_file)
+    record(f"hosted={'unknown' if hosted is None else 'yes' if hosted else 'no'}")
     if hosted is None:
         print("  BOSS could not tell whether a hosted model is connected; roles were left as "
               "they are. Choose models in Mission Control, Settings, Who does what")
@@ -128,10 +131,40 @@ def make_default(api_url: str, api_key: str, env_file: Path, model: str) -> str:
     return "yes" if changed else "no"
 
 
+def release_default(api_url: str, api_key: str, env_file: Path) -> int:
+    """A hosted model is now connected: hand back the roles the Ollama fallback set.
+
+    Only a lane that still says native with the local Ollama model is cleared (back to its
+    deployment default); a lane anyone set to something else is left alone. Ollama stays
+    connected.
+    """
+    if hosted_connected(api_url, api_key, env_file) is not True:
+        return 0
+    items = sources(api_url, api_key)
+    local_model = ollama_connection(items) if items is not None else None
+    knobs = role_settings(api_url, api_key)
+    if not local_model or not knobs:
+        return 0
+    released = 0
+    for engine_key in ROLE_ENGINES:
+        model_key = engine_key.replace("_engine", "_model")
+        engine_knob, model_knob = knobs.get(engine_key) or {}, knobs.get(model_key) or {}
+        if engine_knob.get("source") == "project" and engine_knob.get("value") == "native" \
+                and model_knob.get("value") == local_model:
+            # An empty value hands the lane, and its paired model, back to the default.
+            _request(f"{api_url}/v1/settings/{engine_key}", api_key,
+                     {"project_id": PROJECT, "actor": "ceo", "value": ""}, method="PUT")
+            released += 1
+    if released:
+        print(f"  A hosted model is connected, so the {released} role(s) that used Ollama "
+              f"{local_model} went back to their defaults. Ollama stays connected.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api-url", required=True)
-    parser.add_argument("--container-url", required=True,
+    parser.add_argument("--container-url", default="",
                         help="Ollama's OpenAI-compatible address as the BOSS containers see it")
     parser.add_argument("--host-url", default=os.environ.get("BOSS_OLLAMA_URL",
                                                              "http://127.0.0.1:11434"))
@@ -140,7 +173,13 @@ def main() -> int:
                         help="make Ollama every role's model when no hosted model is connected")
     parser.add_argument("--env-file", type=Path,
                         help="the install's .env, read for provider key names only")
+    parser.add_argument("--release-default", action="store_true",
+                        help="a hosted model is connected: clear the roles Ollama was given")
     args = parser.parse_args()
+    if args.release_default:
+        api_key = os.environ.get("BOSS_API_KEY", "")
+        return release_default(args.api_url.rstrip("/"), api_key,
+                               args.env_file or Path("/nonexistent")) if api_key else 0
 
     container = urllib.parse.urlparse(args.container_url)
     if container.scheme != "http" or container.hostname != "host.docker.internal":

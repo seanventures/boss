@@ -36,6 +36,8 @@ Commands:
                                            containers, pull the model, connect it
                       --local-model NAME   the model to pull (default qwen2.5-coder:7b)
                       --no-local-model     never offer the local model
+                      --rebind-ollama      allow moving an Ollama you already had from
+                                           127.0.0.1 to the Docker bridge (Linux)
                       WHAT connects one explicitly:
                         keys    save provider keys exported in this shell into .env and
                                 restart api and worker (OPENAI_, ANTHROPIC_, GOOGLE_, XAI_,
@@ -393,6 +395,11 @@ connect_keys() {
     return 0
   fi
   save_exported_keys || rc=$?
+  if [[ "$rc" -eq 0 ]] && [[ -n "${OPENAI_API_KEY:-}" ]] &&
+     python3 "$INSTALL_DIR/scripts/install/local_model.py" chat-hosted "$ENV_FILE" </dev/null; then
+    printf '  Chat and the other OPENAI_* surfaces move from the local Ollama to the OpenAI key\n'
+  fi
+  [[ "$rc" -ne 0 ]] || release_local_default
   case "$rc" in
     0) apply_env Keys ;;
     1) printf '  nothing   .env already holds these keys; no restart needed\n' ;;
@@ -651,7 +658,7 @@ start_ollama() {
 
 # The containers reach the host as host.docker.internal. Docker Desktop forwards that to the
 # host's loopback. Docker Engine on Linux maps it to the Docker bridge gateway, where an Ollama
-# listening on 127.0.0.1 cannot be reached. With $1=1 (the full setup), BOSS then binds the
+# listening on 127.0.0.1 cannot be reached. With $1=1 or 2 (the full setup), BOSS then binds the
 # Ollama service to the bridge gateway: reachable from this machine and its containers, not from
 # the network. Never 0.0.0.0. Without it, the fix is printed and nothing changes.
 reach_ollama() {
@@ -661,7 +668,7 @@ reach_ollama() {
   if container_sees_ollama "$container"; then
     return 0
   fi
-  if [[ "$rebind" -ne 1 || "$(host_os)" != Linux ]] || ! command -v systemctl >/dev/null 2>&1 ||
+  if [[ "$rebind" -eq 0 || "$(host_os)" != Linux ]] || ! command -v systemctl >/dev/null 2>&1 ||
      ! systemctl cat ollama.service >/dev/null 2>&1; then
     printf '  ✗ The BOSS containers cannot reach Ollama at %s. Ollama must listen on an address the Docker bridge reaches; on Linux run: boss connect --install-ollama (it binds Ollama to the bridge address). See docs/community/MODEL_CONNECTIONS.md. Nothing was changed.\n' "$container"
     return 1
@@ -673,6 +680,13 @@ reach_ollama() {
     return 1
   fi
   dropin="${BOSS_OLLAMA_DROPIN_DIR:-/etc/systemd/system/ollama.service.d}"
+  # $1=2: this Ollama was here before this run. Other programs may use it on 127.0.0.1, so
+  # moving it needs a yes at a terminal (default no) or --rebind-ollama.
+  if [[ "$rebind" -eq 2 && "$REBIND_OLLAMA" -ne 1 ]] &&
+     ! ask "Your Ollama already runs on 127.0.0.1, which the BOSS containers cannot reach. Move it to the Docker bridge address $gateway:$port? Programs that use 127.0.0.1:$port would then need OLLAMA_HOST=$gateway:$port."; then
+    printf '  ✗ Your existing Ollama was left on 127.0.0.1, so the BOSS containers cannot reach it. Nothing was changed. To move it: boss connect --install-ollama --rebind-ollama (or set OLLAMA_HOST=%s:%s for the service yourself, then: boss connect ollama)\n' "$gateway" "$port"
+    return 1
+  fi
   printf 'Ollama listens on 127.0.0.1, which containers cannot reach on Linux. Binding it to the Docker bridge address %s:%s: this machine and its containers reach it, your network does not.\n' "$gateway" "$port"
   if ! as_root mkdir -p "$dropin" </dev/null ||
      ! printf '[Unit]\nAfter=docker.service\n\n[Service]\nEnvironment="OLLAMA_HOST=%s:%s"\n' "$gateway" "$port" |
@@ -734,7 +748,7 @@ pull_local_model() {
 # connected, price it at zero, and check from the API container that the model is there.
 # Container reachability must already be established.
 register_ollama() {
-  local model="$1" key port container result rc=0 args
+  local model="$1" key port container result result_copy rc=0 args
   port="$(ollama_port)" || return 1
   container="http://host.docker.internal:$port"
   key="$(env_value BOSS_API_KEY)"
@@ -745,23 +759,48 @@ register_ollama() {
   BOSS_MODELS_RESULT="$result" BOSS_API_KEY="$key" BOSS_OLLAMA_URL="$(ollama_url)" \
     python3 "$INSTALL_DIR/scripts/install/connect_ollama.py" "${args[@]}" </dev/null || rc=$?
   model="$(grep -m 1 '^ollama_model=' "$result" | cut -d= -f2- || true)"
+  result_copy="$(cat "$result")"
   [[ -z "${BOSS_MODELS_RESULT:-}" ]] || cat "$result" >> "$BOSS_MODELS_RESULT"
   rm -f "$result"
   [[ "$rc" -eq 0 && -n "$model" ]] || return 1
+  local hosted restart=0
+  hosted="$(printf '%s\n' "$result_copy" | grep -m 1 '^hosted=' | cut -d= -f2- || true)"
   rc=0
-  python3 "$INSTALL_DIR/scripts/install/local_model.py" price-zero "$model" "$ENV_FILE" </dev/null || rc=$?
+  python3 "$INSTALL_DIR/scripts/install/local_model.py" price-zero "$model" "$container/v1" "$ENV_FILE" </dev/null || rc=$?
   case "$rc" in
-    0) printf '  Priced %s at zero in BOSS_MODEL_PRICES_JSON (.env)\n' "$model"
-       apply_env Price || return 1 ;;
+    0) printf '  Priced %s at zero for %s/v1 only (BOSS_MODEL_PRICES_JSON in .env)\n' "$model" "$container"; restart=1 ;;
     3) ;;
     *) printf '  ✗ %s was connected but not priced at zero; BOSS counts it at its default rate.\n' "$model" ;;
   esac
+  # Nothing hosted: chat and the other surfaces that read OPENAI_* use the local model too.
+  if [[ "$hosted" == no ]]; then
+    rc=0
+    python3 "$INSTALL_DIR/scripts/install/local_model.py" chat-local "$model" "$container/v1" "$ENV_FILE" </dev/null || rc=$?
+    case "$rc" in
+      0) printf '  Chat and the other OPENAI_* surfaces now use %s too (no hosted model is connected)\n' "$model"; restart=1 ;;
+      3) ;;
+      4) printf '  Chat keeps the OpenAI key in .env\n' ;;
+      *) printf '  ✗ Chat was not pointed at %s; the reason is above.\n' "$model" ;;
+    esac
+  fi
+  if [[ "$restart" -eq 1 ]]; then
+    apply_env "Local model" || return 1
+  fi
   if container_sees_ollama "$container" "$model"; then
     printf '  ✓ Checked: the BOSS API container sees %s in Ollama. No completion was run: Community setup makes no model calls; the first governed job verifies it.\n' "$model"
   else
     printf '  ✗ The BOSS API container does not see %s in Ollama. Check: ollama list, then: boss connect ollama\n' "$model"
     return 1
   fi
+}
+
+# A hosted model is connected: the roles the Ollama fallback set go back to their defaults.
+release_local_default() {
+  local key
+  key="$(env_value BOSS_API_KEY)"
+  [[ -n "$key" ]] || return 0
+  BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/connect_ollama.py" --release-default \
+    --api-url "$(api_url)" --env-file "$ENV_FILE" </dev/null || true
 }
 
 # A running Ollama, found on this machine. Status: 0 connected, 1 failed, 2 skipped.
@@ -778,11 +817,15 @@ connect_ollama() {
 
 # The whole local setup: install, start, reach from the containers, pull, register, check.
 setup_local_model() {
-  local model="$1"
+  local model="$1" existing=1
   printf 'Setting up a local model: Ollama with %s\n' "$model"
+  # An Ollama that was already installed or running belongs to the user: moving it needs consent.
+  if ! command -v ollama >/dev/null 2>&1 && ! ollama_up; then
+    existing=0
+  fi
   install_ollama || return 1
   start_ollama || return 1
-  reach_ollama 1 || return 1
+  reach_ollama "$([[ "$existing" -eq 1 ]] && echo 2 || echo 1)" || return 1
   pull_local_model "$model" || return 1
   register_ollama "$model"
 }
@@ -793,6 +836,7 @@ ASSUME=0           # --connect-found / --yes: yes for found items (never for ins
 NO_QUESTIONS=0     # --yes / an unattended installer: ask nothing
 INSTALL_OLLAMA=0   # --install-ollama: the whole local setup, unattended allowed
 NO_LOCAL_MODEL=0   # --no-local-model: never offer the local setup
+REBIND_OLLAMA=0    # --rebind-ollama: an existing Ollama may be moved to the Docker bridge
 LOCAL_MODEL="$OLLAMA_DEFAULT_MODEL"
 LOCAL_MODEL_SET=0
 FROM_INSTALLER=0   # the installer already saved keys and handled Codex
@@ -872,6 +916,7 @@ models_step() {
     fi
   fi
 
+  release_local_default
   usable_model || rc=$?
   if [[ "$rc" -eq 3 ]]; then
     printf '\nNo model is connected yet, so BOSS cannot run model work.\n'
@@ -922,6 +967,7 @@ cmd_connect() {
         LOCAL_MODEL="${2:-}"; LOCAL_MODEL_SET=1; shift 2 || die "--local-model needs a model name"
         valid_model_name "$LOCAL_MODEL" || die "--local-model takes an Ollama model name such as $OLLAMA_DEFAULT_MODEL" ;;
       --no-local-model) NO_LOCAL_MODEL=1; shift ;;
+      --rebind-ollama) REBIND_OLLAMA=1; shift ;;
       --list) mode=list; shift ;;
       --summary) mode=summary; shift ;;
       # Used by the installer.

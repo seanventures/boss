@@ -69,11 +69,13 @@ Connecting an Ollama that is already running does the following:
    - the base URL `http://host.docker.internal:11434/v1`
    - the first model Ollama lists, or `--local-model` or `BOSS_OLLAMA_MODEL` when that model is pulled
    - the placeholder key `ollama`, because the form requires a key and Ollama ignores it
-4. When no hosted model is connected (no provider key in `.env`, no recorded subscription, and no API-key connection), Ollama becomes the model for every role: implementer, reviewer, hard problems, and routine work. This goes through the project's role settings. A role you already chose is left alone. When a hosted model is connected, Ollama is added but not made the default. The summary card's `Default` row shows which applies.
-5. The model is priced at zero in `BOSS_MODEL_PRICES_JSON` in `.env`, other entries are kept, and only api and worker are recreated so they read it.
+4. When no hosted model is connected (no provider key in `.env`, no recorded subscription, and no API-key connection), Ollama becomes the model for every role: implementer, reviewer, hard problems, and routine work. This goes through the project's role settings. A role you already chose is left alone. Chat, meetings, and the other surfaces that read `OPENAI_*` then use it too: BOSS sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL` to the local address, and `OPENAI_MODEL` in `.env`, but only when `.env` holds no hosted OpenAI key. With a hosted model connected, chat is untouched. When a hosted model is connected, Ollama is added but not made the default. The summary card's `Default` and `Chat` rows show which applies.
+5. The model is priced at zero for the local endpoint only: the `BOSS_MODEL_PRICES_JSON` key is `<local base URL>#<model>`, for example `http://host.docker.internal:11434/v1#qwen2.5-coder:7b`, so the same model name on a hosted provider keeps its normal price. Other entries are kept, and only api and worker are recreated so they read `.env`.
 6. The API container checks that it sees the model in Ollama. No completion is run, because Community setup makes no model calls until model spend has its reservation, lease, and receipt path. The first governed job is what verifies the model.
 
-An existing **Anything OpenAI-compatible** connection to another address is never replaced; replace it in Mission Control if you want Ollama instead. When the setup screen also holds an OpenAI key, the native lane uses whichever of the two connections was saved last.
+An existing **Anything OpenAI-compatible** connection to another address is never replaced; replace it in Mission Control if you want Ollama instead. A local Ollama never takes the native (OpenAI-compatible) lane from a hosted connection: with an OpenAI key saved in the setup screen or in `.env`, that key is used whichever was saved last; Ollama is used there only when nothing hosted is connected.
+
+When a hosted model is connected later, `boss connect` hands back the roles the fallback set (lanes that still say native with the Ollama model return to their defaults), and `boss connect keys` with a new `OPENAI_API_KEY` moves chat from Ollama to that key. An installer rerun with an exported OpenAI key does the same for chat. Ollama stays connected.
 
 ### The local model
 
@@ -82,6 +84,7 @@ An existing **Anything OpenAI-compatible** connection to another address is neve
 1. **Install Ollama if it is missing.** On Linux, BOSS downloads the official installer from `https://ollama.com/install.sh` and runs it; a failed download runs nothing. On macOS, BOSS runs `brew install ollama` when Homebrew is present. Without Homebrew, BOSS tells you to install the app from https://ollama.com/download and stops.
 2. **Start it if it is stopped.** On Linux this uses `systemctl enable --now ollama`. On macOS it uses `brew services start ollama`, or opens the app. Otherwise BOSS runs `ollama serve` in the background, which does not survive a reboot.
 3. **Make it reachable from the containers.** On Linux, Ollama listens on `127.0.0.1`, which containers cannot reach. BOSS therefore binds the Ollama service to the Docker bridge address (the `host-gateway` address, usually `172.17.0.1`), which this machine and its containers can reach and your network cannot. It never binds to `0.0.0.0`.
+   - An Ollama that was already installed or running before this run belongs to you, and other programs may use it on `127.0.0.1`, so BOSS asks before moving it (default no). An unattended run never moves it unless you pass `--rebind-ollama`; without that, it stops with the fix. An Ollama that this run installed is moved without asking.
    - The change is a systemd drop-in, `/etc/systemd/system/ollama.service.d/boss-docker-bridge.conf`, with `OLLAMA_HOST=<bridge address>:11434` and `After=docker.service`. It needs `sudo`.
    - BOSS records the new address as `BOSS_OLLAMA_URL` in `.env`.
    - Afterwards the `ollama` command needs `export OLLAMA_HOST=<bridge address>:11434`. To undo the change, delete the drop-in and run `sudo systemctl daemon-reload && sudo systemctl restart ollama`.
@@ -659,6 +662,7 @@ Every flag is optional. See `./install.sh --help` for the full list. Added for t
 | `--install-ollama` | Set up the local model without asking: install Ollama if missing, start it, make it reachable from the containers, pull the model, and connect it. See [The local model](#the-local-model) |
 | `--local-model NAME` | The Ollama model to pull and connect (default `qwen2.5-coder:7b`) |
 | `--no-local-model` | Never offer the local model |
+| `--rebind-ollama` | Allow `--install-ollama` to move an Ollama you already had from `127.0.0.1` to the Docker bridge address (Linux) |
 | `--no-discover` | Skip looking for model keys and subscriptions |
 | `--no-boss-command` | Do not install `boss` on `PATH` |
 

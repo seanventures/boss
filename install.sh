@@ -196,6 +196,7 @@ CONNECT_FOUND=0
 INSTALL_OLLAMA=0
 LOCAL_MODEL=""
 NO_LOCAL_MODEL=0
+REBIND_OLLAMA=0
 INSTALL_BOSS_COMMAND=1
 SECRET_STORE_EXPLICIT=0
 if [ -n "${BOSS_SECRET_STORE:-}" ]; then
@@ -248,6 +249,9 @@ Options:
                           no model is usable; --yes alone never installs it
   --local-model NAME      The Ollama model to pull (default qwen2.5-coder:7b)
   --no-local-model        Never offer the local model
+  --rebind-ollama         Allow --install-ollama to move an Ollama you already had from
+                          127.0.0.1 to the Docker bridge address (Linux). Without it an
+                          unattended run leaves an existing Ollama alone and says how
   --no-discover           Do not look for model keys and subscriptions on this machine
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
@@ -307,6 +311,7 @@ while [[ $# -gt 0 ]]; do
         die "--local-model takes an Ollama model name, for example qwen2.5-coder:7b"
       shift 2 ;;
     --no-local-model) NO_LOCAL_MODEL=1; shift ;;
+    --rebind-ollama) REBIND_OLLAMA=1; shift ;;
     --no-discover) AUTO_DISCOVER=0; shift ;;
     --no-boss-command) INSTALL_BOSS_COMMAND=0; shift ;;
     --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
@@ -1469,6 +1474,7 @@ if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
   [[ "$INSTALL_OLLAMA" -eq 0 ]] || _models_args+=(--install-ollama)
   [[ -z "$LOCAL_MODEL" ]] || _models_args+=(--local-model "$LOCAL_MODEL")
   [[ "$NO_LOCAL_MODEL" -eq 0 ]] || _models_args+=(--no-local-model)
+  [[ "$REBIND_OLLAMA" -eq 0 ]] || _models_args+=(--rebind-ollama)
   bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
     ui_warn "The Models step did not finish; BOSS is running. Retry: boss connect"
   # Codex signs in on this machine, so it needs the CLI here. Offered only at a terminal and

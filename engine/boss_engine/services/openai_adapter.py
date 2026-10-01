@@ -183,14 +183,26 @@ def _price_overrides() -> dict[str, tuple[float, float]]:
 _price_overrides_cache: dict = {}
 
 
-def price_for_model(model: str, provider: str = "") -> tuple[float, float, bool]:
+def endpoint_price_key(base_url: str, model: str) -> str:
+    """The BOSS_MODEL_PRICES_JSON key that prices MODEL only at one endpoint.
+
+    "http://host.docker.internal:11434/v1#qwen2.5-coder:7b" prices the local Ollama model
+    and nothing else: the same model name served by a hosted provider never matches it.
+    """
+    return f"{(base_url or '').strip().rstrip('/')}#{model}"
+
+
+def price_for_model(model: str, provider: str = "", endpoint: str = "") -> tuple[float, float, bool]:
     """(input_$/Mtok, output_$/Mtok, known). Lookup order (BOSS-280 P2):
+    "<base url>#model" (one endpoint only, e.g. a local Ollama priced at zero) →
     "provider:model" (Azure/OpenRouter/self-hosted price the SAME model differently — set
     e.g. {"azure:gpt-4o": [3.0, 12.0]} in BOSS_MODEL_PRICES_JSON) → exact model → basename
     of provider-prefixed names ("deepseek/deepseek-chat"). Overrides always win.
     known=False means the DEFAULT_PRICE fallback was used — treat that cost as an estimate."""
     table = {**PRICE_PER_MTOK, **_price_overrides()}
     keys = []
+    if endpoint:
+        keys.append(endpoint_price_key(endpoint, model))
     if provider:
         keys.append(f"{provider.strip().lower()}:{model}")
     keys += [model, model.rsplit("/", 1)[-1]]
@@ -215,7 +227,8 @@ def estimate_cost_usd_micros(usage: dict) -> int:
     if usage.get("cost_usd_micros") is not None:
         return int(usage["cost_usd_micros"])
     inp, out, _ = price_for_model(str(usage.get("model") or ""),
-                                  provider=str(usage.get("provider") or ""))
+                                  provider=str(usage.get("provider") or ""),
+                                  endpoint=str(usage.get("base_url") or ""))
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
     cache_read = int(usage.get("cache_read_tokens") or 0)
@@ -348,6 +361,8 @@ class OpenAIAdapter:
             text = response.choices[0].message.content or ""
             usage = _usage_from_response(response, used_model)
             usage["retries"] = stats.get("retries", 0)
+            # Which endpoint answered, so an endpoint-scoped price applies to it alone.
+            usage["base_url"] = self._resolved_base_url()
             return response.id, text, usage
 
         # The Responses API is OpenAI-specific; compatible base URLs use
@@ -431,6 +446,8 @@ class OpenAIAdapter:
         }
         usage = _usage_from_response(response, model)
         usage["retries"] = stats.get("retries", 0)
+        if not self._azure_enabled() and self._resolved_base_url():
+            usage["base_url"] = self._resolved_base_url()
         return normalized, usage
 
 

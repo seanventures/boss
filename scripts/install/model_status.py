@@ -39,18 +39,34 @@ ROLE_ENGINES = ("code_agent_engine", "code_review_engine", "code_agent_strong_en
 LOCAL_HOST = "host.docker.internal"
 
 
-def env_key_names(env_file: Path) -> list[str]:
+def _env_lines(env_file: Path) -> list[str]:
     try:
-        lines = env_file.read_text(encoding="utf-8").splitlines()
+        return env_file.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
-    present = []
-    for name in KEY_NAMES:
-        for line in lines:
-            if line.startswith(name + "=") and line.split("=", 1)[1].strip().strip("'\""):
-                present.append(name)
-                break
-    return present
+
+
+def _env_value(lines: list[str], name: str) -> str:
+    for line in lines:
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip("'\"")
+    return ""
+
+
+def chat_is_local(env_file: Path) -> bool:
+    """OPENAI_* point at the local Ollama (the placeholder key and a local base URL)."""
+    lines = _env_lines(env_file)
+    host = urllib.parse.urlparse(_env_value(lines, "OPENAI_BASE_URL")).hostname
+    return _env_value(lines, "OPENAI_API_KEY") == "ollama" and \
+        host in {LOCAL_HOST, "localhost", "127.0.0.1", "::1"}
+
+
+def env_key_names(env_file: Path) -> list[str]:
+    """Hosted provider keys in .env. The local Ollama's placeholder OpenAI key is not one."""
+    lines = _env_lines(env_file)
+    local_openai = chat_is_local(env_file)
+    return [name for name in KEY_NAMES if _env_value(lines, name)
+            and not (name == "OPENAI_API_KEY" and local_openai)]
 
 
 def api_get(api_url: str, api_key: str, path: str) -> dict | None:
@@ -164,6 +180,8 @@ def rows(api_url: str, api_key: str, env_file: Path, found: dict[str, bool]) -> 
     else:
         out.append(("Ollama", "not found. Set it up: boss connect --install-ollama"))
     out.append(("Default", default_text(api_url, api_key, items, keys, model)))
+    if chat_is_local(env_file):
+        out.append(("Chat", "the local Ollama model (OPENAI_* in .env point at it)"))
     if items is None:
         out.append(("Note", "BOSS did not answer, so connected subscriptions are not shown. "
                             "Try: boss status"))
