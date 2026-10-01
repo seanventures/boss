@@ -150,6 +150,13 @@ class ModelGatewayService:
             "source_kind"
         ] in {"official_cli", "official_coding_agent"}
 
+    def consumer_for(self, connection: Connection, project_id: str,
+                     source_id: Optional[str], actor: str) -> str:
+        """Whom a pinned call books capacity for; see typed_decision_spend.consumer_for."""
+        from .typed_decision_spend import consumer_for
+
+        return consumer_for(connection, project_id, source_id, actor)
+
     def _assert_owner_scope(
         self, source: dict[str, Any], project_id: str, consumer_owner_id: Optional[str]
     ) -> None:

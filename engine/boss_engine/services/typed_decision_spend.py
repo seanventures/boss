@@ -16,6 +16,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from sqlalchemy import text
+
 from ..config import Settings
 from .core import create_blocking_decision, emit_event
 from .jobs import JOB_PRIORITY_INTERACTIVE, JobDeferredError, LeaseNotFoundError
@@ -101,6 +103,29 @@ def _uncertain(error: BaseException) -> bool:
         return True
     name = type(error).__name__.lower()
     return "timeout" in name or "connect" in name
+
+
+def consumer_for(connection, project_id: str, source_id: Optional[str], actor: str) -> str:
+    """Whom a governed call books capacity FOR, given the source that will answer it.
+
+    The gateway refuses to pool owner-scoped capacity: the consumer must be the source's owner.
+    The seed gives every subscription to the WORKSPACE OPERATOR (owner_type workspace_operator,
+    owner_id "founder"), and sources are seeded per project — so a call made inside that
+    project is the workspace operator's own work, and is booked for them. Using the actor
+    ("ceo") instead refused every governed discovery stage and decision on a default install
+    ("…owner scoped and cannot be pooled"). A PERSONALLY owned source (owner_type operator)
+    still needs the actor to be its owner: one person's subscription is not lent to another.
+    """
+    if not source_id:
+        return actor
+    row = connection.execute(
+        text("SELECT owner_type, owner_id FROM entitlement_sources "
+             "WHERE project_id = :p AND source_id = :s"),
+        {"p": project_id, "s": source_id},
+    ).mappings().first()
+    if row and row["owner_type"] == "workspace_operator" and row["owner_id"]:
+        return str(row["owner_id"])
+    return actor
 
 
 def capacity_after_failure(error: BaseException) -> dict:
@@ -409,9 +434,11 @@ class TypedDecisionSpend:
                 skill_id=SKILL_ID,
                 preferred_capabilities=["classify"],
                 risk_tier=1,
-                # The person the work is for. A subscription is owner-scoped: booking it for
-                # the project read as pooling the operator's own Claude login, and refused.
-                consumer_owner_id=self.actor,
+                # Owner-scoped capacity is booked for its owner when the work is the
+                # workspace's own; see consumer_for.
+                consumer_owner_id=(self.gateway.consumer_for(
+                    connection, self.project_id, source_id, self.actor)
+                    if hasattr(self.gateway, "consumer_for") else self.actor),
                 estimated_cost_usd_micros=MAX_COST_USD_MICROS,
                 max_usage={"total_tokens": 20_000},
                 dedupe_key=dedupe,

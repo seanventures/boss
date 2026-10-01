@@ -205,8 +205,11 @@ class DiscoveryStageSpend:
                 job_lease_token=self.job_lease_token,
                 agent_id=AGENT_ID, skill_id=SKILL_ID,
                 preferred_capabilities=["research"], risk_tier=1,
-                # The person the research is for; a subscription is owner-scoped.
-                consumer_owner_id=self.actor,
+                # Owner-scoped capacity is booked for its owner when the research is the
+                # workspace's own; see typed_decision_spend.consumer_for.
+                consumer_owner_id=(self.gateway.consumer_for(
+                    connection, self.project_id, source_id, self.actor)
+                    if hasattr(self.gateway, "consumer_for") else self.actor),
                 estimated_cost_usd_micros=amount,
                 max_usage={"total_tokens": 2_000_000},
                 dedupe_key=dedupe, ttl_seconds=self.ttl_seconds,
