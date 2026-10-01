@@ -52,19 +52,6 @@ def test_new_typed_decision_versions_publish_onto_the_governed_path(engine):
     assert count == 1
 
 
-def _capacity(client, suffix: str) -> None:
-    """Give the gateway a source to lease, as a real install has once a model is connected."""
-    created = client.post("/v1/secret-refs", json={
-        "project_id": PROJECT, "ref_kind": "env", "ref_key": f"BOSS_TEST_DECIDE_{suffix}",
-        "provider": "openai", "secret_kind": "api_token", "status": "active", "actor": "ceo",
-    })
-    assert created.status_code == 201, created.text
-    bound = client.post("/v1/entitlements/sources/openai_api/credential-ref", json={
-        "project_id": PROJECT, "secret_ref_id": created.json()["id"], "actor": "ceo",
-    })
-    assert bound.status_code == 200, bound.text
-
-
 def _committed_spend(engine, project: str) -> dict:
     """What another connection can see: only what the spend path has COMMITTED."""
     with engine.connect() as connection:
@@ -82,7 +69,6 @@ def _committed_spend(engine, project: str) -> dict:
 def test_typesafe_key_proof_is_reserved_and_receipted_before_the_call(client, engine, monkeypatch):
     """BOSS-451 step 5: the proof is a billed call, so the reservation and an in-progress
     receipt must be committed — visible to another connection — when TypeSafe is called."""
-    _capacity(client, "PROOF")
     seen = {}
     before = _committed_spend(engine, PROJECT)["reservations"]
 
@@ -92,12 +78,7 @@ def test_typesafe_key_proof_is_reserved_and_receipted_before_the_call(client, en
             decisions={"decision": typed_decisions.Decision("yes", 0.99)},
             backend="typesafe", model="jev-test", latency_ms=42, cost_usd_micros=7)
 
-    stored = {}
     monkeypatch.setattr(typed_decisions.TypeSafeDecider, "decide", decide)
-    monkeypatch.setattr("boss_engine.services.secrets_service.put_secret",
-                        lambda *a, **k: stored.update(k) or {
-                            "secret_ref_id": "sref_test", "backend": k.get("backend"),
-                            "fingerprint": "fp"})
     response = client.post("/v1/setup/decision-model/key", json={
         "project_id": PROJECT, "actor": "ceo", "api_key": "test-only-key",
         "accept_database_fallback": True,
@@ -108,23 +89,84 @@ def test_typesafe_key_proof_is_reserved_and_receipted_before_the_call(client, en
     assert _committed_spend(engine, PROJECT)["receipt"] == "succeeded"
     body = response.json()
     assert body["receipt_id"] and body["cost_usd_micros"] == 7
-    assert stored["value"] == "test-only-key" and "test-only-key" not in response.text
+    assert "test-only-key" not in response.text
     status = client.get("/v1/setup/decision-model", params={"project_id": PROJECT}).json()
     assert status["execution_available"] is True and status["hold_reason"] == ""
+    with engine.connect() as connection:
+        source = connection.execute(text(
+            "SELECT status, credential_secret_ref_id FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = 'typesafe_jev'"), {"p": PROJECT}).first()
+    with engine.connect() as connection:
+        kept = connection.execute(text(
+            "SELECT id, ref_key FROM secret_refs WHERE project_id = :p AND provider = 'typesafe' "
+            "AND status = 'active'"), {"p": PROJECT}).all()
+    assert len(kept) == 1 and not kept[0][1].endswith("_CANDIDATE"), kept
+    assert source is not None and source[0] == "active" and source[1] == kept[0][0], (
+        "the key is TypeSafe's own source's credential")
+
+
+def test_a_rejected_key_leaves_the_typesafe_source_as_it_was(client, engine, monkeypatch):
+    def rejected(self, context, questions):
+        raise RuntimeError("TypeSafe HTTP 401 unauthorized")
+
+    monkeypatch.setattr(typed_decisions.TypeSafeDecider, "decide", rejected)
+    response = client.post("/v1/setup/decision-model/key", json={
+        "project_id": PROJECT, "actor": "ceo", "api_key": "test-bad-key",
+        "accept_database_fallback": True,
+    })
+    assert response.status_code == 422, response.text
+    assert "rejected that key" in response.json()["detail"]
+    with engine.connect() as connection:
+        source = connection.execute(text(
+            "SELECT credential_secret_ref_id FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = 'typesafe_jev'"), {"p": PROJECT}).first()
+        live = connection.execute(text(
+            "SELECT count(*) FROM secret_refs WHERE project_id = :p AND provider = 'typesafe' "
+            "AND status = 'active'"), {"p": PROJECT}).scalar_one()
+    assert source is not None and source[0] is None, "a bad paste never becomes the credential"
+    assert live == 0, "the candidate is revoked"
+
+
+def test_builds_are_never_routed_to_typesafe(engine, monkeypatch):
+    """Jev answers multiple-choice questions and cannot write code."""
+    from boss_engine.config import get_settings
+    from boss_engine.services.entitlements import EntitlementBrokerService
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-key")
+    settings = get_settings().model_copy(update={"typesafe_api_key": "test-only-key"})
+    broker = EntitlementBrokerService(settings)
+    with engine.begin() as connection:
+        broker.seed_default_sources(connection, PROJECT, actor="ceo")
+        build = broker.preview_route(
+            connection, PROJECT, skill_id="model.generate_text", task_kind="code",
+            workload_class="owner_sandbox", risk_tier=0)
+        decide = broker.preview_route(
+            connection, PROJECT, skill_id="typed_decision", task_kind="typed_decision.execute",
+            workload_class="owner_sandbox", risk_tier=1, only_source_id="typesafe_jev")
+    rejected = {r["source_id"]: r["reason"] for r in build.get("rejected_sources") or []}
+    assert build.get("source_id") != "typesafe_jev"
+    assert rejected.get("typesafe_jev") == "source_reserved_for_decisions"
+    assert decide.get("source_id") == "typesafe_jev", decide
 
 
 def test_a_failed_key_write_after_the_proof_keeps_the_receipt(client, engine, monkeypatch):
     """The original gap: the proof ran inside the request transaction, so a failed key write
     rolled back every trace of a call TypeSafe had already billed."""
-    _capacity(client, "BROKEN")
     monkeypatch.setattr(typed_decisions.TypeSafeDecider, "decide", lambda self, c, q:
                         typed_decisions.DecisionBatch(
                             decisions={"decision": typed_decisions.Decision("yes", 0.99)},
                             backend="typesafe", model="jev-test", latency_ms=5,
                             cost_usd_micros=3))
 
+    from boss_engine.services import secrets_service
+
+    real_put = secrets_service.put_secret
+
     def broken_store(*a, **k):
-        raise RuntimeError("secret store unavailable")
+        # The candidate is held and proved; storing the KEPT key is what fails.
+        if k.get("name") == "TYPESAFE_API_KEY":
+            raise RuntimeError("secret store unavailable")
+        return real_put(*a, **k)
 
     monkeypatch.setattr("boss_engine.services.secrets_service.put_secret", broken_store)
     with pytest.raises(RuntimeError, match="secret store unavailable"):
