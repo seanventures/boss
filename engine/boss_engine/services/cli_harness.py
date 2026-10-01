@@ -124,6 +124,10 @@ class CliHarnessSpec:
     #: file changes, so the list is a suggestion and anything else is still accepted. Pretending
     #: to enumerate would reject a model that works.
     models_exhaustive: bool = False
+    #: Argv that prints the SIGNED-IN ACCOUNT's model catalog as JSON. When set, the console
+    #: offers what the account can actually use, and `models` is only the fallback for when
+    #: the CLI cannot answer. See `offered_models`.
+    models_catalog_args: tuple[str, ...] = ()
     #: Seconds before BOSS gives up on a build step. Review steps get review_timeout.
     timeout: int = 2400
     review_timeout: int = 420
@@ -342,6 +346,10 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         # (gpt-5.2-codex is settings.openai_model's default) plus that example; the operator can
         # type any other, which is why models_exhaustive stays False.
         models=("gpt-5.2-codex", "o3"),
+        # THE ACCOUNT'S OWN LIST. `codex debug models` (verified on 0.154 and 0.158) prints the
+        # catalog the ChatGPT login is entitled to — the same five the CLI's /model picker
+        # showed while the console offered the two fallbacks above.
+        models_catalog_args=("debug", "models"),
         final_message_flag="--output-last-message",
         token_pattern=r"tokens used\s+([\d,]+)",
         verified=False,
@@ -556,6 +564,53 @@ def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
     except OSError as exc:
         return 127, str(exc)
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+
+
+_CATALOG_TTL = 600.0
+_CATALOG_RETRY = 60.0
+_catalog_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+
+
+def offered_models(name: str) -> tuple[str, ...]:
+    """The models worth offering for this harness: the signed-in account's, where it can say.
+
+    The console offered codex's hardcoded pair (gpt-5.2-codex, o3) to an operator whose Codex
+    CLI listed five newer models — so the picker hid exactly the models the subscription had.
+    Asked of the CLI and cached: ten minutes on success, one minute after a failure so a
+    sign-in is picked up quickly. Never raises; the static list is the fallback.
+    """
+    spec = BUILTIN_CLI_HARNESSES.get(str(name or "").lower())
+    if spec is None:
+        return ()
+    if not spec.models_catalog_args:
+        return spec.models
+    now = time.monotonic()
+    cached = _catalog_cache.get(spec.name)
+    if cached and now < cached[0]:
+        return cached[1] or spec.models
+    found = _read_model_catalog(spec)
+    _catalog_cache[spec.name] = (now + (_CATALOG_TTL if found else _CATALOG_RETRY), found)
+    return found or spec.models
+
+
+def _read_model_catalog(spec: CliHarnessSpec) -> tuple[str, ...]:
+    """Slugs the CLI lists for its picker, in its own order. Hidden models are left out."""
+    binary = shutil.which(spec.binary)
+    if not binary:
+        return ()
+    code, output = _run_probe(binary, spec.models_catalog_args, timeout=20)
+    if code != 0 or "{" not in output:
+        return ()
+    try:
+        # The probe joins stdout and stderr; the catalog is the JSON object in it.
+        data, _ = json.JSONDecoder().raw_decode(output[output.index("{"):])
+    except ValueError:
+        return ()
+    models = data.get("models") if isinstance(data, dict) else None
+    listed = [m for m in models or [] if isinstance(m, dict)
+              and m.get("visibility") == "list" and isinstance(m.get("slug"), str)]
+    listed.sort(key=lambda m: m["priority"] if isinstance(m.get("priority"), int) else 10**9)
+    return tuple(m["slug"] for m in listed)
 
 
 def detect(spec: CliHarnessSpec, settings=None) -> dict:
