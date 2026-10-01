@@ -842,7 +842,9 @@ if [ -f "$ENV_FILE" ]; then
   if grep -qs '^BOSS_BIND_ADDRESS=0.0.0.0$' "$ENV_FILE"; then
     ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
   fi
-  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
+  # `|| true`: a key this .env predates (BOSS_KMS_MASTER_KEY on every upgrade) is a grep with no
+  # match, and under `set -euo pipefail` that silently ended the installer mid-configuration.
+  _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
   _keep_api="$(_existing BOSS_API_KEY)"
   if [ -n "$_keep_db" ]; then
