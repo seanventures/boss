@@ -253,6 +253,14 @@ ship_source() {
   ok "source on host at $sha (tree replaced, not merged)"
 }
 
+# The commands printed for the operator to paste next. They carry --dir: without it a pasted
+# command goes to the default /opt/boss and reports "no BOSS_API_KEY" against a healthy install.
+again() {
+  local cmd="remote.sh --host $HOST${KEY:+ --key $KEY}"
+  [[ "$DIR" != "/opt/boss" ]] && cmd+=" --dir '$DIR'"
+  printf '%s' "$cmd"
+}
+
 # ---------------------------------------------------------------------------- commands
 cmd_install() {
   head_ "Install BOSS on $HOST"
@@ -279,17 +287,17 @@ cmd_install() {
   # The tunnel makes the VM's loopback ports available on the operator laptop;
   # do not suggest opening unencrypted public HTTP endpoints.
   printf "\n${B}Where it is${N}\n\n"
-  say "Tunnel    ${D}remote.sh --host $HOST${KEY:+ --key $KEY} tunnel${N}"
+  say "Tunnel    ${D}$(again) tunnel${N}"
   say "Console   http://127.0.0.1:${WEB_PORT} after connecting the tunnel"
   say "API       http://127.0.0.1:${API_PORT} after connecting the tunnel"
   printf "\n${B}What next${N}\n\n"
-  say "Check it:        ${D}remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
-  say "An API key:      ${D}remote.sh --host $HOST${KEY:+ --key $KEY} model --provider openrouter${N} (hidden prompt)"
-  say "A subscription:  ${D}claude setup-token | remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider claude_code${N}"
-  say "Codex subscription: ${D}remote.sh --host $HOST${KEY:+ --key $KEY} subscription --provider codex${N}"
+  say "Check it:        ${D}$(again) smoke${N}"
+  say "An API key:      ${D}$(again) model --provider openrouter${N} (hidden prompt)"
+  say "A subscription:  ${D}claude setup-token${N}, then ${D}read -rs T && printf %s \"\$T\" | $(again) subscription --provider claude_code; unset T${N}"
+  say "Codex subscription: ${D}$(again) subscription --provider codex < ~/.codex/auth.json${N}"
   say "Claude CLI login: claude auth login inside the API container, then --connect-claude-local"
   say "Grok CLI login: grok login --device-auth inside the API container, then --connect-grok-local"
-  say "Shell variables: ${D}eval \"\$(remote.sh --host $HOST${KEY:+ --key $KEY} env)\"${N}"
+  say "Shell variables: ${D}eval \"\$($(again) env)\"${N}"
   printf "\n"
 }
 
@@ -368,7 +376,7 @@ cmd_update() {
 
   ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
   say ""
-  say "now run:  ${D}scripts/install/remote.sh --host $HOST${KEY:+ --key $KEY} smoke${N}"
+  say "now run:  ${D}scripts/install/$(again) smoke${N}"
 }
 
 cmd_uninstall() {
