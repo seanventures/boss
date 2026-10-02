@@ -729,6 +729,8 @@ def _repoint_default(
     if not newest or newest[0] == row["workflow_version_id"]:
         return False                       # already current
 
+    # Repointing changes which version work starts: not while an agent delete is deciding.
+    workflows.hold_workflow_reach(connection, project_id)
     connection.execute(
         text("UPDATE workflow_mappings SET workflow_version_id = :v, updated_at = now() "
              " WHERE id = :m"),

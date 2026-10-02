@@ -399,35 +399,47 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
     Round 1 of the milestone/agents review read only each workflow's NEWEST version, so an
     agent named only in the version that actually runs (an older one made active again, or the
     active one under a newer unactivated publish) was deleted with 200 and the workflow broken
-    for good. Each entry says which version names it (`because`: the VERSION_REACH label, or
-    'live run') and whether retiring that version would free the agent (`retirable`).
+    for good. Each entry says which version names it (`because`: the strongest REACH_SAID
+    label; `reasons`: every one that applies), whether retiring that version would free the
+    agent (`retirable`), and — in the operator's words, the same ones the API's refusal and the
+    console show — where it is (`where`) and what to do about it (`remedy`).
+
+    A RUN THAT CAN STILL BE TRIED AGAIN REACHES ITS VERSION. Only runs in flight counted, so a
+    run stopped at a failed step (status failed or deadlettered, still offering Try again) did
+    not hold its version: the agent was deleted (its version retired if older), and Try again
+    sent the run on to a later step naming it, which failed with "not a role this workforce
+    has" (review of milestone/agents, round 3). Every run whose status is not CLOSED — the
+    statuses in which nothing runs again — now counts.
     """
     from . import workflows
+    from .workflow_run_actions import CLOSED_RUN_STATES
 
     role = str(role_key or "").strip().lower()
+    versions = workflows.versions_a_run_can_reach(connection, project_id)
     reachable = [
         {"workflow_key": v["workflow_key"], "name": v["name"], "version": v["version"],
-         "version_id": v["version_id"], "spec": v["spec"], "why": v["reach"]}
-        for v in workflows.versions_a_run_can_reach(connection, project_id)
+         "version_id": v["version_id"], "spec": v["spec"], "why": v["reach"],
+         "pointed_by": v.get("pointed_by") or []}
+        for v in versions
     ]
-    live = connection.execute(
+    runs = connection.execute(
         text(
             """
             SELECT DISTINCT d.workflow_key, d.name, v.version, v.id AS version_id, v.spec,
-                   'live run' AS why
+                   r.status
               FROM workflow_runs r
               JOIN workflow_versions v ON v.id = r.workflow_version_id
               JOIN workflow_definitions d ON d.id = v.workflow_definition_id
              WHERE r.project_id = :p
-               AND r.status IN ('queued', 'validating', 'running', 'waiting', 'paused',
-                                'blocked', 'compensating')
+               AND NOT (r.status = ANY(:closed))
             """
         ),
-        {"p": project_id},
+        {"p": project_id, "closed": sorted(CLOSED_RUN_STATES)},
     ).mappings().all()
+    live = [{**dict(r), "why": run_reach(r["status"]), "pointed_by": []} for r in runs]
     out: list[dict[str, Any]] = []
     seen: dict[tuple[str, int, str], dict[str, Any]] = {}
-    for row in [dict(r) for r in live] + reachable:
+    for row in live + reachable:
         spec = row["spec"] if isinstance(row["spec"], dict) else {}
         for step in spec.get("steps") or []:
             if not isinstance(step, dict):
@@ -436,32 +448,152 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
             if not how:
                 continue
             key = (str(row["workflow_key"]), int(row["version"]), str(step.get("id")))
-            if key in seen:
-                # A version with a run in flight is never retirable, however else it is reached.
-                continue
-            entry = {
-                "workflow_key": row["workflow_key"], "workflow": row["name"],
-                "version": int(row["version"]), "version_id": str(row["version_id"]),
-                "step_id": str(step.get("id") or ""),
-                "step": str(step.get("label") or step.get("name") or step.get("id") or ""),
-                "how": how, "because": row["why"],
-                "retirable": row["why"] in workflows.RETIRABLE_REACH,
-            }
-            seen[key] = entry
-            out.append(entry)
+            entry = seen.get(key)
+            if entry is None:
+                entry = {
+                    "workflow_key": row["workflow_key"], "workflow": row["name"],
+                    "version": int(row["version"]), "version_id": str(row["version_id"]),
+                    "step_id": str(step.get("id") or ""),
+                    "step": str(step.get("label") or step.get("name") or step.get("id") or ""),
+                    "how": how, "because": row["why"], "reasons": [], "pointed_by": [],
+                }
+                seen[key] = entry
+                out.append(entry)
+            # EVERY REASON, not the first: a version with a run in flight that a mapping also
+            # starts must say both, or the operator lets the run finish and is refused again.
+            if row["why"] not in entry["reasons"]:
+                entry["reasons"].append(row["why"])
+            entry["pointed_by"].extend(row["pointed_by"])
+    for entry in out:
+        # A version with a run that can still go on is never retirable, however else reached.
+        entry["retirable"] = all(r in workflows.RETIRABLE_REACH for r in entry["reasons"])
+        # What a delete retiring this version retires with it — older parent versions that
+        # bind it as a subworkflow — so the page can say so before it is pressed.
+        entry["also_retires"] = [
+            {"workflow": p["name"], "version": p["version"]}
+            for p in workflows.retired_with(versions, entry["version_id"])
+        ] if entry["retirable"] else []
+        entry["where"] = _where(entry)
+        entry["remedy"] = _remedy(entry)
     return out
+
+
+#: How a RUN reaches its version, beside workflows.VERSION_REACH (how a START reaches one).
+RUN_REACH = {
+    "live run": "a run of it is in flight",
+    "stopped run": "a run of it stopped at a failed step, and Try again would carry it on",
+}
+
+
+def run_reach(status: Any) -> Optional[str]:
+    """The RUN_REACH label for a run in this status, or None when nothing in it runs again."""
+    from .workflow_run_actions import CLOSED_RUN_STATES, STOPPED_RUN_STATES
+
+    status = str(status or "")
+    if status in CLOSED_RUN_STATES:
+        return None
+    return "stopped run" if status in STOPPED_RUN_STATES else "live run"
+
+
+def _work_class(pointer: dict[str, Any]) -> str:
+    """The kind of work a mapping routes, said out loud."""
+    from .workflow_catalogue import work_class_label
+
+    kind, value = pointer.get("selector_kind"), str(pointer.get("selector_value") or "")
+    if kind == "work_class":
+        return work_class_label(value)
+    return f"work with {kind} '{value}'"
+
+
+def _pointers(named: dict[str, Any], via: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for p in named.get("pointed_by") or []:
+        if p.get("via") == via and p not in out:
+            out.append(p)
+    return out
+
+
+def _mapped_where(n: dict[str, Any]) -> str:
+    routed = " and ".join(_work_class(p) for p in _pointers(n, "mapped")) or "work"
+    return f"v{n['version']}, where a mapping still sends {routed}"
+
+
+def _mapped_remedy(n: dict[str, Any]) -> str:
+    # workflows.repoint_mapping moves exactly this mapping, whatever its scope and priority —
+    # the catalogue's Apply only replaces its own slot, so it is not named here.
+    moves = [f"point {_work_class(p)} at the current version of '{n['workflow']}' (Point at "
+             f"the current version on this agent's page, or POST /v1/workflow-mappings/"
+             f"{p['mapping_id']}/repoint)"
+             for p in _pointers(n, "mapped")]
+    return "; ".join(moves) or (f"point the mapping that starts v{n['version']} of "
+                                f"'{n['workflow']}' at its current version")
+
+
+def _subworkflow_where(n: dict[str, Any]) -> str:
+    parents = ", ".join(f"step '{p['step']}' of '{p['workflow']}' v{p['version']}"
+                        for p in _pointers(n, "subworkflow")) or "another workflow's step"
+    return f"v{n['version']}, which {parents} starts as a subworkflow"
+
+
+def _subworkflow_remedy(n: dict[str, Any]) -> str:
+    moves = [f"re-bind step '{p['step']}' of '{p['workflow']}' to the current version of "
+             f"'{n['workflow']}' and save '{p['workflow']}'"
+             for p in _pointers(n, "subworkflow")]
+    return "; ".join(moves) or (f"re-bind the subworkflow step that starts v{n['version']} of "
+                                f"'{n['workflow']}' to its current version")
+
+
+def _edit_the_step(n: dict[str, Any]) -> str:
+    return (f"give step '{n['step']}' of '{n['workflow']}' to another agent (or leave it for "
+            "BOSS to pick) and save the workflow")
+
+
+#: WHERE A STEP NAMING THE AGENT IS, AND WHAT TO DO ABOUT IT — one entry per way a run reaches a
+#: version (every workflows.VERSION_REACH label and every RUN_REACH label), read by the API's
+#: refusal and sent to the console as each step's `where` and `remedy`, so the two can never
+#: say different things.
+#:
+#: THE INCIDENT (review of milestone/agents, round 3). Every reach but 'older' got one sentence:
+#: "give those steps to another agent and save the workflow, then delete again". Saving never
+#: moves a mapping (it pins one exact version) or a parent's subworkflow binding, so an operator
+#: who did exactly that was refused again, for good, and the refusal named neither the kind of
+#: work nor the parent workflow. tests/test_every_version_a_run_can_start_guards_its_agents.py
+#: walks every label and fails until it has its own entry here.
+REACH_SAID: dict[str, tuple[Any, Any]] = {
+    "active": (lambda n: f"v{n['version']}, the version it runs", _edit_the_step),
+    "not yet active": (
+        lambda n: f"v{n['version']}, published but not yet the version it runs",
+        _edit_the_step),
+    "mapped": (_mapped_where, _mapped_remedy),
+    "subworkflow": (_subworkflow_where, _subworkflow_remedy),
+    "older": (
+        lambda n: f"v{n['version']}, an older version still startable by id",
+        lambda n: ("delete again choosing to retire the older versions that name it (their "
+                   "history is kept), or delete the workflow")),
+    "live run": (
+        lambda n: f"a run in flight on v{n['version']}",
+        lambda n: f"let the run of '{n['workflow']}' v{n['version']} finish, or stop it"),
+    "stopped run": (
+        lambda n: f"a run of v{n['version']} stopped at a failed step",
+        lambda n: (f"stop the run of '{n['workflow']}' v{n['version']} that is waiting at a "
+                   "failed step (its history is kept) — Try again would carry it on to this "
+                   "step")),
+}
 
 
 def _where(named: dict[str, Any]) -> str:
     """Which version names it, said the way an operator thinks of it."""
-    because = named["because"]
-    if because == "live run":
-        return "a run in flight"
-    if because == "active":
-        return f"v{named['version']}, the version it runs"
-    if because == "older":
-        return f"v{named['version']}, an older version still startable by id"
-    return f"v{named['version']}, {because}"
+    return REACH_SAID[named["because"]][0](named)
+
+
+def _remedy(named: dict[str, Any]) -> str:
+    """What to do so this step stops naming the agent: one clause per reason it is reached."""
+    said: list[str] = []
+    for reason in named.get("reasons") or [named["because"]]:
+        clause = REACH_SAID[reason][1](named)
+        if clause not in said:
+            said.append(clause)
+    return "; ".join(said)
 
 
 def studio_profiles(connection: Connection, project_id: str, role_key: str) -> list[dict]:
@@ -738,13 +870,19 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
     retired (kept, no longer startable) in the same transaction as the delete, and only those.
     """
     key = str(role_key or "").strip().lower()
+    from . import workflows
+
+    # HELD BEFORE ANYTHING IS READ, until the delete commits: no publish, mapping, run start or
+    # migration may change which versions a run can reach between the check below and the
+    # delete (workflows.hold_workflow_reach — review of milestone/agents, round 3).
+    workflows.hold_workflow_reach(connection, project_id, exclusive=True)
     role = _require_role(connection, project_id, key)
 
     named = steps_naming(connection, project_id, key)
     blocking = [n for n in named if not (retire_older_versions and n["retirable"])]
     if blocking:
         shown = "; ".join(
-            f"workflow '{n['workflow']}' step '{n['step']}' ({_where(n)}, {n['how']})"
+            f"workflow '{n['workflow']}' step '{n['step']}' ({n['where']}, {n['how']})"
             for n in blocking[:6])
         more = f" and {len(blocking) - 6} more" if len(blocking) > 6 else ""
         if all(n["retirable"] for n in blocking):
@@ -752,10 +890,13 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
                     "again choosing to retire those versions (their history is kept), or "
                     "delete the workflow.")
         else:
-            todo = ("Give those steps to another agent (or leave them for BOSS to pick) and "
-                    "save the workflow" + (", let the run in flight finish"
-                                           if any(n["because"] == "live run" for n in blocking)
-                                           else "") + ", then delete again.")
+            # Each step's own remedy (REACH_SAID), never one sentence for every reach: "save the
+            # workflow" does not move a mapping or a parent's binding.
+            remedies: list[str] = []
+            for n in blocking:
+                if n["remedy"] not in remedies:
+                    remedies.append(n["remedy"])
+            todo = "To delete it: " + "; ".join(remedies) + " — then delete again."
         raise AgentError(
             f"{role['display_name']} cannot be deleted: {len(blocking)} workflow step"
             f"{'s name' if len(blocking) != 1 else ' names'} it — {shown}{more}. {todo}",
@@ -773,11 +914,17 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
             "keeps. Take its skills and MCP servers away instead — an agent holding nothing is "
             "never picked for a step and is refused if one names it.", status=409)
 
-    from . import workflows
-
+    planned = {n["version_id"] for n in named if n["retirable"]}
     retired = workflows.retire_versions(
-        connection, project_id, {n["version_id"] for n in named if n["retirable"]},
+        connection, project_id, planned,
         actor=actor, reason=f"named agent '{key}', which was deleted") if named else []
+    if not planned <= set(retired):
+        # Cannot happen while the reach lock is held; if a writer ever skips it, refuse rather
+        # than delete the agent under a version that is no longer older (and so not retired).
+        raise AgentError(
+            f"{role['display_name']} was not deleted: a workflow changed while it was being "
+            "deleted, so a version that names it is no longer an older one. Open the agent "
+            "again to see what names it now, then delete again.", status=409)
 
     connection.execute(text("UPDATE kpis SET owner_role_id = NULL WHERE owner_role_id = :id"),
                        {"id": role["id"]})

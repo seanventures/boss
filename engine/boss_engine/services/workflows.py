@@ -968,6 +968,9 @@ def publish_version(
     actor: str,
     activate: bool = True,
 ) -> dict[str, Any]:
+    # Before the roster is read: a publish must not land between an agent delete's check and
+    # its commit (hold_workflow_reach).
+    hold_workflow_reach(connection, project_id)
     definition = connection.execute(
         text("SELECT * FROM workflow_definitions WHERE id=:id AND project_id=:project_id FOR UPDATE"),
         {"id": definition_id, "project_id": project_id},
@@ -1115,6 +1118,8 @@ def create_mapping(
     priority: int,
     actor: str,
 ) -> dict[str, Any]:
+    # A mapping makes its version one work starts: not while an agent delete is deciding.
+    hold_workflow_reach(connection, project_id)
     version = connection.execute(
         text(
             """
@@ -1184,6 +1189,55 @@ def create_mapping(
         },
     )
     return _serialize_mapping(row)
+
+
+def repoint_mapping(connection: Connection, *, project_id: str, mapping_id: str,
+                    actor: str) -> dict[str, Any]:
+    """Point ONE mapping at its workflow's current (active) version.
+
+    THE INCIDENT (review of milestone/agents, round 3). A mapping pins one exact version, and
+    nothing an operator could press moved an arbitrary one: saving the workflow does not, the
+    catalogue's Apply only replaces the project-scoped slot at its own priority, and
+    `_repoint_default` only moves BOSS's own default. So an agent named in an older version that
+    a mapping still sent work to could never be deleted, and the refusal told the operator to
+    save the workflow — which changed nothing. This is the move that refusal now names, by the
+    mapping's id, and the agent's page offers as a button.
+    """
+    hold_workflow_reach(connection, project_id)
+    row = connection.execute(
+        text("SELECT m.id, m.workflow_version_id, m.selector_kind, m.selector_value, m.enabled, "
+             "       d.id AS definition_id, d.name, d.active_version_id, "
+             "       (SELECT a.version FROM workflow_versions a "
+             "         WHERE a.id = d.active_version_id) AS active_version "
+             "  FROM workflow_mappings m "
+             "  JOIN workflow_versions v ON v.id = m.workflow_version_id "
+             "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+             " WHERE m.id = :m AND m.project_id = :p FOR UPDATE OF m"),
+        {"m": mapping_id, "p": project_id},
+    ).mappings().first()
+    if row is None:
+        raise WorkflowNotFoundError("Workflow mapping not found.")
+    if not row["active_version_id"]:
+        raise WorkflowConflictError(
+            f"'{row['name']}' has no current version to point this mapping at. Publish the "
+            "workflow (saving it in the builder makes the new version current), then try again.")
+    current = _version_row(connection, project_id, str(row["active_version_id"]))
+    before = str(row["workflow_version_id"])
+    if before != str(current["id"]):
+        connection.execute(
+            text("UPDATE workflow_mappings SET workflow_version_id = :v, updated_at = now() "
+                 "WHERE id = :m"),
+            {"v": current["id"], "m": mapping_id})
+        emit_event(connection, project_id, "workflow.mapping_repointed", actor,
+                   "workflow_mapping", mapping_id,
+                   {"selector_kind": row["selector_kind"],
+                    "selector_value": row["selector_value"],
+                    "from_version_id": before, "to_version_id": str(current["id"])})
+    updated = connection.execute(
+        text("SELECT * FROM workflow_mappings WHERE id = :m"), {"m": mapping_id},
+    ).mappings().one()
+    return {**_serialize_mapping(updated), "workflow": row["name"],
+            "version": int(current["version"]), "moved": before != str(current["id"])}
 
 
 def list_mappings(connection: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -1388,39 +1442,130 @@ def versions_a_run_can_reach(connection: Connection, project_id: str) -> list[di
         {"p": project_id, "version_statuses": list(STARTABLE_VERSION_STATUSES),
          "definition_statuses": list(GUARDED_DEFINITION_STATUSES)},
     ).mappings().all()
-    mapped = {str(v) for v in connection.execute(
-        text("SELECT workflow_version_id FROM workflow_mappings "
-             "WHERE project_id = :p AND enabled"),
+    # WHO POINTS AT IT, not only that something does. The delete refusal said "(v1, mapped)"
+    # and then "save the workflow, then delete again" — which never moves a mapping or a
+    # parent's binding, so an operator who did exactly what it said was refused again, for good
+    # (review of milestone/agents, round 3). Each version now carries every mapping and parent
+    # step that starts it (`pointed_by`, each with `via`: 'mapped' or 'subworkflow'), so the
+    # refusal can name the kind of work or the parent workflow and say how to move THAT.
+    pointers: dict[str, list[dict[str, Any]]] = {}
+    for m in connection.execute(
+        text("SELECT id, workflow_version_id, selector_kind, selector_value "
+             "FROM workflow_mappings "
+             "WHERE project_id = :p AND enabled ORDER BY selector_kind, selector_value, id"),
         {"p": project_id},
-    ).scalars().all()}
+    ).mappings().all():
+        pointers.setdefault(str(m["workflow_version_id"]), []).append(
+            {"via": "mapped", "mapping_id": str(m["id"]), "selector_kind": str(m["selector_kind"]),
+             "selector_value": str(m["selector_value"])})
     specs = {str(row["version_id"]): (row["spec"] if isinstance(row["spec"], dict)
                                       else _json(row["spec"], {})) or {}
              for row in rows}
-    children: set[str] = set()
-    for spec in specs.values():
-        for step in spec.get("steps") or []:
+    parents: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        for step in specs[str(row["version_id"])].get("steps") or []:
             if isinstance(step, dict) and step.get("kind") == "subworkflow":
                 child = (step.get("binding") or {}).get("workflow_version_id")
                 if child:
-                    children.add(str(child))
-    out: list[dict[str, Any]] = []
+                    parents.setdefault(str(child), []).append({
+                        "via": "subworkflow", "parent_version_id": str(row["version_id"]),
+                        "workflow_key": row["workflow_key"],
+                        "workflow": row["name"], "version": int(row["version"]),
+                        "step": str(step.get("label") or step.get("name")
+                                    or step.get("id") or "")})
+
+    # A PARENT ONLY STARTS ITS CHILD IF SOMETHING STARTS THE PARENT. Counting every binding made
+    # a child bound by an OLDER parent version unretirable for good: re-binding the parent (what
+    # the refusal says to do) publishes a new parent version, and the old one — which nothing
+    # starts by default — still bound the child (review of milestone/agents, round 3). So a
+    # binding counts only from a parent that is itself reached: active, mapped, not yet active,
+    # a reached child in turn, or carrying a run that can still go on. A child bound only by
+    # older parents is older too, and retiring it retires those parents with it (`retires_with`)
+    # rather than leaving them to fail at their subworkflow step.
+    from .workflow_run_actions import CLOSED_RUN_STATES
+
+    held = {str(v) for v in connection.execute(
+        text("SELECT DISTINCT workflow_version_id FROM workflow_runs "
+             "WHERE project_id = :p AND NOT (status = ANY(:closed))"),
+        {"p": project_id, "closed": sorted(CLOSED_RUN_STATES)},
+    ).scalars().all()}
+    own: dict[str, str] = {}
     for row in rows:
         vid = str(row["version_id"])
         active = row["active_version"]
         if vid == str(row["active_version_id"] or ""):
-            reach = "active"
-        elif vid in mapped:
-            reach = "mapped"
-        elif vid in children:
-            reach = "subworkflow"
+            own[vid] = "active"
+        elif any(p["via"] == "mapped" for p in pointers.get(vid, [])):
+            own[vid] = "mapped"
         elif active is None or int(row["version"]) > int(active):
-            reach = "not yet active"
+            own[vid] = "not yet active"
         else:
-            reach = "older"
+            own[vid] = "older"
+    reached = {vid for vid, r in own.items() if r != "older"} | held
+    grew = True
+    while grew:
+        grew = False
+        for child, bound in parents.items():
+            if child not in reached and any(b["parent_version_id"] in reached for b in bound):
+                reached.add(child)
+                grew = True
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        vid = str(row["version_id"])
+        bound = parents.get(vid, [])
+        strong = [b for b in bound if b["parent_version_id"] in reached]
+        reach = own[vid]
+        if reach in ("not yet active", "older") and strong:
+            reach = "subworkflow"
         out.append({"definition_id": row["definition_id"], "workflow_key": row["workflow_key"],
                     "name": row["name"], "version_id": vid, "version": int(row["version"]),
-                    "spec": specs[vid], "reach": reach})
+                    "spec": specs[vid], "reach": reach,
+                    "pointed_by": pointers.get(vid, []) + strong,
+                    "retires_with": [b["parent_version_id"] for b in bound
+                                     if b["parent_version_id"] not in reached]})
     return out
+
+
+def retired_with(versions: list[dict[str, Any]], version_id: str) -> list[dict[str, Any]]:
+    """The older parent versions that must be retired along with `version_id`, transitively —
+    each binds it (or one of them) as a subworkflow and nothing starts it (see
+    versions_a_run_can_reach). Never the version itself."""
+    by_id = {v["version_id"]: v for v in versions}
+    found: list[dict[str, Any]] = []
+    queue = list((by_id.get(str(version_id)) or {}).get("retires_with") or [])
+    while queue:
+        parent = by_id.get(queue.pop(0))
+        if parent is None or parent["reach"] not in RETIRABLE_REACH or parent in found:
+            continue
+        found.append(parent)
+        queue.extend(parent.get("retires_with") or [])
+    return found
+
+
+#: THE LOCK BETWEEN "WHAT CAN START WHICH VERSION" AND DELETING AN AGENT.
+#:
+#: THE INCIDENT (review of milestone/agents, round 3). delete_agent read the versions a run can
+#: reach, then retired the older ones and deleted the role, with nothing held in between. A
+#: publish committing in that gap — re-saving an older version's content makes it active again
+#: — left the role deleted under the version that now runs, while `retire_versions` (which
+#: re-reads the reach) quietly skipped it. The same gap was open to a new mapping, a run started
+#: by id, and a paused run migrated onto an older version.
+#:
+#: So every writer that changes which versions a run can start from takes this lock SHARED (they
+#: never wait for one another), and delete_agent takes it EXCLUSIVE before it reads anything: a
+#: writer either commits before the delete looks, or runs after it and finds the agent gone.
+#: tests/test_every_version_a_run_can_start_guards_its_agents.py scans for every such writer and
+#: fails until it takes this lock.
+_REACH_LOCK = "boss.workflow_reach:"
+
+
+def hold_workflow_reach(connection: Connection, project_id: str, *,
+                        exclusive: bool = False) -> None:
+    """Hold this project's workflow reach until the transaction ends (see _REACH_LOCK)."""
+    fn = "pg_advisory_xact_lock" if exclusive else "pg_advisory_xact_lock_shared"
+    connection.execute(text(f"SELECT {fn}(hashtextextended(:k, 0))"),
+                       {"k": _REACH_LOCK + str(project_id)})
 
 
 def retire_versions(connection: Connection, project_id: str, version_ids: Iterable[str], *,
@@ -1431,11 +1576,21 @@ def retire_versions(connection: Connection, project_id: str, version_ids: Iterab
     one or a subworkflow child, which are what work actually starts from. History is kept: the
     row stays, with its runs; only `_version_row` stops accepting it. Re-saving the same content
     later publishes it again (publish_version), after the spec is re-checked.
+
+    The older parent versions that bind a retired version as a subworkflow (`retired_with`) are
+    retired with it, so none is left startable by id only to fail at that step.
     """
     wanted = {str(v) for v in version_ids}
-    retirable = [v for v in versions_a_run_can_reach(connection, project_id)
+    versions = versions_a_run_can_reach(connection, project_id)
+    retirable = [(v, reason) for v in versions
                  if v["version_id"] in wanted and v["reach"] in RETIRABLE_REACH]
-    for version in retirable:
+    for version, _ in list(retirable):
+        for parent in retired_with(versions, version["version_id"]):
+            if all(parent is not r for r, _ in retirable):
+                retirable.append((parent, f"starts v{version['version']} of "
+                                          f"'{version['name']}' as a subworkflow, retired "
+                                          f"because it {reason}"))
+    for version, why in retirable:
         connection.execute(
             text("UPDATE workflow_versions SET status = 'retired' "
                  "WHERE id = :id AND project_id = :p AND status = 'published'"),
@@ -1443,8 +1598,8 @@ def retire_versions(connection: Connection, project_id: str, version_ids: Iterab
         emit_event(connection, project_id, "workflow.version_retired", actor,
                    "workflow_version", version["version_id"],
                    {"definition_id": version["definition_id"],
-                    "version": version["version"], "reason": reason})
-    return [v["version_id"] for v in retirable]
+                    "version": version["version"], "reason": why})
+    return [v["version_id"] for v, _ in retirable]
 
 
 def _table_exists(connection: Connection, table_name: str) -> bool:
@@ -1643,6 +1798,8 @@ def start_run(
             raise WorkflowMappingNotFoundError(resolution["reason"])
         mapping_id = resolution["selected"]["id"]
         workflow_version_id = resolution["selected"]["workflow_version_id"]
+    # A run started now reaches its version's steps: not while an agent delete is deciding.
+    hold_workflow_reach(connection, project_id)
     version = _version_row(connection, project_id, str(workflow_version_id))
     spec = validate_workflow_spec(_json(version["spec"], {}),
                                   project_roster(connection, project_id))
@@ -4624,6 +4781,8 @@ def migrate_run(
     ).scalar_one()
     if active:
         raise WorkflowConflictError("A paused run with active leases cannot migrate.")
+    # The run will reach the target's steps: not while an agent delete is deciding.
+    hold_workflow_reach(connection, project_id)
     target = _version_row(connection, project_id, target_version_id)
     if target["workflow_definition_id"] != run["workflow_definition_id"]:
         raise WorkflowValidationError("Target version belongs to another workflow definition.")
@@ -4753,6 +4912,20 @@ def rollback_migration(
         return get_run(connection, project_id, run_id)
     if migration["status"] != "completed" or run["workflow_version_id"] != migration["to_version_id"]:
         raise WorkflowConflictError("Migration is not the active completed migration.")
+    # Rolling back puts the run on its old version again. That version may have been retired
+    # since (an agent it named was deleted — review of milestone/agents, round 3), and a run put
+    # back on it would fail at the step naming the agent that is gone. Only a RETIRED version is
+    # refused here; everything rollback accepted before, it still accepts.
+    hold_workflow_reach(connection, project_id)
+    retired = connection.execute(
+        text("SELECT version FROM workflow_versions WHERE id = :id AND status = 'retired'"),
+        {"id": migration["from_version_id"]},
+    ).scalar()
+    if retired is not None:
+        raise WorkflowConflictError(
+            f"this run cannot go back to v{retired}: that version was retired because an agent "
+            "it named was deleted. Keep the run on the version it migrated to, or stop it and "
+            "start the workflow's current version.")
     snapshot = _json(migration["rollback_snapshot"], {})
     keep_ids = {item["id"] for item in snapshot.get("steps", [])}
     rows = connection.execute(
