@@ -4,9 +4,13 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
+import {
+  PRESS_CARRYING_COMPONENTS, serverActionModules, serverActionRefs,
+} from "./_helpers/server-action-refs";
 
 /**
- * Every console write goes through lib/api-write.ts. No exceptions without a reason here.
+ * Every console write carries its press: a fetch through lib/api-write.ts, a server action
+ * through a SubmitButton form or lib/call-action.ts. No exceptions without a reason here.
  *
  * The same duplicate came back on a new button four times — 2026-08-22 a run started twice,
  * 2026-08-30 "Open preview happened twice", 2026-09-10 duplicate chat actions, 2026-10-02 "Stop
@@ -181,6 +185,95 @@ describe("the key travels the whole way to the API", () => {
     const routes = FILES.filter((f) => f.startsWith("app/api/") && f.endsWith("route.ts"));
     expect(routes.length).toBeGreaterThan(30);
     for (const route of routes) expect(writeCapableFetches(route), route).toEqual([]);
+  });
+});
+
+describe("every server action carries its press", () => {
+  /**
+   * The fetch scan above was the whole enforcement in 45e7693, and it could not see the other
+   * door: a server action called from code. 63 such calls — Deploy, Redeploy, the shepherd's
+   * sweep, the agent chat turn (the 2026-09-10 duplicate-chat path) — went out with no key while
+   * this file reported the console clean. Every mention of a server action in the console's code
+   * must now be one of: `callAction(X)` (lib/call-action.ts), the action of a `<form>` that
+   * renders a SubmitButton, a prop of a component verified to invoke it through callAction, a
+   * call made while rendering on the server (there is no press — the call is the render), or a
+   * `typeof`.
+   */
+  const REFS = serverActionRefs(ROOT);
+  /** The only direct calls allowed in client code, and why. */
+  const DIRECT_CALLS_ALLOWED: Record<string, string> = {
+    "lib/call-action.ts runPressedAction":
+      "the relay itself: callAction sends every press through it with the key as its first argument",
+  };
+
+  it("finds the console's server actions and the code that uses them", () => {
+    const modules = serverActionModules(ROOT);
+    expect(Object.keys(modules)).toContain("app/actions.ts");
+    expect(Object.keys(modules)).toContain("app/press-relay.ts");
+    expect(Object.values(modules).flat().length).toBeGreaterThan(150);
+    expect(REFS.length).toBeGreaterThan(150);
+    // The calls the review named are seen, and seen to be carried.
+    for (const [file, name] of [["app/deploy-ui.tsx", "deployTargetAction"],
+                                ["app/deploy-ui.tsx", "redeployAction"],
+                                ["app/shepherd-ui.tsx", "shepherdSweepAction"],
+                                ["app/agent-ui.tsx", "askBossAction"],
+                                ["app/agent-ui.tsx", "runAgentActionAction"]]) {
+      const mine = REFS.filter((r) => r.file === file && r.name === name && r.how !== "typeof");
+      expect(mine.length, `${file} ${name}`).toBeGreaterThan(0);
+      expect(mine.every((r) => r.how === "callAction"), `${file} ${name}`).toBe(true);
+    }
+  });
+
+  it("has no server action reached any other way", () => {
+    const offenders = REFS
+      .filter((r) => !r.ok && !(`${r.file} ${r.name}` in DIRECT_CALLS_ALLOWED))
+      .map((r) => `${r.file}:${r.line}  ${r.name} — ${r.how}`);
+    expect(offenders,
+      "wrap it: callAction(action)(...args), or make the form's button a SubmitButton").toEqual([]);
+  });
+
+  it("allows nothing that does not exist or no longer needs allowing", () => {
+    for (const [ref, reason] of Object.entries(DIRECT_CALLS_ALLOWED)) {
+      const [file, name] = ref.split(" ");
+      expect(REFS.some((r) => r.file === file && r.name === name && !r.ok), ref).toBe(true);
+      expect(reason.split(" ").length).toBeGreaterThan(6);
+    }
+  });
+
+  it("each component trusted to carry a press really invokes its action through callAction", () => {
+    for (const [component, file] of Object.entries(PRESS_CARRYING_COMPONENTS)) {
+      const src = codeOnly(file);
+      const start = src.search(new RegExp(`function ${component}\\b`));
+      expect(start, `${component} in ${file}`).toBeGreaterThan(-1);
+      const body = src.slice(start, src.indexOf("\nexport function", start + 1));
+      expect(body, component).toMatch(/callAction\(action\)\(/);
+      expect(body, `${component} must not also call the action directly`)
+        .not.toMatch(/(?<![\w.(])action\(/);
+    }
+  });
+
+  it("catches the shapes the review found unguarded", () => {
+    const probe = (code: string, client = true) => {
+      const dir = join(ROOT, "app", "__probe_tmp");
+      const fs = require("node:fs");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(join(dir, "probe.tsx"),
+        `${client ? '"use client";\n' : ""}import { redeployAction, deployTargetAction } from "../actions";\n${code}`);
+      try {
+        return serverActionRefs(ROOT).filter((r) => r.file.startsWith("app/__probe_tmp/"))
+          .map((r) => r.ok);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    };
+    expect(probe("async function f() { await redeployAction('d'); }")).toEqual([false]);
+    expect(probe("const go = () => void deployTargetAction('t', 'main');")).toEqual([false]);
+    expect(probe("const p = <Panel onSave={redeployAction} />;")).toEqual([false]);
+    expect(probe("const f = <form action={redeployAction}><button type=\"submit\">Go</button></form>;"))
+      .toEqual([false]);
+    expect(probe("async function f() { await callAction(redeployAction)('d'); }")).toEqual([true]);
+    expect(probe("const f = <form action={redeployAction}><SubmitButton>Go</SubmitButton></form>;"))
+      .toEqual([true]);
+    expect(probe("export default async function Page() { await redeployAction('d'); }", false))
+      .toEqual([true]);
   });
 });
 

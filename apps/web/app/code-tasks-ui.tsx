@@ -67,11 +67,12 @@ import { SubmitButton } from "./submit-button";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
 
+import { callAction } from "../lib/call-action";
 function RetryControls(
   { runId, failingGates = [], compact = false }:
   { runId: string; failingGates?: string[]; compact?: boolean },
 ) {
-  const [state, action, pending] = useActionState(retryCodeTaskWithStateAction, null);
+  const [state, action, pending] = useActionState(callAction(retryCodeTaskWithStateAction), null);
   // Which stages the retry will SKIP, mirroring _repair_needs_write_tests on the server, so the
   // operator knows this resumes rather than restarting. Kept in sync with _TEST_GATES.
   const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
@@ -119,7 +120,7 @@ function RetryControls(
 }
 
 function OverrideControls({ runId }: { runId: string }) {
-  const [state, action, pending] = useActionState(overrideCodeTaskAction, null);
+  const [state, action, pending] = useActionState(callAction(overrideCodeTaskAction), null);
   return (
     <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <input type="hidden" name="run_id" value={runId} />
@@ -201,7 +202,7 @@ function PreviewLogs({ previewId }: { previewId: string }) {
 }
 
 function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
-  const [state, action, pending] = useActionState(startPreviewAction, null);
+  const [state, action, pending] = useActionState(callAction(startPreviewAction), null);
   const hasLive = livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p));
   // Defensive as well as at the call site: a second identical "Open preview" is never useful,
   // whoever passes the list.
@@ -327,7 +328,7 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
 }
 
 function ConfirmFeedback({ threadId, workflowName }: { threadId: string; workflowName?: string }) {
-  const [state, action, pending] = useActionState(confirmCodeTaskFeedbackAction, null);
+  const [state, action, pending] = useActionState(callAction(confirmCodeTaskFeedbackAction), null);
   return (
     <form action={action} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <input type="hidden" name="thread_id" value={threadId} />
@@ -427,7 +428,7 @@ function FeedbackControls({ runId, status, anchor = "", projectId }: {
   runId: string; status: string; anchor?: string; projectId: string;
 }) {
   const completed = status === "completed";
-  const [state, action, pending] = useActionState(submitCodeTaskFeedbackAction, null);
+  const [state, action, pending] = useActionState(callAction(submitCodeTaskFeedbackAction), null);
   const workflows = useProjectWorkflows(projectId);
   const [picked, setPicked] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -731,7 +732,7 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
       run_id?: string; kind?: "meeting" | "code" | "existing"; error?: string;
     } | undefined;
     try {
-      out = await startQaBenchmarkAppAction(data);
+      out = await callAction(startQaBenchmarkAppAction)(data);
     } finally {
       setSent(false);
       await onLaunched?.(benchmark.id, out?.run_id,
@@ -893,7 +894,7 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running, 
   running: boolean;
   lastPreview?: PreviewRec | null;
 }) {
-  const [state, action] = useActionState(startPreviewAction, null);
+  const [state, action] = useActionState(callAction(startPreviewAction), null);
   const url = state?.url || previewUrl;
 
   if (url) {
@@ -1723,7 +1724,7 @@ function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
     data.set("instructions", text);
     let out: { run_id?: string; error?: string } | undefined;
     try {
-      out = await followUpCodeTaskAction(data);
+      out = await callAction(followUpCodeTaskAction)(data);
     } finally {
       setBusy(false);
       if (out?.run_id) {
@@ -1851,7 +1852,7 @@ function LaunchTask({ run, projectId, label = "Run this task again", onLaunched,
     if (riskTier != null) data.set("risk_tier", String(riskTier));
     let out: { run_id?: string; error?: string } | undefined;
     try {
-      out = await relaunchCodeTaskAction(data);
+      out = await callAction(relaunchCodeTaskAction)(data);
     } finally {
       setSent(false);
       // No router.refresh(): it re-renders the server tree and remounts this card, which is
@@ -2027,7 +2028,7 @@ function QaBenchmarkEvidence({ runId, benchmarkName }: { runId: string; benchmar
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    void getQaBenchmarkReportAction(runId).then((value) => {
+    void callAction(getQaBenchmarkReportAction)(runId).then((value) => {
       if (!cancelled) {
         setReport(value);
         setLoaded(true);
@@ -2166,7 +2167,7 @@ function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      const data = await getCodeTaskActivityAction(runId);
+      const data = await callAction(getCodeTaskActivityAction)(runId);
       if (!cancelled) { setCalls(data); setLoaded(true); }
     };
     void load();
@@ -2288,7 +2289,7 @@ function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
     if (!open) return;
     let cancelled = false;
     const load = async () => {
-      const data = await getCodeTaskActivityAction(runId);
+      const data = await callAction(getCodeTaskActivityAction)(runId);
       if (!cancelled) {
         setCalls(data);
         setLoaded(true);
@@ -2971,7 +2972,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
   }, []);
 
   const reload = useCallback(async () => {
-    const fresh = await listCodeTasksAction(projectId);
+    const fresh = await callAction(listCodeTasksAction)(projectId);
     // A failed or empty refresh leaves what is on screen alone. The poll runs while a task is
     // live — exactly when someone is watching — so a blank frame here is the most visible
     // possible failure.

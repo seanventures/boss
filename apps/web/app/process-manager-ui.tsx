@@ -9,6 +9,7 @@ import {
 } from "./process-manager-actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 type ProcessManagerView = {
   apiReachable: boolean;
   blockedReason: string;
@@ -79,7 +80,7 @@ export function ProcessManager({
   };
 
   const reload = () =>
-    loadProcessManagerAction(projectId).then((result) => {
+    callAction(loadProcessManagerAction)(projectId).then((result) => {
       if (result.ok && result.data) {
         applyResult(result.data);
         return;
@@ -96,7 +97,7 @@ export function ProcessManager({
 
   useEffect(() => {
     let alive = true;
-    loadProcessManagerAction(projectId).then((result) => {
+    callAction(loadProcessManagerAction)(projectId).then((result) => {
       if (!alive) return;
       if (result.ok && result.data) {
         applyResult(result.data);
@@ -150,7 +151,7 @@ export function ProcessManager({
         action={(formData) => {
           setError(null);
           startTransition(async () => {
-            const result = await tickProcessManagerAction(formData);
+            const result = await callAction(tickProcessManagerAction)(formData);
             if (result.ok && result.data) {
               applyResult(result.data);
               await reload();

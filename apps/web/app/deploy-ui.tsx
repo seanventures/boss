@@ -20,6 +20,7 @@ import {
   redeployAction,
 } from "./actions";
 
+import { callAction } from "../lib/call-action";
 type Step = {
   step: string; label: string; status: "pending" | "running" | "ok" | "failed" | "skipped";
   duration_ms?: number | null; log?: string; error?: string;
@@ -121,7 +122,7 @@ export function LiveDeployment({ runId, onFinished }: {
   useEffect(() => {
     let live = true;
     const tick = async () => {
-      const d = await getDeploymentAction(runId);
+      const d = await callAction(getDeploymentAction)(runId);
       if (!live || !d || d.error) return;
       setRun(d);
       const isPlan = ["created", "planned"].includes(d.status);
@@ -272,7 +273,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   // Who owns the repo BOSS clones when a target does not say. Fetched once, on open.
   useEffect(() => {
     if (!open || defaultOwner) return;
-    getDeliveryDefaultsAction().then((d) => { if (d?.owner) setDefaultOwner(d.owner); });
+    callAction(getDeliveryDefaultsAction)().then((d) => { if (d?.owner) setDefaultOwner(d.owner); });
   }, [open, defaultOwner]);
 
   /** Branches for a target's repo.
@@ -289,7 +290,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
       : [t.repo_owner || fallbackOwner, repo];
     if (!owner) { setRefsError("no repo owner configured for this app"); return; }
     setRefsError(null);
-    const d = await listRefsAction(owner, name);
+    const d = await callAction(listRefsAction)(owner, name);
     if (d?.error || !d?.branches) {
       setRefsError(`could not list branches for ${owner}/${name}`);
       return;
@@ -301,7 +302,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   const start = async () => {
     if (!targetId) { setErr("choose which app to deploy"); return; }
     setErr(null); setStarting(true);
-    const out = await deployTargetAction(targetId, ref);
+    const out = await callAction(deployTargetAction)(targetId, ref);
     setStarting(false);
     if (out?.error) {
       setErr(typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 220));
@@ -473,7 +474,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
       delete next[id];
       return next;
     });
-    const out = await redeployAction(id);
+    const out = await callAction(redeployAction)(id);
     setBusy(null);
     if (out?.error) {
       setErrors((current) => ({ ...current, [id]: String(out.error) }));

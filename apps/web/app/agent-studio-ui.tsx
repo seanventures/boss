@@ -45,6 +45,7 @@ import {
 } from "./agent-studio-actions";
 import { AgentCreationWizard } from "./agent-creation-wizard";
 
+import { callAction } from "../lib/call-action";
 type Selection =
   | { kind: "agent"; item: StudioAgent }
   | { kind: "panel"; item: StudioPanel }
@@ -270,12 +271,12 @@ export function AgentStudio({
     startTransition(async () => {
       const next =
         kind === "test" && selection.kind === "agent"
-          ? await testStudioAgent(feed.projectId, activeVersion.id)
+          ? await callAction(testStudioAgent)(feed.projectId, activeVersion.id)
           : selection.kind === "workflow"
-            ? await runStudioWorkflow(feed.projectId, activeVersion.id, objective)
+            ? await callAction(runStudioWorkflow)(feed.projectId, activeVersion.id, objective)
           : selection.kind === "panel"
-            ? await runStudioPanel(feed.projectId, activeVersion.id, objective)
-            : await runStudioAgent(feed.projectId, activeVersion.id, objective);
+            ? await callAction(runStudioPanel)(feed.projectId, activeVersion.id, objective)
+            : await callAction(runStudioAgent)(feed.projectId, activeVersion.id, objective);
       setResult(next);
     });
   };
@@ -283,14 +284,14 @@ export function AgentStudio({
   const runCatalogSmoke = () => {
     setResult(undefined);
     startTransition(async () => {
-      setResult(await runStudioCatalogSmoke(feed.projectId));
+      setResult(await callAction(runStudioCatalogSmoke)(feed.projectId));
     });
   };
 
   const installStarterCatalog = () => {
     setResult(undefined);
     startTransition(async () => {
-      const seeded = await seedStudioCatalog(feed.projectId);
+      const seeded = await callAction(seedStudioCatalog)(feed.projectId);
       setResult(seeded);
       if (seeded.ok) router.refresh();
     });
@@ -320,8 +321,8 @@ export function AgentStudio({
     startTransition(async () => {
       const next =
         action === "validate"
-          ? await validateStudioWorkflow(feed.projectId, spec)
-          : await publishStudioWorkflowVersion(
+          ? await callAction(validateStudioWorkflow)(feed.projectId, spec)
+          : await callAction(publishStudioWorkflowVersion)(
               feed.projectId,
               selection.item.id,
               spec,
@@ -343,12 +344,12 @@ export function AgentStudio({
     }
     setResult(undefined);
     startTransition(async () => {
-      const validated = await validateStudioWorkflow(feed.projectId, spec);
+      const validated = await callAction(validateStudioWorkflow)(feed.projectId, spec);
       if (!validated.ok) {
         setResult(validated);
         return;
       }
-      const created = await createStudioWorkflow(
+      const created = await callAction(createStudioWorkflow)(
         feed.projectId,
         newWorkflowKey.trim(),
         newWorkflowName.trim(),

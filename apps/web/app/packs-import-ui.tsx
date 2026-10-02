@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { exportPackAction, importPackAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 export function PackImportForm({
   projectId,
   actor,
@@ -25,7 +26,7 @@ export function PackImportForm({
         setError(null);
         startTransition(async () => {
           try {
-            await importPackAction(formData);
+            await callAction(importPackAction)(formData);
             router.refresh();
           } catch (err) {
             setError(err instanceof Error ? err.message : "Pack import failed.");
@@ -90,7 +91,7 @@ export function PackExportButton({
         setError(null);
         startTransition(async () => {
           try {
-            const result = await exportPackAction(formData);
+            const result = await callAction(exportPackAction)(formData);
             downloadPackYaml(result.packId, result.yaml);
           } catch (err) {
             setError(err instanceof Error ? err.message : "Pack export failed.");

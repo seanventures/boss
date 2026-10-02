@@ -20,7 +20,7 @@ import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
-import { apiWrite, writeInFlight } from "../lib/api-write";
+import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -636,16 +636,20 @@ async function get<T>(view: string, projectId: string): Promise<T | { error: str
   }
 }
 
-/** Every run action on this panel shares one scope: one at a time, decided by lib/api-write. */
-const RUN_ACTIONS = "delivery-workflows";
+/** The operator's presses on this panel: one at a time, the one running named by `busy`.
+ *  ONLY presses. The automatic recheck below is not one — when it shared this scope, of several
+ *  runs ready to continue only the first was put back, and a Retry pressed during it vanished. */
+const PANEL_PRESSES = "delivery-workflows-panel";
 
-async function post(action: string, payload: Record<string, unknown>) {
+/** POST one run action. `key` is the press's Idempotency-Key when a press sends it; without
+ *  one (a background recheck) apiWrite mints its own and takes no press scope. */
+async function post(action: string, payload: Record<string, unknown>, key?: string) {
   try {
     const r = await apiWrite("/api/delivery-workflows", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...payload }),
-    }, { action: RUN_ACTIONS });
+    }, { key });
     const body = await r.json();
     return r.ok ? { ok: true as const, data: body } : { ok: false as const, error: body?.error };
   } catch (e) {
@@ -873,8 +877,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     // the console re-checks in a loop for as long as it is open.
     todo.forEach((r) => rechecked.current.add(r.id));
     void (async () => {
+      // ALL AT ONCE, AND NOT A PRESS. These are background writes: no press scope, so one run's
+      // recheck cannot refuse another's, and none can refuse a button the operator presses.
       const results = await Promise.all(todo.map((r) =>
         post("recheck", { project_id: projectId, actor, run_id: r.id })));
+      // A recheck that did not get through is tried again on the next poll, not written off for
+      // as long as the page is open.
+      results.forEach((r, i) => { if (!r.ok) rechecked.current.delete(todo[i].id); });
       const moved = results.reduce((n, r) => n + (
         (r.ok ? ((r.data as { requeued?: unknown[] })?.requeued ?? []).length : 0)), 0);
       if (moved) {
@@ -955,17 +964,38 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(timer);
   }, [previewStarting, load]);
 
-  // ONE ACTION AT A TIME, CHECKED SYNCHRONOUSLY. `busy` disables the buttons only after React
-  // re-renders, so a quick second click still fired: "Stop and run again" pressed twice
-  // started two workflows. lib/api-write registers the write before its first await, so the
-  // second click sees it here — the same rule every console write now follows, not a ref of
-  // this panel's own; and the press's Idempotency-Key makes the API run it once regardless.
-  const act = useCallback(async (label: string, action: string, payload: Record<string, unknown>) => {
-    if (writeInFlight(RUN_ACTIONS)) return { ok: false, error: "already running" } as Awaited<ReturnType<typeof post>>;
-    setBusy(label);
-    setNotice(null);
-    try {
-      const result = await post(action, { project_id: projectId, actor, ...payload });
+  // ONE PRESS AT A TIME, AND A REFUSED PRESS IS SAID OUT LOUD.
+  //
+  // `busy` disables the buttons only after React re-renders, so a quick second click still
+  // fired: "Stop and run again" pressed twice started two workflows. Every press on this panel
+  // goes through `pressOn`, which holds the panel's press scope in lib/api-write's one registry
+  // (registered before any await) and is the ONLY thing that sets `busy`. The same press again
+  // joins the running one; a different press is refused by the helper, which says so in the
+  // operator's words ("Retry was not sent — Stop is still in progress") instead of the old
+  // `return { error: "already running" }` that every button threw away.
+  type PressResult<T> = T | { ok: false; error: string; refused: true };
+  const pressOn = useCallback(<T,>(label: string, what: unknown,
+                                   run: (key: string) => Promise<T>): Promise<PressResult<T>> =>
+    runPress<T>({ press: { scope: PANEL_PRESSES, label }, fingerprint: JSON.stringify([label, what]) },
+      async (key) => {
+        setBusy(label);
+        try {
+          return await run(key);
+        } finally {
+          // In a finally so a throw cannot leave the console stuck showing "Advancing…" forever.
+          setBusy(null);
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof WriteInFlightError) {
+          return { ok: false as const, error: error.message, refused: true as const };
+        }
+        throw error;
+      }), []);
+
+  const act = useCallback((label: string, action: string, payload: Record<string, unknown>) =>
+    pressOn(label, [action, payload], async (key) => {
+      setNotice(null);
+      const result = await post(action, { project_id: projectId, actor, ...payload }, key);
       // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
       // always requires a person" is the whole value of the validation.
       setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
@@ -977,11 +1007,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       // is a click that did nothing — reported as "I clicked and there's no indicator".
       if (result.ok) await load();
       return result;
-    } finally {
-      // In a finally so a throw cannot leave the console stuck showing "Advancing…" forever.
-      setBusy(null);
-    }
-  }, [projectId, actor, load]);
+    }), [pressOn, projectId, actor, load]);
 
   // OPEN THE ONE THAT WANTS YOU. A page whose every run is collapsed makes an operator click
   // to find out whether anything needs them, which is the question the page exists to answer.
@@ -1080,16 +1106,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
           // waiting on a person cannot be ticked forward — and a button that always says
           // "done" is indistinguishable from a button that does nothing.
-          onAdvance={async () => {
-            setBusy("Advance");
-            const r = await post("advance", { project_id: projectId, actor });
-            setBusy(null);
+          onAdvance={() => void pressOn("Advance", null, async (key) => {
+            const r = await post("advance", { project_id: projectId, actor }, key);
             const moved = ((r.ok ? (r.data as { performed?: unknown[] })?.performed : []) ?? []);
             setNotice(!r.ok ? `Advance — ${r.error}`
               : moved.length ? `Advanced ${moved.length} step${moved.length === 1 ? "" : "s"}.`
               : "Nothing to advance — every run is finished or waiting on a person.");
             if (r.ok) await load();
-          }}
+          })}
           onRetryStep={(runId, stepId) =>
             act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
           // SKIP AND PROCEED. A failed step stops the run; going on without it is a decision,
@@ -1122,22 +1146,19 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               `Remove this ${run.workflow_name} run for good?\n\n`
               + "Its steps and history go with it. Anything it produced — files, issues, "
               + "anything published — is untouched. This cannot be undone.")) return;
-            setBusy("Remove");
-            setNotice(null);
-            try {
+            await pressOn("Remove", run.id, async (key) => {
+              setNotice(null);
               const query = new URLSearchParams({
                 project_id: projectId, actor, run_id: run.id,
               });
               const response = await apiWrite(`/api/delivery-workflows?${query}`,
-                                           { method: "DELETE" });
+                                              { method: "DELETE" }, { key });
               const body = await response.json().catch(() => ({}));
               setNotice(response.ok
                 ? "Removed."
                 : `Remove — ${(body as { error?: string }).error ?? response.status}`);
               if (response.ok) { setOpenRun(null); await load(); }
-            } finally {
-              setBusy(null);
-            }
+            });
           }}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
@@ -1251,31 +1272,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             if (result.ok) setScheduleDraft(null);
           }}
           onToggleSchedule={async (id, enabled) => {
-            setBusy(enabled ? "Resume schedule" : "Pause schedule");
-            try {
+            await pressOn(enabled ? "Resume schedule" : "Pause schedule", id, async (key) => {
               const r = await apiWrite("/api/delivery-workflows", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action: "schedule_enabled", schedule_id: id,
                                        enabled, project_id: projectId, actor }),
-              });
+              }, { key });
               const body = await r.json();
               if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
               await load();
-            } finally { setBusy(null); }
+            });
           }}
           onDeleteSchedule={async (id) => {
-            setBusy("Remove schedule");
-            try {
+            await pressOn("Remove schedule", id, async (key) => {
               const r = await apiWrite(
                 `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
                   + `&project_id=${encodeURIComponent(projectId)}`
                   + `&actor=${encodeURIComponent(actor)}`,
-                { method: "DELETE" });
+                { method: "DELETE" }, { key });
               const body = await r.json();
               if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
               await load();
-            } finally { setBusy(null); }
+            });
           }}
         />
       ) : tab === "catalogue" ? (
@@ -1338,44 +1357,42 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             // fields an edit can change — a renamed step must not orphan the workflows placing
             // it.
             if (fields.step_key) {
-              setBusy(`Save ${fields.label}`);
-              try {
-                const r = await apiWrite("/api/delivery-workflows", {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ ...fields, actor }),
-                });
-                const body = await r.json();
-                if (!r.ok) return { ok: false, error: body?.error ?? `API returned ${r.status}` };
-                setNotice(`Saved ${fields.label}`);
-                await load();
-                return { ok: true };
-              } catch (e) {
-                return { ok: false, error: String((e as Error)?.message ?? e) };
-              } finally {
-                setBusy(null);
-              }
+              return pressOn(`Save ${fields.label}`, fields, async (key) => {
+                try {
+                  const r = await apiWrite("/api/delivery-workflows", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ...fields, actor }),
+                  }, { key });
+                  const body = await r.json();
+                  if (!r.ok) {
+                    return { ok: false, error: String(body?.error ?? `API returned ${r.status}`) };
+                  }
+                  setNotice(`Saved ${fields.label}`);
+                  await load();
+                  return { ok: true };
+                } catch (e) {
+                  return { ok: false, error: String((e as Error)?.message ?? e) };
+                }
+              });
             }
             const result = await act(`Define ${fields.label}`, "define_step", fields);
             if (result.ok) await load();
             return result;
           }}
           onRemoveStep={async (stepKey) => {
-            setBusy(`Remove ${stepKey}`);
-            try {
+            await pressOn(`Remove ${stepKey}`, stepKey, async (key) => {
               const r = await apiWrite(
                 `/api/delivery-workflows?project_id=${encodeURIComponent(projectId)}`
                   + `&step_key=${encodeURIComponent(stepKey)}`
                   + `&actor=${encodeURIComponent(actor)}`,
-                { method: "DELETE" },
+                { method: "DELETE" }, { key },
               );
               const body = await r.json();
               if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
               setNotice(`Removed ${stepKey}`);
               await load();
-            } finally {
-              setBusy(null);
-            }
+            });
           }}
         />
       ) : (

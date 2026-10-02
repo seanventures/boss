@@ -19,6 +19,7 @@ import {
 } from "./focused-agents-actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 export function FocusedAgents({
   projectId,
   actor,
@@ -33,7 +34,7 @@ export function FocusedAgents({
   const [pending, startTransition] = useTransition();
 
   const reload = () =>
-    loadFocusedAgentsAction(projectId).then((result) => {
+    callAction(loadFocusedAgentsAction)(projectId).then((result) => {
       if (result.ok && result.data) {
         setState(mapFocusedAgentList(result.data));
         setError(null);
@@ -45,7 +46,7 @@ export function FocusedAgents({
 
   useEffect(() => {
     let alive = true;
-    loadFocusedAgentsAction(projectId).then((result) => {
+    callAction(loadFocusedAgentsAction)(projectId).then((result) => {
       if (!alive) return;
       if (result.ok && result.data) {
         setState(mapFocusedAgentList(result.data));
@@ -85,7 +86,7 @@ export function FocusedAgents({
         action={(formData) => {
           setError(null);
           startTransition(async () => {
-            const result = await createFocusedAgentAction(formData);
+            const result = await callAction(createFocusedAgentAction)(formData);
             if (result.ok) {
               await reload();
               return;
@@ -194,7 +195,7 @@ export function FocusedAgents({
           <form
             action={(formData) => {
               startTransition(async () => {
-                const result = await wakeFocusedAgentAction(formData);
+                const result = await callAction(wakeFocusedAgentAction)(formData);
                 if (!result.ok) setError(result.error ?? "Wake failed.");
                 else await reload();
               });
@@ -211,7 +212,7 @@ export function FocusedAgents({
             <form
               action={(formData) => {
                 startTransition(async () => {
-                  const result = await pauseFocusedAgentAction(formData);
+                  const result = await callAction(pauseFocusedAgentAction)(formData);
                   if (!result.ok) setError(result.error ?? "Pause failed.");
                   else await reload();
                 });
@@ -228,7 +229,7 @@ export function FocusedAgents({
             <form
               action={(formData) => {
                 startTransition(async () => {
-                  const result = await activateFocusedAgentAction(formData);
+                  const result = await callAction(activateFocusedAgentAction)(formData);
                   if (!result.ok) setError(result.error ?? "Activate failed.");
                   else await reload();
                 });

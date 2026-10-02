@@ -22,6 +22,7 @@ import {
   getShepherdOverviewAction, shepherdAnswerAction, shepherdSweepAction,
 } from "./actions";
 
+import { callAction } from "../lib/call-action";
 type Reasoning = {
   id: string; task_ref: string; step_no: number; observe: string;
   hypothesis: string | null; confidence: number | null;
@@ -92,7 +93,7 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
   const load = async () => {
     // Same reader as the server payload, so a refresh cannot admit a shape the first render
     // rejected. The old `d as Overview` cast was the other half of this bug.
-    const next = readOverview(await getShepherdOverviewAction());
+    const next = readOverview(await callAction(getShepherdOverviewAction)());
     if (next.error) setErr(next.error);
     else if (next.data) { setData(next.data); setErr(null); }
   };
@@ -104,11 +105,11 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
 
   const sweep = async () => {
     setBusy(true);
-    try { await shepherdSweepAction(); await load(); } finally { setBusy(false); }
+    try { await callAction(shepherdSweepAction)(); await load(); } finally { setBusy(false); }
   };
 
   const answer = async (id: string, choice: string) => {
-    await shepherdAnswerAction(id, choice);
+    await callAction(shepherdAnswerAction)(id, choice);
     await load();
   };
 

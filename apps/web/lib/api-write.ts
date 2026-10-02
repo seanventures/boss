@@ -1,5 +1,7 @@
 /**
- * ONE PRESS, ONE EFFECT: the only way the console changes anything.
+ * ONE PRESS, ONE EFFECT: how every console write carries its press. A fetch write goes through
+ * `apiWrite` here; a server action goes through a SubmitButton form or `callAction`
+ * (lib/call-action.ts), which share this module's in-flight registry. Those are the only doors.
  *
  * The same duplicate kept coming back on a different button. 2026-08-22 the operator and the
  * autopilot started one run twice; 2026-08-30 "Open preview happened twice"; 2026-09-10
@@ -7,14 +9,28 @@
  * Each fix guarded one button (a ref here, a dedupe key there), and the next button had the same
  * hole. The API now honours an `Idempotency-Key` on every write (apps/api/app/idempotency.py);
  * this is the console's half, in one place, and `tests/every-write-goes-through-api-write.test.ts`
- * fails the build if a write goes around it.
+ * fails the build if a fetch write or a server action goes around it.
  *
  * IN THE BROWSER, a call is one press:
  *   - it gets a fresh Idempotency-Key, so the API runs it at most once;
  *   - a second identical call while the first is in flight (the double click — `disabled` only
  *     lands after React re-renders) does NOT send anything: it gets the first call's response;
- *   - a DIFFERENT call in the same `action` scope while one is in flight is refused with
- *     WriteInFlightError, so one panel cannot fire two actions over each other.
+ *   - a call made as an operator's PRESS (`press: { scope, label }`) occupies its scope while it
+ *     runs, and a DIFFERENT press in the same scope is refused — and the refusal is SAID, in the
+ *     operator's words, naming what is still running ("Retry was not sent — Stop is still in
+ *     progress"), by this module, so no button can drop a press silently;
+ *   - a call made WITHOUT a press (an automatic recheck, a poll that writes) takes no scope: it
+ *     can never block a press, and a press can never swallow it. The first version of this put
+ *     the delivery panel's automatic recheck in the press scope, so of several stopped runs only
+ *     the first was put back and every Retry pressed meanwhile vanished without a word.
+ *
+ * A DUPLICATE WAITS FOR THE ORIGINAL'S ANSWER. If the API says the key is still running (409
+ * idempotency_key_in_progress — a second tab, a resubmitted form), the call waits and asks again
+ * with the same key until the first request's stored answer is replayed. A duplicate of a press
+ * that is working must never show the operator an error that makes them press again.
+ *
+ * Server actions invoked from code (not from a SubmitButton form) go through
+ * `callAction` in lib/call-action.ts, which uses the same press registry below.
  *
  * ON THE SERVER (route handlers, server actions, the typed client), the press happened in the
  * browser, so the key is DERIVED from it: the incoming request's Idempotency-Key, or the intent a
@@ -32,18 +48,42 @@ export const INTENT_HEADER = "x-boss-intent";
 
 export type WriteMethod = "POST" | "PUT" | "PATCH" | "DELETE";
 export type WriteInit = Omit<RequestInit, "method"> & { method: WriteMethod };
+/** An operator's press: `scope` is what one operator acts on one-at-a-time (a panel, a run),
+ *  `label` is the button's own words, used when a second press has to be refused. */
+export type Press = { scope: string; label: string };
 export type WriteOptions = {
-  /** Calls sharing an action scope are one-at-a-time; default: the exact request. */
-  action?: string;
+  /** Set ONLY for an operator's press. Background writes leave it out and take no scope. */
+  press?: Press;
   /** Reuse a key the caller already holds for this intent (e.g. a retried press). */
   key?: string;
 };
 
+/** The one sentence a refused press is told with, everywhere in the console. */
+export function refusalSentence(attempted: string, running: string): string {
+  const what = attempted === running ? `the previous ${running}` : running;
+  return `${attempted} was not sent — ${what} is still in progress. `
+    + "Try again when it finishes.";
+}
+
 export class WriteInFlightError extends Error {
-  constructor(action: string) {
-    super(`Still working on the previous ${action} — it was not sent twice.`);
+  readonly attempted: string;
+  readonly running: string;
+  constructor(attempted: string, running: string) {
+    super(refusalSentence(attempted, running));
     this.name = "WriteInFlightError";
+    this.attempted = attempted;
+    this.running = running;
   }
+}
+
+/** The console-wide toast (app/client-forms.tsx `Toaster`, mounted in the layout). Dispatched
+ *  here rather than imported so this module stays importable by middleware and server code. */
+export const TOAST_EVENT = "boss:toast";
+
+function announce(message: string): void {
+  try {
+    window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: { type: "error", message } }));
+  } catch { /* no window: nothing to show it on */ }
 }
 
 // Per call, not at import: the same module is evaluated on both sides, and tests switch sides.
@@ -67,8 +107,8 @@ export function newIntentKey(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-type Joiner = { resolve: (r: Response) => void; reject: (e: unknown) => void };
-type Pending = { fingerprint: string; joiners: Joiner[] };
+type Joiner<T> = { resolve: (value: T) => void; reject: (e: unknown) => void };
+type Pending = { fingerprint: string; label: string; joiners: Joiner<unknown>[] };
 const inFlight = new Map<string, Pending>();
 let opaqueBodies = 0;
 
@@ -79,10 +119,50 @@ function fingerprintOf(url: string, init: WriteInit): string {
   return `${init.method} ${url} ${shown}`;
 }
 
-/** Whether a write in this action scope is still running. For a panel that must refuse a second
- *  action synchronously, before its own state has re-rendered. */
-export function writeInFlight(action: string): boolean {
-  return inFlight.has(action);
+/** The label of the press running in this scope, or null. For a panel that wants to show the
+ *  state before it is asked; refusing is done by runPress itself. */
+export function pressInFlight(scope: string): string | null {
+  return inFlight.get(`press:${scope}`)?.label ?? null;
+}
+
+/**
+ * THE ONE REGISTRY OF WHAT IS IN FLIGHT, for fetch writes and server actions alike.
+ *
+ * `fingerprint` says what "the same call" is: an identical call joins the running one and gets
+ * its result (through `share`, so a Response is cloned before the first caller reads it). With a
+ * `press`, the press's scope is held; a different call there is refused, announced, and rejected
+ * with WriteInFlightError. Without one, only the identical call is held. Registered before the
+ * first await, so a second click in the same tick already sees it.
+ */
+export function runPress<T>(
+  spec: { press?: Press; fingerprint: string; key?: string; share?: (value: T) => T },
+  send: (key: string) => Promise<T>,
+): Promise<T> {
+  const slot = spec.press ? `press:${spec.press.scope}` : `call:${spec.fingerprint}`;
+  const pending = inFlight.get(slot);
+  if (pending) {
+    if (pending.fingerprint === spec.fingerprint) {
+      return new Promise<T>((resolve, reject) =>
+        pending.joiners.push({ resolve: resolve as (v: unknown) => void, reject }));
+    }
+    const refused = new WriteInFlightError(spec.press?.label ?? "This", pending.label);
+    announce(refused.message);
+    return Promise.reject(refused);
+  }
+  const entry: Pending = { fingerprint: spec.fingerprint, label: spec.press?.label ?? "", joiners: [] };
+  inFlight.set(slot, entry);
+  return (async () => {
+    try {
+      const value = await send(spec.key ?? newIntentKey());
+      for (const joiner of entry.joiners) joiner.resolve(spec.share ? spec.share(value) : value);
+      return value;
+    } catch (error) {
+      for (const joiner of entry.joiners) joiner.reject(error);
+      throw error;
+    } finally {
+      inFlight.delete(slot);
+    }
+  })();
 }
 
 export async function apiWrite(
@@ -93,35 +173,43 @@ export async function apiWrite(
   const url = String(input);
   const has = new Headers(init.headers).has(IDEMPOTENCY_HEADER);
   if (isBrowser()) {
-    const fingerprint = fingerprintOf(url, init);
-    const scope = options.action ?? fingerprint;
-    const pending = inFlight.get(scope);
-    if (pending) {
-      if (pending.fingerprint !== fingerprint) throw new WriteInFlightError(scope);
-      return new Promise<Response>((resolve, reject) => pending.joiners.push({ resolve, reject }));
-    }
-    const headers = has ? init.headers : withKey(init.headers, options.key ?? newIntentKey());
-    // Registered before the first await: a second click in the same tick already sees it.
-    const entry: Pending = { fingerprint, joiners: [] };
-    inFlight.set(scope, entry);
-    try {
-      const response = await fetch(url, { ...init, headers });
+    return runPress<Response>({
+      press: options.press,
+      fingerprint: fingerprintOf(url, init),
+      key: options.key,
       // Copies are cut BEFORE the first caller can read the body; with no joiner nothing is
       // copied, so a streamed reply is never buffered a second time.
-      for (const joiner of entry.joiners) joiner.resolve(response.clone());
-      return response;
-    } catch (error) {
-      for (const joiner of entry.joiners) joiner.reject(error);
-      throw error;
-    } finally {
-      inFlight.delete(scope);
-    }
+      share: (response) => response.clone(),
+    }, (key) => sendKeyed(url, has ? init : { ...init, headers: withKey(init.headers, key) }));
   }
-  if (has) return fetch(url, init);
+  if (has) return sendKeyed(url, init);
   const intent = options.key ?? (await serverIntent());
   if (!intent) return fetch(url, init);
   const key = await deriveKey(intent, init.method, url, init.body);
-  return fetch(url, { ...init, headers: withKey(init.headers, key) });
+  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) });
+}
+
+/** How long a duplicate waits for the original press's answer before giving up and showing the
+ *  API's own 409. Longer than any ordinary write; an agent turn can run for minutes. */
+export const IN_PROGRESS_WAIT_MS = 5 * 60_000;
+
+/** Send a keyed write; while the API says the same key is still running, wait and ask again. */
+async function sendKeyed(url: string, init: WriteInit): Promise<Response> {
+  const started = Date.now();
+  let delay = 250;
+  for (;;) {
+    const response = await fetch(url, init);
+    if (response.status !== 409 || Date.now() - started > IN_PROGRESS_WAIT_MS
+        || typeof init.body === "object" && init.body !== null) {
+      // An opaque body (a stream, a FormData upload) cannot be sent a second time.
+      return response;
+    }
+    const detail = await response.clone().json().then(
+      (body: { detail?: unknown }) => String(body?.detail ?? ""), () => "");
+    if (!detail.startsWith("idempotency_key_in_progress")) return response;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 2000);
+  }
 }
 
 /** Add the key in the caller's own header shape, so a plain object stays a plain object. */

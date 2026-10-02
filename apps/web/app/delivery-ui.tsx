@@ -28,6 +28,7 @@ import {
 import { HardwareManagerLink } from "./hardware-manager-ui";
 import { DeployWizard, RecentDeployments } from "./deploy-ui";
 
+import { callAction } from "../lib/call-action";
 type Stage = {
   run_id: string; title: string; run_status: string;
   pull_request_url: string | null; pull_request_number: number | null;
@@ -556,7 +557,7 @@ export function DeliveryPipeline({ initial, secrets, deployments,
   const [data, setData] = useState(initial);
   useEffect(() => { setData(initial); }, [initial]);
   const reload = useCallback(async () => {
-    const fresh = await getDeliveryPipelineAction();
+    const fresh = await callAction(getDeliveryPipelineAction)();
     if (fresh && !fresh.error) setData(fresh);
   }, []);
 

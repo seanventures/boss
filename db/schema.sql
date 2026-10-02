@@ -6123,6 +6123,8 @@ CREATE TABLE IF NOT EXISTS api_idempotency_keys (
   status_code INTEGER,
   response_body BYTEA,
   content_type TEXT,
+  -- The route's own headers ([[name, value], ...]) so a replayed download keeps its filename.
+  response_headers JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ NOT NULL DEFAULT now() + interval '24 hours',
@@ -6132,5 +6134,7 @@ CREATE TABLE IF NOT EXISTS api_idempotency_keys (
     state <> 'completed' OR status_code IS NOT NULL
   )
 );
+ALTER TABLE api_idempotency_keys
+  ADD COLUMN IF NOT EXISTS response_headers JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry
   ON api_idempotency_keys (expires_at);

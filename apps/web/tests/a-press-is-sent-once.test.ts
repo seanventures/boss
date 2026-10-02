@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  IDEMPOTENCY_HEADER, WriteInFlightError, apiWrite, deriveKey, installServerIntentResolver,
-  intentFromActionBody, writeAwareFetch, writeInFlight,
+  IDEMPOTENCY_HEADER, TOAST_EVENT, WriteInFlightError, apiWrite, deriveKey,
+  installServerIntentResolver, intentFromActionBody, pressInFlight, writeAwareFetch,
 } from "../lib/api-write";
 
 /**
@@ -62,17 +62,54 @@ describe("in the browser, a press", () => {
     expect(await b.json()).toEqual({ run: { id: "wfr_1" } });
   });
 
-  it("refuses a different action in the same scope while one is in flight", async () => {
-    browser();
+  it("refuses a different press in the same scope, and SAYS so naming what is running", async () => {
+    const shown: string[] = [];
+    vi.stubGlobal("window", {
+      dispatchEvent: (e: CustomEvent<{ message: string }>) => {
+        if (e.type === TOAST_EVENT) shown.push(e.detail.message);
+        return true;
+      },
+    });
     const { fetchMock, release } = deferredFetch();
-    const stop = apiWrite("/api/x", { method: "POST", body: "stop" }, { action: "panel" });
-    expect(writeInFlight("panel")).toBe(true);
-    await expect(apiWrite("/api/x", { method: "POST", body: "start" }, { action: "panel" }))
-      .rejects.toBeInstanceOf(WriteInFlightError);
+    const stop = apiWrite("/api/x", { method: "POST", body: "stop" },
+                          { press: { scope: "panel", label: "Stop" } });
+    expect(pressInFlight("panel")).toBe("Stop");
+    const retry = apiWrite("/api/x", { method: "POST", body: "retry" },
+                           { press: { scope: "panel", label: "Retry" } });
+    await expect(retry).rejects.toBeInstanceOf(WriteInFlightError);
+    await expect(retry).rejects.toThrow(
+      "Retry was not sent — Stop is still in progress. Try again when it finishes.");
+    // Said by the helper itself, so no button can swallow it.
+    expect(shown).toEqual([
+      "Retry was not sent — Stop is still in progress. Try again when it finishes."]);
     release({});
     await stop;
-    expect(writeInFlight("panel")).toBe(false);
+    expect(pressInFlight("panel")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a write that is not a press takes no scope: several at once all reach the API", async () => {
+    // Review of 45e7693: the panel's automatic recheck shared the press scope, so of three
+    // stopped runs only the first recheck was sent.
+    browser();
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const results = await Promise.all(["a", "b", "c"].map((run) =>
+      apiWrite("/api/delivery-workflows", { method: "POST", body: JSON.stringify({ action: "recheck", run }) })));
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("a background write never blocks a press, and a press never blocks it", async () => {
+    browser();
+    const { fetchMock, release } = deferredFetch();
+    const background = apiWrite("/api/x", { method: "POST", body: "recheck" });
+    const press = apiWrite("/api/x", { method: "POST", body: "retry" },
+                           { press: { scope: "panel", label: "Retry" } });
+    const another = apiWrite("/api/x", { method: "POST", body: "recheck-2" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    release({});
+    void background; void press; void another;
   });
 
   it("is a new press once the last one finished: a new key, a new request", async () => {
@@ -88,8 +125,49 @@ describe("in the browser, a press", () => {
   it("frees the scope when the request fails, so the press can be tried again", async () => {
     browser();
     vi.stubGlobal("fetch", vi.fn(async (_url: unknown, _init?: RequestInit) => { throw new TypeError("network down"); }));
-    await expect(apiWrite("/api/x", start, { action: "p" })).rejects.toThrow("network down");
-    expect(writeInFlight("p")).toBe(false);
+    await expect(apiWrite("/api/x", start, { press: { scope: "p", label: "Start" } }))
+      .rejects.toThrow("network down");
+    expect(pressInFlight("p")).toBeNull();
+  });
+});
+
+describe("a duplicate waits for the original's answer instead of showing an error", () => {
+  /**
+   * Review of 45e7693: a duplicate of a running press (a second tab, a resubmitted form) got
+   * `409 idempotency_key_in_progress` and the raw detail reached the form as an error, though the
+   * first press was working. A non-technical operator reads that as a failure and presses again.
+   */
+  it("asks again with the SAME key until the first request's answer is replayed", async () => {
+    vi.useFakeTimers();
+    try {
+      const replies = [
+        Response.json({ detail: "idempotency_key_in_progress: the first request with this key is still running" }, { status: 409 }),
+        Response.json({ detail: "idempotency_key_in_progress: the first request with this key is still running" }, { status: 409 }),
+        Response.json({ run: { id: "wfr_1" } }, { status: 200, headers: { "Idempotency-Replayed": "true" } }),
+      ];
+      const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => replies.shift()!);
+      vi.stubGlobal("fetch", fetchMock);
+      const sent = apiWrite("http://api/v1/delivery-workflows/runs", {
+        method: "POST", headers: { [IDEMPOTENCY_HEADER]: "press-1" }, body: "{}" });
+      await vi.runAllTimersAsync();
+      const response = await sent;
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ run: { id: "wfr_1" } });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls.map(keyOf)).toEqual(["press-1", "press-1", "press-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes any other 409 straight back — a conflict about the request is the caller's to show", async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      Response.json({ detail: "a run is already live for this project" }, { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await apiWrite("http://api/v1/x", {
+      method: "POST", headers: { [IDEMPOTENCY_HEADER]: "k" }, body: "{}" });
+    expect(response.status).toBe(409);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

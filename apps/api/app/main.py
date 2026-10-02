@@ -1658,9 +1658,13 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
         _idempotency_claim, method=request.method, path=route_path,
         fingerprint=fingerprint, **owner)
     if claim.outcome == "replay":
-        return Response(content=claim.body, status_code=claim.status_code,
-                        media_type=claim.content_type,
-                        headers={idempotency.REPLAYED_HEADER: "true"})
+        replay = Response(content=claim.body, status_code=claim.status_code,
+                          media_type=claim.content_type)
+        # The route's own headers too (a download's filename), not just its body.
+        for name, value in claim.headers:
+            replay.headers.append(name, value)
+        replay.headers[idempotency.REPLAYED_HEADER] = "true"
+        return replay
     if claim.outcome == "in_progress":
         return JSONResponse(status_code=409, content={
             "detail": "idempotency_key_in_progress: the first request with this key is still "
@@ -1692,7 +1696,8 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     else:
         await run_in_threadpool(
             _idempotency_complete, status_code=response.status_code, body=payload,
-            content_type=content_type or None, **owner)
+            content_type=content_type or None,
+            headers=idempotency.replayable_headers(response.raw_headers), **owner)
     replayable = Response(content=payload, status_code=response.status_code)
     replayable.raw_headers = list(response.raw_headers)
     return replayable
