@@ -5,7 +5,7 @@ import { isInConsoleLink } from "./console-href";
 import { onChanged } from "./changed";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
-import { dockChatKey } from "../lib/dock-subject";
+import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 
 import React, {
@@ -655,7 +655,7 @@ export default function ConsoleShell({
   // threads by external_ref, so each app gets its own thread and its own history; asking about
   // BugBox cannot surface ApproveIt's answers.
   // `?agent=` normally carries a RUN id. This sentinel opens the same dock for a
-  // conversation that is not about a run — asking the Deployment Manager about a host.
+  // conversation that is not about a record — BOSS in general, or a role a door names.
   // Kept as one constant so the shell and the panel cannot drift on the spelling.
   const DOCK_GENERAL = "general";
   const [dockedRun, setDockedRun] = useState<string | null>(null);
@@ -1204,15 +1204,12 @@ export default function ConsoleShell({
                  role="separator" aria-orientation="vertical"
                  aria-label="Resize the panel" title="Drag to resize" />
             <div className="bx-dock-head">
-              {/* A CONVERSATION THAT IS NOT ABOUT A RUN. `?agent=` has always carried a run id,
-                  and the head rendered it as a code. Opening the dock to ask the Deployment
-                  Manager about a HOST has no run to name, so the sentinel gets the role's name
-                  instead of a meaningless token. */}
+              {/* WHO IS ANSWERING. One meaning for "no role": BOSS in general (dockSpeaker in
+                  lib/dock-subject.ts). This head used to call the no-subject, no-role dock the
+                  Deployment Manager, so Repo and model's "Ask BOSS about this step" went to the
+                  role whose subject is hosts and rollbacks. */}
               <span className="eyebrow" data-testid="bx-dock-who">
-                {dockDiscussing
-                  ? "Talking to BOSS"
-                  : dockRole || (dockedRun === DOCK_GENERAL
-                                 ? "Deployment Manager" : "Ask BOSS")}
+                {dockSpeaker({ role: dockRole, discussing: dockDiscussing }).heading}
               </span>
               {dockDiscussing
                 ? <span className="detail">
@@ -1221,7 +1218,7 @@ export default function ConsoleShell({
                 : dockRole
                 ? <span className="detail">answering from this role&rsquo;s own work here</span>
                 : dockedRun === DOCK_GENERAL
-                  ? <span className="detail">hosts, releases, rollback readiness</span>
+                  ? <span className="detail">BOSS in general &mdash; across the whole factory</span>
                   : <code className="detail">{dockedRun}</code>}
               {/* Icon, not a labelled button. The head is a tight strip already holding the
                   title and the run id, and a text "Close" competed with both while doing the
@@ -1241,17 +1238,14 @@ export default function ConsoleShell({
                          initialMessage={dockAsk || undefined}
                          // NOBODY IN PARTICULAR, WHEN DISCUSSING AN IDEA.
                          //
-                         // The general dock defaults to the Deployment Manager — reasonable
-                         // when the dock is for operating the factory, and wrong here. It made
+                         // The general dock used to default to the Deployment Manager. It made
                          // "Discuss it" open under "Continuing with the Deployment Manager",
                          // resuming that role's week-old thread about probe latencies with the
                          // new idea typed into it. The heading was the visible half; the real
                          // damage is that the thread's history goes into the model's context.
                          roleName={dockDiscussing
                            ? undefined
-                           : (dockRole
-                              || (dockedRun === DOCK_GENERAL
-                                  ? "the Deployment Manager" : undefined))}
+                           : dockSpeaker({ role: dockRole, discussing: false }).roleName}
                          // `dockFresh` in the key so starting a discussion remounts with no
                          // thread and no history, rather than the component unpicking its own
                          // state — a reset that has to remember every field misses one.
