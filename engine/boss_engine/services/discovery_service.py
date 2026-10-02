@@ -160,9 +160,22 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
         ).mappings().first()
     if row is None:
         return {"status": "failed", "retry": False, "error": f"no discovery run {run_id}"}
-    if row["status"] != "running":
-        return {"status": row["status"], "retry": False}
     state = row["state"] if isinstance(row["state"], dict) else {}
+    if row["status"] == "failed" and state.get("failed_by_job"):
+        # A REQUEUED DEADLETTER resumes the run it failed: the job, not the research, stopped
+        # it, and the stages it already paid for replay from their receipts.
+        with begin(engine) as c:
+            c.execute(text(
+                "UPDATE discovery_runs SET status = 'running', error = NULL, "
+                "state = (state - 'failed_by_job' - 'job_error') || jsonb_build_object('job_id', CAST(:j AS text)), "
+                "updated_at = now() WHERE id = :id AND status = 'failed'"),
+                {"id": run_id, "j": job_id})
+            emit_event(c, row["project_id"], "discovery.resumed", worker_id, "discovery_run",
+                       run_id, {"reason": "its deadlettered job was requeued", "job_id": job_id})
+        state = {k: v for k, v in state.items() if k not in ("failed_by_job", "job_error")}
+        state["job_id"] = job_id
+    elif row["status"] != "running":
+        return {"status": row["status"], "retry": False}
     payload = row["payload"] if isinstance(row["payload"], dict) else {}
     spend = DiscoveryStageSpend.for_engine(
         settings, engine, project_id=row["project_id"], run_id=run_id, job_id=job_id,
@@ -197,6 +210,15 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
         _fail_run(engine, row["project_id"], run_id, settled)
         return {"status": "failed", "retry": False, "error": str(settled)[:1000]}
     except Exception as error:  # noqa: BLE001 — a stage failed outright; retry if attempts remain
+        from .model_failures import explain, is_login_rejected
+
+        if is_login_rejected(error):
+            # A REJECTED LOGIN DOES NOT FIX ITSELF. Retrying spent three attempts saying the
+            # same 401 while the run showed "queued"; stop now and say what to do.
+            said = explain(error, source_id=discovery_spend.RESEARCH_SOURCE_ID)
+            _fail_run(engine, row["project_id"], run_id,
+                      RuntimeError(f"{said['headline']} {said['action']}"))
+            return {"status": "failed", "retry": False, "error": said["headline"]}
         if last_attempt:
             _fail_run(engine, row["project_id"], run_id, error)
             return {"status": "failed", "retry": False, "error": str(error)[:1000]}
@@ -327,9 +349,12 @@ def resume_interrupted(settings: Settings) -> dict:
 
 def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
     rows = connection.execute(
-        text("""SELECT id, project_id, status, phase, title, seed, context, state, usage, error,
-                       created_at, updated_at
-                FROM discovery_runs WHERE project_id=:p ORDER BY created_at DESC LIMIT :n"""),
+        text("""SELECT d.id, d.project_id, d.status, d.phase, d.title, d.seed, d.context, d.state,
+                       d.usage, d.error, d.created_at, d.updated_at, j.status AS job_status,
+                       j.last_error AS job_error, j.lease_owner AS job_lease_owner,
+                       j.run_after AS job_run_after, (now() - j.created_at) AS job_age
+                FROM discovery_runs d LEFT JOIN jobs j ON j.id = d.state->>'job_id'
+                WHERE d.project_id=:p ORDER BY d.created_at DESC LIMIT :n"""),
         {"p": project_id, "n": limit},
     ).mappings().all()
     return [_row_to_dict(r) for r in rows]
@@ -337,8 +362,12 @@ def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[di
 
 def load_discovery_run(connection, run_id: str) -> Optional[dict]:
     r = connection.execute(
-        text("""SELECT id, project_id, status, phase, title, seed, context, state, usage, error,
-                       created_at, updated_at FROM discovery_runs WHERE id=:id"""),
+        text("""SELECT d.id, d.project_id, d.status, d.phase, d.title, d.seed, d.context, d.state,
+                       d.usage, d.error, d.created_at, d.updated_at, j.status AS job_status,
+                       j.last_error AS job_error, j.lease_owner AS job_lease_owner,
+                       j.run_after AS job_run_after, (now() - j.created_at) AS job_age
+                FROM discovery_runs d LEFT JOIN jobs j ON j.id = d.state->>'job_id'
+                WHERE d.id=:id"""),
         {"id": run_id},
     ).mappings().first()
     return _row_to_dict(r) if r else None
@@ -381,7 +410,66 @@ def _row_to_dict(r) -> dict:
         "state": state, "usage": usage, "error": r["error"],
         "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        "attention": _attention(r, state),
     }
+
+
+#: A queued job nobody has picked up for this long means no worker is taking work.
+_UNCLAIMED_AFTER_SECONDS = 180
+
+
+def _attention(r, state: dict) -> Optional[dict]:
+    """Why this run is not moving, in words an operator can act on — or None if it is fine.
+
+    Discovery used to say "queued" through a refused worker (409), a budget cap and a rejected
+    Claude login: each reason was in a job's last_error, an event or this row's error, and none
+    was where the operator looked. This reads the run AND its job, because some failures (the
+    worker refused, the job deadlettered) never reach this row at all.
+    """
+    from .discovery_spend import RESEARCH_SOURCE_ID
+    from .model_failures import explain
+
+    keys = r.keys() if hasattr(r, "keys") else ()
+    status, error = r["status"], r["error"] or ""
+    job_status = r["job_status"] if "job_status" in keys else None
+    job_error = r["job_error"] if "job_error" in keys else None
+    if isinstance(job_error, str):
+        try:
+            job_error = json.loads(job_error)
+        except ValueError:
+            pass
+    job_text = (job_error.get("message") if isinstance(job_error, dict) else job_error) or ""
+    if status == "completed":
+        return None
+    if status == "failed":
+        if state.get("failed_by_job"):
+            # The job, not the research, stopped it: explain the job's own error.
+            said = explain(state.get("job_error") or error, source_id=RESEARCH_SOURCE_ID)
+            return {**said, "state": "stopped",
+                    "headline": "Its worker job stopped. " + said["headline"]}
+        return {**explain(error, source_id=RESEARCH_SOURCE_ID), "state": "stopped"}
+    if status != "running":
+        return None
+    if state.get("job_id") and job_status in ("deadlettered", "failed", "cancelled"):
+        said = explain(job_text or f"the job is {job_status}", source_id=RESEARCH_SOURCE_ID)
+        return {**said, "state": "stopped",
+                "headline": f"Not running — its worker job stopped ({job_status}). "
+                            + said["headline"]}
+    if error.startswith("waiting for the per-minute budget"):
+        return {**explain("burst cap"), "state": "waiting"}
+    if error.startswith("retrying:"):
+        said = explain(error, source_id=RESEARCH_SOURCE_ID)
+        return {**said, "state": "retrying",
+                "headline": "Retrying after a failed attempt. " + said["headline"]}
+    age = r["job_age"] if "job_age" in keys else None
+    if (job_status == "queued" and not (r["job_lease_owner"] if "job_lease_owner" in keys else None)
+            and age is not None and age.total_seconds() > _UNCLAIMED_AFTER_SECONDS):
+        return {"kind": "no_worker", "state": "waiting",
+                "headline": "Queued, but no worker has picked it up for a few minutes.",
+                "action": "Check that the worker service is running (boss doctor, or "
+                          "`docker compose ps` on the server).",
+                "href": None, "retry": True}
+    return None
 
 
 # --------------------------------------------------------------------------- #

@@ -20674,6 +20674,9 @@ def get_project_settings(project_id: str) -> dict:
     with begin(engine) as connection:
         chosen = ps.get_all(connection, project_id)
         connected = connected_engines(connection, settings, project_id)
+        from boss_engine.services.setup_service import engine_login_states
+
+        login_states = engine_login_states(connection, project_id)
         # THE PROJECT'S OWN CHOICES DECIDE WHICH MODELS A LANE OFFERS. The lists were drawn from
         # the deployment settings, so choosing codex as the reviewer here still offered Claude's
         # models beside it — the reviewer's model list follows the reviewer's harness, and that
@@ -20718,7 +20721,9 @@ def get_project_settings(project_id: str) -> dict:
             # So the console can say WHY the list is short, and what to do about it, instead
             # of showing a one-item picker with no explanation.
             "connected_engines": sorted(connected),
-            "connected_engine_detail": [connected[name] for name in sorted(connected)]}
+            "connected_engine_detail": [connected[name] for name in sorted(connected)],
+            # A connected engine whose login the provider just rejected: shown as broken.
+            "engine_login_states": login_states}
 
 
 @app.put("/v1/settings/{key}")

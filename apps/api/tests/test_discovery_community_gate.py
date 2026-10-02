@@ -324,3 +324,101 @@ def test_startup_leaves_job_owned_runs_to_the_job_system_and_reconciles_legacy_o
             "SELECT id, status FROM discovery_runs WHERE id IN (:a, :b)"),
             {"a": legacy, "b": owned}).all())
     assert statuses == {legacy: "failed", owned: "running"}
+
+
+# --- Saying why it is not moving ----------------------------------------------------------- #
+# On boss-1 a discovery said "queued" through a refused worker (409), a budget cap and a
+# rejected Claude login. Each reason was recorded somewhere and shown nowhere.
+
+def _attention(engine, run_id: str) -> dict | None:
+    with engine.connect() as connection:
+        return discovery_service.load_discovery_run(connection, run_id)["attention"]
+
+
+def test_a_rejected_login_stops_at_once_and_says_what_to_do(engine, governed):
+    run_id = _start()
+    governed.fail_at = "signal_sweep"
+    governed.fail_with = RuntimeError(
+        "claude code agent exited 1: Failed to authenticate. API Error: 401 Invalid bearer token")
+    result = _execute(run_id, _lease(engine, run_id))
+    assert result["status"] == "failed" and result["retry"] is False, (
+        "a rejected login does not fix itself; retrying it only hid the reason")
+    attention = _attention(engine, run_id)
+    assert attention["kind"] == "login_rejected" and attention["state"] == "stopped"
+    assert "Setup" in attention["action"] and "sk-ant-" in attention["action"]
+    with engine.connect() as connection:
+        state = connection.execute(text(
+            "SELECT observed_capacity->>'credential_state' FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = 'openai_api'"), {"p": PROJECT}).scalar_one()
+    assert state == "rejected", "Setup must be able to show the source as broken"
+
+
+def test_a_deadlettered_job_fails_the_run_with_a_reason_and_a_requeue_resumes_it(
+    engine, governed,
+):
+    run_id = _start()
+    lease = _lease(engine, run_id)
+    with engine.begin() as connection:  # the worker was refused before the endpoint ran
+        JobLeaseService(api_main.settings).fail(
+            connection, lease["worker_id"], lease["job_id"], lease["lease_token"],
+            {"message": "Client error '409 Conflict' for url 'http://api:8000/v1/discoveries/x/execute'"},
+            False, 0)
+        status = connection.execute(text("SELECT status FROM discovery_runs WHERE id = :id"),
+                                    {"id": run_id}).scalar_one()
+        deadletter = connection.execute(text(
+            "SELECT id FROM deadletters WHERE source_id = :j"), {"j": lease["job_id"]}).scalar_one()
+    assert status == "failed", "a run whose job deadlettered is not 'queued'"
+    attention = _attention(engine, run_id)
+    assert attention["kind"] == "refused_by_api" and attention["state"] == "stopped"
+
+    with engine.begin() as connection:
+        requeued = api_main.deadletter_remediation.requeue_job_deadletter(
+            connection, deadletter_id=deadletter, actor="ceo", reason="fixed", run_after_seconds=0)
+        job_id = requeued.get("requeued_job_id") or requeued["deadletter"]["requeued_job_id"]
+        lease = JobLeaseService(api_main.settings).lease_owned_job(
+            connection, project_id=PROJECT, job_id=job_id, worker_id="worker-test",
+            lease_ttl_seconds=600)
+    result = _execute(run_id, {"job_id": job_id, "worker_id": "worker-test",
+                               "lease_token": lease["lease_token"]})
+    assert result == {"status": "completed", "retry": False}
+    assert _attention(engine, run_id) is None
+
+
+def test_a_run_waiting_for_the_per_minute_budget_says_so(engine, governed, budget_policy):
+    budget_policy(burst_cap_usd_micros_per_min=1_000)
+    with engine.begin() as connection:  # the last minute's budget is already spent
+        connection.execute(text(
+            "INSERT INTO budget_reservations (id, project_id, category, amount_usd_micros, reason, "
+            "status, expires_at) VALUES (:id, :p, 'model', 1000, 'earlier work', 'active', "
+            "now() + interval '5 minutes')"), {"id": f"res_{uuid4().hex[:12]}", "p": PROJECT})
+    run_id = _start()
+    assert _execute(run_id, _lease(engine, run_id))["status"] == "deferred"
+    attention = _attention(engine, run_id)
+    assert attention["kind"] == "budget_wait" and attention["state"] == "waiting"
+    assert governed.calls == []
+
+
+def test_setup_shows_a_rejected_claude_login_until_a_new_token_is_saved(engine, monkeypatch):
+    monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
+                        lambda settings: "infisical")
+    from boss_engine.services.setup_service import engine_login_states, store_coding_agent_credential
+
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE entitlement_sources SET observed_capacity = COALESCE(observed_capacity, "
+            "'{}'::jsonb) || '{\"credential_state\": \"rejected\"}'::jsonb "
+            "WHERE project_id = :p AND source_id = 'anthropic_claude_code'"), {"p": PROJECT})
+        assert engine_login_states(connection, PROJECT) == {"claude_code": "rejected"}
+    import boss_engine.services.secrets_service as secrets
+
+    with engine.begin() as connection:
+        original = secrets.put_secret
+        secrets.put_secret = lambda *a, **k: {"secret_ref_id": None, "backend": "infisical",
+                                             "ref_key": "k", "fingerprint": "fp"}
+        try:
+            store_coding_agent_credential(connection, api_main.settings, PROJECT, "claude_code",
+                                          "sk-ant-oat01-" + "t" * 48, actor="ceo",
+                                          accept_database_fallback=True)
+        finally:
+            secrets.put_secret = original
+        assert engine_login_states(connection, PROJECT) == {}

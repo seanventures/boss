@@ -26,6 +26,7 @@ from typing import Any, Callable, Optional
 
 from ..config import Settings
 from .core import create_blocking_decision, emit_event
+from .model_failures import is_login_rejected, mark_login
 from .typed_decision_spend import (
     _result_of,
     _uncertain,
@@ -236,7 +237,7 @@ class DiscoveryStageSpend:
         self._emit(connection, "discovery.stage_started",
                    {"stage": stage, "receipt_id": invocation["receipt_id"],
                     "reservation_id": reservation_id})
-        return {"reservation_id": reservation_id, "lease_id": lease_id,
+        return {"reservation_id": reservation_id, "lease_id": lease_id, "source_id": source_id,
                 "lease_token": acquired["lease_token"], "invocation_id": invocation["id"],
                 "receipt_id": invocation["receipt_id"], "dedupe": dedupe}
 
@@ -257,6 +258,11 @@ class DiscoveryStageSpend:
                                else capacity_after_failure(error)),
             error={} if succeeded else {"reason": str(error)[:500]},
         )
+        # Tell Setup whether this source's login works: a rejected login is shown as broken
+        # there instead of green "Connected" while every call fails.
+        if succeeded or is_login_rejected(error):
+            mark_login(connection, self.project_id, authority.get("source_id"),
+                       rejected=not succeeded)
         if succeeded:
             # The stage's output lives on its receipt: a retry replays it instead of paying again.
             self.receipts.merge_result(connection, authority["receipt_id"],
