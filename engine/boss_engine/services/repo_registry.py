@@ -268,5 +268,6 @@ def resolve_repository_target(
             }
     raise RepositoryResolutionError(
         f"No repository registered for project {project_id} and no legacy default "
-        "configured. Register a GitHub connection and a repository binding first."
+        "configured. Connect a GitHub repository in Mission Control, Settings, Repo and "
+        "model, Repository, then rerun this step."
     )

@@ -51,7 +51,7 @@ Self-hosted SSO against an identity provider you run can be set up later.
 
 2. Type one concrete goal and choose a path.
 
-    **Talk to BOSS** answers and starts nothing unless you say so. **Build** follows the governed path: a panel drafts a PRD, and code is written only after the PRD is approved. By default that approval is automatic, and **Approvals** records it as **AUTO-APPROVED**. The build itself needs a connected GitHub repository; [Getting started](GETTING_STARTED.md) covers the whole path, including the workflow to pick in this release. If no model is connected, model work shows as unavailable while the control plane stays up.
+    **Talk to BOSS** answers and starts nothing unless you say so. **Build** follows the governed path: a panel drafts a PRD, and code is written only after the PRD is approved. By default that approval is automatic, and **Approvals** records it as **AUTO-APPROVED**. The build itself needs a connected GitHub repository; [Getting started](GETTING_STARTED.md) covers the whole path. The research step that opens the default path runs governed web research when a Claude Code subscription is connected. Without one, it shows as skipped with the reason, and the run goes on to the panel. If no model is connected, model work shows as unavailable while the control plane stays up.
 
 3. Read the reply as a plan.
 

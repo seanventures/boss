@@ -1474,6 +1474,50 @@ def execute_step(
                     f"this project was started with",
         }
 
+    # RESEARCH RUNS WHEN IT CAN, AND STANDS ASIDE — SAYING WHY — ONLY WHEN IT CANNOT.
+    #
+    # In Community a discovery is a governed `discovery.run` job: every research stage is
+    # reserved, leased and receipted (discovery_spend.py), so the tool below commissions it like
+    # any other edition and the step waits on it. Research is the Claude CLI's web search on
+    # the Claude Code subscription. Where that subscription cannot be used — not connected, its
+    # login rejected, out of capacity — the job could only be refused at its first stage, so the
+    # step is recorded as not applicable with that reason, a `workflow.research_skipped` event
+    # names it, and the run carries on to the panel, whose research binding is optional. The
+    # check is the model route the job itself would take (discovery_service.research_unavailable),
+    # never the edition. A budget refused at run time is not prejudged here: the job records it
+    # with a decision, and the step reports research that failed and the run continues. An
+    # adopted dossier above still wins: reading research that already exists spends nothing.
+    if key == "research":
+        from .discovery_service import RESEARCH_SOURCE_UNAVAILABLE, research_unavailable
+
+        settings = getattr(ctx, "settings", None)
+        unavailable: Optional[dict[str, Any]] = None
+        if settings is not None and connection is not None:
+            try:
+                unavailable = research_unavailable(connection, settings, project_id, actor)
+            except Exception as error:  # noqa: BLE001 — recorded as the skip's reason below
+                log.warning("research availability check failed for %s: %s",
+                            context.get("run_id"), error)
+                unavailable = {
+                    "reason": "research_check_failed",
+                    "detail": f"BOSS could not check whether research can run: {error}"[:500],
+                }
+        if unavailable:
+            detail = str(unavailable.get("detail") or "")
+            emit_event(
+                connection, project_id, "workflow.research_skipped", actor,
+                "workflow_run", str(context.get("run_id") or ""),
+                {"step_id": str(step.get("id") or ""), **unavailable},
+            )
+            return {
+                "capability": key,
+                "tool": None,
+                "status": "not_applicable",
+                "reason": str(unavailable.get("reason") or RESEARCH_SOURCE_UNAVAILABLE),
+                "note": "Skipped: research cannot run here. The panel works from your "
+                        "request instead. " + detail,
+            }
+
     # NO PREVIEW, NO DEPLOY.
     #
     # A workflow that has a `preview` step has it for a reason: somebody looks at the thing
