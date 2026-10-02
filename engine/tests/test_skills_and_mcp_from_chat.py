@@ -121,12 +121,15 @@ def test_a_server_registered_from_chat_is_off_unreviewed_and_not_contacted(call,
 
 def test_a_server_a_person_turned_on_but_nobody_reviewed_never_runs_unattended(call, eng,
                                                                                project):
-    """The class, not the chat tool: ANY unreviewed server's tool waits for a person in an agent
-    turn, whatever tier it claims. agent_loop asks mcp_registry.reviewed — the one question —
-    alongside the tier, and says why in the tool description the model reads."""
-    import inspect
+    """The chat half of the class: a server a chat registered and a person merely turned on (and
+    lowered to tier 0) is still unreviewed, so every road to its tools waits for a person.
 
-    from boss_engine.services import agent_loop, mcp_registry
+    REWRITTEN (round-2 review): this asserted strings in agent_loop's source, which could not
+    see the authored-skill and custom-step roads that ran the same tool unattended. Those roads
+    are now driven for real in test_an_unreviewed_server_never_runs_unattended.py; here the
+    chat's own follow-ups — draft_custom_step on the server — are shown to land as manual."""
+    from boss_engine.services import mcp_registry
+    from boss_engine.services import workflow_custom_steps as custom_steps
 
     call("register_mcp_server", project, name="web-intel", url="http://web-intel:8770/mcp")
     _a_person_turns_it_on(eng, project)
@@ -135,11 +138,14 @@ def test_a_server_a_person_turned_on_but_nobody_reviewed_never_runs_unattended(c
         mcp_registry.update_mcp_server(c, project, server["id"], actor="operator", risk_tier=0)
         server = mcp_registry.get_mcp_server(c, project, server["id"])
     assert server["enabled"] and server["risk_tier"] == 0
-    assert mcp_registry.reviewed(server) is False
-    source = inspect.getsource(agent_loop._drive_run)
-    assert "unreviewed = not reviewed_server(server)" in source
-    assert "if risk > threshold or unreviewed:" in source
-    assert "UNREVIEWED server: every call waits for a person" in source
+    assert mcp_registry.needs_person(server) is True
+    drafted = call("draft_custom_step", project, step_key="search_it", label="Search",
+                   mcp_server="web-intel", mcp_tool="search")
+    assert drafted["status"] == "defined", drafted
+    with eng.begin() as c:
+        step = custom_steps.get(c, project, "search_it")
+    assert step["risk_tier"] == 0 and step["approval_forced_manual"] is True
+    assert "Reviewed" in step["requires_person"]
     with eng.begin() as c:
         mcp_registry.update_mcp_server(c, project, server["id"], actor="operator", trusted=True)
         assert mcp_registry.reviewed(mcp_registry.get_mcp_server(c, project, server["id"]))

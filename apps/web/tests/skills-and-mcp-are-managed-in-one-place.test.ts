@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { describeApiError } from "../lib/api-error";
-import { MCP_TIERS, parseOverrides } from "../app/mcp-servers-ui";
+import { MCP_TIERS, parseOverrides, serversNeedingReview } from "../app/mcp-servers-ui";
 import { deleteConsequence, draftFromSkill } from "../app/skills-ui";
 import { codeOnly } from "./_helpers/source";
 
@@ -77,6 +77,20 @@ describe("one MCP panel, wherever servers are shown", () => {
     // Unreachable is said, with what to do, and "never checked" is not called down.
     expect(UI).toContain("status_note");
     expect(UI).toContain('"not checked yet"');
+  });
+
+  it("after an upgrade the panel says which servers need review and why approvals started", () => {
+    // Round-2 review: a tool on an unreviewed server now waits for a person on every road, and
+    // servers registered before that rule were never marked — so calls that used to run began
+    // asking with nothing on the page to say why.
+    const rows = [
+      { id: "a", name: "tracker", url: "http://t/mcp", risk_tier: 0, enabled: true, trusted: false },
+      { id: "b", name: "web-intel", url: "http://w/mcp", risk_tier: 1, enabled: true, trusted: true },
+      { id: "c", name: "parked", url: "http://p/mcp", risk_tier: 0, enabled: false, trusted: false },
+    ];
+    expect(serversNeedingReview(rows).map((s) => s.name)).toEqual(["tracker"]);
+    const UI = codeOnly("app/mcp-servers-ui.tsx");
+    expect(UI).toContain("mcp-needs-review");
   });
 
   it("tier 0 is offered, and said as a consequence", () => {

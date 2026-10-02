@@ -11450,9 +11450,15 @@ def list_approval_rules(project_id: str):
         pass
 
     with begin(engine) as connection:
+        from boss_engine.services.mcp_registry import needs_person
+
         for srv in list_mcp_servers(connection, project_id):
+            # An unreviewed server's tools wait for a person at any tier (needs_person) — the
+            # rule every runtime road enforces, so the rules page states it too.
             tool_rules.append({"name": srv["name"], "source": "MCP server", "kind": "mcp",
-                               "risk_tier": srv["risk_tier"], "requires_approval": _req(srv["risk_tier"])})
+                               "risk_tier": srv["risk_tier"],
+                               "requires_approval": _req(srv["risk_tier"]) or needs_person(srv),
+                               "unreviewed": needs_person(srv)})
         bp = connection.execute(
             text("SELECT daily_cap_usd_micros, monthly_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct, "
                  "freeze_provisioning_pct, freeze_tier2_pct FROM budget_policies "
@@ -15527,7 +15533,12 @@ def list_skill_definitions(project_id: str) -> dict:
             "usable": bool(item.get("usable", False)),
             "reason": item.get("reason"),
             "runs_through": item.get("runs_through", ""),
+            # Why a person approves every run whatever the tier (its MCP server is not
+            # reviewed), or None. The Skills page shows it beside the tier.
+            "requires_person": item.get("requires_person"),
         }
+        if item.get("requires_person"):
+            skill["requires_approval"] = True
     return {"project_id": project_id, "skills": skills}
 
 

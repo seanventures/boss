@@ -31,7 +31,9 @@ type Skill = {
                   workflows?: Array<{ workflow_key: string; name?: string }> };
   /** What the ONE skill catalogue says: the tier the floor will use (never below what it wraps
    *  or calls), and whether it can run right now. */
-  catalogue?: { risk_tier: number; usable: boolean; reason?: string | null; runs_through?: string };
+  catalogue?: { risk_tier: number; usable: boolean; reason?: string | null; runs_through?: string;
+                /** Why every run needs a person whatever the tier (its MCP server is unreviewed). */
+                requires_person?: string | null };
 };
 
 const BEHAVIOURS = [
@@ -446,6 +448,12 @@ export function SkillsHome(
                     Runs at tier {s.catalogue.risk_tier}, not {s.risk_tier}: what it calls
                     {s.catalogue.runs_through ? ` (${s.catalogue.runs_through})` : ""} is tier
                     {" "}{s.catalogue.risk_tier}, and a skill is never safer than what it runs.
+                  </span>
+                ) : null}
+                {s.catalogue?.requires_person ? (
+                  // At ANY tier: the MCP server it calls is unreviewed, so every run asks first.
+                  <span className="detail" data-testid={`skill-requires-person-${s.skill_key}`}>
+                    Every run waits for a person: {s.catalogue.requires_person}
                   </span>
                 ) : null}
                 <AssignRow
