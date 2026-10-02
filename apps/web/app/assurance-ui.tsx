@@ -86,9 +86,8 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
                 An empty center is not a healthy production claim.
               </p>
               <p>
-                Add one via <code>POST /v1/assurance/metrics</code> and{" "}
-                <code>POST /v1/assurance/cases</code>. How-to:{" "}
-                <code>docs/api/ASSURANCE_GOVERNANCE.md</code>.
+                Seed a measured contract below to see how a metric and its case fit together;
+                the assurance guide in the documentation explains how to record your own.
               </p>
               <form action={seedAssuranceDemoAction}>
                 <input type="hidden" name="project_id" value={feed.projectId} />

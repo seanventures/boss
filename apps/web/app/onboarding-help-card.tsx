@@ -49,7 +49,7 @@ export function OnboardingHelpCard() {
           <h3 className="help-h">What is not here yet</h3>
           <ul className="help-list">
             <li>
-              You can record a <b>host and a target</b> under CI/CD → Hosts. BOSS-initiated
+              You can record a <b>host and a target</b> under Infra → Hosts. BOSS-initiated
               SSH planning and deployment are paused in Community.
             </li>
             <li>

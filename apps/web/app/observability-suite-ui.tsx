@@ -171,8 +171,9 @@ export function ObservabilitySuitePanel({ feed }: { feed: ObservabilitySuiteFeed
           </div>
         ) : (
           <p className="detail" style={{ marginTop: 12 }}>
-            No telemetry sources registered yet. Deploy the BOSS stack from Monitoring, or connect
-            Prometheus/Loki/Grafana under reliability sources.
+            No telemetry sources registered yet. Deploy the BOSS monitoring stack from Infra
+            (Deploy monitoring stack, beside the deployment targets); it registers Prometheus,
+            Loki and Grafana here when it comes up.
           </p>
         )}
       </section>

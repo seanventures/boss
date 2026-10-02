@@ -360,8 +360,8 @@ def compress_suggestions(
                     f"Conversation estimates {total_tokens:,} tokens — consider "
                     "authoritative pack_context with an explicit token_budget."
                 ),
-                "action": "Use POST /v1/knowledge/pack-context (or Toolchain pack) "
-                          "with a hard budget; drop non-authoritative chunks first.",
+                "action": "Pack the context with a hard token budget (the Toolchain pack does "
+                          "this); drop non-authoritative chunks first.",
                 "message_indexes": [],
                 "potential_token_saving": max(0, total_tokens - 16_000),
             }
@@ -1021,8 +1021,8 @@ def build_recommendations(
                     f"Average {score['avg_tokens_per_call']:.0f} tokens/call "
                     f"(target < {_AVG_TOKENS_WARN:,}) across {score['calls']} calls."
                 ),
-                "action": "Run POST /v1/token-efficiency/estimate before large packs; "
-                          "trim long messages; use pack_context budgets.",
+                "action": "Estimate a large pack before sending it; trim long messages; give "
+                          "packed context a token budget.",
                 "potential_saving_usd_micros": 0,
                 "potential_token_saving": int(
                     (score["avg_tokens_per_call"] - 12_000) * score["calls"]
@@ -1049,8 +1049,8 @@ def build_recommendations(
                         f"Stage `{st['stage']}` averages "
                         f"{st['avg_tokens_per_call']:.0f} tokens/call vs policy cap {cap:,}."
                     ),
-                    "action": f"Compress context for `{st['stage']}` or raise that stage's "
-                              "max_total_tokens_per_call via PUT /v1/token-efficiency/policies.",
+                    "action": f"Compress context for `{st['stage']}`, or raise that stage's "
+                              "per-call cap under Token budget policies (Save cap) in Govern.",
                     "potential_saving_usd_micros": 0,
                     "potential_token_saving": int(
                         (st["avg_tokens_per_call"] - cap) * st["calls"]

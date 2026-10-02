@@ -1079,7 +1079,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Built / building / planned / blocked — release board and plans.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/release-planning/*` for project {activeProjectId}.
+              From BOSS&apos;s release board and plans for project {activeProjectId}.
             </p>
           </div>
           <ReleasePlanningPanel
@@ -1449,8 +1449,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Organization-wide actors with scoped project authorization.</h2>
             </div>
             <p className="status-meta">
-              PRD 9.2 identity and access: delegated actors are explicit,
-              permissioned, and audited through `/v1/org-members`.
+              Delegated actors are explicit, scoped to the projects they may act on,
+              and every change to them is recorded in the audit log.
             </p>
           </div>
 
@@ -1749,7 +1749,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Live spend, forecast, and cap pressure.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/budget/status` for project {activeProjectId}.
+              From the budget ledger for project {activeProjectId}: reservations, actual spend and the cap.
             </p>
           </div>
 
@@ -1951,9 +1951,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           {mcpServers.items.length === 0 ? (
             <p className="detail">
-              {mcpServers.apiReachable
-                ? "No MCP servers registered. Register one via POST /v1/mcp/servers."
-                : mcpServers.blockedReason ?? "MCP registry unavailable."}
+              {/* A LINK TO THE FORM, not the endpoint. "Register one via POST /v1/mcp/servers"
+                  was the whole instruction on this screen; the register form lives in
+                  Capabilities. */}
+              {mcpServers.apiReachable ? (
+                <>
+                  No MCP servers registered.{" "}
+                  <AreaLink area="capabilities" orgId={activeOrgId}>Register one in Capabilities</AreaLink>.
+                </>
+              ) : (mcpServers.blockedReason ?? "MCP registry unavailable.")}
             </p>
           ) : (
             <div className="feed-list">
@@ -3018,7 +3024,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Receipt-backed droplets with TTL and janitor visibility.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/infra/resources` for project {activeProjectId}.
+              From BOSS&apos;s resource ledger for project {activeProjectId} — every row has a receipt.
             </p>
           </div>
 
@@ -3905,10 +3911,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">Identity providers</span>
               <CommunityIncludedBadge label="SSO · Community" />
             </div>
-            <h2>Workforce and developer IdP packs — OIDC, SAML, SCIM blueprints.</h2>
+            <h2>Identity providers BOSS can record — and what sign-in uses today.</h2>
             <p className="status-meta">
-              Catalog and dry-run setup for project {activeProjectId}. Secrets stay out of
-              the catalog responses. Self-hosted SSO is included in Community.
+              Provider records for project {activeProjectId}. Secrets are referenced by name,
+              never shown. Included in Community.
             </p>
           </div>
           <IdentityProvidersCatalogView
@@ -3985,6 +3991,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   <form
                     action={upsertEnterpriseIdentityProviderAction}
                     className="composer"
+                    id="identity-provider-form"
                   >
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
@@ -4989,6 +4996,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <span className="add">+{st.additions ?? 0}</span>{" "}
                             <span className="del">−{st.deletions ?? 0}</span>
                           </>
+                        ) : st.files_changed != null ? (
+                          // Not "—" beside "Files changed · 53": the files are known, the
+                          // line counts are what was not recorded (console walk, 2026-10-02).
+                          `${st.files_changed} files`
                         ) : (
                           "—"
                         )}
@@ -5024,7 +5035,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     {paths.length > 0 ? (
                       paths.slice(0, 14).map((p, i) => <code key={i}>{p}</code>)
                     ) : (
-                      <code>{st.summary ?? "No file manifest recorded"}</code>
+                      <code>
+                        {st.summary
+                          ?? (st.files_changed
+                            ? `${st.files_changed} files changed; this run did not record their paths — the pull request lists them.`
+                            : "No file list recorded for this run.")}
+                      </code>
                     )}
                     {codeTask.pull_request_url ? (
                       <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
@@ -5166,10 +5182,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("delivery") ? (
-        <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
+        <section className="panel-stack" data-area="delivery" aria-label="Infra">
           <div className="section-head">
             <div>
-              <span className="eyebrow">CI/CD</span>
+              <span className="eyebrow">Infra</span>
               <h2>
                 {deliveryPipeline && !deliveryPipeline.error && !deliveryPipeline.configured
                   ? "No deployment targets yet — register an app destination."
@@ -5190,7 +5206,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Generate and validate CI config for GitHub Actions and peers.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/cicd/*` for project {activeProjectId}.
+              Generated and validated here; nothing is pushed to your repository until you copy it.
             </p>
           </div>
           <CICDPipelinesPanel
@@ -5212,7 +5228,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">Observability</span>
               <h2>
                 {(!deploymentHealth?.targets?.length && !observability?.deployed)
-                  ? "Not configured — health and dashboards appear after CI/CD onboarding."
+                  ? "Not configured — health and dashboards appear after an app is onboarded in Infra."
                   : "Health of what BOSS has deployed, and the dashboards behind it."}
               </h2>
             </div>
@@ -5330,7 +5346,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Capability ledger — category, status, and the remaining gap. Missing stays missing.</h2>
             </div>
             <p className="status-meta">
-              Source: GET /v1/ai-sre/capabilities. Not public GA.
+              A coverage ledger kept by BOSS. Not public GA.
             </p>
           </div>
           <AiSreHome feed={aiSreFeed} />

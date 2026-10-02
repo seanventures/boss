@@ -249,10 +249,12 @@ def recommend_stack(workload_profile: str) -> dict[str, Any]:
         "boss_stack_covers": already_in_boss_stack,
         "add_alongside_boss_stack": external_or_optional,
         "next_steps": [
-            "Deploy BOSS observability stack via POST /v1/observability/stack/deploy "
-            "(covers otel-collector, prometheus, grafana).",
-            "Register remaining sources via reliability sources or telemetry connectors.",
-            "Run POST /v1/observability-suite/health-check after endpoints are configured.",
+            # Operator words: these render on the Observability screen, where an endpoint is
+            # not something anyone can press (console walk, 2026-10-02).
+            "Deploy the BOSS monitoring stack from Infra — Deploy monitoring stack, beside the "
+            "deployment targets (covers otel-collector, prometheus, grafana).",
+            "Connect the remaining sources as telemetry connectors once the stack is up.",
+            "Press Health-check on the Observability screen after the endpoints are configured.",
         ],
     }
 
@@ -388,8 +390,8 @@ def _compute_gaps(kinds_present: list[str], stack_deployed: bool) -> list[dict[s
             {
                 "id": "empty_observability",
                 "severity": "warning",
-                "message": "No telemetry sources and no stack — start with POST /v1/observability/stack/deploy "
-                "or register a connector.",
+                "message": "No telemetry sources and no stack — start with Deploy monitoring stack "
+                "in Infra, or connect a telemetry source.",
             }
         )
     return gaps
@@ -592,7 +594,8 @@ def graph_health_summary(connection: Connection, project_id: str) -> dict[str, A
             []
             if healthy
             else [
-                "Graph is empty — POST /v1/knowledge/graph/seed-from-infra or upsert nodes.",
+                "Graph is empty — it fills from deployed infrastructure once an app is onboarded "
+                "in Infra.",
             ]
         ),
     }

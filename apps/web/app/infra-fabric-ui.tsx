@@ -55,10 +55,9 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
 
       {!anyReachable ? (
         <p className="detail" role="alert">
-          Infra fabric APIs are unreachable. Confirm the control plane is up and
-          routes <code className="mono">/v1/multi-cloud/*</code>,{" "}
-          <code className="mono">/v1/elastic/*</code>, and{" "}
-          <code className="mono">/v1/provider-usage/*</code> are mounted.
+          The BOSS API did not answer for multi-cloud, elastic capacity or provider usage.
+          Reload the page; if it stays like this, check that the API is running (Repo and model
+          shows its status).
         </p>
       ) : null}
 
@@ -181,9 +180,8 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
                 </div>
               ) : (
                 <p className="detail">
-                  No worker pools yet. Request capacity via{" "}
-                  <code className="mono">POST /v1/elastic/capacity</code> against
-                  your own ProviderOps connections — Community does not provision
+                  No worker pools yet. Capacity is requested against your own provider
+                  connections (Provider configuration, above) — Community does not provision
                   managed fleets.
                 </p>
               )}

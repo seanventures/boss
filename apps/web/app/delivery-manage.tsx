@@ -367,7 +367,7 @@ export function MonitoringPanel({ initial, hostTargetId, compact = false }: {
           scrape config for this project yet.
         </p>
         <p className="detail" style={{ marginTop: 0 }}>
-          Onboard a deployment target in CI/CD first — the stack borrows that host and
+          Onboard a deployment target in Infra first — the stack borrows that host and
           credential. After a target exists, return here to deploy the collector /
           Prometheus / Grafana stack.
         </p>
@@ -1003,6 +1003,11 @@ export function FleetPanel({ projectId, targets = [] }: {
   const [blocker, setBlocker] = React.useState<Blocker | null>(null);
   const [hostWritesAllowed, setHostWritesAllowed] = React.useState(false);
   const [hostWriteBlocker, setHostWriteBlocker] = React.useState<string | null>(null);
+  // ONE GATE FOR EVERY ACTION THAT REACHES A HOST. The panel said "BOSS is configured not to
+  // reach out over SSH ... no host can be verified" and still offered Register a host, Verify
+  // and Re-verify, each of which ends at that same refusal — after a key may already have been
+  // minted and pasted onto a machine (console walk, 2026-10-02). Only Retire was gated.
+  const canReachHosts = blocker === null;
 
   const reload = React.useCallback(async () => {
     const r = await callAction(listDeploymentHostsAction)(projectId);
@@ -1052,7 +1057,11 @@ export function FleetPanel({ projectId, targets = [] }: {
       {err ? <div className="cap-badge tone-red" data-testid="fleet-error">{err}</div> : null}
 
       {hosts.length === 0 ? (
-        <p className="detail">No hosts yet. Register one to give BOSS somewhere to deploy.</p>
+        <p className="detail">
+          {canReachHosts
+            ? "No hosts yet. Register one to give BOSS somewhere to deploy."
+            : "No hosts yet. Registering one is offered once BOSS may reach hosts over SSH (see above)."}
+        </p>
       ) : null}
 
       <div style={{ display: "grid", gap: 14 }}>
@@ -1173,8 +1182,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                         void navigator.clipboard?.writeText(cmd);
                         setCopied(h.id); window.setTimeout(() => setCopied(null), 2000);
                       }} />
-                    <ActionButton busy={busy} label="I've run it — verify" busyLabel="Connecting…"
-                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    {canReachHosts ? (
+                      <ActionButton busy={busy} label="I've run it — verify" busyLabel="Connecting…"
+                        onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    ) : <HostsUnreachableNote />}
                   </div>
                   {/* The trap this wizard exists to close. */}
                   <p className="detail" style={{ margin: "6px 0 0" }}>
@@ -1192,8 +1203,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                     evidence, not a checkbox.
                   </p>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
-                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    {canReachHosts ? (
+                      <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
+                        onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    ) : <HostsUnreachableNote />}
                     {hostWritesAllowed ? (
                       <ActionButton busy={busy} label="Let BOSS install its own key"
                         busyLabel="Installing…"
@@ -1217,8 +1230,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                       <ActionButton busy={busy} label="Install docker" busyLabel="Provisioning…"
                         onClick={() => run(() => callAction(provisionHostAction)(null, formOf({ host_id: h.id })))} />
                     ) : null}
-                    <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
-                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    {canReachHosts ? (
+                      <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
+                        onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    ) : <HostsUnreachableNote />}
                   </div>
                 </div>
               ) : null}
@@ -1255,8 +1270,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                   )}
 
                   <div>
-                    <ActionButton busy={busy} label="Re-verify" busyLabel="Connecting…"
-                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    {canReachHosts ? (
+                      <ActionButton busy={busy} label="Re-verify" busyLabel="Connecting…"
+                        onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
+                    ) : <HostsUnreachableNote />}
                   </div>
                 </div>
               ) : null}
@@ -1326,11 +1343,13 @@ export function FleetPanel({ projectId, targets = [] }: {
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <ActionButton busy={busy} label={openReg ? "Cancel" : "Register a host"}
-          busyLabel="…" onClick={() => setOpenReg((v) => !v)} />
+        {canReachHosts ? (
+          <ActionButton busy={busy} label={openReg ? "Cancel" : "Register a host"}
+            busyLabel="…" onClick={() => setOpenReg((v) => !v)} />
+        ) : <HostsUnreachableNote />}
       </div>
 
-      {openReg ? (
+      {openReg && canReachHosts ? (
         <form style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}
           onSubmit={(e) => {
             e.preventDefault();
@@ -1358,4 +1377,14 @@ function formOf(values: Record<string, string>): FormData {
   const fd = new FormData();
   for (const [k, v] of Object.entries(values)) fd.set(k, v);
   return fd;
+}
+
+/** What stands in for a host action BOSS cannot take: why, and where the switch is. */
+function HostsUnreachableNote() {
+  return (
+    <span className="detail" data-testid="fleet-action-unavailable">
+      Unavailable while BOSS may not reach hosts over SSH — set BOSS_SSH_HOST_DEPLOY_ALLOWED=true
+      and restart (the notice at the top of this panel).
+    </span>
+  );
 }
