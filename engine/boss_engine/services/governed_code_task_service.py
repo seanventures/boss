@@ -199,6 +199,10 @@ def classify_gate_faults(
                 evidence.get("security_summary", ""),
                 evidence.get("security_verdict"),
             )
+        elif gate == "app_serves":
+            # The app did not answer is WORK. The check could not even start it (no tree to
+            # copy, launcher failed) is BOSS's fault, and must not send the coder to fix it.
+            inconclusive = bool((evidence.get("app_serves") or {}).get("harness"))
         else:
             # Test gates are authoritative: BOSS re-runs the suite itself, so a red suite is
             # real evidence about the code, not a check that failed to finish.
@@ -341,6 +345,7 @@ _TEST_GATES = frozenset({
 # Every gate the pipeline can report. Used to detect a gate name this build does not know.
 _ALL_GATE_NAMES = _TEST_GATES | frozenset({
     "code_written", "code_review_passed", "security_clean", "nothing_broke", "consistent",
+    "app_serves",
 })
 
 
@@ -423,7 +428,15 @@ _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_
 # and that is where the weakened-tests verdict already blocks (_pull_request_ci_gate's
 # blocked_weakened_existing_tests hard stop). Holding the PR back as well meant the operator
 # got nothing to look at, which is how "22 runs, 2 PRs" happened. Findings ride ON the PR.
-_ADVISORY_HARD_FLOOR = ("code_written",)
+_ADVISORY_HARD_FLOOR = ("code_written", "app_serves")
+
+# Gates no autonomy setting may ship past. `app_serves` is not a reviewer's opinion: BOSS
+# started the build's own run command and nothing answered HTTP. The Lead Triage Inbox build
+# (crun_3e370c11) completed and opened PR #218 while its app could not start at all — an
+# ImportError on its first line — and the operator found out from a preview timeout. A build
+# whose app does not run is not done, so exhausting the repairs BLOCKS with the app's own
+# error (and the partial PR rescue keeps the work), rather than shipping with dissent.
+_NEVER_SHIP_PAST = frozenset({"app_serves"})
 
 
 def resolve_gate_failure_action(
@@ -493,6 +506,8 @@ def resolve_gate_failure_action(
         return "inconclusive"
     if rounds_used < max_repair_rounds and open_pr:
         return "repair"
+    if any(g in _NEVER_SHIP_PAST and (faults or {}).get(g) != "HARNESS" for g in failing):
+        return "block"
     return "ship_with_dissent" if (never_block and open_pr) else "block"
 
 
@@ -705,6 +720,20 @@ def _metrics_tests_clause(title: str, instructions: str, *,
     return "\n\n" + METRICS_TEST_REQUIREMENT + "\n"
 
 
+def _run_declaration_rule() -> str:
+    """The implement stage's share of the build contract: say HOW TO RUN what was built.
+
+    The Lead Triage Inbox build (crun_3e370c11) finished green and its preview then guessed
+    lead_triage_core/approvals.py as the app, ran it as a script, and died on a relative import.
+    Every stage that WRITES the implementation carries this rule, and the app_serves gate
+    (preview_service.prove_app_serves) starts the declared command before the build can pass.
+    The text lives beside the code that reads the file, so the two cannot drift.
+    """
+    from .preview_service import RUN_DECLARATION_INSTRUCTION
+
+    return RUN_DECLARATION_INSTRUCTION
+
+
 def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False, app_root=None):
     tf = ", ".join(test_files) or "(the test files in this repo)"
     scope = (
@@ -721,7 +750,8 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         f"({tf}) — they are the spec. If a test looks wrong, STOP and explain rather than change it.\n"
         f"- Run `{test_cmd}` from the app directory and iterate until the tests pass. "
         "Create parent directories for SQLite/data files before opening them.\n"
-        "- Do NOT commit. End with a one-line summary of what you changed.\n"
+        + _run_declaration_rule()
+        + "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + (_IAC_GUIDANCE if iac else "")
         + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
     )
@@ -1002,7 +1032,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             "- Write JS/TS API and e2e tests, not Python unittest.\n"
             f"- Run `{test_cmd}` from {scope} and iterate until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
-            "- Do NOT commit. End with a one-line summary of what you built.\n"
+            + _run_declaration_rule()
+            + "- Do NOT commit. End with a one-line summary of what you built.\n"
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -1012,7 +1043,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         "RULES:\n"
         "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
         f"- Run `{test_cmd}` and iterate until it passes. Do NOT commit.\n"
-        "- End with a one-line summary of what you built.\n"
+        + _run_declaration_rule()
+        + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
@@ -2019,7 +2051,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """
         try:
             from .preview_service import DECLARED_APP_FILE, declare_app_entry
-            entry = declare_app_entry(list(accumulated.keys()), accumulated.get)
+            # The files the PR will carry. On the local substrate `accumulated` holds only
+            # what the last checkpoint pushed, which predates any fix round — the same tree
+            # the app_serves gate just proved, not an older one.
+            built = (dict(accumulated) if use_microvm
+                     else {fc.path: fc.content for fc in sandbox.diff()})
+            entry = declare_app_entry(list(built.keys()), built.get)
             if not entry:
                 return
             sf.github.upsert_file(
@@ -3600,6 +3637,38 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
             gates["web_package_honest"] = bool(_web_contract.get("ok"))
 
+        # THE APP RUNS — proven here, not discovered by the operator's first preview.
+        #
+        # The Lead Triage Inbox build (crun_3e370c11, PR paramg/boss-sandbox#218) passed every
+        # gate and completed; its preview then failed twice on "ImportError: attempted relative
+        # import with no known parent package". Nothing between "tests pass" and "done" had ever
+        # started the app. So once the suite is green, BOSS starts what the build declared (or,
+        # failing a declaration, what the preview would start) and requires an HTTP answer.
+        # A failure is a WORK gate with the app's own error, fed back to the implementer.
+        def _check_app_serves(files: dict) -> dict:
+            from .preview_service import prove_app_serves
+
+            with _transaction(engine) as c:
+                _phase(c, "serve_check")
+            record = prove_app_serves(
+                root, list(files.keys()), read=files.get,
+                serves_http=bool(fctx.get("web_app_build") or _app_id),
+                overlay=dict(files) if use_microvm else None,
+                timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds", 180)
+                              or 180),
+            )
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.app_serve_checked", "boss",
+                           "code_task_run", run_id,
+                           {k: (v[:600] if isinstance(v, str) else v)
+                            for k, v in record.items()})
+            return record
+
+        app_serves_record: dict = {"skipped": "the tests did not pass, so there is no app to start"}
+        if tests_passed:
+            app_serves_record = _check_app_serves(changed_files)
+            gates["app_serves"] = bool(app_serves_record.get("ok"))
+
         if _weakened and _retirement_allowed:
             with _transaction(engine) as c:
                 c.execute(sql(
@@ -3665,7 +3734,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             + (["write_tests"] if do_separate_tests else []) + ["implement"] \
             + (["review_code", "security_check", "check_tests", "run_all_tests", "consistency_check"]
                if do_review else []) \
-            + (["iac_verify"] if iac_result is not None else [])
+            + (["iac_verify"] if iac_result is not None else []) \
+            + (["serve_check"] if "app_serves" in gates else [])
         workspace_evidence = bind_test_outcomes(
             workspace_evidence or {}, tests_passed=bool(tests_passed),
         )
@@ -3677,6 +3747,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # point — writing to it above was a latent crash that would have fired precisely
             # when a run DID weaken an existing test, i.e. when the gate matters most.
             **({"weakened_existing_tests": _weakened[:20]} if _weakened else {}),
+            # What BOSS started, and whether it answered — the receipt for the app_serves gate.
+            "app_serves": app_serves_record,
             "steps_run": steps_run,
             "cost_usd_micros": cost,
             "stage_costs": {
@@ -3807,7 +3879,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # spec/plan — which is why repeated attempts never converged on test failures.
             _convergeable = {"code_review_passed", "consistent",
                              "written_tests_pass", "nothing_broke",
-                             "web_package_honest"}
+                             "web_package_honest", "app_serves"}
             if (failing and not use_microvm and impl_session_id
                     and set(failing) <= _convergeable):
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
@@ -3878,6 +3950,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         finding_bits.append(_anchored_findings(
                             r6.get("summary") or "", root, stage="consistency_check",
                             header="CONSISTENCY FINDINGS:"))
+                    if "app_serves" in failing:
+                        # The app's OWN error, not "preview timed out": this is what lets the
+                        # implementer fix an ImportError instead of guessing at a port.
+                        finding_bits.append(
+                            "THE APP DOES NOT START. BOSS ran "
+                            f"`{app_serves_record.get('command') or '(no command found)'}` "
+                            "with PORT set and nothing answered HTTP:\n"
+                            + str(app_serves_record.get("error") or "")[:2500]
+                            + "\nFix the app (or its boss.preview.command) so that command "
+                            "serves HTTP on $PORT.")
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.inrun_convergence_round", "boss",
                                    "code_task_run", run_id,
@@ -3924,6 +4006,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
                         gates["nothing_broke"] = tests_passed
+                    if tests_passed:
+                        # Green again: re-prove the app against the code as it now stands.
+                        app_serves_record = _check_app_serves(
+                            {fc.path: fc.content for fc in sandbox.diff()})
+                        gates["app_serves"] = bool(app_serves_record.get("ok"))
+                        evidence["app_serves"] = app_serves_record
                     if not tests_passed:
                         # Still red is no longer a dead end: re-arbitrate next round (the fix may
                         # be partial, or an amended test still over-specified). Only exhausting
@@ -4000,7 +4088,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             emit_event(c, project_id, "code_task.inrun_convergence_pass",
                                        "boss", "code_task_run", run_id, {"rounds": round_i})
                         break
-                    if set(failing) - {"code_review_passed", "consistent"}:
+                    if set(failing) - {"code_review_passed", "consistent", "app_serves"}:
                         break  # a non-judgment gate regressed — legacy handling below
               except Exception as exc:  # noqa: BLE001
                 with _transaction(engine) as c:
@@ -4208,7 +4296,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               f"{', '.join(failing)}. Address EVERY review finding below so ALL "
                               "gates pass, and do NOT regress the checks that already passed. If "
                               "'tests_strong_enough' failed, STRENGTHEN the tests so a one-line "
-                              "mutation to the logic is caught."))
+                              "mutation to the logic is caught."
+                              # The app's own startup error, so the repair fixes THAT rather
+                              # than rediscovering it (crun_3e370c11's ImportError).
+                              + (" 'app_serves' failed: BOSS ran "
+                                 f"`{app_serves_record.get('command')}` and nothing served "
+                                 f"HTTP — {str(app_serves_record.get('error') or '')[:1500]}"
+                                 if "app_serves" in failing else "")))
                 with _transaction(engine) as c:
                     # Fenced: a stale execution must not be able to declare a repair round.
                     if not _fenced_status(
