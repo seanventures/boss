@@ -37,9 +37,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _common import (  # noqa: E402
-    agent_step, connect, define_steps, enable_skills, from_input, from_step, grant, parser,
-    publish, step,
+    agent_step, connect, define_steps, enable_skills, ensure_agents, from_input, from_step,
+    grant, parser, publish, step,
 )
+
+#: The agents this example names, and the pack that ships them. core_v1 — the default — has
+#: neither, so setup installs this pack when they are missing rather than dying at the grant.
+AGENTS = ["video_editor", "media_publisher"]
+AGENT_PACK = "media_pack"
 
 NAME = "Video edit and publish"
 DESCRIPTION = (
@@ -87,6 +92,9 @@ def main() -> None:
     # `role_skills` is the grant the runtime checks, and a skill an agent was merely told about
     # in its spec is one it will be refused at the first call.
     enable_skills(api, EDITING_SKILLS + [s["skill_id"] for s in STEPS], args)
+    # THE AGENTS FIRST. Granting a skill to an agent the project does not have is refused,
+    # which is where this example used to stop on every default install.
+    ensure_agents(api, AGENTS, AGENT_PACK, args)
     grant(api, "video_editor", EDITING_SKILLS, args)
     grant(api, "media_publisher", ["publish_youtube"], args)
 
