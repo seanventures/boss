@@ -675,6 +675,11 @@ def execute(
     # workflow_capabilities.validate_captain, which refuses a role the workforce does not have.
     captain = str(step.get("captain") or "").strip().lower()
 
+    # What the gate decision has to be about: this run, this step. The MCP effect checks it
+    # (mcp_registry.approval_stands), so another step's approval cannot release this one.
+    approval_about = ({"workflow_run_id": run_id, "step_id": str(step.get("id") or "")}
+                      if approved_by else None)
+
     if row["binding_kind"] == "skill":
         from .agent_loop import _invoke_agent_skill
 
@@ -687,7 +692,7 @@ def execute(
             skill_spec=None if captain else _spec_granting_the_runner(
                 connection, settings, project_id, str(row["skill_id"])
             ),
-            approved_by=approved_by,
+            approved_by=approved_by, approval_about=approval_about,
         )
         if str(result.get("status")) == "denied":
             # The runtime denies rather than raises, so a denial would otherwise be recorded as
@@ -724,6 +729,7 @@ def execute(
         dict(server), {"name": row["mcp_tool_name"]}, inputs,
         run_id=run_id, step=step_index, actor=captain or actor,
         caller=captain or RUNNER_CALLER, approved_by=approved_by,
+        approval_about=approval_about,
     )
     if str(result.get("status")) in ("denied", "failed"):
         raise CustomStepError(

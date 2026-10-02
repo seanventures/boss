@@ -150,8 +150,17 @@ def _approve(c, decision_id: str) -> None:
               {"i": decision_id})
 
 
-def _a_decision(c, project) -> str:
-    return create_blocking_decision(c, project, None, "Approve the step", {}, {}, "test")
+def _a_decision(c, project, about: dict | None = None) -> str:
+    return create_blocking_decision(c, project, None, "Approve the step", dict(about or {}),
+                                    {}, "test")
+
+
+#: What the custom-step road's gate decision is about: the run and step _step_road executes.
+#: REWRITTEN in round 3: the helper used to approve a decision with an EMPTY recommendation and
+#: the backstop accepted it, because it only asked "approved, in this project?". That was the
+#: defect (an unrelated approval released the tool); the gate _open_gate really raises names
+#: its workflow_run_id and step_id, so the test now raises that one.
+STEP_GATE = {"workflow_run_id": "wfr_t", "step_id": "s1"}
 
 
 # --------------------------------------------------------------------------- #
@@ -195,16 +204,16 @@ def _step_road(binding: str):
         try:
             custom_steps.execute(c, Settings(), project_id=project, actor="workflow",
                                  step=step, inputs={"title": "Broken build"}, run_id="wfr_t",
-                                 approved_by=_approved_decision(c, project) if approved
-                                 else None)
+                                 approved_by=_approved_decision(c, project, STEP_GATE)
+                                 if approved else None)
         except custom_steps.CustomStepError as error:
             return str(error)
         return None
     return road
 
 
-def _approved_decision(c, project) -> str:
-    decision = _a_decision(c, project)
+def _approved_decision(c, project, about: dict | None = None) -> str:
+    decision = _a_decision(c, project, about)
     _approve(c, decision)
     return decision
 
@@ -286,10 +295,56 @@ def test_the_catalogue_and_a_skill_step_say_a_person_is_needed(eng, project):
     assert "requires a person" in str(refused.value)
 
 
+def _shipping_calls(attr: str):
+    """Every call to ``<anything>.<attr>(...)`` or ``<attr>(...)`` in shipping code."""
+    for top in ("engine/boss_engine", "apps/api/app", "apps/worker"):
+        for path in sorted((ROOT / top).rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            if "/tests/" in rel:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(
+                        node.func, "id", getattr(node.func, "attr", None)) == attr:
+                    yield rel, node
+
+
+#: Clients allowed to call an MCP tool outside mcp_registry, and why. Each one's URL comes from
+#: DEPLOYMENT CONFIGURATION (an environment variable the installer writes), never from the
+#: mcp_servers registry an operator or a chat can edit — so the review rule, which is about
+#: registry servers, has nothing to ask about them.
+CONFIG_URL_CLIENTS = {
+    "engine/boss_engine/services/mcp_repo_host.py":
+        ("the repo host gateway URL is the BOSS_REPO_MCP_URL setting; repo_host.py builds "
+         "it from settings only"),
+    "engine/boss_engine/services/mcp_client.py": "the client itself",
+    "engine/boss_engine/services/mcp_registry.py":
+        "the two governed doors: call_tool_with_receipt and call_tool_unattended",
+}
+
+
+def test_no_shipping_code_calls_an_mcp_tool_around_the_registry():
+    """Round-3 review: the meeting research phase called the registered 'web-intel' server
+    with MCPClient.call_tool directly, so a re-pointed (unreviewed) web-intel received every
+    meeting's URL with nobody asked — and the scan below could not see it, because it only
+    listed callers of call_tool_with_receipt. This one fails on ANY `.call_tool(` in shipping
+    code outside the registry and the named config-URL clients, so the next road to a
+    registry server's tool has to go through needs_person."""
+    stray = [f"{rel}:{node.lineno}" for rel, node in _shipping_calls("call_tool")
+             if rel not in CONFIG_URL_CLIENTS]
+    assert not stray, (
+        "these call an MCP tool without mcp_registry (call_tool_with_receipt, or "
+        f"call_tool_unattended where nobody can be asked): {stray}")
+    # The allowlist stays honest: every entry still exists and still calls a tool.
+    callers = {rel for rel, _ in _shipping_calls("call_tool")}
+    assert set(CONFIG_URL_CLIENTS) - {"engine/boss_engine/services/mcp_client.py"} <= callers
+
+
 def test_every_caller_of_the_mcp_effect_carries_the_approval():
     """The backstop only holds if the approval reaches it. Every call to
-    call_tool_with_receipt in the shipping code passes `approved_by`, so a new road to an MCP
-    tool cannot be written that drops the person's decision on the floor."""
+    call_tool_with_receipt in the shipping code passes `approved_by` AND `approval_about` (what
+    the decision must be about — round 3), so a new road to an MCP tool cannot be written that
+    drops the person's decision on the floor or accepts somebody else's."""
     missing, found = [], []
     for top in ("engine/boss_engine", "apps/api/app", "apps/worker"):
         for path in sorted((ROOT / top).rglob("*.py")):
@@ -302,7 +357,8 @@ def test_every_caller_of_the_mcp_effect_carries_the_approval():
                         node.func, "id", getattr(node.func, "attr", None)
                 ) == "call_tool_with_receipt":
                     found.append(f"{rel}:{node.lineno}")
-                    if not any(k.arg == "approved_by" for k in node.keywords):
+                    given = {k.arg for k in node.keywords}
+                    if not {"approved_by", "approval_about"} <= given:
                         missing.append(f"{rel}:{node.lineno}")
     assert len(found) >= 2, found
     assert not missing, f"these reach an MCP tool without carrying the approval: {missing}"
@@ -395,3 +451,161 @@ def test_a_publish_builds_the_catalogue_once_not_once_per_step(eng, project, mon
         before = len(builds)
         assert catalogue.entry(c, project, "later", settings=Settings()) is not None
     assert len(builds) == before + 1
+
+
+# --------------------------------------------------------------------------- #
+# Round 3: the roads the backstop could not see, and what the approval is for   #
+# --------------------------------------------------------------------------- #
+
+def test_a_meeting_never_sends_its_url_to_an_unreviewed_web_intel(eng, project, mcp_calls):
+    """Round-3 review, probed on Postgres: the built-in web-intel re-pointed at
+    http://elsewhere.example/mcp turned unreviewed, and the meeting's research phase still
+    called it — `_gather_research` gave calls=[('http://elsewhere.example/mcp', 'study_site')]
+    and the reply went into every persona prompt. The untouched seeded server keeps working;
+    a re-pointed one, or a person-registered 'web-intel' nobody reviewed, is skipped and the
+    research note says why and what to do, so the meeting still runs."""
+    from boss_engine.services import meeting_service
+
+    builtin = {"source": "builtin", "version": "1", "trusted": True}
+    with eng.begin() as c:
+        seeded = mcp_registry.ensure_mcp_server(
+            c, project, "web-intel", "http://127.0.0.1:8770/mcp", provenance=builtin,
+            respect_operator=True)
+        kept = meeting_service._gather_research(c, Settings(), project, "https://example.com")
+        assert [tool for tool, _ in mcp_calls] == ["study_site"], "the reviewed seed stopped"
+        assert "pages" in kept and "research skipped" not in str(kept.get("note"))
+
+        mcp_registry.update_mcp_server(c, project, seeded["id"], actor="op",
+                                       url="http://elsewhere.example/mcp")
+        moved = meeting_service._gather_research(c, Settings(), project, "https://example.com")
+
+        # Deleted and registered again under the same name by a person, never reviewed.
+        mcp_registry.delete_mcp_server(c, project, seeded["id"], actor="op")
+        mcp_registry.register_mcp_server(c, project, "web-intel", "http://other.example/mcp",
+                                         actor="op", enabled=True)
+        replaced = meeting_service._gather_research(c, Settings(), project,
+                                                    "https://example.com")
+    assert [tool for tool, _ in mcp_calls] == ["study_site"], (
+        "an unreviewed web-intel was sent the meeting's URL with nobody asked")
+    for research in (moved, replaced):
+        assert research["pages"] == []
+        assert "research skipped" in research["note"]
+        assert "Reviewed" in research["note"] and "Skills and MCP" in research["note"]
+
+
+def test_an_approval_about_another_step_does_not_release_the_tool(eng, project, mcp_calls):
+    """Round-3 review: the backstop accepted ANY approved decision in the project. Now the
+    decision has to be about this run and step; another step's approval, another run's, or an
+    agent run's are refused with a sentence saying which approval to give."""
+    with eng.begin() as c:
+        sid = _unreviewed_server(c, project)
+        server = mcp_registry.get_mcp_server(c, project, sid)
+        assert mcp_registry.approval_stands(
+            c, project, _approved_decision(c, project, STEP_GATE), STEP_GATE)
+        wrong = None
+        for about in ({"workflow_run_id": "wfr_t", "step_id": "other"},
+                      {"workflow_run_id": "wfr_other", "step_id": "s1"},
+                      {"run_id": "arun_x"}, {}):
+            wrong = _approved_decision(c, project, about)
+            assert not mcp_registry.approval_stands(c, project, wrong, STEP_GATE), about
+        # The right subject but nobody has answered yet: still not an approval.
+        pending = _a_decision(c, project, STEP_GATE)
+        assert not mcp_registry.approval_stands(c, project, pending, STEP_GATE)
+        # Naming nothing to match is never an approval.
+        assert not mcp_registry.approval_stands(
+            c, project, _approved_decision(c, project, STEP_GATE), None)
+        # A blank field is not a wildcard: a step with no run id matches no run's gate.
+        assert not mcp_registry.approval_stands(
+            c, project, _approved_decision(c, project, {"step_id": "s1"}),
+            {"workflow_run_id": "", "step_id": "s1"})
+
+        with pytest.raises(mcp_registry.McpServerUnreviewed) as other:
+            mcp_registry.call_tool_with_receipt(
+                c, Settings(), project, server, TOOL, {}, dedupe_key="k1",
+                tenant_scope=("org", "ws"), approved_by=wrong, approval_about=STEP_GATE)
+        with pytest.raises(mcp_registry.McpServerUnreviewed) as none:
+            mcp_registry.call_tool_with_receipt(
+                c, Settings(), project, server, TOOL, {}, dedupe_key="k2",
+                tenant_scope=("org", "ws"), approved_by=None, approval_about=None)
+    assert mcp_calls == []
+    assert "not an approved decision about this run or step" in str(other.value)
+    # A road that carries no approval (a workflow `kind: skill` step's skill.execute job) is
+    # told the fix that works there, not "approve it when BOSS asks".
+    assert "approving does not release it here" in str(none.value)
+    assert "mark the server Reviewed" in str(none.value)
+
+
+def test_an_unreviewed_refusal_is_recorded_as_one_attempt(eng, project, mcp_calls):
+    """Round-3 review: SkillRuntimeService retried the refusal under the MCP spec's retry
+    policy (max 2), so the run recorded a second attempt at a call only a person could
+    release. The refusal is not retryable."""
+    with eng.begin() as c:
+        sid = _unreviewed_server(c, project)
+        custom_steps.create(c, project_id=project, label="tool_step", actor="op",
+                            step_key="tool_step", binding_kind="mcp_tool",
+                            mcp_server_id=sid, mcp_tool_name=TOOL)
+        with pytest.raises(custom_steps.CustomStepError):
+            custom_steps.execute(c, Settings(), project_id=project, actor="workflow",
+                                 step={"id": "s1", "binding": {"custom_step": "tool_step"}},
+                                 inputs={"title": "x"}, run_id="wfr_t")
+        row = c.execute(text("SELECT status, attempts, max_attempts FROM skill_invocations "
+                             "WHERE project_id=:p ORDER BY created_at DESC LIMIT 1"),
+                        {"p": project}).mappings().one()
+    assert mcp_calls == []
+    assert row["status"] == "failed" and row["max_attempts"] >= 2
+    assert row["attempts"] == 1, "the refusal was retried"
+
+
+def test_a_legacy_timeout_approval_never_releases_an_unreviewed_step(eng, project, mcp_calls,
+                                                                     monkeypatch):
+    """Round-3 review: a custom step published with on_timeout=approve (legal while its server
+    was reviewed at tier 0) kept that in its gate snapshot when the server became unreviewed
+    while a run was under way.
+    The gate is forced manual, but the timeout sweep read on_timeout=approve and approved it BY
+    POLICY. The gate now opens with on_timeout=block and the reason, and the sweep blocks."""
+    from boss_engine.services import workflow_capability_runner as runner
+    from boss_engine.services import workflows
+
+    class _NoTools:
+        def specs(self):
+            return []
+
+    class _Ctx:
+        def begin(self):
+            return eng.begin()
+
+    monkeypatch.setattr(runner, "_tool_registry", lambda: _NoTools())
+    with eng.begin() as c:
+        sid = _unreviewed_server(c, project)
+        mcp_registry.update_mcp_server(c, project, sid, actor="op", trusted=True)
+        custom_steps.create(c, project_id=project, label="File it", actor="op",
+                            step_key="file_it", binding_kind="mcp_tool",
+                            mcp_server_id=sid, mcp_tool_name=TOOL)
+        definition = workflows.create_definition(
+            c, project_id=project, workflow_key="legacy_sla", name="legacy", description=None,
+            actor="test", namespace="product")
+        version = workflows.publish_version(
+            c, project_id=project, definition_id=definition["id"], actor="test",
+            spec={"entry_step": "s1", "steps": [
+                {"id": "s1", "kind": "capability", "next": [],
+                 "approval": {"mode": "manual", "sla_hours": 1, "on_timeout": "approve"},
+                 "binding": {"custom_step": "file_it", "inputs": {}}}]})
+        run = workflows.start_run(c, project_id=project, actor="test", input_data={},
+                                  dedupe_key=f"dk_{uuid.uuid4().hex[:10]}",
+                                  workflow_version_id=version["id"])
+        # The server stops being reviewed AFTER the run started (a new start is refused at
+        # _validate_bindings; a run already under way reaches the gate).
+        mcp_registry.update_mcp_server(c, project, sid, actor="op", trusted=False)
+        runner.tick(c, _Ctx(), project_id=project)
+        snapshot = c.execute(text("SELECT binding_snapshot FROM workflow_step_runs "
+                                  "WHERE workflow_run_id=:r"), {"r": run["id"]}).scalar()
+        c.execute(text("UPDATE workflow_step_runs SET binding_snapshot = binding_snapshot || "
+                       "jsonb_build_object('due_at', (now() - interval '1 hour')::text) "
+                       "WHERE workflow_run_id=:r"), {"r": run["id"]})
+        swept = runner.sweep_gate_timeouts(c, project_id=project)
+        status = c.execute(text("SELECT status FROM workflow_step_runs "
+                                "WHERE workflow_run_id=:r"), {"r": run["id"]}).scalar()
+    assert snapshot["approval"]["on_timeout"] == "block"
+    assert "Reviewed" in (snapshot.get("requires_person") or "")
+    assert swept["applied"][0]["outcome"] == "blocked"
+    assert status == "waiting" and mcp_calls == []

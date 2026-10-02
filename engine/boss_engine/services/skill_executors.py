@@ -46,6 +46,10 @@ class SkillExecutorContext:
     #: (mcp_registry.call_tool_with_receipt), which refuses an unreviewed server's tool
     #: without one; None for everything that ran without asking.
     approved_by: Optional[str] = None
+    #: What that decision has to be ABOUT, as fields of its recommendation —
+    #: ``{"run_id": …}`` or ``{"workflow_run_id": …, "step_id": …}``. Round-3 review: an
+    #: approved decision about some other run would otherwise have counted.
+    approval_about: Optional[dict[str, Any]] = None
 
     @property
     def github(self) -> Any:
@@ -813,6 +817,7 @@ def execute_mcp_tool(
         tenant_scope=context.tenant_scope(), created_by_job_id=context.created_by_job_id,
         # An unreviewed server's tool needs the approval this run was given (needs_person).
         approved_by=context.approved_by,
+        approval_about=context.approval_about,
     )
     output = called.get("output")
     return {

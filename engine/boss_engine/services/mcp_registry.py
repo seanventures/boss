@@ -260,7 +260,13 @@ def reviewed(server: dict[str, Any]) -> bool:
 
 class McpServerUnreviewed(McpServerError):
     """A tool on an unreviewed server was about to run with nobody's approval. The API answers
-    409; a run records the sentence."""
+    409; a run records the sentence.
+
+    NOT RETRYABLE. Round-3 review: SkillRuntimeService retried this refusal under the MCP
+    spec's retry policy, so the run recorded a second attempt at a call that could not succeed
+    until a person acted. The runtime reads ``retryable`` and stops at the first attempt."""
+
+    retryable = False
 
 
 def unreviewed_sentence(server: dict[str, Any]) -> str:
@@ -287,18 +293,35 @@ def needs_person(server: Optional[dict[str, Any]]) -> bool:
 
 
 def approval_stands(connection: Connection, project_id: str,
-                    decision_id: Optional[str]) -> bool:
+                    decision_id: Optional[str],
+                    about: Optional[dict[str, Any]] = None) -> bool:
     """Is ``decision_id`` a decision in this project that a person (or the policy acting for
-    them) APPROVED? Read, never assumed: a decision id that is pending, rejected or from
-    another project is not an approval."""
+    them) APPROVED — about THIS call? Read, never assumed: a decision id that is pending,
+    rejected or from another project is not an approval.
+
+    ``about`` names what the approval has to be for, as fields of the decision's
+    recommendation: ``{"run_id": …}`` for an agent run's resume decision,
+    ``{"workflow_run_id": …, "step_id": …}`` for a workflow step's gate. Every field must
+    match. Round-3 review: this asked only "approved, in this project?", so an unrelated
+    approved decision — another run's, another step's — would have released an unreviewed
+    server's tool if a caller ever passed the wrong id. With nothing named there is nothing
+    to match, and the answer is no — as it is when a named field is blank, because a blank
+    run id would otherwise match any decision that lacks one.
+    """
     wanted = str(decision_id or "").strip()
-    if not wanted:
+    scope = {k: str(v or "").strip() for k, v in (about or {}).items()}
+    if not wanted or not scope or not all(scope.values()):
         return False
-    status = connection.execute(
-        text("SELECT status FROM decisions WHERE id = :id AND project_id = :p"),
+    row = connection.execute(
+        text("SELECT status, recommendation FROM decisions WHERE id = :id AND project_id = :p"),
         {"id": wanted, "p": project_id},
-    ).scalar()
-    return status == "approved"
+    ).mappings().first()
+    if row is None or row["status"] != "approved":
+        return False
+    recommendation = _loads(row["recommendation"], {}) or {}
+    if not isinstance(recommendation, dict):
+        return False
+    return all(str(recommendation.get(k) or "") == v for k, v in scope.items())
 
 
 def _name_taken(
@@ -884,14 +907,16 @@ def call_tool_with_receipt(
     tenant_scope: tuple[str, str],
     created_by_job_id: Optional[str] = None,
     approved_by: Optional[str] = None,
+    approval_about: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
 
     THE BACKSTOP FOR THE REVIEW RULE (:func:`needs_person`). Every road to an MCP tool ends
     here, so this is where an unreviewed server's tool is refused unless ``approved_by`` names
-    an APPROVED decision in this project — the agent run's resume decision, or the workflow
-    step's gate. The gates upstream (agent_loop, the catalogue, resolve_risk) are what make
-    that decision exist; this makes a road that skips them fail closed with a sentence instead
+    an APPROVED decision in this project ABOUT this call (``approval_about``, see
+    :func:`approval_stands`) — the agent run's resume decision, or the workflow step's gate.
+    The gates upstream (agent_loop, the catalogue, resolve_risk) are what make that decision
+    exist; this makes a road that skips them fail closed with a sentence instead
     of running unattended. Round-2 review found two such roads (an authored mcp_tool skill and
     a custom step) after the rule had been written at one call site.
 
@@ -906,10 +931,9 @@ def call_tool_with_receipt(
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
 
-    if needs_person(server) and not approval_stands(connection, project_id, approved_by):
-        raise McpServerUnreviewed(
-            f"Did not call {tool_name}: {unreviewed_sentence(server)} Then run it again, or "
-            "approve it when BOSS asks.")
+    if needs_person(server) and not approval_stands(connection, project_id, approved_by,
+                                                    approval_about):
+        raise McpServerUnreviewed(_refusal(tool_name, server, approved_by))
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()
     receipt, created = receipts.create_or_reuse(
@@ -963,6 +987,58 @@ def call_tool_with_receipt(
         "receipt_id": receipt["id"],
         "actual_cost_usd_micros": 0,
     }
+
+
+def _refusal(tool_name: str, server: dict[str, Any], approved_by: Optional[str]) -> str:
+    """What a run records when the backstop refuses — and what to do, which depends on whether
+    an approval was carried at all.
+
+    Round-3 review: the one sentence ended "approve it when BOSS asks", and a product workflow's
+    ``kind: skill`` step reaches the tool through a ``skill.execute`` job that carries no
+    approval — so an operator who had just approved the step's gate was told to approve it.
+    A road with no approval in hand cannot be fixed by approving; the server has to be
+    reviewed."""
+    if not str(approved_by or "").strip():
+        return (f"Did not call {tool_name}: {unreviewed_sentence(server)} This call reached "
+                "the server without a person's approval attached, so approving does not "
+                "release it here: mark the server Reviewed, then run it again.")
+    return (f"Did not call {tool_name}: {unreviewed_sentence(server)} The approval this call "
+            f"carried ({approved_by}) is not an approved decision about this run or step. "
+            "Approve the request BOSS raised for it, or mark the server Reviewed, then run it "
+            "again.")
+
+
+def call_tool_unattended(
+    settings: Any,
+    server: dict[str, Any],
+    tool_name: str,
+    inputs: dict[str, Any],
+    *,
+    timeout: Optional[float] = None,
+) -> Any:
+    """Call a REGISTERED server's tool where no person is present to ask and no receipt is
+    kept — the meeting's shared research crawl.
+
+    Round-3 review: the meeting research phase called the registered 'web-intel' server with
+    ``MCPClient.call_tool`` directly, skipping :func:`needs_person`. Once a server's URL could be
+    edited and chat could register servers, an operator could re-point web-intel (or delete it
+    and register another 'web-intel'), and every meeting then sent its URL to that server and
+    fed the reply into every persona prompt, with nobody asked. There is no one to ask on this
+    road, so an unreviewed server is simply refused: the caller records
+    :func:`unreviewed_sentence` and carries on without the tool.
+
+    Every call to a registry server's tool goes through this module — this function or
+    :func:`call_tool_with_receipt`. The enforcing test
+    (test_an_unreviewed_server_never_runs_unattended) fails on a ``.call_tool(`` anywhere else
+    in shipping code, apart from a named allowlist of clients whose URL comes from deployment
+    configuration rather than the registry.
+    """
+    from .mcp_client import MCPClient
+
+    if needs_person(server):
+        raise McpServerUnreviewed(unreviewed_sentence(server))
+    client = MCPClient(settings) if timeout is None else MCPClient(settings, timeout=timeout)
+    return client.call_tool(server["url"], tool_name, inputs)
 
 
 def _is_transport_failure(error: BaseException) -> bool:

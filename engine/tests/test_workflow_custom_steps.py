@@ -329,7 +329,7 @@ def test_a_safe_custom_step_runs_through_the_governed_skill_path(eng, project, m
     seen = {}
 
     def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
-                    skill_spec=None, approved_by=None):
+                    skill_spec=None, approved_by=None, approval_about=None):
         seen.update({"skill_id": skill_id, "caller": caller, "args": dict(args)})
         return {"status": "succeeded", "result": {"issue_url": "https://tracker/T-1"}}
 
@@ -410,7 +410,7 @@ def test_approving_the_gate_actually_lets_the_step_run(eng, project, monkeypatch
     called = []
 
     def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
-                    skill_spec=None, approved_by=None):
+                    skill_spec=None, approved_by=None, approval_about=None):
         called.append(skill_id)
         return {"status": "succeeded", "result": {"reset": True}}
 
@@ -539,7 +539,7 @@ def test_defining_a_step_is_what_grants_the_runner_permission_to_call_the_skill(
     passed = {}
 
     def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
-                    skill_spec=None, approved_by=None):
+                    skill_spec=None, approved_by=None, approval_about=None):
         passed["spec"] = skill_spec
         passed["caller"] = caller
         return {"status": "succeeded", "result": {}}
