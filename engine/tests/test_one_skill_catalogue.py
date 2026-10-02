@@ -483,6 +483,13 @@ def test_an_agent_holding_an_mcp_tool_skill_can_run_it(eng, project, monkeypatch
         _author(c, project, "file_ticket", behaviour="mcp_tool", risk_tier=0,
                 config={"mcp_server_id": sid, "tool_name": "create_issue"})
         _grant(c, project, "pm", "file_ticket")
+        # AND THE SERVER. Changed by the review of milestone/integration: holding an mcp_tool
+        # skill no longer carries its server's reach (agents.mcp_reach_gap), so an agent that
+        # runs one holds both — test_a_skill_never_carries_an_mcp_servers_reach.py has the
+        # refusal when it holds only the skill.
+        c.execute(text("INSERT INTO role_mcp_servers (id, project_id, role_key, mcp_server_id, "
+                       "tools, assigned_by) VALUES (:i, :p, 'pm', :s, '[]'::jsonb, 'op')"),
+                  {"i": f"rmcp_{project}", "p": project, "s": sid})
         context = SkillExecutorContext(settings=_settings(), connection=c, project_id=project,
                                        actor="pm")
         assert resolve_executor("file_ticket", context=context) is not None

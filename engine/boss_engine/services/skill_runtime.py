@@ -14,6 +14,7 @@ Real mode is driven by the worker runtime, which passes an `executor` callable.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from sqlalchemy import text
@@ -112,6 +113,17 @@ class SkillRuntimeService:
         if not self._caller_allowed(caller, allowed_callers):
             granted_by_assignment = self._assigned_to_agent(
                 connection, project_id, caller, skill_id)
+            policy = skill.get("policy") or {}
+            if not granted_by_assignment and skill.get("kind") == "mcp" and policy.get(
+                    "mcp_server_id"):
+                # HOLDING THE SERVER IS HOLDING ITS TOOLS. step_agents picks the agent that
+                # holds a custom MCP step's server (role_mcp_servers), and this gate then
+                # denied it — it only read role_skills, where a server grant never writes.
+                from .agents import holds_mcp_tool
+
+                granted_by_assignment = holds_mcp_tool(
+                    connection, project_id, caller, str(policy["mcp_server_id"]),
+                    str(policy.get("mcp_tool") or ""))
         if not self._caller_allowed(caller, allowed_callers) and not granted_by_assignment:
             reason = f"caller '{caller}' not in allowed_callers {allowed_callers}"
             record_policy_eval(
@@ -123,6 +135,33 @@ class SkillRuntimeService:
                 max_attempts=max_attempts, estimate=estimate, reservation_id=None,
                 actual_cost=None, cost_receipt_id=None,
                 created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
+
+        # HOLDING AN MCP-CALLING SKILL IS NOT HOLDING ITS SERVER. Review of milestone/integration:
+        # a skill grant is `safe` (the chat model makes it itself) and a server grant is not, so
+        # an `mcp_tool` skill was a way round the server grant. The caller must hold the server
+        # the skill calls (agents.mcp_reach_gap, the one rule); only the workflow itself, on its
+        # documented step exceptions, runs one without.
+        reaches = skill.get("policy") or {}
+        if (reaches.get("behaviour_kind") == "mcp_tool" and reaches.get("mcp_server_id")
+                and caller not in _serverless_mcp_callers()):
+            from .agents import mcp_grant_gap
+
+            gap = mcp_grant_gap(connection, project_id, caller,
+                                server_id=str(reaches["mcp_server_id"]),
+                                tool=str(reaches.get("mcp_tool") or ""), skill_key=skill_id)
+            if gap is not None:
+                record_policy_eval(
+                    connection, project_id, "skill.invoke", "deny",
+                    action=skill_id, reason=gap["message"],
+                    detail={"caller": caller, "mode": mode, "mcp_server_id": gap["mcp_server_id"],
+                            "grant": "mcp_server_not_held"})
+                return self._record(
+                    connection, project_id, skill_id, caller, mode,
+                    status="denied", permission_decision="deny", attempts=0,
+                    max_attempts=max_attempts, estimate=estimate, reservation_id=None,
+                    actual_cost=None, cost_receipt_id=None,
+                    created_by_job_id=created_by_job_id, reason=gap["message"], result={},
+                    actor=actor)
 
         if granted_by_assignment:
             # SAY WHY IT WAS ALLOWED. Without this the trail shows a caller the spec does not
@@ -136,6 +175,11 @@ class SkillRuntimeService:
                 detail={"caller": caller, "mode": mode, "grant": "role_assignment"})
 
         if not mock and executor is None:
+            if executor_context is not None and executor_context.caller is None:
+                # WHO IS CALLING travels to the executor, so an effect that depends on the
+                # caller's own holdings (skill.mcp_tool: the server it calls) can check it
+                # where the effect happens, not only here.
+                executor_context = replace(executor_context, caller=caller)
             executor = resolve_executor(skill_id, context=executor_context)
             if executor is None:
                 reason = f"No server-side executor is registered for skill '{skill_id}'."
@@ -432,3 +476,9 @@ class SkillRuntimeService:
             "reservation_id": reservation_id,
             "reason": reason, "result": result,
         }
+
+
+def _serverless_mcp_callers() -> frozenset[str]:
+    from .agents import SERVERLESS_MCP_CALLERS
+
+    return SERVERLESS_MCP_CALLERS
