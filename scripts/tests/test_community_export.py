@@ -1084,6 +1084,58 @@ def test_community_makefile_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
     assert "Makefile" not in candidate
 
 
+def test_community_gitignore_rewrite_is_checksum_pinned(tmp_path: Path) -> None:
+    """The public .gitignore came from a collaborator commit on the public repo; an export that
+    does not carry it would silently drop it again. The private ignore file stays private."""
+    import hashlib
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / ".gitignore").write_text("private-build-input.zip\n")
+    public = b".env\n.env.*\n!.env.example\nboss-community.env.sh\n"
+    (repo / ".gitignore.community").write_bytes(public)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-f", ".gitignore", ".gitignore.community"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    sha = export.git(repo, "rev-parse", "HEAD").decode().strip()
+    manifest = {
+        "schema_version": 1,
+        "include": [".gitignore.community"],
+        "exclude": ["unused.md"],
+        "requires_split": ["unused-private-file"],
+        "required_runtime": [".gitignore"],
+        "required_release": [".gitignore"],
+        "gitignore_export_rewrite": {
+            "source": ".gitignore.community",
+            "destination": ".gitignore",
+            "sha256": hashlib.sha256(public).hexdigest(),
+        },
+    }
+    export.validate_manifest(manifest)
+    report, candidate = export.analyze(repo, sha, manifest)
+    assert report["gitignore_export_rewrite_applied"] is True
+    assert candidate == {".gitignore": public}
+
+    changed = json.loads(json.dumps(manifest))
+    changed["gitignore_export_rewrite"]["sha256"] = "0" * 64
+    report, candidate = export.analyze(repo, sha, changed)
+    assert report["gitignore_export_rewrite_applied"] is False
+    assert "gitignore-export-source-changed" in {b["kind"] for b in report["blockers"]}
+    assert ".gitignore" not in candidate
+
+    leaking = json.loads(json.dumps(manifest))
+    leaking["include"].append(".gitignore")
+    try:
+        export.validate_manifest(leaking)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("the private .gitignore was allowed into the export")
+
+
 def test_community_schema_rewrite_is_exact_and_preserves_easy_connect(tmp_path: Path) -> None:
     import hashlib
 

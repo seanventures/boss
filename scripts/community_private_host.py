@@ -165,7 +165,10 @@ def _strip_json(text: str) -> str:
             if isinstance(operation, dict):
                 status = str(operation.get("mcp_status") or "")
                 counts[status] = counts.get(status, 0) + 1
-        cleaned["counts"] = {key: counts.get(key, 0) for key in cleaned["counts"]}
+        # The generator counts present statuses only, so a status the redaction emptied is
+        # dropped rather than kept at zero; otherwise the published matrix fails the public
+        # tree's own `audit_mcp_api_parity.py --check-community`.
+        cleaned["counts"] = {key: counts[key] for key in cleaned["counts"] if counts.get(key)}
         if "operation_count" in cleaned:
             cleaned["operation_count"] = len(cleaned["operations"])
     rendered = json.dumps(cleaned, indent=2, ensure_ascii=False) + "\n"
