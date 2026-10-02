@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * Start a project from a brief — the reference's launch modal.
@@ -45,7 +46,7 @@ export async function POST(req: Request) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       return NextResponse.json(
-        { error: (data as { detail?: string })?.detail ?? `HTTP ${r.status}` },
+        { error: apiErrorText(data, r.status) },
         { status: r.status },
       );
     }

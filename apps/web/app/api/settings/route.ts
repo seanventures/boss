@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /** Route handler rather than a server action: the console takes seconds to re-render, and a
  *  knob that appears to hang while the value has already been written reads as broken. */
@@ -36,8 +37,7 @@ export async function PUT(req: Request) {
     const parsed = await r.json().catch(() => ({}));
     // The API's own message, forwarded: "has to be between 1 and 16" is actionable.
     if (!r.ok) {
-      return NextResponse.json({ error: (parsed as { detail?: string })?.detail
-                                        ?? `API returned ${r.status}` }, { status: r.status });
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) }, { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {

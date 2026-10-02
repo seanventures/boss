@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /** Route handler rather than a server action: the console takes seconds to re-render, and a
  *  drag whose effect appears only after a full re-render reads as a drag that did nothing. */
@@ -40,7 +41,7 @@ export async function PUT(req: Request) {
     // operator what to do differently; "could not save" sends them looking in the wrong place.
     if (!r.ok) {
       return NextResponse.json(
-        { error: (parsed as { detail?: string })?.detail ?? `API returned ${r.status}` },
+        { error: apiErrorText(parsed, r.status) },
         { status: r.status });
     }
     return NextResponse.json(parsed);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * The setup wizard's reads and writes, off the Server Action path.
@@ -38,7 +39,7 @@ export async function GET(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(data, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(data);
@@ -87,9 +88,9 @@ export async function POST(req: Request) {
       const detail = data?.detail;
       return NextResponse.json(
         typeof detail === "object" && detail !== null
-          ? { error: (detail as Record<string, unknown>).message ?? `HTTP ${r.status}`,
+          ? { error: apiErrorText(data, r.status),
               decision: detail }
-          : { error: detail ?? `HTTP ${r.status}` },
+          : { error: apiErrorText(data, r.status) },
         { status: r.status });
     }
     return NextResponse.json(data);

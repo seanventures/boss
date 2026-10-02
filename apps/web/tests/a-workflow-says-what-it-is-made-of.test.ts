@@ -94,7 +94,9 @@ describe("a custom step can be changed", () => {
 
   it("forwards the API's own message rather than replacing it", () => {
     const patch = proxy.slice(proxy.indexOf("export async function PATCH"));
-    expect(patch.slice(0, 1400)).toContain("detail || `API returned ${r.status}`");
+    // Still the API's own message — now through apiErrorText (lib/api-error.ts), which keeps a
+    // sentence verbatim and turns a validation array into words instead of "[object Object]".
+    expect(patch.slice(0, 1400)).toContain("apiErrorText(parsed, r.status)");
   });
 });
 
