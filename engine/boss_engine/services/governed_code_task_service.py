@@ -478,8 +478,10 @@ def serve_proof_known_service(spec: Optional[dict], fctx: Optional[dict]) -> boo
     directory). NOT `web_app_build`: tools/builtin.py and intent_router set it on every
     build-on-existing/extend — CLIs and libraries included — so f16b5d4, which read it as "this
     serves HTTP", launched a CLI follow-up, saw it exit, and blocked it with a gate nothing may
-    ship past (second review of f16b5d4). Everything else is decided by evidence in
-    prove_app_serves: a lineage declaration, or an entry that starts a server when run.
+    ship past (second review of f16b5d4). Otherwise only a run command the lineage DECLARED
+    holds a build to serving (prove_app_serves). Nothing is inferred from the code: b63717c's
+    "the entry starts a server when run" still launched a CLI whose main() chose `serve` with
+    an if/elif or a --serve flag, and blocked it (third review of b63717c).
     """
     return bool(verification_target.official_app_id(spec or {}, fctx or {}))
 
@@ -3735,9 +3737,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                           "error": f"could not read this app's lineage to check it: "
                                    f"{type(exc).__name__}: {exc}"[:600]}
             else:
-                # Service or not is EVIDENCE (a declaration, an entry that starts a server)
-                # or a named full-stack app — never `web_app_build`, which every
-                # build-on-existing/extend carries, CLIs and libraries included.
+                # Held to serving only when the lineage DECLARED a run command or the run
+                # builds a named full-stack app — never inferred from the code (third review
+                # of b63717c), never `web_app_build`, which every build-on-existing/extend
+                # carries, CLIs and libraries included.
                 record = prove_app_serves(
                     root, list(files.keys()), lineage=lineage,
                     known_service=serve_proof_known_service(spec, fctx),
