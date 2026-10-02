@@ -518,14 +518,26 @@ def test_the_chat_does_not_revalidate_the_whole_console():
     """"It showed the answer but why is it still working on it?" — the reply painted and the
     Working bubble kept spinning for another 15s. agentChatAction calls revalidatePath("/"),
     so the transition stays pending while the entire 8 MB console re-renders, and `busy` is
-    driven by that transition. Both chat surfaces use the non-revalidating action."""
+    driven by that transition. Both chat surfaces use the non-revalidating action.
+
+    REWRITTEN (2026-10-02). This matched the old call shape, `askBossAction(`. Since 6ca9119
+    every server action a press invokes goes through the press door — `callAction(action)(…)`
+    carries the press's idempotency key — so both chat surfaces now call
+    `callAction(askBossAction)(null, fd)` and the old literal no longer appears; the guard went
+    red while the behaviour was right. The rule it guards is unchanged and now matched in its
+    current shape: the non-revalidating action, invoked through the press door, and
+    `agentChatAction` not referenced at all — called, wrapped or passed."""
     import re
     for name in ("agent-ui.tsx", "ask-boss-hero.tsx"):
         src = pathlib.Path(f"apps/web/app/{name}").read_text(encoding="utf-8")
         code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
         code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
-        assert "askBossAction(" in code, f"{name} does not use the non-revalidating action"
-        assert "agentChatAction(" not in code, f"{name} still revalidates the world"
+        assert re.search(r"callAction\(askBossAction\)\(", code), (
+            f"{name} does not invoke the non-revalidating action through the press door")
+        assert not re.search(r"\baskBossAction\(", code), (
+            f"{name} calls askBossAction directly, without the press's key")
+        assert not re.search(r"\bagentChatAction\b", code), (
+            f"{name} still references the action that revalidates the world")
 
 
 def test_ask_boss_uses_the_consoles_standard_header():

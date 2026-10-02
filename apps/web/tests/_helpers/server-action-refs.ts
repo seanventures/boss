@@ -81,14 +81,78 @@ export const PRESS_CARRYING_COMPONENTS: Record<string, string> = {
   ActionForm: "app/client-forms.tsx",
 };
 
+/** The file a relative import names, if it is one of `files`. */
+function resolveImport(root: string, from: string, spec: string, files: Set<string>): string | null {
+  if (!spec.startsWith(".")) return null;
+  const base = relative(root, resolve(root, dirname(from), spec));
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+    if (files.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** A NON-relative import (`@/app/actions`, `app/actions`) that names a server-action module. */
+function nonRelativeServerModule(spec: string, modules: Record<string, string[]>): string | null {
+  if (spec.startsWith(".")) return null;
+  const bare = spec.replace(/^[@~]\//, "");
+  return Object.keys(modules).find((f) => {
+    const stem = f.replace(/\.tsx?$/, "");
+    return bare === stem || bare.endsWith(`/${stem}`);
+  }) ?? null;
+}
+
+/**
+ * Every module that runs in the browser: each `"use client"` file and, transitively, every file
+ * it imports. A file with no directive is a SERVER component only when no client file imports
+ * it; imported by one, it is bundled into the client and its direct call of an action has no
+ * press. The scanner used to call every directive-less file server-rendered (review of 6ca9119).
+ */
+function clientModules(root: string, files: string[], modules: Record<string, string[]>): Set<string> {
+  const all = new Set(files);
+  const client = new Set<string>();
+  const queue = files.filter((f) =>
+    /^\s*["']use client["']/.test(readFileSync(join(root, f), "utf8")));
+  while (queue.length) {
+    const file = queue.pop()!;
+    if (client.has(file) || file in modules) continue;
+    client.add(file);
+    const src = codeWithLines(join(root, file));
+    for (const m of src.matchAll(/(?:import|export)\s[^;'"]*?from\s*["']([^"']+)["']|import\s*["']([^"']+)["']/g)) {
+      const target = resolveImport(root, file, m[1] ?? m[2], all);
+      if (target && !client.has(target)) queue.push(target);
+    }
+  }
+  return client;
+}
+
 export function serverActionRefs(root: string): ActionRef[] {
   const modules = serverActionModules(root);
   const refs: ActionRef[] = [];
-  for (const file of ["app", "lib", "components"].flatMap((d) => sourceFiles(root, d))) {
+  const files = ["app", "lib", "components"].flatMap((d) => sourceFiles(root, d));
+  const inBrowser = clientModules(root, files, modules);
+  for (const file of files) {
     if (file in modules) continue;
     const src = codeWithLines(join(root, file));
     const carriers = submitCarriers(src);
-    const serverRendered = !/^\s*["']use client["']/.test(readFileSync(join(root, file), "utf8"));
+    const serverRendered = !inBrowser.has(file);
+    // SHAPES THE SCAN CANNOT FOLLOW ARE REFUSED, NOT SKIPPED. A namespace import
+    // (`import * as actions`) is used as `actions.deploy(…)`, which no name below matches, and a
+    // non-relative import was never parsed at all — either would let a direct call through.
+    for (const m of src.matchAll(/import\s+\*\s+as\s+([\w$]+)\s+from\s*["']([^"']+)["']/g)) {
+      const module = resolveImport(root, file, m[2], new Set(Object.keys(modules)))
+        ?? nonRelativeServerModule(m[2], modules);
+      if (module) {
+        refs.push({ file, line: src.slice(0, m.index).split("\n").length, name: m[1],
+                    how: `namespace import of ${module} — import its actions by name`, ok: false });
+      }
+    }
+    for (const m of src.matchAll(/import\s+(?:type\s+)?[^;'"]*?from\s*["']([^"'.][^"']*)["']/g)) {
+      const module = nonRelativeServerModule(m[1], modules);
+      if (module && !/^import\s+type\b/.test(m[0]) && !/\*\s+as\s/.test(m[0])) {
+        refs.push({ file, line: src.slice(0, m.index).split("\n").length, name: m[1],
+                    how: `non-relative import of ${module} — import it relatively`, ok: false });
+      }
+    }
     const imports = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
     for (let m = imports.exec(src); m; m = imports.exec(src)) {
       if (m[1] || !m[3].startsWith(".")) continue;

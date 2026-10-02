@@ -96,3 +96,49 @@ def test_what_a_key_remembers():
     assert idempotency.remembers(404) and idempotency.remembers(422)
     for transient in (408, 409, 425, 429, 500, 502, 503):
         assert not idempotency.remembers(transient), transient
+
+
+def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_does_not(
+        monkeypatch):
+    """NOT A TAUTOLOGY. The test above calls a route "covered" when the exclusion regex does not
+    match its TEMPLATE — but the middleware decides on the CONCRETE path a request arrives on,
+    and nothing proved a covered route ever reaches the claim (review of 45e7693, still open
+    after 6ca9119). Here every mutating /v1 route is requested for real, through the real
+    middleware stack, with an Idempotency-Key and a concrete path built from its template. The
+    claim is replaced by a recorder that answers "replay", so no handler runs and nothing is
+    written; a covered route must reach it, on its own template, and come back replayed — an
+    excluded one must not reach it at all."""
+    from fastapi.testclient import TestClient
+
+    from apps.api.app import main
+
+    reached: list[tuple[str, str]] = []
+
+    def recorder(**kwargs):
+        reached.append((kwargs["method"], kwargs["path"]))
+        return idempotency.Claim(outcome="replay", status_code=200, body=b"{}",
+                                 content_type="application/json")
+
+    monkeypatch.setattr(main, "_idempotency_claim", recorder)
+    client = TestClient(app, raise_server_exceptions=False)
+    missed, leaked = [], []
+    import re as _re
+
+    for method, route in _mutating_routes():
+        if not route.path.startswith("/v1/"):
+            continue
+        concrete = _re.sub(r"\{[^}:]+(?::path)?\}", "zzparam", route.path)
+        reached.clear()
+        response = client.request(method, concrete, json={},
+                                  headers={idempotency.HEADER: "route-probe-1"})
+        excluded = idempotency.exclusion_reason(method, route.path)
+        if excluded:
+            if reached:
+                leaked.append((method, route.path))
+            continue
+        if reached != [(method, concrete)] \
+                or response.headers.get(idempotency.REPLAYED_HEADER) != "true":
+            missed.append((method, route.path, response.status_code))
+    assert not leaked, f"excluded routes that still claim a key: {sorted(leaked)}"
+    assert not missed, (
+        f"covered routes whose requests never reach the claim: {sorted(missed)[:40]}")

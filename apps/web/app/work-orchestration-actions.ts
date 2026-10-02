@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
-import { apiWrite } from "../lib/api-write";
+import { apiWrite, pressToken } from "../lib/api-write";
 
 async function post(path: string, body: Record<string, unknown>): Promise<void> {
   const response = await apiWrite(`${API_URL}${path}`, {
@@ -42,7 +42,7 @@ function lines(formData: FormData, key: string): string[] {
 }
 
 export async function upsertRankedWorkAction(formData: FormData): Promise<void> {
-  const subjectId = text(formData, "subject_id") || crypto.randomUUID();
+  const subjectId = text(formData, "subject_id") || await pressToken();
   await post("/v1/work-orchestration/items", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),

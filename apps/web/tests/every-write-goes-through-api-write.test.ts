@@ -275,6 +275,47 @@ describe("every server action carries its press", () => {
     expect(probe("export default async function Page() { await redeployAction('d'); }", false))
       .toEqual([true]);
   });
+
+  it("refuses the shapes it cannot follow, instead of skipping them", () => {
+    // Review of 6ca9119: a namespace import (`actions.redeployAction(…)`), a non-relative
+    // import, and a directive-less file imported by a client component all slipped past.
+    const fs = require("node:fs");
+    const dir = join(ROOT, "app", "__probe_tmp");
+    const scan = (files: Record<string, string>) => {
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [name, code] of Object.entries(files)) fs.writeFileSync(join(dir, name), code);
+      try {
+        return serverActionRefs(ROOT).filter((r) => r.file.startsWith("app/__probe_tmp/"))
+          .map((r) => [r.file.replace("app/__probe_tmp/", ""), r.ok, r.how]);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    };
+    const ns = scan({ "ns.tsx": '"use client";\nimport * as actions from "../actions";\n'
+                              + "const go = () => actions.redeployAction('d');\n" });
+    expect(ns).toHaveLength(1);
+    expect(ns[0][1]).toBe(false);
+    expect(String(ns[0][2])).toContain("namespace import");
+
+    const alias = scan({ "alias.tsx": '"use client";\nimport { redeployAction } from "@/app/actions";\n'
+                                    + "const go = () => redeployAction('d');\n" });
+    expect(alias.some(([, ok, how]) => ok === false && String(how).includes("non-relative")))
+      .toBe(true);
+
+    // No directive, so it looked server-rendered — but a client component imports it, so it
+    // runs in the browser and its direct call carries no press.
+    const helper = scan({
+      "helper.ts": 'import { redeployAction } from "../actions";\n'
+                 + "export const go = () => redeployAction('d');\n",
+      "panel.tsx": '"use client";\nimport { go } from "./helper";\nexport const P = () => go;\n',
+    });
+    expect(helper).toEqual([["helper.ts", false, "called directly"]]);
+
+    // And left alone, the same helper IS server code.
+    const serverOnly = scan({
+      "helper.ts": 'import { redeployAction } from "../actions";\n'
+                 + "export const go = () => redeployAction('d');\n",
+    });
+    expect(serverOnly).toEqual([["helper.ts", true, "called while rendering on the server"]]);
+  });
 });
 
 void readFileSync;

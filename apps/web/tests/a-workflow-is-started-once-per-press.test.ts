@@ -43,7 +43,15 @@ describe("a workflow is started once per press", () => {
     expect(UI).toContain("dedupe_key: `replace:${run.id}`");
   });
 
-  it("gives every other start its own key for retries", () => {
-    expect(UI).toContain("dedupe_key: `again:${run.id}:${crypto.randomUUID()}`");
+  it("gives every other start its own key for retries — minted from the press, not the payload", () => {
+    // REWRITTEN (review of 6ca9119): this pinned `again:${run.id}:${crypto.randomUUID()}` in the
+    // payload. The payload is what pressOn recognises a press by, so the random part made a
+    // double click a DIFFERENT press: refused and toasted instead of joining the first. The key
+    // is now minted from the press's own key inside the send; behaviour in
+    // tests/a-double-rerun-sends-once.test.ts.
+    expect(UI).toContain('}, `again:${run.id}`)}');
+    expect(UI).toContain("dedupe_key: `${dedupeFromPress}:${key}`");
+    const panel = UI.slice(UI.indexOf("export function DeliveryWorkflows("));
+    expect(panel.slice(0, panel.indexOf("\nexport function", 1))).not.toContain("crypto.randomUUID()");
   });
 });
