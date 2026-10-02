@@ -1626,6 +1626,174 @@ def test_a_run_with_nothing_adopted_still_researches(eng, project, monkeypatch):
     assert discovery.calls, "the ordinary forward path stopped doing research"
 
 
+class _Edition:
+    def __init__(self, edition):
+        self.boss_edition = edition
+
+
+class EditionCtx(Ctx):
+    """A context whose settings name an edition, as EngineContext.create() does."""
+
+    def __init__(self, engine, edition):
+        super().__init__(engine)
+        self.settings = _Edition(edition)
+
+
+def _two_step_build(c, project, name):
+    _, version = _publish(c, project, name, [
+        {"id": "research", "kind": "capability",
+         "binding": {"capability": "research", "inputs": {"seed": "a todo app"}},
+         "next": ["meeting"]},
+        {"id": "meeting", "kind": "capability",
+         "binding": {"capability": "meeting",
+                     "inputs": {"directive": "a todo app",
+                                "research": {"from_step": "research",
+                                             "field": "dossier"}}},
+         "next": []},
+    ], "research")
+    return _start(c, project, version["id"], {})
+
+
+def test_community_skips_research_visibly_only_when_it_cannot_run(eng, project, monkeypatch):
+    """Build starts Standard Product Delivery, whose first step is research. Community research
+    is a governed job on the Claude Code subscription; where that subscription cannot be used,
+    the job could only be refused, so the step stands aside with the router's reason, an event
+    names it, nothing is commissioned, and the run reaches the panel."""
+    from boss_engine.services import discovery_service
+
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_never"})
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_community"})
+    monkeypatch.setattr(runner, "_tool_registry",
+                        lambda: RecordingRegistry([discovery, meeting]))
+    asked = []
+
+    def unavailable(connection, settings, project_id, actor="boss"):
+        asked.append(project_id)
+        return {"reason": discovery_service.RESEARCH_SOURCE_UNAVAILABLE,
+                "source_id": "anthropic_claude_code", "source_status": "not_connected",
+                "detail": "Research runs on the Claude Code subscription (not_connected)."}
+
+    monkeypatch.setattr(discovery_service, "research_unavailable", unavailable)
+
+    with eng.begin() as c:
+        run = _two_step_build(c, project, "communitybuild")
+        ctx = EditionCtx(eng, "community")
+        runner.tick(c, ctx, project_id=project)
+        runner.tick(c, ctx, project_id=project)
+        steps = _steps(c, run["id"])
+        events = c.execute(
+            text("SELECT event_type, data FROM events WHERE project_id=:p "
+                 "AND event_type = 'workflow.research_skipped'"),
+            {"p": project},
+        ).mappings().all()
+
+    assert asked == [project]
+    assert not discovery.calls, "research was commissioned where it cannot run"
+    research = steps["research"]
+    assert research["status"] == "succeeded", research["last_error"]
+    assert research["output"]["status"] == "not_applicable"
+    assert research["output"]["reason"] == "research_source_unavailable"
+    assert "research cannot run here" in research["output"]["note"]
+    assert "not_connected" in research["output"]["note"]
+    assert meeting.calls, "the panel was never convened after the skipped research"
+    assert "research" not in meeting.calls[0]["args"]
+    assert len(events) == 1
+    assert events[0]["data"]["reason"] == "research_source_unavailable"
+    assert events[0]["data"]["source_status"] == "not_connected"
+    assert events[0]["data"]["step_id"]
+
+
+def test_community_runs_governed_research_when_it_can(eng, project, monkeypatch):
+    """With a usable research subscription Community commissions the discovery — a governed
+    job — and the step waits on it instead of skipping."""
+    from boss_engine.services import discovery_service
+
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_governed"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+    monkeypatch.setattr(discovery_service, "research_unavailable",
+                        lambda connection, settings, project_id, actor="boss": None)
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "communityresearch", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, EditionCtx(eng, "community"), project_id=project)
+        steps = _steps(c, run["id"])
+        skipped = c.execute(
+            text("SELECT count(*) FROM events WHERE project_id=:p "
+                 "AND event_type = 'workflow.research_skipped'"), {"p": project}).scalar()
+
+    assert discovery.calls, "Community did not commission research it can run"
+    assert steps["r"]["status"] == "waiting"
+    assert steps["r"]["output"]["await"]["id"] == "drun_governed"
+    assert skipped == 0
+
+
+def test_a_research_check_that_errors_is_a_visible_skip(eng, project, monkeypatch):
+    """The availability check failing must neither deadletter Build nor pass silently."""
+    from boss_engine.services import discovery_service
+
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_never"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    def broken(connection, settings, project_id, actor="boss"):
+        raise RuntimeError("routing table missing")
+
+    monkeypatch.setattr(discovery_service, "research_unavailable", broken)
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "communitycheck", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, EditionCtx(eng, "community"), project_id=project)
+        steps = _steps(c, run["id"])
+        events = c.execute(
+            text("SELECT data FROM events WHERE project_id=:p "
+                 "AND event_type = 'workflow.research_skipped'"), {"p": project}).mappings().all()
+
+    assert not discovery.calls
+    assert steps["r"]["output"]["reason"] == "research_check_failed"
+    assert "routing table missing" in steps["r"]["output"]["note"]
+    assert events and "routing table missing" in events[0]["data"]["detail"]
+
+
+def test_community_still_adopts_research_that_already_exists(eng, project, monkeypatch):
+    """Reading a dossier that already exists spends nothing, so it is adopted, never re-run."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_second"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "communityadopt", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        run = _start(c, project, version["id"], {"adopt_discovery_run_id": "drun_first"})
+        runner.tick(c, EditionCtx(eng, "community"), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not discovery.calls
+    assert steps["r"]["output"]["await"]["id"] == "drun_first"
+
+
+def test_other_editions_still_research(eng, project, monkeypatch):
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_ent"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "enterpriseresearch", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        _start(c, project, version["id"], {})
+        runner.tick(c, EditionCtx(eng, "enterprise"), project_id=project)
+
+    assert discovery.calls, "the Community research check leaked into another edition"
+
+
 def test_an_approved_spec_is_not_approved_again(eng, project, monkeypatch):
     """The panel path approves the spec BEFORE the project exists. Opening a spec_review gate
     then asks the same person the same question a second time, about a build already running —

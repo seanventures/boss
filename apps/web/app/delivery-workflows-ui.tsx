@@ -1821,6 +1821,39 @@ export function linksFrom(draft: NewProjectDraft): string[] {
     .filter((l) => /^https?:\/\//i.test(l));
 }
 
+/**
+ * What the repository step says about where the code goes.
+ *
+ * NO PLATFORM DEFAULT IS PROMISED. With nothing registered this said "the platform default is
+ * used" — but the API pre-selects that default whenever one exists, so reaching this branch
+ * means there is none. Community has none at all, and the build then deadlettered with "No
+ * repository registered for project …" after the panel had already run. The form says what is
+ * true: builds need a connected GitHub repository, and where to connect one.
+ */
+export function repositoryHint(
+  suggested: { name: string; source: string } | null, repoCount: number,
+): { text: string; needsConnection: boolean } {
+  if (suggested) {
+    return {
+      text: ` Pre-selected: ${suggested.name}${
+        suggested.source === "registry_primary" ? " — this project's primary." : "."}`,
+      needsConnection: false,
+    };
+  }
+  if (repoCount > 0) {
+    return {
+      text: " This project has more than one repository and none is primary, so choose one below.",
+      needsConnection: false,
+    };
+  }
+  return {
+    text: " This project has no repository connected yet, and a build needs one: BOSS opens "
+      + "its pull request in a GitHub repository you connect. The panel and PRD still run "
+      + "without one; the build step stops until a repository is connected.",
+    needsConnection: true,
+  };
+}
+
 /** What stops the operator moving on, said as the thing to do rather than as an error. */
 export function blockingReason(
   step: number, draft: NewProjectDraft, declaresInputs = false,
@@ -1934,6 +1967,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
   }, [projectId]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [suggested, setSuggested] = useState<{ name: string; source: string } | null>(null);
+  const repoHint = repositoryHint(suggested, repos.length);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof NewProjectDraft>(key: K, value: NewProjectDraft[K]) =>
@@ -1950,8 +1984,8 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
     void (async () => {
       const r = await get<{ repositories: Repo[]; suggested: string; suggested_source: string }>(
         "repositories", projectId);
-      // A project with no registry is a normal state, not an error to surface: the build
-      // resolves to the platform default and the step says so.
+      // A project with no registry is a normal state, not an error to surface: the repository
+      // step says a build needs one and where to connect it (see repositoryHint).
       if (!alive || !r || "error" in r) return;
       setRepos(r.repositories ?? []);
       if (r.suggested) setSuggested({ name: r.suggested, source: r.suggested_source });
@@ -2329,12 +2363,22 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
       {step === 2 ? (
         <div className="dw-wiz-body" data-testid="dw-wiz-step-2">
           <span className="dw-field-label">Which repository?</span>
-          <span className="dw-field-hint">
+          <span className="dw-field-hint" data-testid="dw-new-repo-hint">
             Where the branch and the pull request go.
-            {suggested
-              ? ` Pre-selected: ${suggested.name}${
-                  suggested.source === "registry_primary" ? " — this project's primary." : "."}`
-              : " This project has no repository registered, so the platform default is used."}
+            {repoHint.text}
+            {repoHint.needsConnection ? (
+              <>
+                {" "}Connect one in{" "}
+                <a data-testid="dw-new-repo-connect"
+                   href={consoleHref(
+                     typeof window !== "undefined" ? window.location.search : "",
+                     { area: "setup" })}>
+                  Settings → Repo and model → Repository
+                </a>
+                {" "}(a fine-grained token with Contents and Pull requests: read and write),
+                then come back.
+              </>
+            ) : null}
           </span>
           <div className="dw-wiz-choices" role="radiogroup" aria-label="Repository">
             <button type="button" role="radio" className="dw-wiz-choice"
@@ -2343,12 +2387,15 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
                     data-testid="dw-new-repo-default"
                     onClick={() => set("repository", "")}>
               <span className="dw-wiz-choice-name">
-                {suggested ? suggested.name : "The project default"}
+                {suggested ? suggested.name
+                  : repoHint.needsConnection ? "No repository yet" : "The project default"}
               </span>
               <span className="detail">
                 {suggested
                   ? "What this project resolves to today. Leave it unless you mean elsewhere."
-                  : "Resolved when the build starts."}
+                  : repoHint.needsConnection
+                    ? "Resolved when the build starts; connect a repository before then."
+                    : "Resolved when the build starts."}
               </span>
             </button>
             {repos

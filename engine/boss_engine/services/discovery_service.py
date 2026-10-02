@@ -41,6 +41,79 @@ def _research_runs_as_a_job(settings: Settings) -> bool:
     return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
 
 
+#: The one reason a workflow's research step stands aside instead of commissioning research.
+RESEARCH_SOURCE_UNAVAILABLE = "research_source_unavailable"
+
+
+def research_unavailable(connection, settings: Settings, project_id: str,
+                         actor: str = "boss") -> Optional[dict]:
+    """None when governed research can run for this project; otherwise why it cannot.
+
+    In Community a discovery is a `discovery.run` job whose every stage is a model lease on the
+    Claude Code subscription (discovery_spend.RESEARCH_SOURCE_ID: the research agent is the
+    Claude CLI, which does the web search). This asks the model router the exact question the
+    job's first stage will ask — same skill, job kind, workload class, data boundary, pinned to
+    that source — so a workflow skips research exactly when the job would be refused model
+    capacity, and never merely because of the edition. A local model cannot stand in: it has
+    no web search. The preview is itself recorded (a routing log and a routing.selected or
+    routing.denied event), so the reason the step names can be traced.
+
+    Budget is not prejudged here. A reservation refused at run time is the job's to record:
+    it raises a decision, the discovery fails, and the workflow carries on to the panel with a
+    research step that says it failed.
+
+    Other editions keep the legacy in-process path and are never skipped by this check.
+    """
+    if not _research_runs_as_a_job(settings):
+        return None
+    from .discovery_spend import JOB_KIND, RESEARCH_SOURCE_ID, SKILL_ID
+    from .entitlements import EntitlementBrokerService
+
+    def preview() -> dict:
+        return EntitlementBrokerService(settings).simulate_model_route_decision(
+            connection, project_id, skill_id=SKILL_ID, task_kind=JOB_KIND,
+            workload_class="owner_sandbox", risk_tier=1,
+            preferred_capabilities=["research"], data_boundary="internal",
+            actor=actor, only_source_id=RESEARCH_SOURCE_ID,
+        )
+
+    # A SAVEPOINT, so a check that errors cannot abort the workflow's own transaction and
+    # take the step's record of the error down with it.
+    begin_nested = getattr(connection, "begin_nested", None)
+    if begin_nested is None:
+        decision = preview()
+    else:
+        with begin_nested():
+            decision = preview()
+    if decision.get("selected_source_id") and (decision.get("policy_result") or {}).get("allowed"):
+        return None
+    rejected = [row for row in decision.get("rejected_sources") or []
+                if isinstance(row, dict) and row.get("source_id") == RESEARCH_SOURCE_ID]
+    status = str((rejected[0].get("reason") if rejected else None) or "not_declared")
+    said = _RESEARCH_SOURCE_STATUS_WORDS.get(status, status.replace("_", " "))
+    return {
+        "reason": RESEARCH_SOURCE_UNAVAILABLE,
+        "source_id": RESEARCH_SOURCE_ID,
+        "source_status": status,
+        "route_decision_log_id": decision.get("id"),
+        "detail": (
+            "Research runs on the Claude Code subscription (the Claude CLI does the web "
+            f"search), and it cannot be used here: {said}. Connect Claude Code in Setup and "
+            "Build researches first; a local model cannot do web research."
+        ),
+    }
+
+
+#: The router's reasons, as the step's note says them. The raw reason stays in the event.
+_RESEARCH_SOURCE_STATUS_WORDS = {
+    "declared": "it is not connected",
+    "not_connected": "it is not connected",
+    "not_declared": "this install does not declare it",
+    "runtime_unavailable": "the Claude CLI is not available to this install",
+    "login_rejected": "its login was rejected",
+}
+
+
 class DiscoveryResearchUnavailable(RuntimeError):
     """The research agent ran but gathered nothing — a broken tool, not a weak idea."""
 
