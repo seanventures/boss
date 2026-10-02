@@ -1092,6 +1092,57 @@ def check_github_for_project(
     return out
 
 
+def connected_basics(connection: Connection, settings: Settings, project_id: str
+                     ) -> dict[str, Any]:
+    """Whether this project has a repository and a model — counted, never probed.
+
+    The same two answers `setup_status` gives its wizard, without its live probes, because the
+    workflow start preflight asks on every Start and must not make a network call to do it.
+    One function, so the wizard's tick and the preflight cannot disagree about "connected".
+    """
+    status = _connection_counts(connection, settings, project_id)
+    return {"github": status["github_done"], "model": status["model_done"],
+            "repository": status["repository"]}
+
+
+def _connection_counts(connection: Connection, settings: Settings, project_id: str
+                       ) -> dict[str, Any]:
+    repos = connection.execute(
+        text("SELECT count(*) FROM github_repository_bindings "
+             "WHERE project_id = :p AND status = 'active'"),
+        {"p": project_id},
+    ).scalar() or 0
+    connections = connection.execute(
+        text("SELECT count(*) FROM github_connections "
+             "WHERE project_id = :p AND status IN ('configured', 'active')"),
+        {"p": project_id},
+    ).scalar() or 0
+    models = connection.execute(
+        text("SELECT count(*) FROM entitlement_sources "
+             "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
+             "                           OR connection_status = 'connected')"),
+        {"p": project_id},
+    ).scalar() or 0
+    env_model = bool(str(getattr(settings, "openai_api_key", "") or "").strip())
+    env_repo = str(getattr(settings, "target_github_repo", "") or "").strip()
+    env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()
+    env_github = bool(str(getattr(settings, "github_token", "") or "").strip()
+                      and env_repo and env_owner)
+    primary = None
+    if repos:
+        primary = connection.execute(
+            text("SELECT full_name FROM github_repository_bindings "
+                 "WHERE project_id = :p AND status = 'active' "
+                 "ORDER BY (role = 'primary') DESC, created_at LIMIT 1"),
+            {"p": project_id},
+        ).scalar()
+    return {
+        "github_done": bool((connections and repos) or env_github),
+        "model_done": bool(models or env_model),
+        "repository": primary or (f"{env_owner}/{env_repo}" if env_github else None),
+    }
+
+
 def setup_status(connection: Connection, settings: Settings, project_id: str) -> dict[str, Any]:
     """What is connected, what is not, and what to do about it."""
     repos = connection.execute(
@@ -1193,11 +1244,13 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
     env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()
     env_github = bool(str(getattr(settings, "github_token", "") or "").strip()
                       and env_repo and env_owner)
+    basics = _connection_counts(connection, settings, project_id)
     steps = [
         {
             "id": "github",
             "title": "Connect a repository",
-            "done": bool((connections and repos) or env_github),
+            # The preflight's answer, so the wizard's tick and Start's refusal cannot disagree.
+            "done": basics["github_done"],
             "detail": ("BOSS writes code on a branch and opens a pull request. It needs a "
                        "repository it is allowed to push to."),
             "from_environment": env_github and not (connections and repos),
@@ -1206,7 +1259,7 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
         {
             "id": "model",
             "title": "Connect a model",
-            "done": bool(models or env_model),
+            "done": basics["model_done"],
             "from_environment": env_model and not models,
             "detail": ("An API key, anything that speaks the OpenAI API, or a subscription "
                        "you already pay for."),

@@ -183,6 +183,76 @@ def grant(api: Api, agent: str, skills: list[str], args) -> None:
     print()
 
 
+def ensure_agents(api: Api, agents: list[str], pack: str, args) -> None:
+    """Make sure every agent this example names exists on the project, installing the pack that
+    ships them when one is missing.
+
+    THE VIDEO EXAMPLE DIED HERE ON A DEFAULT INSTALL. It granted skills to `video_editor` and
+    `media_publisher`, the default pack (core_v1) ships neither, and /v1/role-skills refuses an
+    agent the project does not have — so setup stopped with "no agent 'video_editor' on this
+    project" (boss-1, 2026-10-02), while the README said BOSS ships those roles. An example sets
+    up what it needs; it does not leave the operator to discover which pack holds which agent.
+
+    Idempotent: an agent already on the project is left exactly as it is.
+    """
+    print("  AGENTS")
+    missing = []
+    for agent in agents:
+        code, _ = api("GET", f"/v1/roles/{agent}?project_id={api.project}")
+        if code == 200:
+            print(f"    {agent:26} already on this project")
+        else:
+            missing.append(agent)
+    if missing:
+        if args.dry_run:
+            for agent in missing:
+                print(f"    would add {agent} (installs the {pack} pack)")
+            print()
+            return
+        code, body = api("POST", "/v1/packs/install",
+                         {"project_id": api.project, "pack_id": pack, "actor": api.actor})
+        if code >= 400:
+            die(f"could not add {', '.join(missing)}: installing the {pack} pack was refused — "
+                f"{body.get('detail') or body}")
+        for agent in missing:
+            code, _ = api("GET", f"/v1/roles/{agent}?project_id={api.project}")
+            if code != 200:
+                die(f"installed the {pack} pack but '{agent}' is still not on this project. "
+                    f"Register it in Agent Studio and run this again.")
+            print(f"    {agent:26} added (from the {pack} pack)")
+    print()
+
+
+def report_readiness(api: Api, workflow_key: str, args) -> list[dict]:
+    """Say what will not work yet, with the fix — rather than leaving the run to find out.
+
+    The three email examples ended in a send that failed after the operator had approved it,
+    because nothing ever asked whether the install had a mail server; meeting-to-tickets did
+    the same with a tracker that was listed but never connected. BOSS now answers that question
+    for any workflow (GET .../readiness), and Start refuses until it is answered — this prints
+    the same answer at the moment the example is installed.
+    """
+    if args.dry_run or not workflow_key:
+        return []
+    code, body = api("GET", f"/v1/delivery-workflows/{workflow_key}/readiness"
+                            f"?project_id={api.project}")
+    if code >= 400:
+        print(f"  READINESS\n    could not check ({code}): {body.get('detail') or body}\n")
+        return []
+    missing = body.get("missing") or []
+    print("  READINESS")
+    if not missing:
+        print("    ready to run — everything it needs is in place\n")
+        return []
+    for need in missing:
+        steps = ", ".join(n.get("label", "") for n in need.get("needed_by") or [])
+        print(f"    not ready yet: {need.get('label')} (needed by {steps})")
+        print(f"      {need.get('detail')}")
+        print(f"      fix: {need.get('fix')}")
+    print("    The workflow is installed. Start will show this list until it is fixed.\n")
+    return missing
+
+
 def define_steps(api: Api, steps: list[dict], args) -> dict[str, str]:
     """One step per skill, matched by name and reused so re-running is safe."""
     code, body = api("GET", f"/v1/delivery-workflows/custom-steps?project_id={api.project}")
@@ -280,6 +350,9 @@ def publish(api: Api, *, name: str, description: str, spec: dict, args) -> str:
     for step in spec["steps"]:
         print(f"      {step['id']:16} {step.get('captain') or '(the workflow itself)'}")
     print()
+    # EVERY EXAMPLE SAYS WHAT WILL NOT WORK YET, here rather than in each script, so a new
+    # example cannot forget to.
+    report_readiness(api, slug, args)
     return definition_id
 
 

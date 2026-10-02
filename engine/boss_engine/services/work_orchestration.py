@@ -66,6 +66,50 @@ DELIVERY_PLUGINS: tuple[dict[str, Any], ...] = (
 )
 
 
+def tracker_is_connected(provider_key: str, configuration: Any) -> bool:
+    """Whether this tracker could create a ticket right now: configured, with a credential.
+
+    BOOTSTRAP SEEDS FIVE TRACKERS AS `active` WITH EMPTY CONFIGURATIONS — Plane as the default
+    with an api_base_url of '' (boss-1, 2026-10-02). Anything that asked "is there an active
+    tracker?" was told yes, so meeting-to-tickets' "no active work tracker" refusal could never
+    fire, and the run failed only at ticket creation, after a person had approved it.
+    """
+    config = configuration if isinstance(configuration, dict) else {}
+    if not WorkOrchestrationService._provider_looks_configured(provider_key, config):
+        return False
+    from .work_tracker_adapters import resolve_credential
+
+    return bool(resolve_credential(config))
+
+
+def connected_tracker(connection: Connection, project_id: str,
+                      provider_key: str = "") -> Optional[dict[str, Any]]:
+    """The tracker work should go to — the default first — but only one that is CONNECTED.
+
+    The one answer for every caller that has to create something in a tracker (the
+    `tracker.issues.create` skill, the workflow start preflight), so "this project has a
+    tracker" means the same thing at the door and at the step.
+    """
+    wanted = str(provider_key or "").strip().lower()
+    rows = connection.execute(
+        text("SELECT provider_key, display_name, configuration FROM work_tracker_providers "
+             "WHERE project_id = :p AND status = 'active' AND (:k = '' OR provider_key = :k) "
+             "ORDER BY is_default DESC, updated_at DESC"),
+        {"p": project_id, "k": wanted},
+    ).mappings().all()
+    for row in rows:
+        config = row["configuration"]
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except ValueError:
+                config = {}
+        if tracker_is_connected(str(row["provider_key"]), config or {}):
+            return {"provider_key": row["provider_key"], "display_name": row["display_name"],
+                    "configuration": dict(config or {})}
+    return None
+
+
 class WorkOrchestrationService:
     """Rank work, allocate bounded capacity, and mirror delivery presence."""
 
@@ -502,9 +546,12 @@ class WorkOrchestrationService:
             if redacted.get(secret_key):
                 redacted[secret_key] = "***"
         data["configuration"] = redacted
-        data["connected"] = self._provider_looks_configured(
-            data["provider_key"], config
-        )
+        # CONNECTED MEANS USABLE: configured AND a credential that resolves. `status` stays the
+        # row's lifecycle (job admission and existing bindings read it), so a seeded tracker
+        # with an empty configuration is still `active` there — which is exactly why nothing
+        # that has to DO something with a tracker may read `status` alone. See
+        # `connected_tracker`.
+        data["connected"] = tracker_is_connected(data["provider_key"], config)
         return data
 
     @staticmethod

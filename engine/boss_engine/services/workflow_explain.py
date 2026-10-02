@@ -188,7 +188,12 @@ def explain_version(
         forced = bool(spec_of.get("approval_forced_manual"))
         if forced:
             effective = "manual"
-        if effective == "manual" or spec_of.get("is_gate"):
+        # ANSWERED BY THE PANEL, NOT BY A PERSON. The PRD approval is manual by the risk floor
+        # and was counted and described as "stops for a person whatever the workflow asks" —
+        # while the panel's decision approves it automatically by default (boss-1: approved_by
+        # auto_approval twenty seconds after the panel). Not counted as one of your approvals.
+        by_panel = spec_of.get("answered_by") == "panel"
+        if (effective == "manual" or spec_of.get("is_gate")) and not by_panel:
             gates += 1
 
         captain = str(step.get("captain") or spec_of.get("captain") or "")
@@ -227,9 +232,13 @@ def explain_version(
             # WHO ANSWERS FOR IT. "any agents associated" — the captain was already decided by
             # the capability and simply never shown.
             "agent": captain or None,
-            "approval": effective,
-            "approval_is_forced": forced,
+            "approval": "automatic" if by_panel else effective,
+            "approval_is_forced": forced and not by_panel,
             "approval_note": (
+                "Approved automatically when the panel's PRD is approved "
+                "(BOSS_MEETING_PRD_AUTO_APPROVE, on by default). Turn that off to have a "
+                "person sign it on the Approvals page."
+                if by_panel else
                 "Forced: this step's risk tier is at or above the manual-approval floor, so it "
                 "stops for a person whatever the workflow asks for."
                 if forced else
@@ -237,6 +246,8 @@ def explain_version(
                 "Runs without stopping."),
             "risk_tier": spec_of.get("risk_tier"),
             "typical_minutes": spec_of.get("typical_minutes"),
+            # What it SPENDS, when that is worth knowing first — PLRR is a second build pass.
+            "cost_note": spec_of.get("cost_note") or None,
             "inputs": inputs,
             "produces": produces,
             "next": list(step.get("next") or []),

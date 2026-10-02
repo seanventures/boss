@@ -25,20 +25,27 @@ const DRAFT: NewProjectDraft = {
 
 describe("a workflow that declares inputs opens the form", () => {
   it("Start one does not fire a sample when the workflow needs values", () => {
-    expect(UI).toContain("if (workflowInputFields(chosen?.input_schema).length)");
     expect(UI).toContain("setStartWith(key)");
+    expect(UI).toContain("openComposerOn(key)");
   });
 
   it("and the composer opens on the step that collects them, already on that workflow", () => {
     // They pressed a button on that workflow's card; asking "which path?" again is asking a
-    // question they have answered.
-    expect(UI).toContain("useState(startWith ? 1 : 0)");
-    expect(UI).toContain("{ ...EMPTY_DRAFT, workflowKey: startWith }");
+    // question they have answered. A catalogue template's one required answer is its brief,
+    // collected on the first step, so it opens there.
+    expect(UI).toContain("return isCatalogue || !composerFields(schema, isCatalogue).length ? 0 : 1;");
+    expect(UI).toContain("{ ...EMPTY_DRAFT, workflowKey: startWith,");
   });
 
-  it("a workflow that declares nothing still starts on a sample", () => {
-    // That button was built for the catalogue, and it works there.
-    expect(UI).toContain("sample: true");
+  it("no Start fires a sample: an example is shown before it runs", () => {
+    // REWRITTEN (2026-10-02). This asserted that a workflow declaring nothing "still starts on
+    // a sample". That is the behaviour the boss-1 map found spending a build in the operator's
+    // repository on a random demo idea — for six templates a new-product brief that did not
+    // fit them. Every catalogue template now declares its brief, Start opens the form, and the
+    // template's own example is the explicit "Try an example", filled in to read first.
+    expect(UI).not.toContain("sample: true");
+    expect(UI).toContain("onTryExample={(key) =>");
+    expect(UI).toContain('data-testid={`dw-example-${entry.key}`}');
   });
 });
 

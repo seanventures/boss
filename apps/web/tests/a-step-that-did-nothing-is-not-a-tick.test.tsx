@@ -54,8 +54,20 @@ function view(r: ReturnType<typeof runOf>) {
 
 describe("a step that did nothing does not read as work done", () => {
   it("the engine's no-op capabilities are found (the enumeration is not empty)", () => {
-    expect(COMMISSIONS_NOTHING.sort()).toEqual(expect.arrayContaining(["notify", "social_publish",
+    // REWRITTEN (2026-10-02): `notify` is no longer one of them. It was a `recorded` no-op that
+    // ended three catalogue templates by telling nobody; the runner now sends it, skips it
+    // visibly (`not_applicable`, drawn as skipped) or fails it with the fix.
+    expect(COMMISSIONS_NOTHING.sort()).toEqual(expect.arrayContaining(["social_publish",
                                                                        "video_edit"]));
+    expect(COMMISSIONS_NOTHING).not.toContain("notify");
+    expect(OUTCOMES).toContain('"notify": notified');
+  });
+
+  it("a notify with no channel reads as skipped, with its reason, not as ✓", () => {
+    const s = step({ capability: "notify",
+                     output: { status: "not_applicable", posted: false,
+                               note: "Nobody was told: this run was given no channel." } });
+    expect(phaseOf(s)).toBe("skipped");
   });
 
   for (const capability of COMMISSIONS_NOTHING) {

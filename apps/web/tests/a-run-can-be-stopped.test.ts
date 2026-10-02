@@ -56,16 +56,31 @@ describe("stop and run again", () => {
     expect(ENGINE).toContain('_verdict("stop_and_rerun", "Stop and run again", ENABLED)');
   });
 
-  it("stops BEFORE it starts", () => {
+  // REWRITTEN (review of the readiness change). These asserted the browser sent a stop and then
+  // a start. Once Start could refuse a project that lacks something, that order destroyed the
+  // operator's run: the stop landed, the start was refused, and nothing was left running. The
+  // press is now ONE start naming `replaces_run`, and the SERVER checks, then stops, then starts
+  // in one transaction (apps/api/tests/test_a_template_that_cannot_run_here_is_refused_at_start
+  // proves the original survives a refusal). Stop still lands before start — on the server.
+  it("is one request that names the run it replaces, never a stop then a start", () => {
     const at = UI.indexOf("onStopAndRerun={async (run)");
     expect(at).toBeGreaterThan(-1);
-    const body = UI.slice(at, at + 700);
-    expect(body.indexOf('"stop"')).toBeLessThan(body.indexOf('"start"'));
+    const body = UI.slice(at, UI.indexOf("onBuildOnThis", at));
+    expect(body).toContain("replaces_run: run.id");
+    expect(body).not.toContain('"stop"');
+    expect(body.match(/act\(/g)?.length).toBe(1);
   });
 
-  it("and does not start at all if the stop failed", () => {
-    // Otherwise the one button whose job is to leave a single run running leaves two.
-    expect(UI).toContain("if (!stopped?.ok) return;");
+  it("and the server refuses before it stops anything", () => {
+    const API = readFileSync("../api/app/main.py", "utf8");
+    const at = API.indexOf("def start_delivery_workflow(");
+    const body = API.slice(at, API.indexOf("\ndef _delivery_readiness_or_409(", at));
+    const check = body.indexOf("readiness = _delivery_readiness_or_409(");
+    const stop = body.indexOf("workflow_runtime.cancel_run(");
+    const start = body.indexOf("workflow_runtime.start_run(");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(stop);
+    expect(stop).toBeLessThan(start);
   });
 
   it("the step-level retry is still offered as the cheaper option", () => {

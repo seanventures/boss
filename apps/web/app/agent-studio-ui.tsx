@@ -46,6 +46,7 @@ import {
 import { AgentCreationWizard } from "./agent-creation-wizard";
 
 import { callAction } from "../lib/call-action";
+import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 type Selection =
   | { kind: "agent"; item: StudioAgent }
   | { kind: "panel"; item: StudioPanel }
@@ -139,6 +140,7 @@ export function AgentStudio({
   const [newWorkflowName, setNewWorkflowName] = useState("");
   const [newWorkflowDescription, setNewWorkflowDescription] = useState("");
   const [result, setResult] = useState<StudioActionResult | undefined>();
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
@@ -269,18 +271,29 @@ export function AgentStudio({
     }
   };
 
-  const execute = (kind: "test" | "run") => {
+  const execute = (kind: "test" | "run", startAnyway: string[] = []) => {
     if (!selection || !activeVersion?.id) return;
     setResult(undefined);
+    setRefusal(null);
     startTransition(async () => {
       const next =
         kind === "test" && selection.kind === "agent"
           ? await callAction(testStudioAgent)(feed.projectId, activeVersion.id, actor)
           : selection.kind === "workflow"
-            ? await callAction(runStudioWorkflow)(feed.projectId, activeVersion.id, objective, actor)
+            ? await callAction(runStudioWorkflow)(feed.projectId, activeVersion.id, objective, actor,
+                                                  startAnyway)
           : selection.kind === "panel"
             ? await callAction(runStudioPanel)(feed.projectId, activeVersion.id, objective, actor)
             : await callAction(runStudioAgent)(feed.projectId, activeVersion.id, objective, actor);
+      // A Run refused for what the project lacks gets the same checklist and "Run anyway" as
+      // every other door — it showed "Agent Studio returned 409." (review of the readiness
+      // change).
+      const readiness = !next.ok ? asReadiness(next.readiness) : null;
+      if (readiness) {
+        setRefusal({ label: "Run", message: next.message, readiness,
+                     retry: (keys) => execute(kind, keys) });
+        return;
+      }
       setResult(next);
     });
   };
@@ -754,6 +767,10 @@ export function AgentStudio({
                     <span>{result.message}</span>
                   </div>
                 )}
+                {refusal ? (
+                  <StartRefusal refusal={refusal} projectId={feed.projectId} busy={pending}
+                                onDismiss={() => setRefusal(null)} />
+                ) : null}
               </div>
             </>
           ) : (

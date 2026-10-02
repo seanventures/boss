@@ -31,6 +31,7 @@ import { SplitAction } from "./split-action";
 import { HelpTip } from "./help-tip";
 import { askBossAction, runAgentActionAction } from "./actions";
 import { apiWrite } from "../lib/api-write";
+import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { openDockAbout } from "../lib/dock-subject";
 
 import { callAction } from "../lib/call-action";
@@ -884,7 +885,7 @@ const IDEAS_PER_PAGE = 4;
 async function postBounded(
   url: string,
   body: Record<string, unknown>,
-): Promise<{ ok: boolean; data?: any; error?: string }> {
+): Promise<{ ok: boolean; data?: any; error?: string; readiness?: unknown }> {
   const stalled = Symbol("stalled");
   try {
     const r = await Promise.race([
@@ -903,7 +904,15 @@ async function postBounded(
                       + "cancelled. Check the area before trying again." };
     }
     const data = await (r as Response).json().catch(() => ({}));
-    if (!(r as Response).ok) return { ok: false, error: data?.error ?? `HTTP ${(r as Response).status}` };
+    if (!(r as Response).ok) {
+      // ALWAYS A STRING. Our routes flatten a refusal (lib/start-refusal), but this renders
+      // `error` as text, and one route that forgot would crash the hero again — as Build did
+      // when the checklist arrived as `error` (review of the readiness change).
+      const said = data?.error;
+      return { ok: false,
+               error: typeof said === "string" && said ? said : `HTTP ${(r as Response).status}`,
+               ...(data?.readiness ? { readiness: data.readiness } : {}) };
+    }
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message ?? e) };
@@ -1048,6 +1057,8 @@ export function AskBossHero({
   //: Ours is now the same, because that is what this much content needs.
   const [openIdea, setOpenIdea] = useState<Idea | null>(null);
   const [error, setError] = useState("");
+  /** Build refused for what the project lacks: the checklist, with Build anyway. */
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [ranAction, setRanAction] = useState<string | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
@@ -1275,15 +1286,26 @@ export function AskBossHero({
    * what. They are one box now: the same words either get answered or get built, and the
    * operator picks which by pressing a different button rather than by choosing a lane first.
    */
-  const assign = useCallback((text: string) => {
+  const assign = useCallback((text: string, startAnyway: string[] = []) => {
     const directive = text.trim();
     if (!directive || busy) return;
-    setError(""); setReply(""); setProposed([]);
+    setError(""); setReply(""); setProposed([]); setRefusal(null);
     startTransition(async () => {
       const r = await postBounded("/api/builds",
-                                  { project_id: projectId, directive, actor });
+                                  { project_id: projectId, directive, actor,
+                                    ...(startAnyway.length ? { start_anyway: startAnyway } : {}) });
       const d = r.data as Record<string, unknown> | undefined;
       if (!r.ok) {
+        // CANNOT RUN HERE YET — the checklist, and Build anyway. A project with GitHub and a
+        // model but no deployment host used to Build to a PR and a preview; the readiness
+        // check refused it with no way past, and the refusal crashed the hero (review of the
+        // readiness change). The operator sees what is missing and can still build.
+        const readiness = asReadiness(r.readiness);
+        if (readiness) {
+          setRefusal({ label: "Build", message: r.error ?? "", readiness,
+                       retry: (keys) => assign(directive, keys) });
+          return;
+        }
         // Build used to swallow this entirely: the action returned void, so a failure and a
         // success looked identical — "Working", then nothing, forever.
         setError(r.error ?? "Could not start the build.");
@@ -1980,6 +2002,11 @@ export function AskBossHero({
              ref={(node) => node?.scrollIntoView({ block: "nearest", behavior: "smooth" })}>
             ⚠ {error}
           </p>
+        ) : null}
+
+        {refusal ? (
+          <StartRefusal refusal={refusal} projectId={projectId} busy={busy}
+                        onDismiss={() => setRefusal(null)} />
         ) : null}
 
         {reply ? (

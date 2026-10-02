@@ -215,6 +215,11 @@ describe("which buttons a run has is the server's decision", () => {
     const requests = [
       ...UI.matchAll(/\bact\("[^"]*",\s*"(retry_step|skip_step|recheck|stop)"/g),
       ...UI.matchAll(/\bfrom_run:/g),
+      // REWRITTEN (review of the readiness change): Stop and run again is no longer a browser
+      // `stop` then `start` — a refused start after a landed stop left no run at all. It is one
+      // start naming `replaces_run`, which the server checks, stops and starts in one
+      // transaction; Re-run names `rerun_of`. Both are run-action requests and are held here.
+      ...UI.matchAll(/\breplaces_run:|\brerun_of:/g),
     ];
     expect(requests.length).toBeGreaterThanOrEqual(6);
     for (const m of requests) {

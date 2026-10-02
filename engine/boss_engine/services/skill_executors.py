@@ -1486,8 +1486,6 @@ def execute_tracker_issues_create(
     real ones behind, and a step that raises would say nothing about which. Each result carries
     its own outcome and the step fails only if EVERY one did.
     """
-    from sqlalchemy import text as _sql
-
     from .work_tracker_adapters import get_adapter
 
     actions = inputs.get("actions") or inputs.get("issues")
@@ -1502,24 +1500,18 @@ def execute_tracker_issues_create(
                 "note": "no actions were given, so no tickets were created"}
 
     wanted = str(inputs.get("provider_key") or "").strip().lower()
-    row = context.connection.execute(
-        _sql(
-            """
-            SELECT provider_key, display_name, configuration
-            FROM work_tracker_providers
-            WHERE project_id = :p AND status = 'active'
-              AND (:k = '' OR provider_key = :k)
-            ORDER BY is_default DESC, updated_at DESC
-            LIMIT 1
-            """
-        ),
-        {"p": context.project_id, "k": wanted},
-    ).mappings().first()
+    # CONNECTED, NOT MERELY `active`. Bootstrap seeds five trackers as active with empty
+    # configurations, so "is there an active tracker" was always yes and this refusal never
+    # fired: the run failed inside the adapter instead, after a person had approved the tickets
+    # (boss-1, 2026-10-02). The same answer the start preflight gives.
+    from .work_orchestration import connected_tracker
+
+    row = connected_tracker(context.connection, context.project_id, wanted)
     if row is None:
         raise ValueError(
-            f"this project has no {'active work tracker' if not wanted else wanted} "
-            f"configured. Connect one first — Plane, Jira, Linear, GitHub Issues or Azure "
-            f"DevOps.")
+            f"this project has no {'connected work tracker' if not wanted else wanted + ' connected'}"
+            f". Connect one first in Work allocation → Connect work tracker — Plane, Jira, "
+            f"Linear, GitHub Issues or Azure DevOps.")
 
     adapter = get_adapter(row["provider_key"])
     config = dict(row["configuration"] or {})

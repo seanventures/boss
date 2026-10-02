@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { refusalFrom } from "../../../lib/start-refusal";
 
 /**
  * Everything the delivery-workflow screen reads and does, in one place.
@@ -47,17 +48,27 @@ function planPath(project: string, key: string): string {
     + `?project_id=${encodeURIComponent(project)}`;
 }
 
+/** `view=readiness&key=…` — what this workflow needs from this project, each item checked,
+ *  with the fix. The same answer Start gives when it refuses, asked before pressing it. */
+function readinessPath(project: string, key: string, input: string | null): string {
+  return `/v1/delivery-workflows/${encodeURIComponent(key)}/readiness`
+    + `?project_id=${encodeURIComponent(project)}`
+    + (input ? `&input=${encodeURIComponent(input)}` : "");
+}
+
 export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const view = params.get("view") ?? "runs";
   const project = params.get("project_id")?.trim() ?? "";
-  if (view === "spec" || view === "plan") {
+  if (view === "spec" || view === "plan" || view === "readiness") {
     const key = params.get("key")?.trim() ?? "";
     if (!project || !key) {
       return NextResponse.json({ error: `${view} needs project_id and key` }, { status: 400 });
     }
     try {
-      const path = view === "plan" ? planPath(project, key) : specPath(project, key);
+      const path = view === "plan" ? planPath(project, key)
+        : view === "readiness" ? readinessPath(project, key, params.get("input"))
+        : specPath(project, key);
       const r = await fetch(`${API_URL}${path}`, {
         headers: authHeaders({}), cache: "no-store",
       });
@@ -122,9 +133,8 @@ async function proxyPost(path: string, payload: unknown) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      // A REFUSAL CAN CARRY A CHECKLIST — flattened by the one shared helper (see it for why).
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -140,9 +150,7 @@ async function proxyDelete(path: string) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -222,9 +230,7 @@ export async function POST(req: Request) {
       // The API's own message, forwarded verbatim. These are the sentences the builder shows
       // beside a step — "step 'd' is risk tier 2 and always requires a person" is the whole
       // point, and replacing it with "request failed" would waste it.
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -268,9 +274,7 @@ export async function PATCH(req: Request) {
     if (!r.ok) {
       // Forwarded verbatim, like every other message from the API here: "choose the skill this
       // step runs" is the sentence the form shows, and "request failed" would waste it.
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -318,9 +322,7 @@ export async function DELETE(req: Request) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {

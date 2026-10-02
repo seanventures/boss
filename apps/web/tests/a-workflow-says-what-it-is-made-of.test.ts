@@ -94,7 +94,13 @@ describe("a custom step can be changed", () => {
 
   it("forwards the API's own message rather than replacing it", () => {
     const patch = proxy.slice(proxy.indexOf("export async function PATCH"));
-    expect(patch.slice(0, 1400)).toContain("detail || `API returned ${r.status}`");
+    // REWRITTEN (review of the readiness change): every proxy here now reads the API's refusal
+    // through the one shared helper, which forwards a sentence verbatim and falls back to
+    // "API returned <status>" only when there is none — the same rule, in one place.
+    expect(patch.slice(0, 1400)).toContain("refusalFrom(r.status, parsed)");
+    const helper = readFileSync("lib/start-refusal.ts", "utf8");
+    expect(helper).toContain("if (flat) return { error: flat };");
+    expect(helper).toContain("`API returned ${status}`");
   });
 });
 

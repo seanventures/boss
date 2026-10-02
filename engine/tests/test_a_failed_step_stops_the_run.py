@@ -73,11 +73,16 @@ INTERNAL = {
     "review": "_observed_from_the_build",
     "test": "_observed_from_the_build",
     "monitor": "_observed_from_the_build",
+    # REWRITTEN (2026-10-02): notify was listed below as commissioning nothing — a `recorded`
+    # no-op that went green having told nobody, at the end of three catalogue templates and as
+    # Deprecation / Sunset's whole announcement. The runner now sends it, so a send that cannot
+    # happen is a failure that must stop the run like any other.
+    "notify": "_notify",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so
 #: (`status: recorded`), so there is no work that could fail and be mistaken for success.
-COMMISSIONS_NOTHING = {"notify", "video_edit", "social_publish"}
+COMMISSIONS_NOTHING = {"video_edit", "social_publish"}
 
 
 def test_every_capability_has_a_failure_path_under_test():

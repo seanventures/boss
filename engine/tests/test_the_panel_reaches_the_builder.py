@@ -62,14 +62,38 @@ def test_every_build_that_follows_a_panel_is_given_its_prd():
 
 def test_a_build_with_no_panel_is_left_alone():
     """fast_fix and security_hardening have no meeting: binding a PRD they never produce
-    would fail the run outright."""
+    would fail the run outright.
+
+    REWRITTEN (2026-10-02). This asserted that a panel-less build binds no `spec_markdown` at
+    all. Security Hardening now hands its build the threat RESEARCH it paid for — the research
+    was otherwise handed to nothing (boss-1 map: "the research is paid for and unused"). The
+    protection is the same: a build may only be briefed from a step that exists in its own
+    workflow, never from a meeting it does not hold."""
     seen = 0
     for workflow in _workflows():
         steps = _steps(workflow)
         if "build" in steps and "meeting" not in steps:
-            assert "spec_markdown" not in _binds(steps["build"]), workflow["key"]
+            spec = _binds(steps["build"]).get("spec_markdown")
+            if spec is not None:
+                assert spec.get("from_step") in steps, workflow["key"]
+                assert spec.get("from_step") != "meeting", workflow["key"]
             seen += 1
     assert seen >= 1
+
+
+def test_research_that_was_paid_for_reaches_the_next_step():
+    """Every catalogue workflow that researches hands the dossier to something — the panel when
+    there is one, the build when there is not. Research-Led Discovery's panel argued without
+    its own deep research, and Security Hardening's research reached nothing (boss-1 map,
+    2026-10-02)."""
+    for workflow in _workflows():
+        steps = _steps(workflow)
+        if "research" not in steps:
+            continue
+        readers = [sid for sid, step in steps.items()
+                   if any(isinstance(v, dict) and v.get("from_step") == "research"
+                          for v in _binds(step).values())]
+        assert readers, f"{workflow['key']}: research is paid for and read by no step"
 
 
 def test_the_directive_is_never_replaced_by_the_spec():

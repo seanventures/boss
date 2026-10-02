@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
 import { apiWrite } from "../lib/api-write";
+import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 
 /**
  * What the whole run cost, who did it, and what went wrong — read at the end, in one place.
@@ -89,6 +90,7 @@ export function RunReportPanel(
   const [pdfHref, setPdfHref] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState("");
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
   const [building, setBuilding] = useState(false);
   const [builtRunId, setBuiltRunId] = useState("");
 
@@ -152,11 +154,12 @@ export function RunReportPanel(
   // `build_on_research` action is enabled; otherwise the fix-up starts without it.
   const carriesResearch = researchAction?.key === "build_on_research"
     && researchAction.enabled === true;
-  const buildFromThis = useCallback(async () => {
+  const buildFromThis = useCallback(async (startAnyway: string[] = []) => {
     const items = report?.next_steps ?? [];
     if (!items.length) return;
     setBuilding(true);
     setProblem("");
+    setRefusal(null);
     try {
       const name = report?.product?.name || "this app";
       const lines = items
@@ -183,12 +186,23 @@ export function RunReportPanel(
               + "Close each item above. Where an item says something was never verified, "
               + "verify it — do not restate the claim. Do not add features.",
           },
+          ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
         }),
       });
       const body = await res.json();
       const started = body?.run_id || body?.id || body?.run?.id;
       if (!started) {
-        setProblem(body?.error || body?.detail || "the run could not be started");
+        // CANNOT RUN HERE YET: the checklist and "Fix anyway", like every other start door.
+        // This showed the summary paragraph with no way past it (review of the readiness
+        // change).
+        const readiness = asReadiness(body?.readiness);
+        if (readiness) {
+          setRefusal({ label: "Fix", message: String(body?.error ?? ""), readiness,
+                       retry: (keys) => buildFromThis(keys) });
+          return;
+        }
+        const said = body?.error || body?.detail;
+        setProblem(typeof said === "string" && said ? said : "the run could not be started");
         return;
       }
       setBuiltRunId(String(started));
@@ -267,6 +281,10 @@ export function RunReportPanel(
       ) : null}
 
       {problem ? <p className="rr-problem">{problem}</p> : null}
+      {refusal ? (
+        <StartRefusal refusal={refusal} projectId={projectId} busy={building}
+                      onDismiss={() => setRefusal(null)} />
+      ) : null}
 
       {/* P1s are the reason to open this panel at all, so they are not behind a disclosure. */}
       {urgent.length ? (
@@ -351,7 +369,7 @@ export function RunReportPanel(
               Started — run <code>{builtRunId}</code> is fixing these.
             </p>
           ) : (
-            <button type="button" className="rr-build" onClick={buildFromThis}
+            <button type="button" className="rr-build" onClick={() => void buildFromThis()}
                     disabled={building} data-testid="run-report-build">
               <Hammer size={15} weight="bold" aria-hidden />
               {building ? "Starting…" : "Build from this"}
