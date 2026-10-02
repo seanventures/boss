@@ -21,10 +21,21 @@ REQUIRED = {
 }
 
 
+#: The agents a DEFAULT install has (core_v1). The fake used to accept a skill grant for ANY
+#: agent, which hid the real blocker: /v1/role-skills refuses an agent the project does not
+#: have, and the video example's two agents are not in core_v1 (boss-1, 2026-10-02).
+DEFAULT_AGENTS = {"program_manager", "pm", "qa", "release_manager", "cto"}
+#: What installing a pack adds, as the real specpack says.
+PACK_AGENTS = {"media_pack": {"video_editor", "media_publisher"}}
+
+
 class _Api(http.server.BaseHTTPRequestHandler):
     requests: ClassVar[list[tuple[str, str]]] = []
     specs: ClassVar[list[dict]] = []
     schedules: ClassVar[list[dict]] = []
+    agents: ClassVar[set[str]] = set()
+    #: What GET .../readiness reports missing, for every workflow.
+    missing: ClassVar[list[dict]] = []
     step_count = 0
 
     def _send(self, status: int, payload: dict) -> None:
@@ -45,6 +56,15 @@ class _Api(http.server.BaseHTTPRequestHandler):
             self._send(200, {"schedules": self.schedules})
         elif self.path.startswith("/v1/delivery-workflows/") and "/spec?" in self.path:
             self._send(404, {"detail": "No workflow yet"})
+        elif self.path.startswith("/v1/delivery-workflows/") and "/readiness?" in self.path:
+            self._send(200, {"ready": not self.missing, "missing": self.missing,
+                             "checked": self.missing})
+        elif self.path.startswith("/v1/roles/"):
+            agent = self.path.split("/v1/roles/", 1)[1].split("?", 1)[0]
+            if agent in self.agents:
+                self._send(200, {"role_key": agent})
+            else:
+                self._send(404, {"detail": f"Role '{agent}' not found"})
         else:
             self._send(404, {"detail": "Unexpected test read"})
 
@@ -54,7 +74,15 @@ class _Api(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/v1/skills/") and self.path.endswith("/enable"):
             self._send(200, {"config": {"risk_tier": 0}})
         elif self.path == "/v1/role-skills":
-            self._send(200, {})
+            # As the real API does (skill_definitions.assign_skill_to_role): an agent the
+            # project does not have is refused.
+            if body.get("role_key") not in self.agents:
+                self._send(400, {"detail": f"no agent '{body.get('role_key')}' on this project"})
+            else:
+                self._send(200, {})
+        elif self.path == "/v1/packs/install":
+            self.agents.update(PACK_AGENTS.get(body.get("pack_id"), set()))
+            self._send(201, {"pack_id": body.get("pack_id")})
         elif self.path == "/v1/delivery-workflows/custom-steps":
             type(self).step_count += 1
             self._send(201, {"custom_step": {"step_key": f"test_step_{self.step_count}"}})
@@ -76,6 +104,7 @@ class _Api(http.server.BaseHTTPRequestHandler):
 
 def _server():
     _Api.requests, _Api.specs, _Api.schedules, _Api.step_count = [], [], [], 0
+    _Api.agents, _Api.missing = set(DEFAULT_AGENTS), []
     server = http.server.HTTPServer(("127.0.0.1", 0), _Api)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -252,6 +281,82 @@ def test_video_example_stores_operator_overrides_for_publishing() -> None:
         assert publish["binding"]["inputs"]["description"] == {
             "from_step": "edit", "field": "description", "override_from_input": "description",
         }
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_the_video_example_adds_its_own_agents_on_a_default_install() -> None:
+    """On boss-1 (default pack core_v1) setup died at its first grant: "no agent 'video_editor'
+    on this project". The example now installs the pack that ships the two agents it names,
+    and only when they are missing."""
+    server, thread = _server()
+    try:
+        result = _run(server, ROOT / "examples" / "video-workflow" / "setup.py")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert ("POST", "/v1/packs/install") in _Api.requests
+        assert {"video_editor", "media_publisher"} <= _Api.agents
+        assert "added (from the media_pack pack)" in result.stdout
+
+        # Run again: they are there now, so nothing is installed a second time.
+        _Api.requests.clear()
+        again = _run(server, ROOT / "examples" / "video-workflow" / "setup.py")
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert ("POST", "/v1/packs/install") not in _Api.requests
+        assert "already on this project" in again.stdout
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_the_pack_the_video_example_installs_ships_those_agents() -> None:
+    """The fake above says media_pack adds the two agents; this holds the real pack to it."""
+    import yaml
+
+    pack = yaml.safe_load((ROOT / "packages/specpack/packs/media_pack.yaml").read_text())
+    assert set(pack["installs"]["roles"]) == PACK_AGENTS["media_pack"]
+    for role in PACK_AGENTS["media_pack"]:
+        assert (ROOT / "packages/specpack/roles" / f"{role}.yaml").is_file()
+
+
+def test_every_example_says_what_will_not_work_yet() -> None:
+    """The email examples installed cleanly on an install with no mail server and failed at
+    their approved send; meeting-to-tickets at its approved ticket creation. Installing now
+    ends with BOSS's own readiness answer, and setup_all lists what will not run yet."""
+    server, thread = _server()
+    try:
+        _Api.missing = [{
+            "key": "email", "label": "Outgoing email (SMTP)",
+            "detail": "no SMTP server is configured for this project",
+            "fix": "Configure SMTP for this project: POST /v1/email/config ...",
+            "needed_by": [{"step_id": "send", "label": "Email the newsletter"}],
+        }]
+        result = _run(server, ROOT / "examples" / "setup_all.py")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout.count("not ready yet: Outgoing email (SMTP)") == 5
+        assert "fix: Configure SMTP" in result.stdout
+        assert "Installed, but will not run here yet:" in result.stdout
+        reads = [path for method, path in _Api.requests
+                 if method == "GET" and "/readiness?" in path]
+        assert len(reads) == 5
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_every_example_input_is_described_for_the_start_form() -> None:
+    """Start draws its form from the declaration: every field needs a title and a sentence."""
+    server, thread = _server()
+    try:
+        for name in ("video-workflow",) + EXAMPLES:
+            result = _run(server, ROOT / "examples" / name / "setup.py")
+            assert result.returncode == 0, f"{name}: {result.stdout}\n{result.stderr}"
+        for spec in _Api.specs:
+            schema = spec["input_schema"]
+            assert schema["required"], spec["entry_step"]
+            for field, prop in schema["properties"].items():
+                assert prop.get("title"), field
+                assert prop.get("description"), field
     finally:
         server.shutdown()
         thread.join()

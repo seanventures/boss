@@ -206,7 +206,12 @@ def test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured():
 
     source = inspect.getsource(setup_service.setup_status)
     assert "env_github" in source
-    assert 'bool((connections and repos) or env_github)' in source
+    # REWRITTEN (2026-10-02): the rule moved, it did not change. "Connected" is decided once in
+    # `_connection_counts`, which the wizard and the workflow start preflight both read, so the
+    # tick on this page and Start's refusal cannot disagree about the same repository.
+    shared = inspect.getsource(setup_service._connection_counts)
+    assert 'bool((connections and repos) or env_github)' in shared
+    assert 'basics["github_done"]' in source
     assert '"from_environment": env_github' in source
 
 

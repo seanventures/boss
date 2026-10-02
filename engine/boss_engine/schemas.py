@@ -1268,7 +1268,7 @@ class SkillToggleRequest(BaseModel):
 class EventSubscriptionCreateRequest(BaseModel):
     project_id: str
     event_type: str
-    sink_kind: Literal["job", "webhook_out"] = "job"
+    sink_kind: Literal["job", "webhook_out", "workflow"] = "job"
     sink_ref: str
     data_boundary: DataBoundary = "internal"
     enabled: bool = True
@@ -1279,7 +1279,7 @@ class EventSubscriptionCreateRequest(BaseModel):
 class EventSubscriptionUpdateRequest(BaseModel):
     project_id: str
     event_type: Optional[str] = None
-    sink_kind: Optional[Literal["job", "webhook_out"]] = None
+    sink_kind: Optional[Literal["job", "webhook_out", "workflow"]] = None
     sink_ref: Optional[str] = None
     data_boundary: Optional[DataBoundary] = None
     enabled: Optional[bool] = None
@@ -1291,13 +1291,18 @@ class EventSubscriptionSummary(BaseModel):
     id: str
     project_id: str
     event_type: str
-    sink_kind: Literal["job", "webhook_out"]
+    sink_kind: Literal["job", "webhook_out", "workflow"]
     sink_ref: str
     data_boundary: DataBoundary
     enabled: bool
     config: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+    #: For a `workflow` sink: what that workflow needs from this project, which missing items
+    #: `config.start_anyway` accepts, and which the event door will refuse (`will_refuse`).
+    #: The sink kind was accepted by the service but not by these schemas, so a workflow
+    #: subscription could not be made or read over HTTP at all.
+    readiness: Optional[dict[str, Any]] = None
 
 
 class EventSubscriptionListResponse(BaseModel):
@@ -3339,6 +3344,10 @@ class WorkflowRunStartRequest(BaseModel):
     dedupe_key: str
     parent_run_id: Optional[str] = None
     actor: str = "ceo"
+    #: Readiness keys the operator was shown missing and chose to start without. This door
+    #: preflights like the delivery door, and without the field a refusal here (Agent Studio's
+    #: Run) had no way to be overridden at all.
+    start_anyway: Optional[list[str]] = None
 
     @model_validator(mode="after")
     def validate_fields(self) -> "WorkflowRunStartRequest":

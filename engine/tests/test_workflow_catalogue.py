@@ -120,7 +120,15 @@ def test_the_summary_counts_gates_from_the_effective_plan():
     """
     summary = {s["key"]: s for s in catalogue.catalogue_summary()}
     assert len(summary["minor_feature"]["gates"]) >= 1
-    assert len(summary["standard_product_delivery"]["gates"]) >= 2
+    # REWRITTEN (2026-10-02). This asserted ">= 2" for Standard Product Delivery, which only
+    # held by counting the PRD approval as a person's gate. That approval is answered by the
+    # panel's own decision — automatically by default (boss-1: approved_by auto_approval twenty
+    # seconds after the panel) — so the card promised a sign-off nobody gives. The release is
+    # the person's gate; the PRD approval is listed apart, as automatic.
+    standard = summary["standard_product_delivery"]
+    assert "deploy" in standard["gates"]
+    assert "spec_review" not in standard["gates"]
+    assert "spec_review" in standard["automatic_approvals"]
 
 
 def test_the_summary_says_what_a_project_must_already_have():

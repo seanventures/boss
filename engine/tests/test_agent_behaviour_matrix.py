@@ -771,7 +771,10 @@ def test_build_reports_success_and_failure():
     then nothing, forever."""
     hero = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
     i = hero.index("const assign = useCallback")
-    body = hero[i:i + 1400]
+    # The whole callback, not a fixed 1400 characters: Build now also draws the readiness
+    # checklist on a refusal (review of the readiness change), which pushed the confirmation
+    # past a fixed window without changing what the callback does.
+    body = hero[i:hero.index("}, [busy", i)]
     assert "setError(" in body, "a failed build is still silent"
     assert "setReply(" in body, "a started build gives no confirmation"
     # The press starts a WORKFLOW RUN now, not a panel, so the id worth naming is the run's —

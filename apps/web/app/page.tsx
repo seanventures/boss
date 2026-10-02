@@ -157,6 +157,7 @@ import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { SetupHome } from "./setup-ui";
+import { EmailSetup } from "./email-setup-ui";
 import { SkillsHome } from "./skills-ui";
 import { ChannelsHome } from "./channels-ui";
 import { DeploymentManagerPanel } from "./deployment-manager-ui";
@@ -1716,6 +1717,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("setup") ? (
         <section className="panel-stack" data-area="setup" aria-label="Repo and model">
           <SetupHome projectId={activeProjectId} actor={activeActorId} />
+          {/* Where the readiness checklist sends an operator whose workflow ends in an email. */}
+          <EmailSetup projectId={activeProjectId} />
         </section>
         ) : null}
 

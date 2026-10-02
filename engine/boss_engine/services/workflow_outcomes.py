@@ -132,10 +132,29 @@ def written(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
 
 
 def commissions_nothing(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
-    """notify, video_edit, social_publish as bare capabilities: no tool performs them, so the
-    runner records an honest `recorded` no-op that says so in its note. The work, when there is
-    any, belongs to the skill or custom step the workflow binds instead."""
+    """video_edit, social_publish as bare capabilities: no tool performs them, so the runner
+    records an honest `recorded` no-op that says so in its note. The work, when there is any,
+    belongs to the skill or custom step the workflow binds instead."""
     return _refused(result) or Verdict(SUCCEEDED)
+
+
+def notified(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """notify: sent, skipped visibly, or failed — never a green no-op.
+
+    It used to be judged by `commissions_nothing`: no tool, `status: recorded`, succeeded. Three
+    catalogue templates ended by telling nobody and Deprecation / Sunset's whole announcement
+    went nowhere before a seven-day wait (boss-1 map, 2026-10-02). Now the runner sends it:
+    `posted` means a receipt exists; `not_applicable` means no channel was given and the step
+    says so (the console shows it as skipped, not ✓); anything else did not reach anybody.
+    """
+    refused = _refused(result)
+    if refused:
+        return refused
+    if _status(result) == "not_applicable":
+        return Verdict(SUCCEEDED)
+    if result.get("posted") is True:
+        return Verdict(SUCCEEDED)
+    return Verdict(FAILED, _reason(result) or "nothing was sent, so nobody was told")
 
 
 def smoke_test(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
@@ -191,7 +210,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "monitor": observed,
     "report": written,
     "document": written,
-    "notify": commissions_nothing,
+    "notify": notified,
     "video_edit": commissions_nothing,
     "social_publish": commissions_nothing,
     "smoke_test": smoke_test,

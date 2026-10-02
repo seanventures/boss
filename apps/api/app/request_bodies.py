@@ -148,6 +148,17 @@ class WorkflowStartBody(ProjectBody):
     from_discovery: str | None = None
     dedupe_key: str | None = None
     sample: bool | None = None
+    #: Readiness keys the operator was shown missing and chose to start without — "I will add
+    #: the deployment host before the release". Anything missing that is not named still
+    #: refuses (see workflow_readiness.refuse_unless_ready).
+    start_anyway: list[str] | None = None
+    #: "Run this again": the run this one repeats. What the operator accepted starting that run
+    #: without carries over; anything newly missing still refuses.
+    rerun_of: str | None = None
+    #: "Stop and run again": the live run this one replaces. Checked FIRST, then stopped, then
+    #: started — one transaction — so a refused re-run leaves the original running. The
+    #: console stopped first and started second, and a refused start left no run at all.
+    replaces_run: str | None = None
 
 
 class WorkflowScheduleBody(ProjectBody):
@@ -168,6 +179,9 @@ class WorkflowScheduleBody(ProjectBody):
     # exists. Absent means create. The same body stays one operation, so the mounted
     # count does not grow for an edit of values the create call already accepted.
     schedule_id: str | None = None
+    #: Readiness keys this schedule may start without — the unattended form of Start anyway.
+    #: Omitted on an edit, the stored choice stays.
+    start_anyway: list[str] | None = None
 
 
 class WorkflowScheduleEnabledBody(ProjectBody):

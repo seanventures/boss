@@ -52,7 +52,11 @@ describe("nothing is invented", () => {
   it("forwards the engine's own validation message", () => {
     // "step 'd' is risk tier 2 and always requires a person" is the whole value of the
     // validation; replacing it with "request failed" throws it away.
-    expect(ROUTE).toContain("const detail = (parsed as { detail?: string })?.detail;");
+    // REWRITTEN (review of the readiness change): the route forwarded `detail` by casting it to
+    // a string, which forwarded the readiness OBJECT as `error` too. It now goes through the
+    // shared helper, which keeps a sentence verbatim (and only a sentence) as `error`.
+    expect(ROUTE).toContain("refusalFrom(r.status, parsed)");
+    expect(codeOnly("lib/start-refusal.ts")).toContain("if (flat) return { error: flat };");
     expect(UI).toContain("result.error");
   });
 });

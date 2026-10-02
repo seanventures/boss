@@ -142,6 +142,7 @@ doing it once is the fastest way to understand what you have.
 
 - `media.fetch_link` — a link becomes a video
 - `media.fetch_image` — a link becomes a picture: an ending slide, a title card, a logo
+- `media.read_document` — a link becomes text: a brief, a title, a description
 - `video.trim`, `video.cut`, `video.reframe`, `video.caption`, `video.overlay_image`,
   `video.watermark`, `video.bookend` — what the agent will compose from
 - `publish_youtube`
@@ -149,7 +150,14 @@ doing it once is the fastest way to understand what you have.
 A skill BOSS ships is *available*, not *installed*: until it is enabled, it lives in the catalogue
 and not in your project. This is the step people most often miss.
 
-### 2. Give the agents their skills
+### 2. Make sure the two agents exist
+
+The default pack does not include `video_editor` or `media_publisher`. Install the **media pack**
+(`POST /v1/packs/install` with `pack_id: media_pack`), which adds exactly those two. `setup.py`
+does this for you when either is missing — granting a skill to an agent the project does not have
+is refused, which is where this example used to stop.
+
+### 3. Give the agents their skills
 
 Enabling a skill puts it in your project; it does **not** give it to anybody. The runtime checks
 `role_skills` before letting an agent call anything. A role spec's "allowed skills" list reaches
@@ -162,7 +170,7 @@ every step naming it is refused at the first call.
 The agent page shows what each agent holds. If that list is empty, the workflow cannot work, and
 the page says so.
 
-### 3. Define the publishing step
+### 4. Define the publishing step
 
 **Delivery → Build your own → Your steps → Define a step.** Give it a name, choose **Skill**, pick
 the skill, and list its inputs.
@@ -174,7 +182,7 @@ the skill, and list its inputs.
 Publish will show **always needs a person**. That comes from its risk tier, and you cannot turn it
 off. The editing step needs no definition; see the next section.
 
-### 4. Create the workflow with the agent step first
+### 5. Create the workflow with the agent step first
 
 **Create a new workflow** → name it → then, from the palette:
 
@@ -185,7 +193,7 @@ On the agent step's row, set the instruction source to **ask me when the run sta
 option, *always do this*, pins a sentence onto the step for a workflow that does the same job
 every time.
 
-### 5. Wire the inputs
+### 6. Wire the inputs
 
 Open each step's **inputs**:
 
@@ -203,7 +211,7 @@ must use exactly**, such as an artifact id it must not invent. The agent step's 
 whatever its skills returned, with the last one winning, which is why **Publish** can read
 `media_artifact_id` from it.
 
-### 6. Assign the agents
+### 7. Assign the agents
 
 Each step row has an agent dropdown. Set the editing step to `video_editor` and **Publish** to
 `media_publisher`.
@@ -214,7 +222,7 @@ what each agent is for and what it holds, and records why in the run.
 Try assigning `video_editor` to Publish: it is refused when you save, and the error names what that
 skill does accept.
 
-### 7. Save
+### 8. Save
 
 **Save as a new version.** If anything is wrong, the error names the step and the reason.
 
@@ -243,7 +251,8 @@ skill does accept.
   same job every time.
 
 **BOSS ships the capability**: the video skills, `media.fetch_link`, `publish_youtube`, the
-`video_editor` and `media_publisher` roles, and ffmpeg in the images. All of it is opt-in; nothing
+`video_editor` and `media_publisher` roles (in the media pack, which is not installed by
+default), and ffmpeg in the images. All of it is opt-in; nothing
 is forced on a project. **The workflow itself is an example**, not part of the product. Its steps
 and definition are data in *your* project, created through the public API, and a fresh install
 has the capability without any of this. Change it, rename it, or delete it.

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { refusalFrom } from "../../../lib/start-refusal";
 
 /**
  * Convene the PRD panel without re-rendering the console.
@@ -48,12 +49,19 @@ export async function POST(req: Request) {
         work_class: "project.new",
         input: { title, directive },
         ...(String(body.actor ?? "").trim() ? { actor: String(body.actor).trim() } : {}),
+        // START ANYWAY, SAID OUT LOUD. The hero draws the checklist a refusal carries and
+        // sends back exactly the keys the operator ticked; anything else missing still refuses.
+        ...(Array.isArray(body.start_anyway) && body.start_anyway.length
+          ? { start_anyway: body.start_anyway.map(String) } : {}),
       }),
       cache: "no-store",
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` }, { status: r.status });
+      // `detail` can be the readiness checklist (an object). Forwarded raw it reached the hero
+      // as `error` and React refused to render it — the Build button crashed. Flattened by
+      // the shared helper: `error` a sentence, `readiness` beside it.
+      return NextResponse.json(refusalFrom(r.status, data), { status: r.status });
     }
     return NextResponse.json(data);
   } catch (e) {

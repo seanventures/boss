@@ -4,11 +4,14 @@ import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
 import type { AgentWizardSubmission } from "../lib/agent-wizard";
 import { apiWrite, pressToken } from "../lib/api-write";
+import { refusalFrom } from "../lib/start-refusal";
 
 export type StudioActionResult = {
   ok: boolean;
   message: string;
   item?: Record<string, unknown>;
+  /** A start refused for what the project lacks: the checklist, for "Start anyway". */
+  readiness?: unknown;
 };
 
 function post(path: string, body: Record<string, unknown>): Promise<StudioActionResult> {
@@ -47,18 +50,16 @@ async function send(
       payload = {};
     }
     if (!response.ok) {
-      const detail =
-        typeof payload.detail === "string"
-          ? payload.detail
-          : Array.isArray(payload.detail)
-            ? payload.detail
-                .map((item) =>
-                  typeof item === "object" && item && "msg" in item
-                    ? String((item as { msg: unknown }).msg)
-                    : String(item),
-                )
-                .join("; ")
-            : undefined;
+      // ONE READING OF A REFUSAL, shared with every other door that starts work. A Run refused
+      // because the project lacks what the workflow needs carries the checklist as an object;
+      // read here as "not a string" it became "Agent Studio returned 409." and the operator
+      // never saw what was missing (review of the readiness change).
+      const refusal = refusalFrom(response.status, { detail: payload.detail });
+      // Undefined when the API gave no sentence, so the per-status explanations below apply.
+      const detail = /^API returned \d+$/.test(refusal.error) ? undefined : refusal.error;
+      if (refusal.readiness) {
+        return { ok: false, message: refusal.error, readiness: refusal.readiness };
+      }
       if (response.status === 403) {
         return {
           ok: false,
@@ -388,6 +389,7 @@ export async function runStudioWorkflow(
   versionId: string,
   objective: string,
   actor: string,
+  startAnyway: string[] = [],
 ): Promise<StudioActionResult> {
   return post("/v1/workflow-runs", {
     project_id: projectId,
@@ -396,5 +398,7 @@ export async function runStudioWorkflow(
     policy_snapshot: { initiated_from: "agent_studio_ui" },
     dedupe_key: `studio-workflow-ui:${versionId}:${await pressToken()}`,
     actor,
+    // Only the keys the operator ticked on the checklist a refusal drew.
+    ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
   });
 }

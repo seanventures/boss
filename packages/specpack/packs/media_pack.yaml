@@ -1,0 +1,18 @@
+# The two agents the video example names, installable on their own.
+#
+# WHY THIS PACK EXISTS. examples/video-workflow grants skills to `video_editor` and
+# `media_publisher`, and the default pack (core_v1) ships neither — only the planning catalogue
+# core_v2 lists them. /v1/role-skills refuses an agent the project does not have, so on a default
+# install the example died at its first grant with "no agent 'video_editor' on this project"
+# (boss-1, 2026-10-02). Installing core_v2 to get two roles would swap in a whole planning
+# catalogue; this pack adds exactly the two, and the example installs it when they are missing.
+id: media_pack
+version: 1.0.0
+description: The video editor and the media publisher — the agents that edit a video and publish it to a channel the project has connected.
+requires: []
+installs:
+  roles: [video_editor, media_publisher]
+  workflows: []
+  policies: []
+  skills: [video, youtube]
+status: active
