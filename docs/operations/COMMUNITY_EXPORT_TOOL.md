@@ -71,3 +71,27 @@ Against the prior combined source commit `9891ad69f1367766595ec57d81f74f18a9a3c3
 ## 2026-09-28 current-main schema review
 
 The integrated source added Community `project_configurations` for local SMTP settings and `workflow_schedules` for recurring workflow runs, and widened the Community skill behaviour constraint to include `agent_program`. The regenerated bootstrap has 246 tables, including `agent_wakeups`, and excludes exactly seven hosted billing/marketplace and Enterprise tables. The source and generated SQL have separate SHA-256 pins; a further source or output change stops the export until the table boundary is reviewed again.
+
+## Syncing to the public repository: import public work first
+
+The sync replaces public `main` with the exported tree. Any commit pushed to public `main` after the previous sync and not yet in the private source is erased by that replacement. On 2026-10-02 the rc3 sync erased 39 collaborator commits (`22c5f15..00907e9`) this way; public `b4a4bff` restored them, and the private branch `ai/claude/import-public-rc4` imported them. `scripts/community_public_guard.py` makes that mistake a refusal instead of a silent loss.
+
+**The rule.** Every public sync commit carries the trailer `Private-source: <40-character private sha>`. Every non-merge public commit after the newest sync must be in the private ref being exported, marked on the private commit by `Imported-from: seanventures/boss@<40-character public sha>`. The newest sync's private source must also be an ancestor of that private ref. Release commits from before this rule say `Private source <sha>.` in their body, and the guard reads that form too.
+
+### Procedure
+
+1. Check, from the private checkout, against the ref you will export:
+
+    ```sh
+    python3 scripts/community_public_guard.py --private-ref HEAD
+    ```
+
+    It clones `https://github.com/seanventures/boss.git` read-only (or pass `--public <local clone> --public-ref origin/main`). Exit 0 means every public change since the last sync is in the private source; 1 lists each commit that is not and refuses; 2 means the check could not run, which is not a pass.
+
+2. If it refuses, import each listed commit in order, keeping its author, date, and message, and adding the `Imported-from` trailer. Map the public path back to its private source: `README.md` → `README.community.md`, `CONTRIBUTING.md` → `CONTRIBUTING.community.md`, `Makefile` → `Makefile.community`, `.gitignore` → `.gitignore.community`, `docs/product/TRACEABILITY.md` → `docs/product/TRACEABILITY.community.md`, `db/schema.sql` → `db/schema.community.sql`, `api/openapi.yaml` → `api/openapi.community.yaml`, `apps/api/tests/conftest.py` → `apps/api/tests/conftest-community.py`, `apps/web/app/page.tsx` → `apps/web/app/page-community.tsx`, and the four specpack files to their `.community.yaml` sources. `apps/api/app/main.py` and `packages/api-client/package.json` keep their paths; the export rewrites them. With the public repository fetched into a scratch ref, `git format-patch -1 --stdout <sha>`, a rewrite of the `diff --git`, `---`, `+++`, and rename lines through that map, the trailer inserted before the patch's `---`, and `git am -3` reproduce each commit; resolve conflicts by hand. A path that differs only through the private-host redaction (operation counts in `docs/community/MCP.md` and `FEATURES.md`, the MCP matrix) is resolved to the private numbers, the matrix is regenerated with `scripts/audit_mcp_api_parity.py`, and `scripts/community_private_host.py` maps the new counts. A public-only file goes to the same private path unless the manifest excludes it; then decide and record it.
+
+3. Re-pin deliberately: update each changed `sha256` in `scripts/community_export_manifest.json` after reviewing the change, run the export, and compare the candidate with the public tree. Every difference must be one of the private changes since the last sync.
+
+4. Run the guard again. When it passes, write the sync commit with `Private-source: <full private sha>` as a trailer.
+
+**A deliberate discard.** A public commit that is meant to be dropped (an accidental push, a revert of a revert) is named one at a time: `--acknowledge <sha> --reason "why"`. The guard prints `Discards-public: <sha> (why)`; copy it into the sync commit. There is no switch that skips the check.
