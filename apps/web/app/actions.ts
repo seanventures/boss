@@ -222,6 +222,9 @@ export async function askBossAction(
     // Parsed rather than forwarded blind: a malformed blob would otherwise reach the API as a
     // 422 the operator sees as "request failed".
     attachments: parseAttachments(formData.get("attachments")),
+    // THE DOCK'S "Investigate further" / "Do the fix": the full tool loop, on request. Unset, a
+    // question about a record is answered first in one call (subject_answer.py).
+    depth: String(formData.get("depth") ?? "").trim() === "investigate" ? "investigate" : undefined,
   });
 }
 

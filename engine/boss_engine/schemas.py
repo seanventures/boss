@@ -798,6 +798,11 @@ class AgentChatRequest(BaseModel):
     #: a UI fault, and pasting six thousand lines of log into a chat box ruins the transcript
     #: for every later turn. Both arrive here instead.
     attachments: list["AgentAttachment"] = Field(default_factory=list)
+    #: HOW DEEP THIS TURN GOES. Unset, a question about a record is answered first in ONE
+    #: tool-less call from that record, inside a hard budget (subject_answer.py — boss-1's
+    #: 347 s "Ask the Qa"). "investigate" is the dock's "Investigate further" / "Do the fix":
+    #: the full tool loop, on the operator's explicit say-so.
+    depth: Optional[Literal["investigate"]] = None
 
     @model_validator(mode="after")
     def validate_turn(self):
@@ -884,6 +889,10 @@ class AgentChatResponse(BaseModel):
     #: with nothing behind it. An answer that names its sources can be checked; one that does
     #: not has to be taken on trust, and BOSS has not earned that.
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    #: WHAT THE DOCK OFFERS NEXT under an answer given from a record in one call —
+    #: {id, label, depth, message} for "Investigate further" and "Do the fix". Pressing one sends
+    #: `message` with `depth`; nothing runs until then.
+    next_steps: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MeetingProposeRequest(BaseModel):

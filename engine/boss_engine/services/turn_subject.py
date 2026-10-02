@@ -521,6 +521,12 @@ _EXCEPTION_LINE = re.compile(
     r"ImportError|KeyboardInterrupt|SystemExit)\b:?\s*([^\n]{0,240})")
 
 
+#: A build tool reporting that the build itself failed (Vite/Rollup, webpack, npm, tsc).
+_BUILD_FAILED = re.compile(
+    r"Could not resolve entry module[^\n]*|error during build[^\n]*|Build failed[^\n]*|"
+    r"Failed to compile[^\n]*|Module not found: [^\n]*|npm ERR! [^\n]*", re.I)
+
+
 def _crash_findings(*texts: str, failure_kind: str = "") -> list[str]:
     """What the recorded text says that the recorded LABEL does not.
 
@@ -534,7 +540,19 @@ def _crash_findings(*texts: str, failure_kind: str = "") -> list[str]:
     for match in _EXCEPTION_LINE.finditer(blob):
         pass
     if match is None:
-        return []
+        # A BUILD THAT FAILED IS THE SAME CLASS (boss-1, wfr_475bf68eb18f485b8c52): Vite's
+        # `Could not resolve entry module "index.html"` under the same port_timeout label, and
+        # no Python-style exception line for the rule above to find.
+        build = _BUILD_FAILED.search(blob)
+        if build is None:
+            return []
+        line = blob[build.start():].split(" log tail:")[0].split("\n")[0][:240].strip()
+        out = [f"The app's build failed before anything could serve ({line}) — a build or "
+               "configuration failure, not a slow start."]
+        if failure_kind in {"port_timeout", "timeout"}:
+            out.append(f"failure_kind '{failure_kind}' is the checker's label for 'nothing "
+                       "answered in time'; the failed build above is why nothing answered.")
+        return out
     exc, detail = match.group(1), match.group(2).strip()
     out = [f"The process raised {exc}" + (f": {detail}" if detail else "")
            + " — it crashed before serving, so this is a start-up failure, not a slow start."]
