@@ -435,3 +435,19 @@ def test_a_run_the_shepherd_cancelled_still_says_why(engine):
                   "API Error: 401 Invalid bearer token"})
     attention = _attention(engine, run_id)
     assert attention["kind"] == "login_rejected" and attention["state"] == "stopped"
+
+
+def test_a_refused_connection_still_marks_the_login_rejected_for_setup(client, engine, monkeypatch):
+    """The refusal rolls back the request's transaction; the mark used to go with it, and Setup
+    kept showing a rejected Claude login as green "Connected"."""
+    from boss_engine.services import cli_harness, setup_service
+
+    monkeypatch.setattr(cli_harness, "detect", lambda _spec: {
+        "installed": True, "authenticated": True, "version": "2", "auth_detail": "signed in"})
+    monkeypatch.setattr(setup_service, "governed_proof", lambda *_a, **_k: {
+        "ok": False, "error": "Failed to authenticate. API Error: 401 Invalid bearer token"})
+    response = client.post("/v1/setup/coding-agents/connect", json={
+        "project_id": PROJECT, "actor": "ceo", "provider": "claude_code", "prove": True})
+    assert response.status_code == 422 and "login was rejected" in response.json()["detail"]
+    states = client.get("/v1/settings", params={"project_id": PROJECT}).json()
+    assert states["engine_login_states"] == {"claude_code": "rejected"}
