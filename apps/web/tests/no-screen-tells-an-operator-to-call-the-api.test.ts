@@ -78,3 +78,17 @@ describe("operator copy names actions and screens, not endpoints", () => {
     expect(PATTERNS.some(([, p]) => p.test("fetch(`${API_URL}/v1/activity?${params}`)"))).toBe(false);
   });
 });
+
+describe("the Observability screen", () => {
+  const SUITE = codeOnly("app/observability-suite-ui.tsx");
+
+  it("shows no GitHub-star counts as if they were measurements", () => {
+    // "~55k GitHub stars (CNCF graduated)" sat under each component on an operations screen.
+    expect(SUITE).not.toContain("c.stars_note");
+  });
+
+  it("says 'nothing is deployed' once", () => {
+    // Three near-identical "not deployed" lines stacked on one screen (console walk, 2026-10-02).
+    expect(SUITE).toContain('gap.id === "empty_observability"');
+  });
+});
