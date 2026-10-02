@@ -422,3 +422,16 @@ def test_setup_shows_a_rejected_claude_login_until_a_new_token_is_saved(engine, 
         finally:
             secrets.put_secret = original
         assert engine_login_states(connection, PROJECT) == {}
+
+
+def test_a_run_the_shepherd_cancelled_still_says_why(engine):
+    run_id = f"drun_cancelled_{uuid4().hex[:10]}"
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO discovery_runs (id, project_id, status, phase, title, seed, error) "
+            "VALUES (:id, :p, 'cancelled', 'signal_sweep', 'x', 'x', :e)"),
+            {"id": run_id, "p": PROJECT,
+             "e": "retrying: claude code agent exited 1: Failed to authenticate. "
+                  "API Error: 401 Invalid bearer token"})
+    attention = _attention(engine, run_id)
+    assert attention["kind"] == "login_rejected" and attention["state"] == "stopped"
