@@ -1009,16 +1009,23 @@ def _register_write_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "draft_custom_step",
-        "Define a reusable workflow step backed by a skill this project has authored. Use it "
-        "when no standard capability covers the work — publishing to a third-party account, "
-        "running a media or document tool. The skill must exist first (list_skills); this step "
-        "is what makes it placeable in a workflow.",
+        "Define a reusable workflow step that runs ONE skill, or calls ONE tool on a registered "
+        "MCP server. Use it when no standard capability covers the work — publishing to a "
+        "third-party account, running a media or document tool. Give `skill` (any skill in "
+        "list_skills: authored here or shipped with BOSS) OR `mcp_server` plus `mcp_tool` "
+        "(see list_mcp_servers). This step is what makes either placeable in a workflow.",
         _obj(
             {
                 "step_key": {"type": "string", "description": "lower_snake_case, stable"},
                 "label": {"type": "string"},
                 "summary": {"type": "string"},
-                "skill": {"type": "string", "description": "the skill_key this step runs"},
+                "skill": {"type": "string",
+                          "description": "the skill id this step runs (list_skills)"},
+                "mcp_server": {"type": "string",
+                               "description": "instead of a skill: the MCP server's name or id "
+                                              "(list_mcp_servers)"},
+                "mcp_tool": {"type": "string",
+                             "description": "with mcp_server: the tool on it this step calls"},
                 "knowledge": {"type": "string",
                               "description": "the standard this step holds to — house style, "
                                              "the format your team uses. Carried into every "
@@ -1027,35 +1034,74 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "produces": {"type": "array", "items": {"type": "object"}},
                 "project_id": {"type": "string"},
             },
-            ["step_key", "label", "skill"],
+            ["step_key", "label"],
         ),
         kind="write",
         reversibility="safe",
     )
     def draft_custom_step(ctx, *, project_id, actor, args):
+        # BOTH BINDINGS, AND EVERY SKILL. This accepted only a skill the project had AUTHORED,
+        # so the chat could not place a skill BOSS ships, and could not bind an MCP tool at all
+        # — the console builder could, so the conversation was the weaker of the two doors.
         steps = services_module("workflow_custom_steps")
-        skills = services_module("skill_definitions")
+        catalogue = services_module("skill_catalogue")
+        registry = services_module("mcp_registry")
         pid = args.get("project_id") or project_id
-        skill_key = str(args.get("skill") or "").strip().lower()
+        skill_key = str(args.get("skill") or "").strip()
+        server_ref = str(args.get("mcp_server") or "").strip()
+        tool_name = str(args.get("mcp_tool") or "").strip()
+        if bool(skill_key) == bool(server_ref):
+            return {"ok": False,
+                    "error": "give either `skill`, or `mcp_server` with `mcp_tool` — one step "
+                             "runs one thing."}
+        binding: dict[str, Any]
+        if skill_key:
+            with ctx.begin() as c:
+                found = catalogue.entry(c, pid, skill_key)
+                if found is None:
+                    # NAMING WHAT EXISTS beats "not found": the model picked a skill and the
+                    # useful correction is the list it should have picked from.
+                    available = sorted(catalogue.entries(c, pid))
+                    return {"ok": False, "error": f"no skill {skill_key!r} in this project",
+                            "available": available[:80]}
+            binding = {"binding_kind": "skill", "skill_id": skill_key}
+        else:
+            if not tool_name:
+                return {"ok": False, "error": "say which tool on the server (`mcp_tool`)."}
+            with ctx.begin() as c:
+                server = registry.find_mcp_server(c, pid, server_ref)
+                known = [f"{x['name']} ({x['id']})" for x in registry.list_mcp_servers(c, pid)]
+            if server is None:
+                return {"ok": False, "error": f"no MCP server {server_ref!r} in this project",
+                        "registered": known}
+            # Asked now if the last answer is stale, so a tool name is checked against what the
+            # server really offers rather than what it offered last week.
+            fresh = registry.servers_with_tools(ctx.begin, ctx.settings, pid,
+                                                server_id=server["id"])
+            server = fresh[0] if fresh else server
+            names = sorted(t["name"] for t in server.get("tools") or [] if t.get("name"))
+            if server.get("reachable") is True and tool_name not in names:
+                return {"ok": False,
+                        "error": f"MCP server '{server['name']}' has no tool {tool_name!r}",
+                        "tools": names}
+            binding = {"binding_kind": "mcp_tool", "mcp_server_id": server["id"],
+                       "mcp_tool_name": tool_name}
         with ctx.begin() as c:
-            if skills.get_skill(c, pid, skill_key) is None:
-                # NAMING WHAT EXISTS beats "not found": the model picked a skill and the useful
-                # correction is the list it should have picked from.
-                available = [s["skill_key"] for s in skills.list_skills(c, pid)]
-                return {"ok": False, "error": f"no skill {skill_key!r} in this project",
-                        "available": available}
             try:
                 created = steps.create(
                     c, project_id=pid, actor=actor,
                     step_key=str(args.get("step_key") or "").strip().lower(),
                     label=str(args.get("label") or ""),
                     summary=str(args.get("summary") or ""),
-                    binding_kind="skill", skill_id=skill_key,
                     inputs=args.get("inputs") or [], produces=args.get("produces") or [],
-                    knowledge=str(args.get("knowledge") or ""))
+                    knowledge=str(args.get("knowledge") or ""), **binding)
             except Exception as error:  # noqa: BLE001
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
-        return {"status": "defined", "step_key": created.get("step_key"), "skill": skill_key}
+        return {"status": "defined", "step_key": created.get("step_key"),
+                **({"skill": skill_key} if skill_key else
+                   {"mcp_server": binding["mcp_server_id"], "mcp_tool": tool_name}),
+                "usable": created.get("usable"),
+                **({"reason": created.get("reason")} if created.get("reason") else {})}
 
     @reg.tool(
         "draft_skill",
@@ -1087,10 +1133,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                            "description": "[{name, required, description}]"},
                 "produces": {"type": "array", "items": {"type": "object"}},
                 "config": {"type": "object",
-                           "description": "behaviour-specific. mcp_tool needs server and tool; "
-                                          "sandboxed_command needs a digest-pinned image and a "
-                                          "command template whose placeholders are all declared "
-                                          "inputs."},
+                           "description": "behaviour-specific. builtin: {executor_id} naming a "
+                                          "skill BOSS ships. mcp_tool: {mcp_server_id, "
+                                          "tool_name} — the server by id or name, see "
+                                          "list_mcp_servers. sandboxed_command: a "
+                                          "digest-pinned image and a command template whose "
+                                          "placeholders are all declared inputs."},
+                "mode": {"type": "string", "enum": ["create", "update"],
+                         "description": "create (default) refuses a key that is taken; update "
+                                        "changes the skill that has it."},
                 "risk_tier": {"type": "integer",
                               "description": "0-3. Anything that spends money, publishes, or "
                                              "touches an outside account is not tier 0."},
@@ -1118,7 +1169,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     inputs=args.get("inputs") or [],
                     produces=args.get("produces") or [],
                     config=args.get("config") or {},
-                    risk_tier=int(args.get("risk_tier") or 1),
+                    # `or 1` turned an honest 0 into 1: tier 0 is falsy. Absent means 1.
+                    risk_tier=1 if args.get("risk_tier") in (None, "") else args["risk_tier"],
+                    mode=str(args.get("mode") or "create"),
                 )
             except Exception as error:  # noqa: BLE001
                 # THE MESSAGE IS THE REPAIR INSTRUCTION. save_skill's errors say precisely what
@@ -1155,49 +1208,139 @@ def _register_write_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "list_skills",
-        "Skills this project has authored, with what each needs and produces and whether it "
-        "forces an approval. A skill is what a custom workflow step runs.",
+        "Every skill this project can use — the ones it authored and the ones BOSS ships — with "
+        "what each needs, its risk tier, whether it forces an approval, and whether it can run "
+        "right now (and why not). A skill is what an agent is given and what a custom workflow "
+        "step runs.",
         _obj({"project_id": {"type": "string"}}),
     )
     def list_skills(ctx, *, project_id, actor, args):
-        # EVERYTHING THIS PROJECT CAN RUN, not only what it wrote.
+        # EVERYTHING THIS PROJECT CAN RUN, not only what it wrote — and from THE ONE CATALOGUE
+        # (skill_catalogue), so the agent's answer is the same one the runtime and the builder
+        # give.
         #
-        # This returned `skill_definitions` alone, so the agent's view of the world was the
-        # handful of skills an operator had authored — and every skill BOSS SHIPS was invisible
-        # to it. Asked to build a video workflow it reported "no such skill: video.bookend"
-        # about a skill sitting in the catalogue with an executor behind it, then designed
-        # around the gap. An agent that cannot see a capability cannot use it, and will
-        # confidently tell the operator it does not exist.
+        # This once returned `skill_definitions` alone, so every skill BOSS SHIPS was invisible:
+        # asked to build a video workflow it reported "no such skill: video.bookend" about a
+        # skill sitting in the catalogue. It then merged the spec pack by hand — which, once
+        # the spec pack started carrying authored skills too, listed each of those twice.
+        catalogue = services_module("skill_catalogue")
         skills = services_module("skill_definitions")
         pid = args.get("project_id") or project_id
-        keep = ("skill_key", "label", "summary", "behaviour_kind", "inputs",
-                "produces", "risk_tier", "trusted", "enabled", "requires_approval")
         with ctx.begin() as c:
-            authored = [
-                {k: v for k, v in s.items() if k in keep}
-                for s in skills.list_skills(c, pid)
-            ]
-            shipped: list[dict[str, Any]] = []
-            try:
-                from ..config import get_settings
-                from .._compat import services_module as _svc
+            authored = {s["skill_key"]: s for s in skills.list_skills(c, pid)}
+        try:
+            with ctx.begin() as c:
+                entries = catalogue.entries(c, pid)
+        except Exception:  # noqa: BLE001 — a partial answer beats none
+            # The authored skills are still returned if the spec pack cannot be read: they are
+            # the ones an operator is most likely asking about.
+            entries = {key: {"skill_id": key, "label": s["label"], "summary": s["summary"],
+                             "source": "authored", "behaviour_kind": s["behaviour_kind"],
+                             "kind": "", "risk_tier": s["risk_tier"], "trusted": s["trusted"],
+                             "enabled": s["enabled"], "usable": s["enabled"],
+                             "runs_through": "", "reason": None}
+                       for key, s in authored.items()}
+        out: list[dict[str, Any]] = []
+        for item in sorted(entries.values(), key=lambda e: (e["source"] != "authored",
+                                                            e["skill_id"])):
+            row = {
+                "skill_key": item["skill_id"],
+                "label": item["label"],
+                "summary": item["summary"],
+                "source": item["source"],
+                "behaviour_kind": item["behaviour_kind"] if item["source"] == "authored"
+                                  else item["kind"],
+                "risk_tier": item["risk_tier"],
+                "requires_approval": item["risk_tier"] >= 2,
+                "trusted": item["trusted"],
+                "enabled": item["enabled"],
+                "usable": item["usable"] and item["enabled"],
+                **({"runs_through": item["runs_through"]} if item["runs_through"] else {}),
+                **({"reason": item["reason"]} if item["reason"] else {}),
+                "ships_with_boss": item["source"] != "authored",
+            }
+            mine = authored.get(item["skill_id"])
+            if mine is not None:
+                row["inputs"] = mine.get("inputs")
+                row["produces"] = mine.get("produces")
+            out.append(row)
+        return {"skills": out,
+                "authored": sum(1 for r in out if not r["ships_with_boss"]),
+                "ships_with_boss": sum(1 for r in out if r["ships_with_boss"])}
 
-                broker = _svc("entitlements").EntitlementBrokerService(get_settings())
-                for item in broker.list_skills(pid, connection=c):
-                    shipped.append({
-                        "skill_key": item.get("id"),
-                        "label": item.get("id"),
-                        "summary": item.get("description"),
-                        "behaviour_kind": item.get("kind"),
-                        "risk_tier": item.get("risk_tier"),
-                        "enabled": item.get("enabled", True),
-                        "trusted": bool((item.get("provenance") or {}).get("trusted")),
-                        "ships_with_boss": True,
-                    })
-            except Exception:  # noqa: BLE001 — authored skills are still worth returning
-                pass
-        return {"skills": authored + shipped,
-                "authored": len(authored), "ships_with_boss": len(shipped)}
+    @reg.tool(
+        "list_mcp_servers",
+        "The MCP servers registered in this project: id, name, URL, risk tier, whether a person "
+        "has reviewed (trusted) it, whether it is turned on, whether BOSS could reach it at the "
+        "last check (and what to do if not), and the tools it offers. Read this before writing "
+        "an mcp_tool skill or binding an MCP tool to a workflow step.",
+        _obj({"check": {"type": "boolean",
+                        "description": "ask each server again now instead of using the last "
+                                       "answer (up to a minute old)"},
+              "project_id": {"type": "string"}}),
+    )
+    def list_mcp_servers(ctx, *, project_id, actor, args):
+        registry = services_module("mcp_registry")
+        pid = args.get("project_id") or project_id
+        servers = registry.servers_with_tools(
+            ctx.begin, ctx.settings, pid,
+            max_age_seconds=0 if args.get("check") else registry.REACHABILITY_FRESH_SECONDS)
+        return {"servers": [
+            {"id": s["id"], "name": s["name"], "url": s["url"], "risk_tier": s["risk_tier"],
+             "trusted": s["trusted"], "enabled": s["enabled"], "reachable": s["reachable"],
+             "last_checked_at": s["last_checked_at"],
+             **({"status": s["status_note"]} if s["status_note"] else {}),
+             "tools": [{"name": t["name"], "description": t.get("description", "")[:200],
+                        "risk_tier": registry.tool_tier(s, t["name"])}
+                       for t in s["tools"]]}
+            for s in servers]}
+
+    @reg.tool(
+        "register_mcp_server",
+        "Register an MCP server (JSON-RPC over HTTP) so its tools can be bound to workflow steps "
+        "or wrapped as mcp_tool skills. Ask the operator for the URL — one the BOSS API "
+        "container can reach (127.0.0.1 inside the container is the container itself) — and a "
+        "name. A server registered here is UNREVIEWED: its tools at tier 2 or above cannot be "
+        "placed in a workflow until a person marks it trusted on the Skills and MCP page.",
+        _obj({"name": {"type": "string"},
+              "url": {"type": "string", "description": "absolute http(s) URL of the endpoint"},
+              "description": {"type": "string"},
+              "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3,
+                            "description": "the blanket tier for its tools. Default 2: an "
+                                           "outside account is not tier 0 until a person says "
+                                           "so."},
+              "project_id": {"type": "string"}},
+             ["name", "url"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def register_mcp_server(ctx, *, project_id, actor, args):
+        registry = services_module("mcp_registry")
+        pid = args.get("project_id") or project_id
+        tier = args.get("risk_tier")
+        with ctx.begin() as c:
+            try:
+                server = registry.register_mcp_server(
+                    c, pid, str(args.get("name") or ""), str(args.get("url") or ""),
+                    risk_tier=2 if tier in (None, "") else tier,
+                    description=str(args.get("description") or "") or None,
+                    # NEVER TRUSTED FROM A CONVERSATION. Trust is a person's review of a
+                    # server, and is what lets its higher-tier tools be placed at all; a model
+                    # that could grant it could talk its way past the floor.
+                    provenance={"source": "chat", "trusted": False},
+                    actor=actor)
+            except Exception as error:  # noqa: BLE001 — the sentence is the repair
+                return {"ok": False, "error": str(error)[:400]}
+        checked = registry.servers_with_tools(ctx.begin, ctx.settings, pid,
+                                              server_id=server["id"], max_age_seconds=0)
+        now = checked[0] if checked else server
+        return {"status": "registered", "id": now["id"], "name": now["name"],
+                "reachable": now["reachable"],
+                "tools": [t["name"] for t in now["tools"]],
+                **({"status_note": now["status_note"]} if now["status_note"] else {}),
+                "next": "draft_skill with behaviour_kind mcp_tool wraps one of its tools as a "
+                        "skill an agent can be given; draft_custom_step with mcp_server and "
+                        "mcp_tool places one in a workflow."}
 
     @reg.tool(
         "start_workflow",
@@ -3412,7 +3555,7 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
     and then failing to publish into it.
     """
     problems: list[str] = []
-    skills = services_module("skill_definitions")
+    catalogue = services_module("skill_catalogue")
     for entry in spec.get("steps", []):
         binding = entry.get("binding") or {}
         if binding.get("custom_step"):
@@ -3429,13 +3572,22 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
                       "WHERE project_id = :p AND step_key = :k LIMIT 1"),
                 {"p": project_id, "k": step_key},
             ).mappings().first()
+            if row is not None and row["binding_kind"] == "mcp_tool":
+                # A step that calls an MCP tool has no skill behind it; publish_version checks
+                # its server and tool through resolve_risk.
+                continue
             skill_key = str((row or {}).get("skill_id") or step_key)
-            skill = skills.get_skill(connection, project_id, skill_key)
-            if skill is None and skills._skill_exists(connection, project_id, skill_key):
-                # A skill BOSS SHIPS. `get_skill` reads only what this project authored, so
-                # every built-in — the entire media pipeline — validated as missing.
-                skill = {"skill_key": skill_key, "risk_tier": 1, "enabled": True,
-                         "requires_approval": False, "trusted": True}
+            # THE ONE CATALOGUE (skill_catalogue), for authored and shipped skills alike. This
+            # read `get_skill` (authored only) and, for a shipped skill, made up a stand-in at
+            # tier 1 — so a tier-3 publish validated as tier 1 here and was refused only later,
+            # at publish, and an authored skill's review was never seen (it was read from a
+            # `provenance` key the authored row does not have).
+            found = catalogue.entry(connection, project_id, skill_key)
+            skill = None if found is None else {
+                "skill_key": skill_key, "risk_tier": found["risk_tier"],
+                "enabled": found["enabled"] and found["usable"],
+                "provenance": {"trusted": found["trusted"]},
+            }
             problems.extend(caps_module.validate_custom_step(
                 {**entry, "binding": {"skill_id": skill_key}}, skill))
             continue
@@ -6724,6 +6876,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # spends nothing. It is how an operator gets a skill by describing one instead of filling
     # in a form they should not have to understand.
     "draft_skill",
+    # CONNECTING A SOURCE OF TOOLS, so "add my MCP server and use its search tool in this
+    # workflow" can be finished in the conversation that asked for it. Registered unreviewed
+    # (see the tool), so nothing at tier 2 or above becomes placeable without a person.
+    "register_mcp_server",
     # STARTING WORK MEANS STARTING A WORKFLOW.
     #
     # `create_discovery` and `request_meeting` are deliberately NOT here. Research and the PRD

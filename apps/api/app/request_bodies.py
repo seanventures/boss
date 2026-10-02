@@ -790,6 +790,15 @@ class SkillDefinitionSaveBody(OpenRequestBody):
     risk_tier: SkipValidation[int | None] = None
     trusted: SkipValidation[bool | None] = None
     enabled: SkipValidation[bool | None] = None
+    #: create | update | upsert (the default, for scripts written before the distinction).
+    mode: SkipValidation[str | None] = None
+
+class SkillDefinitionSwitchBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'enabled']})
+
+    project_id: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+    enabled: SkipValidation[bool | None] = None
 
 class ChannelOAuthClientBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id']})

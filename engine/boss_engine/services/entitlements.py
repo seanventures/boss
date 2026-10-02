@@ -166,6 +166,7 @@ class EntitlementBrokerService:
         project_id: Optional[str] = None,
         *,
         connection: Optional[Connection] = None,
+        include_authored: bool = True,
     ) -> list[dict[str, Any]]:
         if project_id is not None and connection is None:
             raise ValueError("connection is required when project_id is provided")
@@ -276,6 +277,24 @@ class EntitlementBrokerService:
                         "provenance": provenance,
                     }
                 )
+        if project_id is not None and include_authored:
+            # THE SKILLS THIS PROJECT AUTHORED, in the same list. This is what
+            # SkillRuntimeService, held_skills and the agent loop load specs from; without this
+            # an authored skill was shown everywhere and could run nowhere — invoke raised
+            # SkillNotFoundError. See skill_catalogue for the whole story and the risk rule.
+            #
+            # A key that is already in the catalogue is skipped rather than overriding it:
+            # save_skill refuses a key that shadows a built-in, so a collision here is a row
+            # that predates that refusal, and the shipped skill must stay reachable.
+            from .skill_catalogue import authored_specs
+
+            assert connection is not None
+            by_id = {str(item["id"]): item for item in items}
+            for spec in authored_specs(connection, project_id, by_id):
+                if spec["id"] in by_id:
+                    continue
+                self.validate_skill_spec(spec, f"authored:{project_id}")
+                items.append(spec)
         items.sort(key=lambda item: item["id"])
         return items
 

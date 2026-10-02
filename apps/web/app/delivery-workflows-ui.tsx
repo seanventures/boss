@@ -81,10 +81,14 @@ type CustomStep = {
 };
 
 type Bindable = {
-  skills: { skill_id: string; risk_tier: number; trusted: boolean; unclassified: boolean }[];
+  /** From the ONE skill catalogue: authored, shipped and registered skills alike. `usable`
+   *  false (turned off, or what it runs through is gone) comes with the reason. */
+  skills: { skill_id: string; risk_tier: number; trusted: boolean; unclassified: boolean;
+            label?: string; source?: "authored" | "builtin" | "registered";
+            usable?: boolean; reason?: string | null }[];
   mcp_servers: {
     id: string; name: string; risk_tier: number; trusted: boolean; reachable: boolean;
-    error?: string;
+    error?: string; status_note?: string;
     tools: { name: string; description: string; risk_tier: number }[];
   }[];
 };
@@ -4955,8 +4959,23 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
 
   const blocked = chosen !== null && chosen.risk >= riskFloor && !chosen.trusted;
   // How many things can ACTUALLY be picked, which is not the same as how many servers exist.
-  const choices = bindable.skills.length
+  const choices = bindable.skills.filter((s) => s.usable !== false).length
     + bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0);
+  // TWO GROUPS, NAMED FOR WHAT THEY ARE. "Your skills" used to list project_skills — on a real
+  // install five BOSS system skills and none of the operator's — while the operator's authored
+  // skills and most shipped ones were missing. Both come from the one catalogue now.
+  const yours = bindable.skills.filter((s) => s.source === "authored");
+  const shipped = bindable.skills.filter((s) => s.source !== "authored");
+  const skillOption = (skill: Bindable["skills"][number]) => (
+    <option key={skill.skill_id} value={`skill:${skill.skill_id}`}
+            disabled={skill.usable === false}
+            title={skill.usable === false ? (skill.reason ?? "cannot run") : undefined}>
+      {skill.label && skill.label !== skill.skill_id
+        ? `${skill.label} (${skill.skill_id})` : skill.skill_id}
+      {skill.unclassified ? " (unclassified)" : ""}
+      {skill.usable === false ? ` — ${skill.reason ?? "cannot run"}` : ""}
+    </option>
+  );
   const unreachable = bindable.mcp_servers.filter((m) => !m.reachable).map((m) => m.name);
 
   return (
@@ -4999,14 +5018,11 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
         <select className="input" value={bindingRef} data-testid="dw-define-binding"
                 onChange={(e) => setBindingRef(e.target.value)}>
           <option value="">Choose a skill or tool</option>
-          {bindable.skills.length ? (
-            <optgroup label="Your skills">
-              {bindable.skills.map((skill) => (
-                <option key={skill.skill_id} value={`skill:${skill.skill_id}`}>
-                  {skill.skill_id}{skill.unclassified ? " (unclassified)" : ""}
-                </option>
-              ))}
-            </optgroup>
+          {yours.length ? (
+            <optgroup label="Your skills">{yours.map(skillOption)}</optgroup>
+          ) : null}
+          {shipped.length ? (
+            <optgroup label="Skills BOSS ships">{shipped.map(skillOption)}</optgroup>
           ) : null}
           {bindable.mcp_servers.map((server) => (
             <optgroup key={server.id}
@@ -5082,6 +5098,14 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
               + "registered but not answering, so their tools cannot be listed. "
             : ""}
           Register a skill, or connect an MCP server, and it will appear here.
+        </p>
+      ) : unreachable.length ? (
+        // Said even when there is something else to pick, because a server whose tools are
+        // missing from the list reads as a server that has none.
+        <p className="detail dw-define-empty" data-testid="dw-define-unreachable">
+          {unreachable.join(", ")} {unreachable.length === 1 ? "is" : "are"} not answering, so
+          {unreachable.length === 1 ? " its" : " their"} tools are not listed. Fix the URL or
+          start the server on the Skills and MCP page.
         </p>
       ) : null}
     </form>

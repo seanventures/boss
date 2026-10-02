@@ -104,26 +104,18 @@ def resolve_risk(connection: Connection, project_id: str, row: Any) -> dict[str,
     unusable = {"risk_tier": UNKNOWN_RISK, "trusted": False, "usable": False}
 
     if kind == "skill":
-        skill = connection.execute(
-            text("SELECT enabled, config, provenance FROM project_skills "
-                 "WHERE project_id=:p AND skill_id=:s"),
-            {"p": project_id, "s": row["skill_id"]},
-        ).mappings().first()
-        if skill is None:
-            return {**unusable, "source": "skill",
-                    "reason": f"skill '{row['skill_id']}' is not registered in this project."}
-        if not skill["enabled"]:
-            return {**unusable, "source": "skill",
-                    "reason": f"skill '{row['skill_id']}' is disabled."}
-        config = skill["config"] if isinstance(skill["config"], dict) else {}
-        provenance = skill["provenance"] if isinstance(skill["provenance"], dict) else {}
-        declared = config.get("risk_tier")
-        return {
-            "risk_tier": int(declared) if declared is not None else UNKNOWN_RISK,
-            "trusted": bool(provenance.get("trusted", False)),
-            "usable": True,
-            "source": f"skill {row['skill_id']}",
-        }
+        # THE ONE CATALOGUE. This read `project_skills` alone, so a step bound to a skill the
+        # operator AUTHORED was "not registered in this project" and every workflow placing it
+        # was refused at publish — while the same skill showed as placeable on the Skills page.
+        # Built-in, authored and registered skills, with the risk rule, now come from
+        # skill_catalogue, the same place every other consumer reads.
+        from .skill_catalogue import entry, risk_facts
+
+        facts = risk_facts(entry(connection, project_id, str(row["skill_id"] or "")),
+                           str(row["skill_id"]))
+        if not facts["usable"]:
+            return {**unusable, "source": facts["source"], "reason": facts["reason"]}
+        return {key: facts[key] for key in ("risk_tier", "trusted", "usable", "source")}
 
     if kind == "mcp_tool":
         server = connection.execute(
@@ -137,16 +129,14 @@ def resolve_risk(connection: Connection, project_id: str, row: Any) -> dict[str,
         if not server["enabled"]:
             return {**unusable, "source": "mcp",
                     "reason": f"MCP server '{server['name']}' is disabled."}
-        overrides = (server["tool_risk_overrides"]
-                     if isinstance(server["tool_risk_overrides"], dict) else {})
         provenance = server["provenance"] if isinstance(server["provenance"], dict) else {}
         # A per-tool override beats the server's blanket tier: one dangerous tool on an
-        # otherwise ordinary server is exactly the case the override column exists for.
-        tier = overrides.get(str(row["mcp_tool_name"]))
-        if tier is None:
-            # `server["risk_tier"] or UNKNOWN_RISK` would be wrong: tier 0 is falsy, so every
-            # read-only server would be promoted to the approval floor.
-            tier = server["risk_tier"] if server["risk_tier"] is not None else UNKNOWN_RISK
+        # otherwise ordinary server is exactly the case the override column exists for. The
+        # rule lives in skill_catalogue so an authored mcp_tool skill and a step bound straight
+        # to the tool cannot be tiered differently.
+        from .skill_catalogue import mcp_tool_tier
+
+        tier = mcp_tool_tier(dict(server), str(row["mcp_tool_name"]))
         return {
             "risk_tier": int(tier),
             "trusted": bool(provenance.get("trusted", False)),

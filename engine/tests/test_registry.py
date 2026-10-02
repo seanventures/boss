@@ -171,6 +171,10 @@ _EXPECTED_TOOLS: set[str] = {
     "draft_skill",
     "list_capabilities",
     "list_skills",
+    # The MCP side of the same conversation: see what servers exist (and whether they answer),
+    # and connect one, so "use my server's search tool in this workflow" can be finished in chat.
+    "list_mcp_servers",
+    "register_mcp_server",
     "start_workflow",
     "steer_code_task",
     "stop_preview",
@@ -192,11 +196,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 107, (
+    assert len(reg.names()) == 109, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 61
-    assert len(write) == 46
+    assert len(read) == 62
+    assert len(write) == 47
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -411,6 +415,9 @@ _SAFE_WRITES = [
     # workflow places that step.
     "draft_skill",
     "draft_workflow",
+    # Connecting a server is undone by removing it, and it lands UNREVIEWED, so nothing at tier
+    # 2 or above on it becomes placeable until a person marks it trusted.
+    "register_mcp_server",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's
     # click gets a writable shell on a host.
