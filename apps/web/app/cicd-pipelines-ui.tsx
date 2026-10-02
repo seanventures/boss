@@ -155,7 +155,8 @@ export function CICDPipelinesPanel({
       >
         {vendors.length === 0 ? (
           <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>
-            No vendor catalog loaded. Ensure the API exposes GET /v1/cicd/catalog.
+            The pipeline vendor catalog did not load — the BOSS API did not answer for it.
+            Reload the page; if it stays empty, check that the API is running in Repo and model.
           </div>
         ) : (
           vendors.map((v) => (
@@ -315,7 +316,7 @@ export function CICDPipelinesPanel({
           </div>
         </div>
         <p style={{ margin: 0, fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
-          BOSS-side ledger of pipeline runs (POST /v1/cicd/runs). Not live cloud polling —
+          BOSS&apos;s own record of pipeline runs it has been told about. Not live cloud polling —
           that requires pipeline adapters + tokens. Links to delivery and deployments when
           recorded with delivery_run_id / deployment_run_id.
         </p>

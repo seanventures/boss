@@ -103,7 +103,7 @@ export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
         {error ? <p className="detail" style={{ color: "#f85149" }}>{error}</p> : null}
         {!error && hosts.length === 0 ? (
           <p className="detail">
-            No hosts registered yet. Register one under CI/CD and the Deployment Manager can
+            No hosts registered yet. Register one in Infra (Hosts) and the Deployment Manager can
             report on it.
           </p>
         ) : null}
