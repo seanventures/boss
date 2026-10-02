@@ -784,6 +784,35 @@ def _probe(url: str, headers: dict[str, str], timeout: int = 10) -> dict[str, An
         return {"ok": False, "status": 0, "error": str(error.reason)}
 
 
+#: Where a repository is connected in Mission Control. Named once so the status card, the
+#: setup steps and the build's own error all send an operator to the same place.
+REPOSITORY_CONNECT_PATH = "Mission Control, Settings, Repo and model, Repository"
+
+
+def _community(settings: Settings) -> bool:
+    return str(getattr(settings, "boss_edition", "") or "").strip().lower() in {
+        "community", "oss", "local"}
+
+
+def repository_guidance(settings: Settings) -> str:
+    """How to give this install a repository, said as the path that works on it.
+
+    Community's compose file does not pass BOSS_TARGET_GITHUB_OWNER / _REPO to its containers,
+    so telling a Community operator to set them sends them to edit a file that changes
+    nothing. The connection screen stores the token in the secret store and binds the
+    repository to the project, which is what a build resolves.
+    """
+    connect = (f"Connect a GitHub repository in {REPOSITORY_CONNECT_PATH}: a fine-grained "
+               "token with Contents and Pull requests set to read and write, and the "
+               "repository as owner/name.")
+    if _community(settings):
+        return (f"No repository is connected. {connect} Community does not read "
+                "BOSS_TARGET_GITHUB_OWNER or BOSS_TARGET_GITHUB_REPO from .env.")
+    return (f"No repository is connected. {connect} A server you run yourself can instead "
+            "set BOSS_GITHUB_TOKEN, BOSS_TARGET_GITHUB_OWNER and BOSS_TARGET_GITHUB_REPO in "
+            "the API's environment.")
+
+
 def check_github(settings: Settings) -> dict[str, Any]:
     """What this install is pointed at, and whether the token can actually push to it.
 
@@ -803,8 +832,8 @@ def check_github(settings: Settings) -> dict[str, Any]:
     }
     if not out["configured"]:
         out["ok"] = False
-        out["error"] = ("BOSS_GITHUB_TOKEN, BOSS_TARGET_GITHUB_OWNER and "
-                        "BOSS_TARGET_GITHUB_REPO are not all set.")
+        out["error"] = repository_guidance(settings)
+        out["connect_in"] = REPOSITORY_CONNECT_PATH
         return out
     probe = _probe(
         f"https://api.github.com/repos/{owner}/{repo}",
@@ -1061,6 +1090,10 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
             "done": bool((connections and repos) or env_github),
             "detail": ("BOSS writes code on a branch and opens a pull request. It needs a "
                        "repository it is allowed to push to."),
+            # WHERE, said only while it is still to do: the path that works on this install.
+            **({} if ((connections and repos) or env_github)
+               else {"how": repository_guidance(settings),
+                     "connect_in": REPOSITORY_CONNECT_PATH}),
             "from_environment": env_github and not (connections and repos),
             "repository": f"{env_owner}/{env_repo}" if env_github else None,
         },

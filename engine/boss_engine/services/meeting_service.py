@@ -34,6 +34,40 @@ from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
 from .openai_adapter import estimate_cost_usd_micros
 
+# ---- what a meeting is ABOUT, for titles ------------------------------------
+#: The panel brief `request_meeting` puts in front of the operator's request, and the research
+#: block it appends after it. Defined here so the tool that writes them and the titles that
+#: read past them cannot drift apart.
+PANEL_BRIEF_MARKER = "--- WHAT THIS PANEL IS FOR ---"
+REQUEST_MARKER = "--- WHAT YOU ARE BEING ASKED ABOUT ---"
+RESEARCH_MARKER = "--- RESEARCH ALREADY DONE FOR THIS ---"
+
+
+def directive_headline(directive: str, limit: int = 80) -> str:
+    """The operator's request, cut for a title.
+
+    A panel's directive is its whole prompt: the workflow brief comes first and research is
+    appended after the request. Titles cut from the start of it read "PRD: --- WHAT THIS PANEL
+    IS FOR --- You are the panel inside BOSS's..." on every catalogue run. The title is the
+    request itself: the text between the request marker and the research block, first line,
+    whitespace collapsed. A directive with no markers is its own request.
+    """
+    text_ = str(directive or "")
+    if REQUEST_MARKER in text_:
+        text_ = text_.split(REQUEST_MARKER, 1)[1]
+    elif PANEL_BRIEF_MARKER in text_:
+        # A brief with no request section is all brief; there is no request to title.
+        text_ = ""
+    text_ = text_.split(RESEARCH_MARKER, 1)[0]
+    lines = [" ".join(line.split()) for line in text_.splitlines()]
+    headline = next((line for line in lines if line), "")
+    if not headline:
+        return "Untitled request"
+    if len(headline) <= limit:
+        return headline
+    return headline[:limit].rstrip() + "…"
+
+
 # ---- the role-agent template catalog -----------------------------------------
 # Default AI role agents a meeting can be staffed with. A meeting picks any subset
 # (the facilitator is always added). This is the "template" of available roles.
@@ -651,7 +685,7 @@ def convene_prd_meeting_core(
             task = intake.create_task(
                 connection,
                 project_id=project_id,
-                title=f"PRD meeting: {directive[:90]}",
+                title=f"PRD meeting: {directive_headline(directive, 90)}",
                 description=directive,
                 dedupe_key=dedupe_key,
                 priority="p1",
@@ -864,14 +898,14 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         text("""INSERT INTO meetings (id, project_id, title, purpose, status, participants,
                                       minutes_artifact_id, completed_at, created_by)
                 VALUES (:id, :p, :title, :purpose, 'completed', CAST(:parts AS JSONB), :min, now(), 'boss')"""),
-        {"id": meeting_id, "p": project_id, "title": f"PRD meeting: {run['directive'][:80]}",
+        {"id": meeting_id, "p": project_id, "title": f"PRD meeting: {directive_headline(run['directive'])}",
          "purpose": "Cross-functional PRD review and drafting",
          "parts": json.dumps([p["title"] for p in personas] + [FACILITATOR_TITLE]), "min": minutes_artifact_id},
     )
     decision_id = create_blocking_decision(connection, project_id, task_id,
         "Approve publishing the PRD the team drafted",
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
-         "args": {"title": "PRD: " + run["directive"][:80].rstrip(), "markdown": state.get("prd_markdown") or "",
+         "args": {"title": "PRD: " + directive_headline(run["directive"]), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)
 
