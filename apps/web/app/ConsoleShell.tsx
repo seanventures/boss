@@ -312,6 +312,9 @@ export type ConsoleShellProps = {
   /** From GET /v1/edition (or BOSS_EDITION). Defaults to community honesty. */
   editionId?: string;
   initialArea?: string;
+  /** True when console sign-in is configured (BOSS_CONSOLE_PASSWORD set); Sign out is shown only
+   *  then. Read on the server, where the password lives. */
+  signOutAvailable?: boolean;
   children: ReactNode;
 };
 
@@ -321,6 +324,7 @@ export default function ConsoleShell({
   org,
   editionId,
   initialArea,
+  signOutAvailable = false,
   children,
 }: ConsoleShellProps) {
   const resolvedEdition = normalizeEditionId(editionId);
@@ -1129,10 +1133,13 @@ export default function ConsoleShell({
               <div><span>Operator</span><strong><UserCircle size={15} aria-hidden /> {scope.actor}</strong></div>
               <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
               {/* SIGN OUT. /api/auth/logout existed and nothing called it, so the only way to
-                  end a console session on a shared machine was to clear the browser's cookies. */}
-              <form action="/api/auth/logout" method="post" data-testid="bx-sign-out">
-                <button type="submit" className="cap-btn">Sign out</button>
-              </form>
+                  end a console session on a shared machine was to clear the browser's cookies.
+                  Shown only when sign-in is configured: there is no session to end otherwise. */}
+              {signOutAvailable ? (
+                <form action="/api/auth/logout" method="post" data-testid="bx-sign-out">
+                  <button type="submit" className="cap-btn">Sign out</button>
+                </form>
+              ) : null}
             </div>
           </details>
         </header>

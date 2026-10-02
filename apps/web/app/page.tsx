@@ -1,4 +1,5 @@
 
+import { consoleAuthConfig } from "../lib/console-session";
 import {
   applyChangeSetAction,
   approveChangeSetAction,
@@ -960,6 +961,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       org={{ id: activeOrgId, name: activeOrgName }}
       editionId={editionId}
       initialArea={requestedArea}
+      // Sign out only means something when the console has a password; without one the button
+      // led to a sign-in page that could only say authentication is not configured.
+      signOutAvailable={consoleAuthConfig() !== null}
     >
       <div className="frame">
         {/* ONE AGENT SURFACE.
