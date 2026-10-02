@@ -855,7 +855,7 @@ def connect_coding_agent(
 
     record: dict[str, Any] = {"connected": True, "entitlement_recorded": False}
     if spec.entitlement_source_id:
-        from .entitlements import EntitlementBrokerService
+        from .entitlements import WORKSPACE_OPERATOR_ID, EntitlementBrokerService
 
         payload = {
             "project_id": project_id,
@@ -863,8 +863,12 @@ def connect_coding_agent(
             "source_id": spec.entitlement_source_id,
             "source_kind": "official_cli",
             "entitlement_kind": "subscription",
-            "owner_type": "operator",
-            "owner_id": actor,
+            # THE WORKSPACE OPERATOR'S, whoever pressed Connect — the same owner the seed gives
+            # every subscription. Stamping the requesting principal made it personally owned by
+            # the console's own identity ("executive_console") on boss-1, and every discovery
+            # and decision a member ("ceo") started was refused as pooling it.
+            "owner_type": "workspace_operator",
+            "owner_id": WORKSPACE_OPERATOR_ID,
             # A subscription seat is the operator's own. Saying so is what stops it being
             # handed to multi-tenant work it is not licensed for.
             "multi_tenant_allowed": False,

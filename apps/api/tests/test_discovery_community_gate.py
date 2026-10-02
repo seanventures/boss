@@ -283,12 +283,33 @@ def test_the_workspace_operators_subscription_serves_research_started_by_a_membe
     assert governed.calls == STAGES
 
 
-def test_someone_elses_personal_subscription_is_still_not_pooled(engine, governed, owned_source):
+def test_community_uses_the_connected_subscription_whoever_connected_it(
+    engine, governed, owned_source,
+):
+    """Community has one operator and no identity layer, so "whose subscription" has no answer
+    to check against: whoever pressed Connect (the console's own identity, on boss-1) must not
+    lock the operator's own research out of it."""
+    owned_source("operator", "executive_console")
+    run_id = _start()
+    assert _execute(run_id, _lease(engine, run_id)) == {"status": "completed", "retry": False}
+
+
+def test_an_edition_with_identities_still_refuses_another_persons_subscription(
+    engine, governed, owned_source, monkeypatch,
+):
     owned_source("operator", "somebody_else")
     run_id = _start()
+    from boss_engine.services import model_gateway
+    real = model_gateway.ModelGatewayService.consumer_for
+
+    def as_enterprise(self, *a, **k):
+        self.settings = self.settings.model_copy(update={"boss_edition": "enterprise"})
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(model_gateway.ModelGatewayService, "consumer_for", as_enterprise)
     result = _execute(run_id, _lease(engine, run_id))
-    assert result["status"] == "failed" and result["retry"] is False
-    assert "pooled" in result["error"] and governed.calls == []
+    assert result["status"] == "failed" and "pooled" in result["error"]
+    assert governed.calls == []
 
 
 def test_the_worker_route_runs_the_leased_job(client, engine, governed):
@@ -451,3 +472,31 @@ def test_a_refused_connection_still_marks_the_login_rejected_for_setup(client, e
     assert response.status_code == 422 and "login was rejected" in response.json()["detail"]
     states = client.get("/v1/settings", params={"project_id": PROJECT}).json()
     assert states["engine_login_states"] == {"claude_code": "rejected"}
+
+
+def test_research_runs_on_a_subscription_connected_through_the_console(
+    client, engine, governed, owned_source, monkeypatch,
+):
+    """boss-1, third attempt: connecting Claude in the console recorded the subscription as
+    personally owned by the console's own identity ("executive_console"), and research the
+    member "ceo" started was refused as pooling it. A connected subscription belongs to the
+    workspace operator, whoever pressed Connect."""
+    from boss_engine.services import cli_harness, setup_service
+
+    monkeypatch.setattr(cli_harness, "detect", lambda _spec: {
+        "installed": True, "authenticated": True, "version": "2", "auth_detail": "signed in"})
+    monkeypatch.setattr(setup_service, "governed_proof",
+                        lambda *_a, **_k: {"ok": True, "replied": "BOSS_OK"})
+    connected = client.post("/v1/setup/coding-agents/connect", json={
+        "project_id": PROJECT, "actor": "executive_console", "provider": "claude_code",
+        "prove": True})
+    assert connected.status_code in (200, 201), connected.text
+    with engine.connect() as connection:
+        owner = connection.execute(text(
+            "SELECT owner_type, owner_id FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = 'anthropic_claude_code'"), {"p": PROJECT}).one()
+    assert tuple(owner) == ("workspace_operator", "founder")
+    # The research source behaves like that subscription: owned the same way.
+    owned_source(*owner)
+    run_id = _start()
+    assert _execute(run_id, _lease(engine, run_id)) == {"status": "completed", "retry": False}

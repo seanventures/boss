@@ -38,6 +38,10 @@ class EntitlementConnectionSessionStateError(Exception):
     pass
 
 
+#: Who owns a subscription connected to this workspace: its operator, whoever pressed Connect.
+WORKSPACE_OPERATOR_ID = "founder"
+
+
 class EntitlementBrokerService:
     OFFICIAL_OAUTH_METHODS = {
         "official_cli_oauth",
@@ -878,7 +882,8 @@ class EntitlementBrokerService:
                         "entitlement_kind", "usage_based_api"
                     ),
                     "owner_type": owner_type,
-                    "owner_id": "founder" if owner_type == "workspace_operator" else project_id,
+                    "owner_id": (WORKSPACE_OPERATOR_ID if owner_type == "workspace_operator"
+                                 else project_id),
                     "workload_classes_allowed": source_defaults.get(
                         "workload_classes_allowed", []
                     ),
