@@ -512,7 +512,7 @@ describe("managing runs, not just watching them", () => {
     expect(DW2).toContain('testId: "dw-rerun"');
     // The label is the engine's, sent with the run as one of its `actions`.
     expect(readFileSync("../../engine/boss_engine/services/workflow_run_actions.py", "utf8"))
-      .toContain('_action("rerun", "Run this workflow again")');
+      .toContain('_verdict("rerun", "Run this workflow again", ENABLED)');
   });
 
   it("lets the release decision say WHERE it ships", () => {

@@ -1,4 +1,5 @@
-"""What an operator may do to a workflow run, decided ONCE, here, from the run's real state.
+"""What an operator may do to a workflow run, decided ONCE, here, from the run's real state —
+and enforced from the same place.
 
 THE INCIDENT. A cancelled Standard Product Delivery run whose research had FAILED still offered
 "Build on this research →". The product owner, looking at the red ✗ on Research and the button
@@ -10,7 +11,7 @@ before the runner stopped forgiving failures is exactly that: recorded `succeede
 
 That was one of a family. Every workflow-management button on the run card was decided by a
 separate ad-hoc condition in delivery-workflows-ui.tsx, each a private copy of a rule the engine
-already enforces somewhere else, and they disagreed with the engine in exactly the places that
+already enforced somewhere else, and they disagreed with the engine in exactly the places that
 hurt:
 
 * "Remove this run" on a `blocked` run — the console's "not active" included `blocked`, and
@@ -20,21 +21,34 @@ hurt:
 * "Try … again" on a cancelled run's steps, which revives a run the Stop button had just
   promised "cannot be resumed".
 
-THE RULE NOW. The API attaches `actions` to every run it serializes for the console, computed
-by `run_actions` below from the run's status, its steps and — for research — the dossier
-itself. The console renders exactly that list: a button per action, disabled with the reason
-as its help when `enabled` is false, and nothing it was not given. It holds no opinion of its
-own about which buttons a run should have.
+THE FIRST FIX MOVED THE BUTTONS AND LEFT THE ACTIONS ALONE. The list was computed here, but the
+endpoints kept their own preconditions: Try again was hidden on a cancelled run while
+POST retry-step, `retry_failed_step` and the agent's `retry_workflow_step` all still accepted it;
+Skip's "is this an approval" test was a hand copy of `workflows._is_gate_step`; and `from_run`
+built on a run that had not finished, which the button never offered. The review that found it
+put it plainly: the button and the action could still disagree — the very class of bug this
+module exists to end.
+
+THE RULE NOW. One function, `_verdicts`, decides every action on a run from its status, its
+steps (the LATEST attempt of each — the row `_latest_step_row` acts on) and, for research, the
+dossier itself. Everything else reads it:
+
+* `run_actions` — the list the API sends with every run (the console's list, `get_run`,
+  `list_runs`). The console renders exactly that list and holds no opinion of its own.
+* `require` — what every operation that changes a run calls before it does anything:
+  `retry_failed_step`, `skip_failed_step`, `cancel_run`, `delete_run`, `recheck_run` and the
+  start endpoint's `from_run`. The console's buttons, the agent's tools and a raw API call all
+  reach those operations, so none of them can do what the button would not have offered, and a
+  refusal says the same sentence the button's help does.
 
 What appears, and what does not:
 
-* An action that does not APPLY to this run is absent — "Build on this research" on a run whose
-  research failed is not greyed out, it is not there, because there is nothing to build on.
+* An action that does not APPLY to this run is ABSENT — "Build on this research" on a run whose
+  research failed is not greyed out, it is not there, because there is nothing to build on. So
+  is Try again on a run that was stopped or has finished: it will never become possible, and a
+  greyed button under the red ✗ is the incident again with less colour.
 * An action that applies but cannot be taken RIGHT NOW is present and disabled with a sentence
-  saying why — research that is still being written up, a run that is busy compensating.
-
-`research_to_build_on` is shared with the start endpoint's `from_run`, so the button and the
-action it triggers can never disagree about whether a run researched anything.
+  saying why — research that is still being written up, a run busy compensating.
 """
 from __future__ import annotations
 
@@ -44,17 +58,25 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .workflows import WorkflowConflictError, WorkflowNotFoundError
+
 #: A run still doing, or still able to do, work: Stop applies, Remove does not. `blocked` is
 #: here because `cancel_run` stops it and `delete_run` refuses it — the console's private list
 #: left it out and so offered the one button that could not work and hid the one that could.
 ACTIVE_RUN_STATES = frozenset({"queued", "validating", "running", "waiting", "paused", "blocked"})
 
-#: A run that is over. Mirrors `workflows.TERMINAL_RUN_STATES`, which `delete_run` reads; a test
-#: holds the two equal.
+#: A run that is over. Mirrors `workflows.TERMINAL_RUN_STATES`, which `delete_run`'s waiter
+#: check still reads; a test holds the two equal.
 FINISHED_RUN_STATES = frozenset({"completed", "failed", "deadlettered", "cancelled", "compensated"})
 
+#: Finished runs NOTHING in which runs again. `failed` and `deadlettered` are finished too, but a
+#: run stopped by a failure is exactly the one Try again and Skip exist for; these three are not:
+#: somebody stopped it (Stop promises "it cannot be resumed"), it completed, or it was undone.
+CLOSED_RUN_STATES = frozenset({"cancelled", "completed", "compensated"})
+
 #: A run undoing what it did. Neither stoppable (`cancel_run` would race the compensation) nor
-#: removable (`delete_run` refuses it) until that finishes.
+#: removable (`delete_run` refuses it) until that finishes — the one TEMPORARY state, and so the
+#: one where an action is shown disabled rather than left out.
 COMPENSATING = "compensating"
 
 #: The step states "Try … again" applies to. `workflows.OPERATOR_RECOVERABLE_STEP_STATES`.
@@ -82,27 +104,72 @@ BUILD_WORKFLOW_KEY = "standard_product_delivery"
 RUN_ACTION_KEYS = ("recheck", "stop", "stop_and_rerun", "rerun", "remove", "build_on_research")
 STEP_ACTION_KEYS = ("retry_step", "skip_step")
 
+#: A verdict's three states. Only the first two reach the console; all three reach `require`.
+ENABLED, DISABLED, ABSENT = "enabled", "disabled", "absent"
 
-def _action(key: str, label: str, *, enabled: bool = True, reason: Optional[str] = None,
-            step_id: Optional[str] = None) -> dict[str, Any]:
-    out: dict[str, Any] = {"key": key, "label": label, "enabled": bool(enabled),
-                           "reason": None if enabled else (reason or "not available right now")}
+
+class RunActionRefused(WorkflowConflictError):
+    """An operation was asked for that this run's actions do not offer, or offer disabled.
+
+    A `WorkflowConflictError`, so every endpoint and tool that already turns a conflict into a
+    409 or an `{"ok": False}` says this one too, in the action's own words."""
+
+    def __init__(self, key: str, reason: str, *, step_id: Optional[str] = None):
+        super().__init__(reason)
+        self.key = key
+        self.step_id = step_id
+        self.reason = reason
+
+
+def is_gate(kind: Any, capability: Any) -> bool:
+    """An approval: a decision step, or a capability declared `is_gate`.
+
+    THE ONE TEST. `workflows._is_gate_step` reads a spec template through this, and the action
+    list reads a step through it. They were two hand copies, and a gate one of them missed would
+    be an approval somebody could skip past — a person's no turned into a yes."""
+    if kind == "decision":
+        return True
+    key = str(capability or "")
+    if not key:
+        return False
+    from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
+
+    return key in CAPABILITY_KEYS and bool(get_capability(key).is_gate)
+
+
+def _verdict(key: str, label: str, state: str, reason: Optional[str] = None,
+             step_id: Optional[str] = None, **extra: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {"key": key, "label": label, "state": state,
+                           "reason": None if state == ENABLED else (reason or "not available")}
     if step_id is not None:
         out["step_id"] = step_id
+    out.update(extra)
+    return out
+
+
+def _public(verdict: dict[str, Any]) -> dict[str, Any]:
+    """The shape the API sends — `enabled` and `reason` — never the internal three-way state."""
+    out = {k: v for k, v in verdict.items() if k != "state"}
+    out["enabled"] = verdict["state"] == ENABLED
     return out
 
 
 def _output(step: dict[str, Any]) -> dict[str, Any]:
     out = step.get("output")
+    if isinstance(out, str):
+        try:
+            out = json.loads(out)
+        except ValueError:
+            out = {}
     return out if isinstance(out, dict) else {}
 
 
 def step_capability(step: dict[str, Any]) -> str:
     """The capability a step runs, from whichever shape the caller serialized.
 
-    The console's list endpoint resolves it from the spec into `capability`; `get_run` carries
-    the binding snapshot instead. Either is the contract — never the step's id, which a customer
-    may rename.
+    `load_runs` resolves it from the run's pinned spec into `capability`; a serialized step from
+    elsewhere carries the binding snapshot instead. Either is the contract — never the step's
+    id, which a customer may rename.
     """
     named = step.get("capability")
     if isinstance(named, str) and named:
@@ -115,15 +182,8 @@ def step_capability(step: dict[str, Any]) -> str:
     return ""
 
 
-def _is_gate(step: dict[str, Any]) -> bool:
-    """An approval: a decision step, or a capability declared `is_gate`. Same test as
-    `workflows._is_gate_step`, read off the serialized step rather than the spec."""
-    if (step.get("kind") or step.get("step_kind")) == "decision":
-        return True
-    from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
-
-    key = step_capability(step)
-    return key in CAPABILITY_KEYS and bool(get_capability(key).is_gate)
+def _step_kind(step: dict[str, Any]) -> str:
+    return str(step.get("kind") or step.get("step_kind") or "")
 
 
 def _step_label(step: dict[str, Any]) -> str:
@@ -133,6 +193,30 @@ def _step_label(step: dict[str, Any]) -> str:
     if key in CAPABILITY_KEYS:
         return get_capability(key).label
     return str(step.get("step_id") or key or "this step")
+
+
+def latest_attempts(steps: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per step id — the latest attempt, which is the row the operations act on
+    (`workflows._latest_step_row`: newest `created_at`, then highest iteration).
+
+    A loop body or a retried branch leaves older rows behind; offering Try again for an old
+    failed iteration that a later one superseded would be a button for a row nothing acts on.
+    In the order the steps were first met, so the list reads in run order.
+    """
+    ordered = sorted(
+        enumerate(steps),
+        key=lambda pair: (str(pair[1].get("created_at") or ""),
+                          int(pair[1].get("iteration") or 0), pair[0]),
+    )
+    latest: dict[str, dict[str, Any]] = {}
+    first_seen: dict[str, int] = {}
+    for position, step in ordered:
+        step_id = str(step.get("step_id") or "")
+        if not step_id:
+            continue
+        latest[step_id] = step
+        first_seen.setdefault(step_id, position)
+    return [latest[s] for s in sorted(latest, key=lambda s: first_seen[s])]
 
 
 def _discovery_of(step: dict[str, Any]) -> str:
@@ -215,77 +299,151 @@ def research_to_build_on(
     return discovery_id, None, True
 
 
-def run_actions(
+def _verdicts(
     run: dict[str, Any], steps: list[dict[str, Any]],
     discoveries: Optional[dict[str, dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
-    """The actions the console offers on one run, in the order it shows them.
+    """EVERY action this module knows, for one run: enabled, disabled or absent, and why.
 
-    Pure: everything it reads is passed in, so the whole rule set is a table test
-    (engine/tests/test_a_runs_actions_come_from_its_state.py).
+    The one decision. `run_actions` shows the ones that are not absent; `require` refuses any
+    that is not enabled, with the same sentence. Pure: everything it reads is passed in, so the
+    whole rule set is a table test (engine/tests/test_a_runs_actions_come_from_its_state.py).
     """
     status = str(run.get("status") or "")
     active = status in ACTIVE_RUN_STATES
     finished = status in FINISHED_RUN_STATES
+    closed = status in CLOSED_RUN_STATES
     compensating = status == COMPENSATING
-    actions: list[dict[str, Any]] = []
+    undoing = "it is undoing what it did — wait for that to finish"
+    current = latest_attempts(steps)
+    out: list[dict[str, Any]] = []
 
     # RE-CHECK: re-tests the recorded blocker of every failed step and re-queues the ones whose
-    # blocker is gone. Only where a step HAS a recorded failure, and never on a run somebody
-    # stopped or one that finished — re-queueing a step of a cancelled run would quietly revive
-    # it, and a completed run has nothing blocked.
-    if status not in {"completed", "cancelled", "compensated"} and not compensating \
-            and any(step.get("status") in RETRYABLE_STEP_STATES for step in steps):
-        actions.append(_action("recheck", "Re-check this workflow"))
+    # blocker is gone — each through `retry_failed_step`, so it applies exactly where Try again
+    # would. Only where a step HAS a recorded failure; never on a run somebody stopped or one
+    # that finished, where re-queueing a step would quietly revive it.
+    recheck = "Re-check this workflow"
+    if closed:
+        out.append(_verdict("recheck", recheck, ABSENT,
+                            f"this run is {status}, so nothing in it is put back in the queue "
+                            "— run the workflow again to try afresh"))
+    elif compensating:
+        out.append(_verdict("recheck", recheck, ABSENT, undoing))
+    elif not any(step.get("status") in RETRYABLE_STEP_STATES for step in current):
+        out.append(_verdict("recheck", recheck, ABSENT,
+                            "no step on this run has a recorded failure to re-check"))
+    else:
+        out.append(_verdict("recheck", recheck, ENABLED))
 
     if active:
-        actions.append(_action("stop", "Stop this run"))
-        actions.append(_action("stop_and_rerun", "Stop and run again"))
+        out.append(_verdict("stop", "Stop this run", ENABLED))
+        out.append(_verdict("stop_and_rerun", "Stop and run again", ENABLED))
     elif compensating:
-        why = "it is undoing what it did — wait for that to finish"
-        actions.append(_action("stop", "Stop this run", enabled=False, reason=why))
+        out.append(_verdict("stop", "Stop this run", DISABLED, undoing))
+        out.append(_verdict("stop_and_rerun", "Stop and run again", ABSENT, undoing))
+    else:
+        why = f"this run is already {status or 'over'}, so there is nothing to stop"
+        out.append(_verdict("stop", "Stop this run", ABSENT, why))
+        out.append(_verdict("stop_and_rerun", "Stop and run again", ABSENT,
+                            f"{why} — run it again instead"))
+
     if finished:
-        actions.append(_action("rerun", "Run this workflow again"))
-        actions.append(_action("remove", "Remove this run"))
-    elif compensating:
-        actions.append(_action("remove", "Remove this run", enabled=False,
-                               reason="it is undoing what it did — it can be removed after"))
+        out.append(_verdict("rerun", "Run this workflow again", ENABLED))
+        out.append(_verdict("remove", "Remove this run", ENABLED))
+    else:
+        out.append(_verdict("rerun", "Run this workflow again", ABSENT,
+                            "it is still going — Stop and run again replaces it rather than "
+                            "starting a second workflow beside it"))
+        if compensating:
+            out.append(_verdict("remove", "Remove this run", DISABLED,
+                                "it is undoing what it did — it can be removed after"))
+        else:
+            # The sentence `delete_run` has always refused with: what to do instead.
+            out.append(_verdict(
+                "remove", "Remove this run", ABSENT,
+                f"That run is {status}, and work that is still going cannot be deleted. "
+                "Cancel it first — that stops the work — and then it can be removed."))
 
     # BUILD ON THIS RESEARCH: a finished run whose research SUCCEEDED and left a completed
     # dossier with findings. Not on a live run — a second workflow on the same directive while
     # this one is still going is the duplicate "Stop and run again" exists to prevent.
-    if finished:
-        _, why_not, applies = research_to_build_on(steps, run.get("input"), discoveries or {})
-        if applies:
-            actions.append(_action("build_on_research", "Build on this research →",
-                                   enabled=why_not is None, reason=why_not))
+    build = "Build on this research →"
+    if not finished:
+        out.append(_verdict("build_on_research", build, ABSENT,
+                            "this run is still going — its research can be built on once it "
+                            "has finished"))
+    else:
+        found, why_not, applies = research_to_build_on(steps, run.get("input"), discoveries or {})
+        state = ENABLED if found else DISABLED if applies else ABSENT
+        out.append(_verdict("build_on_research", build, state, why_not,
+                            **({"discovery_id": found} if found else {})))
 
-    # PER STEP: Try again, and Skip and proceed. One pair per step that needs a decision.
-    for step in steps:
+    # PER STEP: Try again, and Skip and proceed — on the latest attempt of each step.
+    for step in current:
         step_status = str(step.get("status") or "")
         step_id = str(step.get("step_id") or "")
-        if step_status not in RETRYABLE_STEP_STATES or not step_id:
-            continue
-        name = _step_label(step)
-        blocked_by = None
-        if status == "cancelled":
+
+        if step_status not in RETRYABLE_STEP_STATES:
+            # Re-queueing a step that is running would run it twice.
+            retry = (ABSENT, f"'{step_id}' is {step_status}, so there is nothing to retry.")
+        elif status == "cancelled":
             # Stop promises "it cannot be resumed; start it again to try afresh". Retrying a
             # step here would resume it — `retry_failed_step` revives the run to `running`.
-            blocked_by = ("this run was stopped, and a stopped run is not resumed — "
-                          "run the workflow again to try afresh")
-        elif status in {"compensating", "compensated"}:
-            blocked_by = "this run is undoing what it did, so nothing in it runs again"
-        elif status == "completed":
-            blocked_by = "this run has finished"
-        actions.append(_action("retry_step", f"Try {name} again", enabled=blocked_by is None,
-                               reason=blocked_by, step_id=step_id))
-        # Skip is narrower: never an approval (a refused gate is somebody's no, and a skip
-        # would turn it into a yes), never a cancelled step. `workflows.skip_failed_step`.
-        if step_status in SKIPPABLE_STEP_STATES and not _is_gate(step):
-            actions.append(_action("skip_step", "Skip and proceed", enabled=blocked_by is None,
-                                   reason=blocked_by, step_id=step_id))
-    return actions
+            retry = (ABSENT, "this run was stopped, and a stopped run is not resumed — "
+                             "run the workflow again to try afresh")
+        elif closed:
+            retry = (ABSENT, f"this run is {status}, so nothing in it runs again — "
+                             "run the workflow again to try afresh")
+        elif compensating:
+            retry = (DISABLED, undoing)
+        else:
+            retry = (ENABLED, None)
+        out.append(_verdict("retry_step", f"Try {_step_label(step)} again", retry[0], retry[1],
+                            step_id=step_id))
 
+        # Skip is narrower: never an approval (a refused gate is somebody's no, and a skip
+        # would turn it into a yes), never a cancelled step.
+        if step_status not in SKIPPABLE_STEP_STATES:
+            skip = (ABSENT, f"'{step_id}' is {step_status}. Only a step that failed can be "
+                            "skipped — a live step is still working, and a finished one has "
+                            "nothing to skip.")
+        elif closed:
+            skip = (ABSENT, f"this run is {status}, so there is nothing to proceed to.")
+        elif is_gate(_step_kind(step), step_capability(step)):
+            skip = (ABSENT, f"'{step_id}' is an approval. It did not fail — somebody answered "
+                            "no — and skipping it would turn that answer into a yes. Reopen "
+                            "it with Try again instead.")
+        elif compensating:
+            skip = (DISABLED, undoing)
+        else:
+            skip = (ENABLED, None)
+        out.append(_verdict("skip_step", "Skip and proceed", skip[0], skip[1], step_id=step_id))
+    return out
+
+
+def run_actions(
+    run: dict[str, Any], steps: list[dict[str, Any]],
+    discoveries: Optional[dict[str, dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    """The actions the console offers on one run, in the order it shows them: every verdict
+    that is not absent, as `{key, label, enabled, reason[, step_id]}`."""
+    return [_public(v) for v in _verdicts(run, steps, discoveries) if v["state"] != ABSENT]
+
+
+def decide(
+    run: dict[str, Any], steps: list[dict[str, Any]],
+    discoveries: Optional[dict[str, dict[str, Any]]], key: str, step_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """The verdict on ONE action — enabled, disabled or absent, and why."""
+    if key not in RUN_ACTION_KEYS and key not in STEP_ACTION_KEYS:
+        raise ValueError(f"unknown run action {key!r}")
+    for verdict in _verdicts(run, steps, discoveries):
+        if verdict["key"] == key and verdict.get("step_id") == step_id:
+            return verdict
+    return _verdict(key, key, ABSENT, f"no step '{step_id}' on this run", step_id=step_id)
+
+
+# ── Reading a run's state, once, for the list and for the gate ─────────────────────────────
 
 def load_discoveries(
     connection: Connection, project_id: str, ids: Iterable[str],
@@ -316,21 +474,105 @@ def load_discoveries(
     return out
 
 
-def attach_actions(
-    connection: Connection, project_id: str, runs: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Set `actions` on each serialized run (each must carry `status`, `input`, `steps`)."""
+def _iso(value: Any) -> Any:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def load_runs(
+    connection: Connection, project_id: str, run_ids: Iterable[str],
+) -> dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """`{run_id: (run, steps)}` for every named run in this project — the state `_verdicts`
+    reads, in two queries however many runs are asked for.
+
+    THE SAME READ FOR THE BUTTON AND THE GATE. The console's list used to hand `run_actions`
+    steps it had shaped itself while the endpoints read the database their own way; two readers
+    of one fact is how a button and its action drift. Each step's kind and capability come from
+    the run's PINNED spec — what `skip_failed_step` has always read — falling back to the row's
+    own `step_kind` for a step the spec does not name.
+    """
+    from .workflows import _json, _step_map
+
+    wanted = sorted({str(i) for i in run_ids if i})
+    if not wanted:
+        return {}
+    runs = connection.execute(
+        text("SELECT r.id, r.status, r.input, v.spec FROM workflow_runs r "
+             "JOIN workflow_versions v ON v.id = r.workflow_version_id "
+             "WHERE r.id = ANY(:ids) AND r.project_id = :p"),
+        {"ids": wanted, "p": project_id},
+    ).mappings().all()
+    if not runs:
+        return {}
+    rows = connection.execute(
+        text("SELECT workflow_run_id, step_id, step_kind, status, output, binding_snapshot, "
+             "iteration, created_at, completed_at FROM workflow_step_runs "
+             "WHERE workflow_run_id = ANY(:ids) ORDER BY created_at, iteration"),
+        {"ids": [r["id"] for r in runs]},
+    ).mappings().all()
+    templates = {r["id"]: _step_map(_json(r["spec"], {}) or {}) for r in runs}
+    by_run: dict[str, list[dict[str, Any]]] = {r["id"]: [] for r in runs}
+    for row in rows:
+        template = templates.get(row["workflow_run_id"], {}).get(str(row["step_id"])) or {}
+        binding = template.get("binding") if isinstance(template.get("binding"), dict) else {}
+        by_run[row["workflow_run_id"]].append({
+            "step_id": row["step_id"],
+            "kind": template.get("kind") or row["step_kind"],
+            "capability": str(binding.get("capability") or ""),
+            "status": row["status"],
+            "output": _json(row["output"], {}),
+            "binding_snapshot": _json(row["binding_snapshot"], {}),
+            "iteration": int(row["iteration"] or 0),
+            "created_at": _iso(row["created_at"]),
+            "completed_at": _iso(row["completed_at"]),
+        })
+    return {
+        r["id"]: ({"id": r["id"], "status": r["status"], "input": _json(r["input"], {}) or {}},
+                  by_run[r["id"]])
+        for r in runs
+    }
+
+
+def actions_for(
+    connection: Connection, project_id: str, run_ids: Iterable[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """`{run_id: actions}` for many runs, batched: the field every run serializer attaches."""
+    loaded = load_runs(connection, project_id, run_ids)
     ids: set[str] = set()
-    for run in runs:
-        ids.update(research_discovery_ids(run.get("steps") or [], run.get("input")))
+    for run, steps in loaded.values():
+        ids.update(research_discovery_ids(steps, run.get("input")))
     discoveries = load_discoveries(connection, project_id, ids)
-    for run in runs:
-        run["actions"] = run_actions(run, run.get("steps") or [], discoveries)
-    return runs
+    return {run_id: run_actions(run, steps, discoveries)
+            for run_id, (run, steps) in loaded.items()}
+
+
+def require(
+    connection: Connection, project_id: str, run_id: str, key: str,
+    *, step_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Refuse unless this run offers `key` (on `step_id`) ENABLED right now.
+
+    Called by every operation that acts on a run, before it changes anything, so what the
+    console shows and what the server does are one decision. Returns the action — for
+    `build_on_research`, carrying the `discovery_id` to adopt. Raises `WorkflowNotFoundError`
+    for a run that is not in this project, and `RunActionRefused` (a 409) with the action's own
+    reason otherwise.
+    """
+    loaded = load_runs(connection, project_id, [run_id]).get(run_id)
+    if loaded is None:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    run, steps = loaded
+    discoveries = (load_discoveries(connection, project_id,
+                                    research_discovery_ids(steps, run.get("input")))
+                   if key == "build_on_research" else {})
+    verdict = decide(run, steps, discoveries, key, step_id)
+    if verdict["state"] != ENABLED:
+        raise RunActionRefused(key, str(verdict["reason"]), step_id=step_id)
+    return _public(verdict)
 
 
 __all__ = [
-    "ACTIVE_RUN_STATES", "FINISHED_RUN_STATES", "RUN_ACTION_KEYS", "STEP_ACTION_KEYS",
-    "BUILD_WORKFLOW_KEY", "attach_actions", "load_discoveries", "research_discovery_ids",
-    "research_to_build_on", "run_actions", "step_capability",
+    "ACTIVE_RUN_STATES", "CLOSED_RUN_STATES", "FINISHED_RUN_STATES", "RUN_ACTION_KEYS",
+    "STEP_ACTION_KEYS", "BUILD_WORKFLOW_KEY", "RunActionRefused", "actions_for", "decide",
+    "is_gate", "latest_attempts", "load_discoveries", "load_runs", "require",
+    "research_discovery_ids", "research_to_build_on", "run_actions", "step_capability",
 ]

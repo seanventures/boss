@@ -28,12 +28,17 @@ const sent = (key: RunAction["key"], step_id: string): RunAction =>
 describe("Skip and proceed", () => {
   it("is offered on a step whose work failed or was dead-lettered", () => {
     expect(ENGINE).toContain('SKIPPABLE_STEP_STATES = frozenset({"failed", "deadlettered"})');
-    expect(ENGINE).toContain('if step_status in SKIPPABLE_STEP_STATES and not _is_gate(step):');
+    // REWRITTEN to the verdict form: Skip is absent (with the refusal's sentence) for a step
+    // that did not fail and for an approval, and the SAME verdict is what skip_failed_step
+    // enforces through `require`.
+    expect(ENGINE).toContain("if step_status not in SKIPPABLE_STEP_STATES:");
+    expect(ENGINE).toContain("elif is_gate(_step_kind(step), step_capability(step)):");
   });
 
   it("is never offered on an approval gate — a refused gate is somebody's no", () => {
-    const at = ENGINE.indexOf("def _is_gate(");
-    const block = ENGINE.slice(at, at + 600);
+    // ONE gate test, `is_gate`, read by the action list and by workflows._is_gate_step alike.
+    const at = ENGINE.indexOf("def is_gate(");
+    const block = ENGINE.slice(at, ENGINE.indexOf("\ndef ", at + 1));
     expect(block).toContain('== "decision"');
     expect(block).toContain(".is_gate");
   });

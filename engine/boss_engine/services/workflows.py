@@ -1839,10 +1839,11 @@ def get_run(connection: Connection, project_id: str, run_id: str) -> dict[str, A
             ],
         }
     )
-    # WHAT AN OPERATOR MAY DO TO IT, decided here and nowhere else — see workflow_run_actions.
-    from .workflow_run_actions import attach_actions
+    # WHAT AN OPERATOR MAY DO TO IT — the same decision every operation on it enforces. See
+    # workflow_run_actions.
+    from .workflow_run_actions import actions_for
 
-    attach_actions(connection, project_id, [result])
+    result["actions"] = actions_for(connection, project_id, [run_id]).get(run_id, [])
     return result
 
 
@@ -1883,6 +1884,14 @@ def list_runs(
             }
         )
         items.append(item)
+    # THE AGENT'S LIST CARRIES THE SAME ACTIONS AS THE CONSOLE'S. Without them the agent and the
+    # MCP list surface could not see what a run offers, and would learn it only by trying —
+    # batched, so a page of runs costs three queries, not three per run.
+    from .workflow_run_actions import actions_for
+
+    offered = actions_for(connection, project_id, [item["id"] for item in items])
+    for item in items:
+        item["actions"] = offered.get(item["id"], [])
     return items
 
 
@@ -3115,10 +3124,14 @@ def retry_failed_step(
     row = _latest_step_row(connection, project_id, run_id, step_id)
     if not row:
         raise WorkflowNotFoundError(f"no step '{step_id}' on run {run_id}")
-    if row["status"] not in OPERATOR_RECOVERABLE_STEP_STATES:
-        # Re-queueing a step that is running would run it twice.
-        raise WorkflowConflictError(
-            f"'{step_id}' is {row['status']}, so there is nothing to retry.")
+    # THE BUTTON'S RULE, NOT A COPY OF IT. This kept its own precondition (the step's state) and
+    # nothing about the run, so a step of a CANCELLED run — whose Try again the console no longer
+    # offered, because Stop promises the run "cannot be resumed" — was still revived by the
+    # endpoint, the agent's tool and a re-check. `require` refuses whatever the run's actions do
+    # not offer enabled, in the same words the console shows.
+    from .workflow_run_actions import require
+
+    require(connection, project_id, run_id, "retry_step", step_id=step_id)
     connection.execute(
         text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
              "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now() "
@@ -3136,15 +3149,12 @@ def retry_failed_step(
 
 
 def _is_gate_step(template: dict[str, Any]) -> bool:
-    if template.get("kind") == "decision":
-        return True
-    binding = template.get("binding") or {}
-    key = str(binding.get("capability") or "")
-    if not key:
-        return False
-    from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
+    """An approval step, by its template. ONE test, shared with the run's action list — see
+    `workflow_run_actions.is_gate`."""
+    from .workflow_run_actions import is_gate
 
-    return key in CAPABILITY_KEYS and bool(get_capability(key).is_gate)
+    binding = template.get("binding") or {}
+    return is_gate(template.get("kind"), binding.get("capability") if isinstance(binding, dict) else None)
 
 
 def skip_failed_step(
@@ -3198,19 +3208,14 @@ def skip_failed_step(
         # Pressed twice. The first press already decided; report it rather than refuse it.
         return {"run_id": run_id, "step_id": step_id, "status": "skipped",
                 "already": True, "reason": existing.get("skip_reason")}
-    if row["status"] not in SKIPPABLE_STEP_STATES:
-        raise WorkflowConflictError(
-            f"'{step_id}' is {row['status']}. Only a step that failed can be skipped — "
-            f"a live step is still working, and a finished one has nothing to skip.")
-    if run["status"] in {"cancelled", "completed", "compensating", "compensated"}:
-        raise WorkflowConflictError(
-            f"this run is {run['status']}, so there is nothing to proceed to.")
-    spec = _run_spec(connection, run_id)
-    template = _step_map(spec).get(step_id) or {}
-    if _is_gate_step(template):
-        raise WorkflowConflictError(
-            f"'{step_id}' is an approval. It did not fail — somebody answered no — and "
-            f"skipping it would turn that answer into a yes. Reopen it with Try again instead.")
+    # THE BUTTON'S RULE, NOT A COPY OF IT. The step's state, the run's state and "is this an
+    # approval" were three hand-written checks here and three more in the action list, the gate
+    # test a copy of a copy. `require` is the one decision: a step that did not fail, a run
+    # that is stopped or finished, an approval (a person's no — a skip would make it a yes) and a
+    # run busy undoing itself are each refused in the words the console shows beside the button.
+    from .workflow_run_actions import require
+
+    require(connection, project_id, run_id, "skip_step", step_id=step_id)
 
     marker = {
         "status": "skipped",
@@ -3692,10 +3697,11 @@ def delete_run(connection: Connection, project_id: str, run_id: str, actor: str)
     run = _run_row(connection, run_id, lock=True)
     if run["project_id"] != project_id:
         raise WorkflowNotFoundError("Workflow run not found.")
-    if run["status"] not in TERMINAL_RUN_STATES and run["status"] != "cancelled":
-        raise WorkflowError(
-            f"That run is {run['status']}, and work that is still going cannot be deleted. "
-            "Cancel it first — that stops the work — and then it can be removed.")
+    # Offered, and refused, by ONE rule: the run's "remove" action. A run still going — or one
+    # busy undoing itself — is refused with what to do instead ("Cancel it first").
+    from .workflow_run_actions import require
+
+    require(connection, project_id, run_id, "remove")
 
     # A FINISHED CHILD IS STILL LOAD-BEARING WHILE ITS PARENT IS WAITING ON IT.
     #
@@ -3765,7 +3771,14 @@ def cancel_run(
     if run["project_id"] != project_id:
         raise WorkflowNotFoundError("Workflow run not found.")
     if run["status"] in TERMINAL_RUN_STATES:
+        # Pressed twice, or a run that finished while the press was in flight: it is already
+        # stopped, which is what was asked for. Reported, not refused — like a second Skip.
         return get_run(connection, project_id, run_id)
+    # The run's "stop" action decides the rest: a run busy compensating is refused (stopping it
+    # would race the undo), in the words the console shows on its disabled Stop.
+    from .workflow_run_actions import require
+
+    require(connection, project_id, run_id, "stop")
 
     # STOP THE WORK, NOT JUST THE BOOKKEEPING.
     #

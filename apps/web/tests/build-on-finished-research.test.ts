@@ -49,8 +49,12 @@ describe("a finished run can be built on", () => {
   });
 
   it("and not while the run is still going", () => {
-    const at = ENGINE.indexOf('_action("build_on_research"');
-    expect(ENGINE.slice(at - 300, at)).toContain("if finished:");
+    // REWRITTEN to the verdict form: absent on a run that has not finished — and the start
+    // endpoint's `from_run` now refuses through that same verdict instead of only reading the
+    // research rule.
+    const at = ENGINE.indexOf("    if not finished:\n        out.append(_verdict(\"build_on_research\"");
+    expect(at).toBeGreaterThan(-1);
+    expect(ENGINE.slice(at, at + 200)).toContain("ABSENT");
   });
 
   it("names the source instead of claiming the work already happened", () => {

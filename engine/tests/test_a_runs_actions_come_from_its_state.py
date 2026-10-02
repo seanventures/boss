@@ -7,12 +7,16 @@ console decided that button — and Stop, Run again, Remove, Re-check, Try again
 its own conditions, each a private copy of a rule the engine enforces elsewhere, and they
 disagreed with the engine wherever it mattered.
 
-`workflow_run_actions.run_actions` is now the only place those decisions are made. This file is
-its table: every action across the run states an operator actually meets, plus the invariants
-that keep its state lists equal to the ones the engine's own endpoints enforce.
+`workflow_run_actions._verdicts` is now the only place those decisions are made, and — since the
+review of the first fix found Try again hidden on a cancelled run while the endpoint, the
+engine and the agent's tool still accepted it — the only place they are ENFORCED: every
+operation on a run calls `require`, which reads the same verdicts. This file is its table: every
+action across the run states an operator actually meets, the parity between what is shown and
+what is allowed, and an enumeration that holds every operation to asking.
 """
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -20,14 +24,17 @@ import pytest
 
 from boss_engine.services import workflow_run_actions as actions_mod
 from boss_engine.services import workflows
-from boss_engine.services.workflow_run_actions import run_actions
+from boss_engine.services import workflow_recheck
+from boss_engine.services.workflow_run_actions import decide, run_actions
 
 DOSSIER_OK = {"drun_ok": {"project_id": "p", "status": "completed", "has_findings": True}}
 
 
-def step(step_id, status, capability=None, output=None, kind="capability", completed_at=None):
+def step(step_id, status, capability=None, output=None, kind="capability", completed_at=None,
+         created_at=None):
     return {"step_id": step_id, "status": status, "capability": capability or step_id,
-            "kind": kind, "output": output or {}, "completed_at": completed_at}
+            "kind": kind, "output": output or {}, "completed_at": completed_at,
+            "created_at": created_at}
 
 
 def researched(status="succeeded", discovery="drun_ok", **extra):
@@ -61,31 +68,50 @@ CASES = [
      None,
      {"recheck": True, "rerun": True, "remove": True,
       "retry_step:research": True, "skip_step:research": True}),
+    # A STOPPED RUN OFFERS NO TRY AGAIN — not greyed, absent. It will never become possible
+    # (Stop promises "it cannot be resumed"), and a dead button under the red ✗ is the
+    # incident's bad experience with less colour. REWRITTEN from `retry_step:panel: False`.
     ("research succeeded, then the run was cancelled", "cancelled",
      [researched(), step("panel", "cancelled", "meeting")],
      None,
-     {"rerun": True, "remove": True, "build_on_research": True,
-      "retry_step:panel": False}),
+     {"rerun": True, "remove": True, "build_on_research": True}),
     ("completed", "completed",
      [researched(), step("panel", "succeeded", "meeting"), step("build", "succeeded", "build")],
      None, {"rerun": True, "remove": True, "build_on_research": True}),
     ("cancelled before research ran", "cancelled",
      [step("research", "cancelled", "research")],
-     None, {"rerun": True, "remove": True, "retry_step:research": False}),
+     None, {"rerun": True, "remove": True}),
     # THE INCIDENT, in both shapes it reached the screen in: a pre-2026-10-02 research step the
     # runner recorded `succeeded` with output `failed_continued`, and a research step that failed
-    # outright. Neither offers Build on this research — nor, on a cancelled run, Skip.
+    # outright. Neither offers Build on this research — nor, on a cancelled run, a greyed Try
+    # again or Skip under the ✗ (REWRITTEN: these rows used to pin both as present-disabled).
     ("INCIDENT: cancelled, research recorded succeeded but failed_continued", "cancelled",
      [researched(discovery="drun_dead", status="succeeded")
       | {"output": {"discovery_id": "drun_dead", "status": "failed_continued"}},
       step("panel", "cancelled", "meeting")],
      {"drun_dead": {"project_id": "p", "status": "failed", "has_findings": True}},
-     {"rerun": True, "remove": True, "retry_step:panel": False}),
+     {"rerun": True, "remove": True}),
     ("INCIDENT: cancelled, research failed outright", "cancelled",
      [researched(status="failed", discovery="drun_dead"), step("panel", "cancelled", "meeting")],
      {"drun_dead": {"project_id": "p", "status": "failed", "has_findings": False}},
-     {"rerun": True, "remove": True,
-      "retry_step:research": False, "skip_step:research": False, "retry_step:panel": False}),
+     {"rerun": True, "remove": True}),
+    # failed_continued ON ITS OWN. Every incident row above also gives the dossier a failed
+    # status, so the dossier check alone passed them — removing "failed_continued" from
+    # FAILED_OUTPUT_STATUSES left this whole file green. Here the dossier the step names
+    # COMPLETED with findings: only the step's own report says the research failed.
+    ("research recorded failed_continued; its dossier later completed with findings",
+     "cancelled",
+     [researched(discovery="drun_ok") | {"output": {"discovery_id": "drun_ok",
+                                                    "status": "failed_continued"}}],
+     None, {"rerun": True, "remove": True}),
+    ("completed: an old failed step offers nothing — the run is over", "completed",
+     [step("notify", "failed", "notify")], None, {"rerun": True, "remove": True}),
+    ("compensated: undone, nothing in it runs again", "compensated",
+     [step("deploy", "failed", "deploy")], None, {"rerun": True, "remove": True}),
+    ("a retried step's earlier failed attempt is history, not a button", "running",
+     [step("research", "failed", "research", created_at="2026-10-01T10:00:00"),
+      step("research", "running", "research", created_at="2026-10-01T10:05:00")],
+     None, {"stop": True, "stop_and_rerun": True}),
     ("research step succeeded but its discovery failed", "completed",
      [researched(discovery="drun_dead")],
      {"drun_dead": {"project_id": "p", "status": "failed", "has_findings": True}},
@@ -190,3 +216,105 @@ def test_every_run_status_the_database_allows_is_classified():
                   | {actions_mod.COMPENSATING})
     assert statuses == classified
     assert not actions_mod.ACTIVE_RUN_STATES & actions_mod.FINISHED_RUN_STATES
+
+
+# ── What is shown is what is allowed ────────────────────────────────────────────────────────
+
+def _every_question(steps):
+    yield from ((key, None) for key in actions_mod.RUN_ACTION_KEYS)
+    for item in steps:
+        for key in actions_mod.STEP_ACTION_KEYS:
+            yield key, item["step_id"]
+
+
+@pytest.mark.parametrize("case,status,steps,discoveries,expected", CASES,
+                         ids=[c[0] for c in CASES])
+def test_the_list_and_the_gate_are_one_decision(case, status, steps, discoveries, expected):
+    """The review of the first fix: Try again was hidden on a cancelled run while the endpoint
+    still accepted it — the button and the action disagreeing, the class of bug this module
+    exists to end. `require` reads `decide`; this holds `decide` to the list, for every action
+    in every row: shown-enabled exactly where it is allowed, shown-disabled or absent exactly
+    where it is refused, and every refusal carrying a sentence."""
+    shown = summary(status, steps, discoveries)
+    run = {"status": status, "input": {}}
+    for key, step_id in _every_question(steps):
+        verdict = decide(run, steps, discoveries if discoveries is not None else DOSSIER_OK,
+                         key, step_id)
+        name = key + (f":{step_id}" if step_id else "")
+        if verdict["state"] == "absent":
+            assert name not in shown, f"{case}: {name} is shown but refused as not applying"
+        else:
+            assert shown.get(name) == (verdict["state"] == "enabled"), f"{case}: {name}"
+        if verdict["state"] != "enabled":
+            assert verdict["reason"] and len(verdict["reason"]) > 10, \
+                f"{case}: {name} is refused without saying why"
+
+
+def test_a_finished_run_never_shows_a_step_action_it_will_never_allow():
+    """Disabled means "not right now"; on a run that is stopped, completed or undone nothing
+    will ever run again, so Try again and Skip are left out there, not greyed out."""
+    for status in actions_mod.CLOSED_RUN_STATES:
+        steps = [step("research", "failed", "research"), step("deploy", "cancelled", "deploy")]
+        keys = {a["key"] for a in run_actions({"status": status, "input": {}}, steps, {})}
+        assert not keys & set(actions_mod.STEP_ACTION_KEYS), status
+        assert "recheck" not in keys, status
+
+
+# ── Every operation asks ────────────────────────────────────────────────────────────────────
+
+#: The operation that performs each action, and so must ask `require` for it before changing
+#: anything. The console's buttons, the agent's tools and a raw API call all land in these.
+ENFORCED_BY = {
+    "retry_step": workflows.retry_failed_step,
+    "skip_step": workflows.skip_failed_step,
+    "stop": workflows.cancel_run,
+    "remove": workflows.delete_run,
+    "recheck": workflow_recheck.recheck_run,
+}
+
+#: Actions with no source run on the server to check: "Run this workflow again" and the
+#: second half of "Stop and run again" START a new run (the first half is `stop`, enforced
+#: above). Named here so that a new action key has to be classified one way or the other.
+STARTS_A_NEW_RUN = {"rerun", "stop_and_rerun"}
+
+
+def test_every_action_is_enforced_by_the_operation_that_performs_it():
+    """An enumeration, so the next action cannot ship as a button its endpoint ignores.
+    `build_on_research` is performed by the start endpoint's `from_run` (asserted below)."""
+    every = set(actions_mod.RUN_ACTION_KEYS) | set(actions_mod.STEP_ACTION_KEYS)
+    assert set(ENFORCED_BY) | STARTS_A_NEW_RUN | {"build_on_research"} == every
+    for key, operation in ENFORCED_BY.items():
+        source = inspect.getsource(operation)
+        assert "require(" in source and f'"{key}"' in source, (
+            f"{operation.__name__} performs '{key}' without asking the run's actions")
+    main = (Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py").read_text()
+    start = main[main.index('source_run = str(payload.get("from_run")'):]
+    assert '_run_actions.require(' in start[:4000]
+    assert 'source_run, "build_on_research")' in start[:4000]
+
+
+def test_the_operations_keep_no_private_copy_of_the_rule():
+    """The parallel state sets and the hand-copied gate test are gone from the operations: a
+    copy is how the button and the action drifted in the first place."""
+    retry = inspect.getsource(workflows.retry_failed_step)
+    skip = inspect.getsource(workflows.skip_failed_step)
+    assert "OPERATOR_RECOVERABLE_STEP_STATES" not in retry
+    assert "SKIPPABLE_STEP_STATES" not in skip
+    assert '"cancelled", "completed"' not in skip
+    assert "_is_gate_step(" not in skip
+    gate = inspect.getsource(workflows._is_gate_step)
+    assert "is_gate(" in gate and "CAPABILITY_KEYS" not in gate
+    assert "def _is_gate(" not in inspect.getsource(actions_mod)
+
+
+def test_an_approval_is_an_approval_by_the_same_test_everywhere():
+    """`_is_gate_step` (the spec template) and the action list (a loaded step) agree on every
+    capability in the catalogue and on a decision step."""
+    from boss_engine.services.workflow_capabilities import CAPABILITY_KEYS
+
+    for key in [*CAPABILITY_KEYS, "", "not_a_capability"]:
+        template = {"kind": "capability", "binding": {"capability": key}}
+        loaded = step("s", "failed", key)
+        offered = {a["key"] for a in run_actions({"status": "failed", "input": {}}, [loaded], {})}
+        assert workflows._is_gate_step(template) == ("skip_step" not in offered), key
+    assert workflows._is_gate_step({"kind": "decision"})

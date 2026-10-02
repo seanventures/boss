@@ -45,7 +45,10 @@ describe("who is on this app", () => {
     // Offering "+ Assign" on a completed workflow invites a change that cannot affect
     // anything: the work is done and the gates it would have governed are already answered.
     expect(WORKFLOWS).toContain("readOnly={terminal}");
-    expect(WORKFLOWS).toContain('["completed", "cancelled", "failed", "deadlettered"]');
+    // REWRITTEN: "finished" is the server's fact (the engine's FINISHED_RUN_STATES), not a
+    // list kept here — that list had left out `compensated`.
+    expect(WORKFLOWS).toContain("const terminal = run.finished === true;");
+    expect(WORKFLOWS).not.toContain('["completed", "cancelled", "failed", "deadlettered"]');
     expect(PANEL).toContain("readOnly ? null : (");
     expect(PANEL).toContain("a record now, not a setting");
   });
