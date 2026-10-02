@@ -1336,15 +1336,17 @@ def _validate_bindings(
                 )
         if step["kind"] == "skill":
             skill_id = binding["skill_id"]
-            row = connection.execute(
-                text(
-                    """
-                    SELECT enabled, config, provenance FROM project_skills
-                    WHERE project_id=:project_id AND skill_id=:skill_id
-                    """
-                ),
-                {"project_id": project_id, "skill_id": skill_id},
-            ).mappings().first()
+            # THE ONE CATALOGUE (skill_catalogue). Reading project_skills here refused every
+            # authored skill and every shipped skill without a per-project row — which on a
+            # real install was all of the ones agents actually hold.
+            from .skill_catalogue import entry as _catalogue_entry
+
+            found = _catalogue_entry(connection, project_id, str(skill_id))
+            row = None if found is None else {
+                "enabled": found["enabled"] and found["usable"],
+                "config": {"risk_tier": found["risk_tier"]} if found["risk_declared"] else {},
+                "provenance": {"trusted": found["trusted"]},
+            }
             if not row or not bool(row["enabled"]):
                 raise WorkflowBindingBlockedError(
                     f"step '{step['id']}' skill '{skill_id}' is missing or disabled."

@@ -271,17 +271,11 @@ def infra(connection, project_id: str) -> dict[str, Any]:
         {"p": project_id},
     ).mappings().all()]
 
-    servers = [dict(r) for r in connection.execute(
-        sql(
-            """
-            SELECT id, name, url, transport, enabled, risk_tier, data_boundary
-            FROM mcp_servers
-            WHERE project_id = :p
-            ORDER BY name
-            """
-        ),
-        {"p": project_id},
-    ).mappings().all()]
+    # Through the server model (mcp_registry), like every other MCP screen, so this view says
+    # what the others say about a server — including whether it answered at the last check.
+    from .mcp_registry import list_mcp_servers
+
+    servers = sorted(list_mcp_servers(connection, project_id), key=lambda s: s["name"])
 
     return {
         "project_id": project_id,
@@ -352,8 +346,12 @@ def infra(connection, project_id: str) -> dict[str, Any]:
                 "url": s.get("url"),
                 "transport": s.get("transport"),
                 "enabled": bool(s.get("enabled")),
-                "risk_tier": int(s.get("risk_tier") or 1),
+                # Not `int(x or 1)`: tier 0 is falsy, and a read-only server was shown as tier 1.
+                "risk_tier": int(s["risk_tier"]),
                 "data_boundary": s.get("data_boundary") or "internal",
+                "trusted": bool(s.get("trusted")),
+                "reachable": s.get("reachable"),
+                "status_note": s.get("status_note"),
             }
             for s in servers
         ],

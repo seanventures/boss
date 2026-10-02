@@ -1234,6 +1234,22 @@ class McpServerRegisterRequest(BaseModel):
     actor: str = "system"
 
 
+class McpServerUpdateRequest(BaseModel):
+    """An edit to a registered MCP server. Only the fields sent are changed; the id stays, so
+    every custom step and authored skill bound to the server keeps working."""
+
+    name: Optional[str] = None
+    url: Optional[str] = None
+    transport: Optional[str] = None
+    description: Optional[str] = None
+    risk_tier: Optional[int] = Field(default=None, ge=0, le=3)
+    data_boundary: Optional[DataBoundary] = None
+    tool_risk_overrides: Optional[dict[str, int]] = None
+    enabled: Optional[bool] = None
+    #: A person's review. Recorded with who marked it (provenance.reviewed_by).
+    trusted: Optional[bool] = None
+
+
 class CapabilityBundleImportRequest(BaseModel):
     project_id: str
     bundle: str

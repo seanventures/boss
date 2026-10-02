@@ -2976,9 +2976,31 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
   provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
   tool_risk_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- WHAT THE LAST PROBE FOUND. NULL reachable = never checked, which is not the same as down.
+  -- The seeded servers point at 127.0.0.1 ports the community compose never starts, and every
+  -- screen called them enabled and healthy; these columns are how a screen can say otherwise.
+  reachable BOOLEAN,
+  last_checked_at TIMESTAMPTZ,
+  last_error TEXT,
+  -- [{name, description, inputSchema}] from the last successful tools/list. Kept across a failed
+  -- probe so an operator fixing a server can still see what it offered.
+  tools JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
+-- ONE NAME, ONE SERVER. The agent loop namespaces tools by the server's NAME, so a second
+-- server with the same name silently replaced the first's tools; a double-pressed Register was
+-- enough to cause it. Existing duplicates are renamed (the oldest keeps the name) so the
+-- index below can be created on installs that already have them.
+UPDATE mcp_servers m SET name = m.name || ' (' || m.id || ')'
+WHERE EXISTS (
+  SELECT 1 FROM mcp_servers o
+  WHERE o.project_id = m.project_id AND lower(o.name) = lower(m.name)
+    AND (o.created_at, o.id) < (m.created_at, m.id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_servers_project_name
+  ON mcp_servers (project_id, lower(name));
 
 CREATE TABLE IF NOT EXISTS workflow_custom_steps (
   id TEXT PRIMARY KEY,

@@ -15,6 +15,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
+import { McpServersPanel, type McpServerRow } from "./mcp-servers-ui";
 import { MemoryHome } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
@@ -24,6 +25,11 @@ type Skill = {
   knowledge: string; inputs: Array<{ name: string; required?: boolean }>;
   produces: Array<{ name: string }>; config: Record<string, unknown>;
   risk_tier: number; trusted: boolean; enabled: boolean; requires_approval: boolean;
+  /** What points at it — read before Delete is pressed, not discovered after. */
+  references?: { custom_steps: Array<{ step_key: string; label?: string }>; agents: string[] };
+  /** What the ONE skill catalogue says: the tier the floor will use (never below what it wraps
+   *  or calls), and whether it can run right now. */
+  catalogue?: { risk_tier: number; usable: boolean; reason?: string | null; runs_through?: string };
 };
 
 const BEHAVIOURS = [
@@ -36,6 +42,12 @@ const BEHAVIOURS = [
   { id: "builtin", label: "Names a built-in executor",
     hint: "One BOSS already ships. Use this to give an existing skill knowledge and a risk "
         + "tier without changing its code." },
+  // SHOWN, because agents write these: a program an agent worked out on one run and the
+  // workflow kept, so later runs reuse it with no model call. Leaving the kind out of this
+  // list made such a skill open in the editor as a "sandboxed command" with empty fields.
+  { id: "agent_program", label: "Reruns a program an agent wrote",
+    hint: "Usually written by an agent on an earlier run and kept so later runs need no model "
+        + "call. Read the program below before you rely on it." },
 ];
 
 const BLANK = {
@@ -43,16 +55,53 @@ const BLANK = {
   knowledge: "", inputs: "", produces: "",
   image: "", command: "", timeout_seconds: "300", network: false,
   mcp_server_id: "", tool_name: "", executor_id: "",
-  risk_tier: "1", trusted: false,
+  language: "python", source: "", program_timeout: "60",
+  risk_tier: "1", trusted: false, enabled: true,
 };
 
-/** A registered MCP server. Where a connector's tools live — the realistic path to a
- *  third-party account, since the server holds the integration and a skill names one of its
- *  tools. Read-only here: adding one is a governed registration, not a form field. */
-type McpServer = {
-  id: string; name: string; url: string; transport?: string; risk_tier?: number;
-  data_boundary?: string; enabled?: boolean; description?: string;
-};
+type Draft = typeof BLANK;
+
+/** An existing skill, as the form's fields — what Edit loads. Before this there was no Edit:
+ *  the header said "Edit <key> by hand" as soon as a key was typed, nothing loaded, and saving
+ *  replaced whatever skill already had that key. */
+export function draftFromSkill(s: Skill): Draft {
+  const c = (s.config ?? {}) as Record<string, unknown>;
+  const lines = (xs: Array<{ name: string }> | undefined) => (xs ?? []).map((x) => x.name).join("\n");
+  return {
+    ...BLANK,
+    skill_key: s.skill_key, label: s.label, summary: s.summary ?? "",
+    behaviour_kind: s.behaviour_kind, knowledge: s.knowledge ?? "",
+    inputs: lines(s.inputs), produces: lines(s.produces),
+    image: String(c.image ?? ""), command: String(c.command ?? ""),
+    timeout_seconds: String(c.timeout_seconds ?? "300"), network: Boolean(c.network),
+    mcp_server_id: String(c.mcp_server_id ?? ""), tool_name: String(c.tool_name ?? ""),
+    executor_id: String(c.executor_id ?? ""),
+    language: String(c.language ?? "python"), source: String(c.source ?? ""),
+    program_timeout: String(c.timeout_seconds ?? "60"),
+    risk_tier: String(s.risk_tier), trusted: Boolean(s.trusted), enabled: s.enabled !== false,
+  };
+}
+
+/** What deleting would do, said before the press. A step that runs the skill blocks it; agents
+ *  that hold it lose it, which the operator confirms. */
+export function deleteConsequence(s: Skill): { blocked: string | null; confirm: string } {
+  const steps = s.references?.custom_steps ?? [];
+  const agents = s.references?.agents ?? [];
+  if (steps.length > 0) {
+    return {
+      blocked: `${s.skill_key} is run by ${steps.map((x) => x.label || x.step_key).join(", ")}. `
+        + "Delete or re-point those workflow steps first — or turn the skill off instead.",
+      confirm: "",
+    };
+  }
+  return {
+    blocked: null,
+    confirm: agents.length > 0
+      ? `Delete ${s.skill_key}? ${agents.map(roleLabel).join(", ")} will no longer hold it. `
+        + "This cannot be undone."
+      : `Delete ${s.skill_key}? This cannot be undone.`,
+  };
+}
 
 /** One of the skills BOSS ships. A different shape from an authored one: it has an executor
  *  behind it and a project enables it rather than writing it. */
@@ -82,8 +131,17 @@ export function SkillsHome(
 ) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [builtIn, setBuiltIn] = useState<BuiltIn[] | null>(null);
-  const [mcp, setMcp] = useState<McpServer[] | null>(null);
-  const [draft, setDraft] = useState({ ...BLANK });
+  const [mcp, setMcp] = useState<McpServerRow[]>([]);
+  const [draft, setDraft] = useState<Draft>({ ...BLANK });
+  // WHICH SKILL THE FORM IS EDITING, or null for a new one. Creating and editing are different
+  // intentions and the save says which (mode create | update), so a new skill whose key
+  // happens to match an old one is refused instead of silently replacing it.
+  const [editing, setEditing] = useState<string | null>(null);
+  // The loaded row's own config, kept so an edit does not drop what the form has no field for
+  // — an agent-written program's provenance (written_by, written_for, written_in_run).
+  const [loadedConfig, setLoadedConfig] = useState<Record<string, unknown>>({});
+  const [formOpen, setFormOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   // WHO HOLDS WHAT. One read for the whole page: the alternative is a request per row, and
@@ -158,17 +216,6 @@ export function SkillsHome(
     }
   }, [busy, projectId, actor, reloadAssignments]);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/skills?view=mcp&project_id=${encodeURIComponent(projectId)}`,
-          { cache: "no-store" });
-        setMcp(r.ok ? (((await r.json()).items ?? []) as McpServer[]) : []);
-      } catch { setMcp([]); }
-    })();
-  }, [projectId]);
-
   // WHAT THIS INSTALL ALREADY HAS. Shown beside what the operator wrote, because "you have no
   // skills" is false on a fresh project — BOSS ships seventeen, and several of them are the
   // ones somebody would otherwise try to author from scratch.
@@ -180,7 +227,11 @@ export function SkillsHome(
           { cache: "no-store" });
         if (r.ok) {
           const body = await r.json();
-          setBuiltIn(((body.items ?? body.skills ?? []) as BuiltIn[]));
+          // The runtime catalogue carries this project's AUTHORED skills too (that is what
+          // lets them run). They are listed above as "Custom skills"; listing them here as
+          // well would show each one twice, once as something BOSS ships.
+          setBuiltIn(((body.items ?? body.skills ?? []) as BuiltIn[])
+            .filter((s) => s.source !== "authored"));
         } else setBuiltIn([]);
       } catch { setBuiltIn([]); }
     })();
@@ -199,7 +250,10 @@ export function SkillsHome(
             network: draft.network, outputs: names(draft.produces) }
         : draft.behaviour_kind === "mcp_tool"
           ? { mcp_server_id: draft.mcp_server_id.trim(), tool_name: draft.tool_name.trim() }
-          : { executor_id: draft.executor_id.trim() };
+          : draft.behaviour_kind === "agent_program"
+            ? { ...(editing ? loadedConfig : {}), language: draft.language, source: draft.source,
+                timeout_seconds: Number(draft.program_timeout) || 60 }
+            : { executor_id: draft.executor_id.trim() };
     try {
       const r = await apiWrite("/api/skills", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -209,7 +263,10 @@ export function SkillsHome(
           summary: draft.summary.trim(), behaviour_kind: draft.behaviour_kind,
           knowledge: draft.knowledge, inputs: names(draft.inputs),
           produces: names(draft.produces), config,
-          risk_tier: Number(draft.risk_tier) || 1, trusted: draft.trusted,
+          // Number(), not `Number(x) || 1`: tier 0 is falsy, and `|| 1` made "0 — reads only"
+          // an option that silently saved tier 1.
+          risk_tier: Number(draft.risk_tier), trusted: draft.trusted, enabled: draft.enabled,
+          mode: editing ? "update" : "create",
         }),
       });
       const data = await r.json().catch(() => ({}));
@@ -219,31 +276,63 @@ export function SkillsHome(
         setNote({ ok: false, text: String(data?.error ?? `HTTP ${r.status}`) });
         return;
       }
-      setNote({ ok: true, text: `Saved ${draft.skill_key.trim()}.` });
+      setNote({ ok: true, text: editing
+        ? `Saved your changes to ${draft.skill_key.trim()}.`
+        : `Created ${draft.skill_key.trim()}.` });
       setDraft({ ...BLANK });
+      setEditing(null);
       void reload();
     } catch (e) {
       setBusy(false);
       setNote({ ok: false, text: String((e as Error)?.message ?? e) });
     }
-  }, [busy, draft, projectId, actor, reload]);
+  }, [busy, draft, editing, loadedConfig, projectId, actor, reload]);
 
-  const remove = useCallback(async (key: string) => {
+  /** One authored-skill write that is not a save: delete, or switch on/off. Every outcome says
+   *  what happened — Delete used to say nothing at all when it worked. */
+  const act = useCallback(async (payload: Record<string, unknown>, done: string) => {
+    if (busy) return;
     setBusy(true); setNote(null);
     try {
       const r = await apiWrite("/api/skills", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", skill_key: key, project_id: projectId, actor }),
+        body: JSON.stringify({ project_id: projectId, actor, ...payload }),
       });
       const data = await r.json().catch(() => ({}));
       setBusy(false);
       if (!r.ok) { setNote({ ok: false, text: String(data?.error ?? `HTTP ${r.status}`) }); return; }
-      void reload();
+      setNote({ ok: true, text: done });
+      void reload(); void reloadAssignments();
     } catch (e) {
       setBusy(false);
       setNote({ ok: false, text: String((e as Error)?.message ?? e) });
     }
-  }, [projectId, actor, reload]);
+  }, [busy, projectId, actor, reload, reloadAssignments]);
+
+  const remove = useCallback((s: Skill) => {
+    setConfirmDelete(null);
+    void act({ action: "delete", skill_key: s.skill_key,
+               // Sent only after the confirmation named the agents that will lose it.
+               release_grants: (s.references?.agents ?? []).length > 0 },
+             `Deleted ${s.skill_key}.`);
+  }, [act]);
+
+  const startEdit = useCallback((s: Skill) => {
+    setDraft(draftFromSkill(s));
+    setLoadedConfig({ ...(s.config ?? {}) });
+    setEditing(s.skill_key);
+    setFormOpen(true);
+    setNote(null);
+  }, []);
+
+  const startNew = useCallback(() => {
+    setDraft({ ...BLANK });
+    setLoadedConfig({});
+    setEditing(null);
+  }, []);
+
+  const server = mcp.find((m) => m.id === draft.mcp_server_id);
+  const serverTools = (server?.tools ?? []).map((t) => t.name);
 
   const chosen = BEHAVIOURS.find((b) => b.id === draft.behaviour_kind);
 
@@ -306,7 +395,7 @@ export function SkillsHome(
         {skills === null ? <p className="detail">Loading…</p>
          : skills.length === 0 ? (
            <p className="detail" data-testid="skills-empty">
-             Nothing authored yet. Describe one to BOSS below and it will draft it for you.
+             Nothing authored yet. Describe one to BOSS above and it will draft it for you.
            </p>
          ) : (
           <ul className="skill-list" data-testid="skill-list">
@@ -327,8 +416,28 @@ export function SkillsHome(
                       unreviewed
                     </span>
                   ) : null}
+                  {!s.enabled ? (
+                    <span className="cap-badge tone-muted" data-testid={`skill-off-${s.skill_key}`}>
+                      off
+                    </span>
+                  ) : null}
                 </span>
                 {s.summary ? <span className="detail">{s.summary}</span> : null}
+                {/* WHAT THE RUNTIME WILL ACTUALLY DO with it, from the one catalogue. A skill can
+                    be switched on and still unable to run — its MCP server removed or turned
+                    off — and the row is where that has to be said. */}
+                {s.enabled && s.catalogue && !s.catalogue.usable && s.catalogue.reason ? (
+                  <span className="setup-bad" data-testid={`skill-unusable-${s.skill_key}`}>
+                    Cannot run: {s.catalogue.reason}
+                  </span>
+                ) : null}
+                {s.catalogue && s.catalogue.risk_tier > s.risk_tier ? (
+                  <span className="detail" data-testid={`skill-effective-tier-${s.skill_key}`}>
+                    Runs at tier {s.catalogue.risk_tier}, not {s.risk_tier}: what it calls
+                    {s.catalogue.runs_through ? ` (${s.catalogue.runs_through})` : ""} is tier
+                    {" "}{s.catalogue.risk_tier}, and a skill is never safer than what it runs.
+                  </span>
+                ) : null}
                 <AssignRow
                   skillId={s.skill_key}
                   roles={roles}
@@ -342,9 +451,41 @@ export function SkillsHome(
                   // already covers it in a workflow, so it offers the agent end only.
                   canPlaceInWorkflow
                 />
-                <button type="button" className="linklike" disabled={busy}
-                        data-testid={`skill-delete-${s.skill_key}`}
-                        onClick={() => void remove(s.skill_key)}>Delete</button>
+                <span className="skill-assign-actions">
+                  <button type="button" className="linklike" disabled={busy}
+                          data-testid={`skill-edit-${s.skill_key}`}
+                          onClick={() => startEdit(s)}>Edit</button>
+                  <button type="button" className="linklike" disabled={busy}
+                          data-testid={`skill-toggle-${s.skill_key}`}
+                          onClick={() => void act(
+                            { action: s.enabled ? "disable" : "enable", skill_key: s.skill_key },
+                            s.enabled
+                              ? `${s.skill_key} is off — no agent or step will run it until it `
+                                + "is turned back on."
+                              : `${s.skill_key} is on.`)}>
+                    {s.enabled ? "Turn off" : "Turn on"}
+                  </button>
+                  {confirmDelete === s.skill_key ? (
+                    <span className="skill-assign-pick"
+                          data-testid={`skill-delete-confirm-${s.skill_key}`}>
+                      <span className="detail">{deleteConsequence(s).confirm}</span>
+                      <button type="button" className="cap-btn danger" disabled={busy}
+                              data-testid={`skill-delete-yes-${s.skill_key}`}
+                              onClick={() => remove(s)}>Delete</button>
+                      <button type="button" className="linklike"
+                              onClick={() => setConfirmDelete(null)}>Keep it</button>
+                    </span>
+                  ) : (
+                    <button type="button" className="linklike" disabled={busy}
+                            data-testid={`skill-delete-${s.skill_key}`}
+                            onClick={() => {
+                              const { blocked } = deleteConsequence(s);
+                              // Refused HERE, with the steps named, rather than as a 409 after.
+                              if (blocked) { setNote({ ok: false, text: blocked }); return; }
+                              setConfirmDelete(s.skill_key);
+                            }}>Delete</button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -414,7 +555,7 @@ export function SkillsHome(
 
       <details className="stack-card" data-testid="mcp-servers">
         <summary className="skill-form-summary">
-          MCP servers{mcp === null ? "" : ` (${mcp.length})`}
+          MCP servers{mcp.length === 0 ? "" : ` (${mcp.length})`}
         </summary>
         <div className="section-head">
           <div>
@@ -426,49 +567,32 @@ export function SkillsHome(
             </p>
           </div>
         </div>
-        {mcp === null ? <p className="detail">Loading…</p>
-         : mcp.length === 0 ? (
-           <p className="detail" data-testid="mcp-empty">
-             None registered. A server is registered through the API — deliberately not a form
-             here, because pointing BOSS at a tool endpoint is a governed act with a risk tier
-             and a data boundary, not a text field.
-           </p>
-         ) : (
-          <ul className="skill-list" data-testid="mcp-list">
-            {mcp.map((m) => (
-              <li key={m.id} className="skill-row" data-enabled={m.enabled !== false}>
-                <span className="skill-row-main">
-                  <b>{m.name}</b>
-                  {m.transport ? (
-                    <span className="cap-badge tone-muted">{m.transport}</span>
-                  ) : null}
-                  {(m.risk_tier ?? 0) >= 2 ? (
-                    <span className="cap-badge tone-amber">needs a person</span>
-                  ) : null}
-                  {m.data_boundary ? (
-                    <span className="cap-badge tone-muted">{m.data_boundary}</span>
-                  ) : null}
-                  {m.enabled === false ? (
-                    <span className="cap-badge tone-muted">off</span>
-                  ) : null}
-                </span>
-                {m.description ? <span className="detail">{m.description}</span> : null}
-                {/* The URL, quietly. It is how an operator tells two servers apart when the
-                    names are similar, and it is not a secret. */}
-                <code className="detail">{m.url}</code>
-              </li>
-            ))}
-          </ul>
-        )}
+        {/* THE SAME PANEL every MCP screen mounts (Capabilities manages with it too, System
+            Configuration summarises with it), so they cannot tell three stories again. It
+            reports the servers back so the skill form below can offer them by name. */}
+        <McpServersPanel projectId={projectId} actor={actor} onLoaded={setMcp} />
       </details>
 
-      <details className="stack-card" data-testid="skill-form">
+      <details className="stack-card" data-testid="skill-form" open={formOpen}
+               onToggle={(e) => setFormOpen((e.currentTarget as HTMLDetailsElement).open)}>
         <summary className="skill-form-summary">
-          {draft.skill_key
-            ? `Edit ${draft.skill_key} by hand`
+          {/* THE HEADER SAYS WHAT A SAVE WILL DO. It used to switch to "Edit <key>" as soon as
+              a key was typed — while saving silently replaced any skill with that key. Now it
+              says Edit only when Edit loaded one, and a new skill's key that is taken is
+              refused by the save. */}
+          {editing
+            ? `Edit ${editing} by hand`
             : "Write one by hand instead"}
         </summary>
         <div className="setup-form">
+          {editing ? (
+            <p className="detail" data-testid="skill-editing">
+              Editing <code>{editing}</code>. Saving changes this skill for every agent that holds
+              it and every step that runs it.{" "}
+              <button type="button" className="linklike" data-testid="skill-new"
+                      onClick={startNew}>Write a new one instead</button>
+            </p>
+          ) : null}
           <label className="setup-field">
             <span>Name</span>
             <input type="text" value={draft.label} data-testid="skill-label"
@@ -479,6 +603,8 @@ export function SkillsHome(
             <span>Key</span>
             <input type="text" value={draft.skill_key} data-testid="skill-key"
                    placeholder="trim_clip" spellCheck={false}
+                   // The key is what steps and agents point at, so an edit cannot change it.
+                   readOnly={editing !== null}
                    onChange={(e) => setDraft((d) => ({ ...d, skill_key: e.target.value }))} />
           </label>
           <label className="setup-field">
@@ -529,25 +655,85 @@ export function SkillsHome(
             </>
           ) : draft.behaviour_kind === "mcp_tool" ? (
             <>
+              {/* PICKED, NOT TYPED. This asked for a free-text "MCP server id" that no screen
+                  showed, and a typo saved fine and failed on the first run. */}
               <label className="setup-field">
-                <span>MCP server id</span>
-                <input type="text" value={draft.mcp_server_id} data-testid="skill-mcp-server"
-                       spellCheck={false}
-                       onChange={(e) => setDraft((d) => ({ ...d, mcp_server_id: e.target.value }))} />
+                <span>MCP server</span>
+                <select value={draft.mcp_server_id} data-testid="skill-mcp-server"
+                        onChange={(e) => setDraft((d) => ({ ...d, mcp_server_id: e.target.value,
+                                                            tool_name: "" }))}>
+                  <option value="">Choose a server…</option>
+                  {mcp.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}{m.enabled ? "" : " (off)"}{m.reachable === false ? " (unreachable)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {mcp.length === 0 ? (
+                <p className="detail">No MCP servers yet — register one in the MCP servers
+                  section above first.</p>
+              ) : null}
+              <label className="setup-field">
+                <span>Tool</span>
+                {serverTools.length > 0 ? (
+                  <select value={draft.tool_name} data-testid="skill-mcp-tool"
+                          onChange={(e) => setDraft((d) => ({ ...d, tool_name: e.target.value }))}>
+                    <option value="">Choose a tool…</option>
+                    {serverTools.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                ) : (
+                  // A server never reached says nothing about its tools; the name is typed, and
+                  // checked against its real list once it answers.
+                  <input type="text" value={draft.tool_name} data-testid="skill-mcp-tool"
+                         spellCheck={false} placeholder="create_issue"
+                         onChange={(e) => setDraft((d) => ({ ...d, tool_name: e.target.value }))} />
+                )}
+              </label>
+              {server && server.status_note ? (
+                <p className="setup-bad">{server.status_note}</p>
+              ) : null}
+            </>
+          ) : draft.behaviour_kind === "agent_program" ? (
+            <>
+              {draft.source && editing ? (
+                <p className="detail">Written by an agent — read it before relying on it. It runs
+                  in the sandbox with its declared inputs as files.</p>
+              ) : null}
+              <label className="setup-field">
+                <span>Language</span>
+                <select value={draft.language} data-testid="skill-program-language"
+                        onChange={(e) => setDraft((d) => ({ ...d, language: e.target.value }))}>
+                  <option value="python">python</option>
+                  <option value="bash">bash</option>
+                  <option value="sh">sh</option>
+                </select>
               </label>
               <label className="setup-field">
-                <span>Tool name</span>
-                <input type="text" value={draft.tool_name} data-testid="skill-mcp-tool"
-                       spellCheck={false}
-                       onChange={(e) => setDraft((d) => ({ ...d, tool_name: e.target.value }))} />
+                <span>Program</span>
+                <textarea rows={10} value={draft.source} data-testid="skill-program-source"
+                          spellCheck={false}
+                          onChange={(e) => setDraft((d) => ({ ...d, source: e.target.value }))} />
               </label>
             </>
           ) : (
             <label className="setup-field">
-              <span>Executor id</span>
-              <input type="text" value={draft.executor_id} data-testid="skill-executor"
-                     spellCheck={false} placeholder="deployment.health.check"
-                     onChange={(e) => setDraft((d) => ({ ...d, executor_id: e.target.value }))} />
+              <span>Built-in skill it runs</span>
+              {(builtIn ?? []).length > 0 ? (
+                <select value={draft.executor_id} data-testid="skill-executor"
+                        onChange={(e) => setDraft((d) => ({ ...d, executor_id: e.target.value }))}>
+                  <option value="">Choose one…</option>
+                  {(builtIn ?? []).map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.id}{(b.risk_tier ?? 0) >= 2 ? " — needs a person" : ""}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input type="text" value={draft.executor_id} data-testid="skill-executor"
+                       spellCheck={false} placeholder="deployment.health.check"
+                       onChange={(e) => setDraft((d) => ({ ...d, executor_id: e.target.value }))} />
+              )}
             </label>
           )}
 
@@ -594,6 +780,10 @@ export function SkillsHome(
               approval — and it must be marked reviewed before it can be placed at all.
             </p>
           ) : null}
+          <p className="detail">
+            A skill is never safer than what it runs: wrapping a tier-3 publish, or calling an MCP
+            tool its server marks tier 2, runs at that tier whatever you choose here.
+          </p>
           <label className="setup-field">
             <span>Reviewed</span>
             <select value={draft.trusted ? "yes" : "no"} data-testid="skill-trusted"
@@ -602,19 +792,29 @@ export function SkillsHome(
               <option value="yes">A person has read this and vouches for it</option>
             </select>
           </label>
+          <label className="setup-field">
+            <span>On</span>
+            <select value={draft.enabled ? "yes" : "no"} data-testid="skill-enabled"
+                    onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.value === "yes" }))}>
+              <option value="yes">On — agents and steps can run it</option>
+              <option value="no">Off — kept, but nothing runs it</option>
+            </select>
+          </label>
 
           <button type="button" className="cap-btn primary" data-testid="skill-save"
                   disabled={busy || !draft.skill_key.trim() || !draft.label.trim()}
                   onClick={() => void save()}>
-            {busy ? "Saving…" : "Save skill"}
+            {busy ? "Saving…" : editing ? "Save changes" : "Create skill"}
           </button>
         </div>
-        {note ? (
-          <p className={note.ok ? "setup-ok" : "setup-bad"} data-testid="skill-note">
-            {note.text}
-          </p>
-        ) : null}
       </details>
+      {/* OUTSIDE the form, because the row actions (Edit, Turn off, Delete, Assign) report
+          here too, and a result inside a closed disclosure is a result nobody sees. */}
+      {note ? (
+        <p className={note.ok ? "setup-ok" : "setup-bad"} data-testid="skill-note" role="status">
+          {note.text}
+        </p>
+      ) : null}
     </section>
   );
 }

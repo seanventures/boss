@@ -1254,15 +1254,18 @@ def test_validation_resolves_the_step_before_looking_for_a_skill():
     `_draft_problems` looked the STEP key up in `skill_definitions` directly, so a step called
     `video_bookend` bound to skill `video.bookend` reported the skill as missing — about a
     step sitting in the table.
+
+    REWRITTEN when the skill catalogue became one module: the skill is now looked up in
+    skill_catalogue (authored and shipped together) instead of get_skill plus an
+    _skill_exists fallback that invented a tier-1 stand-in for every shipped skill. The
+    property is unchanged — the step is resolved first, and a built-in skill counts.
     """
     src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
     block = src[src.index("def _draft_problems("):src.index("def _text(")]
     assert "FROM workflow_custom_steps " in block
     step_at = block.index("FROM workflow_custom_steps ")
-    skill_at = block.index("skills.get_skill(connection, project_id, skill_key)")
+    skill_at = block.index("catalogue.entry(connection, project_id, skill_key)")
     assert step_at < skill_at, "resolve the step, then the skill it binds"
-    # And a built-in skill counts. get_skill reads only what the project authored.
-    assert "skills._skill_exists(connection, project_id, skill_key)" in block
 
 
 def test_the_agent_is_told_to_act_once_confirmed_and_not_to_re_offer():
@@ -1341,12 +1344,17 @@ def test_the_agent_can_see_the_skills_boss_ships():
     `list_skills` returned skill_definitions alone — what an operator had AUTHORED — so every
     shipped skill was invisible. Asked to build a video workflow it reported "no such skill:
     video.bookend" about a skill sitting in the catalogue with an executor behind it.
+
+    REWRITTEN when the skill catalogue became one module: this asserted the tool called
+    EntitlementBrokerService itself, which is exactly the hand-merged second reader that went on
+    to list every authored skill twice. The property is unchanged — shipped skills are visible,
+    and say so — and it is now read from skill_catalogue, the one place every consumer reads.
     """
     src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
     block = src[src.index("def list_skills(ctx"):]
     block = block[:block.index("@reg.tool")]
-    assert "EntitlementBrokerService" in block
-    assert '"ships_with_boss": True' in block
+    assert "catalogue.entries(" in block
+    assert '"ships_with_boss": item["source"] != "authored"' in block
     # Authored skills are still returned if the catalogue read fails — a partial answer beats
     # none, and the authored ones are the ones an operator is most likely asking about.
     assert "except Exception:" in block

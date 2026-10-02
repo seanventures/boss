@@ -45,8 +45,18 @@ def test_the_bootstrap_path_does_the_same():
 
 
 def test_resolve_risk_still_reads_that_exact_field():
-    """If this moves, both fixes above become silent no-ops."""
-    from boss_engine.services import workflow_custom_steps
+    """If this moves, both fixes above become silent no-ops.
 
-    source = inspect.getsource(workflow_custom_steps)
-    assert 'config.get("risk_tier")' in source
+    REWRITTEN when the skill catalogue became one module. resolve_risk no longer reads
+    project_skills itself — reading it alone is what made every AUTHORED skill "not registered
+    in this project" — it asks skill_catalogue, which is where `project_skills.config.risk_tier`
+    is now read (as a floor under the spec's own tier). The property is the same: the field the
+    two fixes above write is the field the step's risk is resolved from.
+    """
+    from boss_engine.services import skill_catalogue, workflow_custom_steps
+
+    assert "skill_catalogue import entry, risk_facts" in inspect.getsource(
+        workflow_custom_steps.resolve_risk)
+    source = inspect.getsource(skill_catalogue.entries)
+    assert "FROM project_skills" in source
+    assert '.get("risk_tier")' in source

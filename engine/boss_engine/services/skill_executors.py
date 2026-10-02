@@ -740,6 +740,79 @@ def execute_sandboxed_command(
         sandbox.teardown()
 
 
+@register_executor("skill.mcp_tool")
+def execute_mcp_tool(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Call the one MCP tool an authored ``mcp_tool`` skill names.
+
+    THIS EXECUTOR DID NOT EXIST. ``resolve_executor`` maps an authored skill to
+    ``skill.<behaviour>``, and only ``sandboxed_command`` and ``agent_program`` were registered,
+    so the documented way to give an agent an MCP integration — "the server holds the
+    integration, the skill names one of its tools" — saved fine, showed as held, and failed on
+    its first run with "No server-side executor is registered".
+
+    SAME GOVERNANCE AS AN AGENT'S DIRECT MCP CALL (``agent_loop._invoke_mcp_skill``). The caller
+    has already been through SkillRuntimeService — permission (the role_skills grant), the
+    budget reservation and retry — at the skill's catalogue tier, which is never below the
+    server's tier for this tool (skill_catalogue's risk rule). What is left is the EFFECT, and
+    that goes through ``mcp_registry.call_tool_with_receipt``, the same function the agent loop
+    uses: a receipt before the call, deduplicated, settled after it.
+
+    The definition and the server are re-read here, at execution, so a skill re-pointed or a
+    server turned off between publishing a workflow and running it behaves as it is now.
+    """
+    import hashlib
+    import json as _json
+
+    from .core import make_id
+    from .mcp_registry import call_tool_with_receipt, get_mcp_server
+    from .skill_definitions import get_skill
+
+    skill_key = _required_text(inputs, "_skill_key")
+    skill = get_skill(context.connection, context.project_id, skill_key)
+    if skill is None:
+        raise SkillExecutorConfigurationError(f"no skill {skill_key!r} in this project.")
+    if not skill["enabled"]:
+        raise SkillExecutorConfigurationError(
+            f"skill {skill_key!r} is turned off. Turn it on on the Skills and MCP page.")
+    config = skill["config"] or {}
+    server = get_mcp_server(context.connection, context.project_id,
+                            str(config.get("mcp_server_id") or ""))
+    if server is None:
+        raise SkillExecutorConfigurationError(
+            f"{skill_key} calls an MCP server that has been removed. Edit the skill on the "
+            "Skills and MCP page and choose a server.")
+    if not server["enabled"]:
+        raise SkillExecutorConfigurationError(
+            f"{skill_key} calls MCP server '{server['name']}', which is turned off. Turn it on "
+            "on the Skills and MCP page.")
+    tool_name = str(config.get("tool_name") or "").strip()
+    if not tool_name:
+        raise SkillExecutorConfigurationError(f"{skill_key} names no tool to call.")
+
+    # The runtime's own reserved keys never reach a third party's tool.
+    arguments = {k: v for k, v in inputs.items() if not str(k).startswith("_")}
+    digest = hashlib.sha256(_json.dumps(arguments, sort_keys=True, default=str,
+                                        separators=(",", ":")).encode()).hexdigest()[:20]
+    # A job retried is the same effect and must not be repeated; two separate calls with the
+    # same arguments are two effects, so without a job there is nothing to deduplicate against.
+    occasion = context.created_by_job_id or make_id("call")
+    called = call_tool_with_receipt(
+        context.connection, context.settings, context.project_id, server, tool_name,
+        arguments, dedupe_key=f"mcp:skill:{skill_key}:{occasion}:{digest}",
+        tenant_scope=context.tenant_scope(), created_by_job_id=context.created_by_job_id,
+    )
+    output = called.get("output")
+    return {
+        **(output if isinstance(output, dict) else {"output": output}),
+        "_mcp": {"skill_key": skill_key, "server": server["name"], "tool": tool_name,
+                 "receipt_id": called.get("receipt_id"),
+                 **({"deduplicated": True} if called.get("deduplicated") else {})},
+    }
+
+
 #: Languages an agent may write. A fixed set, because each one is an interpreter that has to
 #: exist in the sandbox image, and "whatever you like" would fail at run time on the third one.
 _AGENT_LANGUAGES = {

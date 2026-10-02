@@ -2284,50 +2284,10 @@ export async function createImprovementProgramAction(
 }
 
 // ---- Capabilities: MCP server management ----
-
-export async function registerMcpServerAction(formData: FormData): Promise<void> {
-  const projectId = getProjectId(formData);
-  const name = String(formData.get("name") ?? "").trim();
-  const url = String(formData.get("url") ?? "").trim();
-  if (!name || !url) {
-    return;
-  }
-  const riskRaw = String(formData.get("risk_tier") ?? "1").trim();
-  const risk = Number.isFinite(Number(riskRaw)) ? Number(riskRaw) : 1;
-  const boundary = String(formData.get("data_boundary") ?? "internal").trim() as DataBoundary;
-  const description = String(formData.get("description") ?? "").trim();
-  await client.registerMcpServer({
-    project_id: projectId,
-    name,
-    url,
-    risk_tier: risk,
-    data_boundary: boundary || "internal",
-    description: description || undefined,
-    actor: getActor(formData),
-  });
-  revalidatePath("/");
-}
-
-export async function setMcpServerEnabledAction(formData: FormData): Promise<void> {
-  const projectId = getProjectId(formData);
-  const serverId = String(formData.get("server_id") ?? "").trim();
-  const enabled = String(formData.get("enabled") ?? "").trim() === "true";
-  if (!serverId) {
-    return;
-  }
-  await client.setMcpServerEnabled(serverId, projectId, enabled);
-  revalidatePath("/");
-}
-
-export async function deleteMcpServerAction(formData: FormData): Promise<void> {
-  const projectId = getProjectId(formData);
-  const serverId = String(formData.get("server_id") ?? "").trim();
-  if (!serverId) {
-    return;
-  }
-  await client.deleteMcpServer(serverId, projectId);
-  revalidatePath("/");
-}
+//
+// Moved to the shared MCP panel (app/mcp-servers-ui.tsx → /api/skills). These server actions
+// threw on every refusal, so a bad URL or a taken name reached the operator as the generic
+// error page instead of the sentence the API wrote, and a blank name was silently ignored.
 
 // ---- Convene a multi-agent PRD meeting ----
 

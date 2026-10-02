@@ -11,7 +11,10 @@ describe("Community client", () => {
     expect(client).toHaveProperty("getEdition");
     expect(client).toHaveProperty("getCloudCatalog");
     expect(client).toHaveProperty("listEnterpriseIdentityProviders");
-    expect(Object.keys(client)).toHaveLength(374);
+    // +1: updateMcpServer — a registered MCP server can be edited in place (URL, tiers,
+    // review) instead of deleted and re-registered, which unbound every step using it.
+    expect(client).toHaveProperty("updateMcpServer");
+    expect(Object.keys(client)).toHaveLength(375);
     await client.listProjects();
     await client.getCloudCatalog("p1");
     expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/cloud/catalog?project_id=p1", expect.objectContaining({ method: "GET" }));

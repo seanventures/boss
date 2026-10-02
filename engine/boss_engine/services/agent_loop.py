@@ -14,7 +14,6 @@ from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
-from .receipts import ReceiptService
 from .role_governance import RoleGovernanceService
 from .claude_cli_adapter import make_chat_adapter
 from .openai_adapter import OpenAIAdapter, _usage_from_response  # noqa: F401
@@ -164,18 +163,14 @@ def _append_skill_tools(
 
 
 def _mcp_tool_risk(server: dict[str, Any], tool: dict[str, Any]) -> int:
-    tool_name = str(tool.get("name") or "")
-    overrides = server.get("tool_risk_overrides") or {}
+    # mcp_registry.tool_tier is the one statement of this rule. This had its own copy, which let
+    # a tool's self-declared tier REPLACE the operator's blanket tier for the server — so the
+    # same tool could need an approval in a workflow step and not in a chat.
+    from .mcp_registry import tool_tier
+
     annotations = tool.get("annotations") or {}
-    candidate = overrides.get(
-        tool_name,
-        tool.get("risk_tier", annotations.get("risk_tier", server.get("risk_tier", 1))),
-    )
-    try:
-        risk = int(candidate)
-    except (TypeError, ValueError):
-        risk = int(server.get("risk_tier") or 1)
-    return max(0, min(risk, 3))
+    return tool_tier(server, str(tool.get("name") or ""),
+                     declared=tool.get("risk_tier", annotations.get("risk_tier")))
 
 
 def _mcp_skill_spec(
@@ -235,61 +230,25 @@ def _invoke_mcp_skill(
     )
 
     def execute(inputs: dict[str, Any]) -> dict[str, Any]:
-        org_id, workspace_id = context.tenant_scope()
-        receipts = ReceiptService()
+        # THE EFFECT is shared with the authored `mcp_tool` skill executor
+        # (skill_executors.execute_mcp_tool), so a tool reached directly and one reached through
+        # a skill leave the same receipt, are deduplicated the same way, and both tell the
+        # registry when the server did not answer.
+        from .mcp_registry import call_tool_with_receipt
+
         args_digest = sha256(
             json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:20]
-        dedupe_key = (
-            f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}"
-        )
-        receipt, created = receipts.create_or_reuse(
+        return call_tool_with_receipt(
             connection,
-            org_id,
-            workspace_id,
+            settings,
             project_id,
-            dedupe_key,
-            "mcp.tool.call",
-            {
-                "server_id": server["id"],
-                "server": server["name"],
-                "tool": tool_name,
-                "data_boundary": server.get("data_boundary") or "internal",
-            },
+            server,
+            tool_name,
             inputs,
-            data_boundary=server.get("data_boundary") or "internal",
+            dedupe_key=f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}",
+            tenant_scope=context.tenant_scope(),
         )
-        if not created:
-            if receipt.get("status") == "succeeded":
-                return {
-                    "output": receipt.get("result") or {},
-                    "receipt_id": receipt["id"],
-                    "actual_cost_usd_micros": 0,
-                    "deduplicated": True,
-                }
-            raise RuntimeError(
-                f"MCP effect receipt already exists with status {receipt.get('status')}"
-            )
-        try:
-            output = MCPClient(settings).call_tool(server["url"], tool_name, inputs)
-        except Exception as exc:
-            receipts.mark_failed(
-                connection,
-                receipt["id"],
-                {"type": type(exc).__name__, "message": str(exc)},
-            )
-            raise
-        receipts.mark_succeeded(
-            connection,
-            receipt["id"],
-            f"{server['id']}:{tool_name}",
-            output if isinstance(output, dict) else {"value": output},
-        )
-        return {
-            "output": output,
-            "receipt_id": receipt["id"],
-            "actual_cost_usd_micros": 0,
-        }
 
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -1841,11 +1800,21 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         for schema in schemas
     }
     mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    from .mcp_registry import known_unreachable, record_reachability_quietly
+
     for server in ([] if bounded
                    else list_mcp_servers(connection, project_id, enabled_only=True)):
+        if known_unreachable(server):
+            # A SERVER THAT JUST FAILED IS NOT ASKED AGAIN EVERY TURN. The three servers BOSS
+            # seeds point at ports the community compose never starts, and every chat turn paid
+            # a connection timeout per server to rediscover that. The registry remembers the
+            # failure for a minute; the screens show it with what to do about it.
+            continue
         try:
             server_tools = mcp.list_tools(server["url"])
         except Exception as exc:
+            record_reachability_quietly(connection, project_id, server, reachable=False,
+                                        error=f"{type(exc).__name__}: {exc}")
             emit_event(
                 connection,
                 project_id,
@@ -1856,6 +1825,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 {"server": server["name"], "error": str(exc)},
             )
             continue
+        record_reachability_quietly(connection, project_id, server, reachable=True,
+                                    tools=server_tools)
         for t in server_tools:
             tool_name = str(t.get("name") or "tool")
             ns = _unique_tool_name(
